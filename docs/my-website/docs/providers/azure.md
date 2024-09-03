@@ -533,3 +533,40 @@ response = litellm.completion(
 )
 
 ```
+### Azure AD Token Refresh
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
+
+
+response = completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token_provider=token_provider
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/your-deployment-name
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+
+litellm_settings:
+    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
