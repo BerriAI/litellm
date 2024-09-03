@@ -48,9 +48,15 @@ class GoogleSecretManager(GCSBucketBase):
 
         _always_read_secret_manager = os.environ.get(
             "GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER",
-            always_read_secret_manager,
         )
-        self.always_read_secret_manager = _always_read_secret_manager
+        if (
+            _always_read_secret_manager
+            and _always_read_secret_manager.lower() == "true"
+        ):
+            self.always_read_secret_manager = True
+        else:
+            # by default this should be False, we want to use in memory caching for this. It's a bad idea to fetch from secret manager for all requests
+            self.always_read_secret_manager = always_read_secret_manager or False
 
     def get_secret_from_google_secret_manager(self, secret_name: str) -> Optional[str]:
         """
