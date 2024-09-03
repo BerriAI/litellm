@@ -14,7 +14,7 @@ def init_rds_client(
     aws_web_identity_token: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
-    from litellm import get_secret
+    from litellm.secret_managers.main import get_secret
 
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
