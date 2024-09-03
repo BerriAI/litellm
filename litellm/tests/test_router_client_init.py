@@ -83,7 +83,7 @@ async def test_router_init():
     )
 
 
-@patch("litellm.proxy.secret_managers.get_azure_ad_token_provider.os")
+@patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(
     mocked_os_lib: MagicMock,
 ) -> None:
@@ -128,7 +128,7 @@ def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secre
 
 @patch("azure.identity.get_bearer_token_provider")
 @patch("azure.identity.ClientSecretCredential")
-@patch("litellm.proxy.secret_managers.get_azure_ad_token_provider.os")
+@patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_azure_service_principal_with_secret_with_environment_variables(
     mocked_os_lib: MagicMock,
     mocked_credential: MagicMock,
