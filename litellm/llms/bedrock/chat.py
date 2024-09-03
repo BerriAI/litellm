@@ -398,7 +398,12 @@ class BedrockLLM(BaseAWSLLM):
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        provider = model.split(".")[0]
+        
+        if provider.startswith("eu.") or provider.startswith("us."):
+            provider = model.split(".")[1]
+        else:
+            provider = model.split(".")[0]
+        
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -679,8 +684,11 @@ class BedrockLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        provider = model.split(".")[0]
-
+        if provider.startswith("eu.") or provider.startswith("us."):
+            provider = model.split(".")[1]
+        else:
+            provider = model.split(".")[0]
+        
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
@@ -1555,8 +1563,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        provider = model.split(".")[0]
-
+        if provider.startswith("eu.") or provider.startswith("us."):
+            provider = model.split(".")[1]
+        else:
+            provider = model.split(".")[0]
+        
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
