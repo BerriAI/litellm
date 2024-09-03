@@ -2550,7 +2550,7 @@ def get_optional_params_image_gen(
 
 def get_optional_params_embeddings(
     # 2 optional params
-    model=None,
+    model: str,
     user=None,
     encoding_format=None,
     dimensions=None,
@@ -2606,7 +2606,7 @@ def get_optional_params_embeddings(
         ):
             raise UnsupportedParamsError(
                 status_code=500,
-                message=f"Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+                message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
             )
     if custom_llm_provider == "triton":
         keys = list(non_default_params.keys())
@@ -2641,39 +2641,57 @@ def get_optional_params_embeddings(
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    if custom_llm_provider == "vertex_ai":
-        if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
-                final_params = {**non_default_params, **kwargs}
-                return final_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
     if custom_llm_provider == "bedrock":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
-        if (
-            "dimensions" in non_default_params.keys()
-            and "amazon.titan-embed-text-v2" in model
-        ):
-            kwargs["dimensions"] = non_default_params["dimensions"]
-            non_default_params.pop("dimensions", None)
+        if "amazon.titan-embed-text-v1" in model:
+            object: Any = litellm.AmazonTitanG1Config()
+        elif "amazon.titan-embed-image-v1" in model:
+            object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
+        elif "amazon.titan-embed-text-v2:0" in model:
+            object = litellm.AmazonTitanV2Config()
+        elif "cohere.embed-multilingual-v3" in model:
+            object = litellm.BedrockCohereEmbeddingConfig()
+        else:  # unmapped model
+            supported_params = []
+            _check_valid_arg(supported_params=supported_params)
+            final_params = {**kwargs}
+            return final_params
 
-        if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
-                final_params = {**non_default_params, **kwargs}
-                return final_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
-        return {**non_default_params, **kwargs}
+        supported_params = object.get_supported_openai_params()
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = object.map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+        # elif model == "amazon.titan-embed-image-v1":
+        #     supported_params = litellm.AmazonTitanG1Config().get_supported_openai_params()
+        #     _check_valid_arg(supported_params=supported_params)
+        #     optional_params = litellm.AmazonTitanG1Config().map_openai_params(
+        #         non_default_params=non_default_params, optional_params={}
+        #     )
+        #     final_params = {**optional_params, **kwargs}
+        #     return final_params
+
+        # if (
+        #     "dimensions" in non_default_params.keys()
+        #     and "amazon.titan-embed-text-v2" in model
+        # ):
+        #     kwargs["dimensions"] = non_default_params["dimensions"]
+        #     non_default_params.pop("dimensions", None)
+
+        # if len(non_default_params.keys()) > 0:
+        #     if litellm.drop_params is True:  # drop the unsupported non-default values
+        #         keys = list(non_default_params.keys())
+        #         for k in keys:
+        #             non_default_params.pop(k, None)
+        #         final_params = {**non_default_params, **kwargs}
+        #         return final_params
+        #     raise UnsupportedParamsError(
+        #         status_code=500,
+        #         message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+        #     )
+        # return {**non_default_params, **kwargs}
     if custom_llm_provider == "mistral":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2869,6 +2887,7 @@ def get_optional_params(
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
             and custom_llm_provider != "cerebras"
+            and custom_llm_provider != "ai21_chat"
             and custom_llm_provider != "volcengine"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
@@ -3638,6 +3657,16 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
         )
+    elif custom_llm_provider == "ai21_chat":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.AI21ChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4265,6 +4294,8 @@ def get_supported_openai_params(
         return litellm.NvidiaNimConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cerebras":
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "ai21_chat":
+        return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
@@ -4653,6 +4684,7 @@ def get_llm_provider(
         ):
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
+
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = api_base or get_secret("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
@@ -4699,6 +4731,16 @@ def get_llm_provider(
                     or "https://api.cerebras.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("CEREBRAS_API_KEY")
+            elif (custom_llm_provider == "ai21_chat") or (
+                custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
+            ):
+                api_base = (
+                    api_base
+                    or get_secret("AI21_API_BASE")
+                    or "https://api.ai21.com/studio/v1"
+                )  # type: ignore
+                dynamic_api_key = api_key or get_secret("AI21_API_KEY")
+                custom_llm_provider = "ai21_chat"
             elif custom_llm_provider == "volcengine":
                 # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = (
@@ -4852,6 +4894,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret("CEREBRAS_API_KEY")
+                    elif endpoint == "https://api.ai21.com/studio/v1":
+                        custom_llm_provider = "ai21_chat"
+                        dynamic_api_key = get_secret("AI21_API_KEY")
                     elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
@@ -4930,11 +4975,20 @@ def get_llm_provider(
             or model in litellm.vertex_language_models
             or model in litellm.vertex_embedding_models
             or model in litellm.vertex_vision_models
+            or model in litellm.vertex_ai_image_models
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
+        elif model in litellm.ai21_chat_models:
+            custom_llm_provider = "ai21_chat"
+            api_base = (
+                api_base
+                or get_secret("AI21_API_BASE")
+                or "https://api.ai21.com/studio/v1"
+            )  # type: ignore
+            dynamic_api_key = api_key or get_secret("AI21_API_KEY")
         ## aleph_alpha
         elif model in litellm.aleph_alpha_models:
             custom_llm_provider = "aleph_alpha"
@@ -5782,6 +5836,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
+        elif custom_llm_provider == "ai21_chat":
+            if "AI21_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("AI21_API_KEY")
         elif custom_llm_provider == "volcengine":
             if "VOLCENGINE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6193,7 +6252,10 @@ def convert_to_model_response_object(
             if "model" in response_object:
                 if model_response_object.model is None:
                     model_response_object.model = response_object["model"]
-                elif "/" in model_response_object.model:
+                elif (
+                    "/" in model_response_object.model
+                    and response_object["model"] is not None
+                ):
                     openai_compatible_provider = model_response_object.model.split("/")[
                         0
                     ]
@@ -9888,11 +9950,7 @@ class CustomStreamWrapper:
 
                 if anthropic_response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
-                        prompt_tokens=anthropic_response_obj["usage"]["prompt_tokens"],
-                        completion_tokens=anthropic_response_obj["usage"][
-                            "completion_tokens"
-                        ],
-                        total_tokens=anthropic_response_obj["usage"]["total_tokens"],
+                        **anthropic_response_obj["usage"]
                     )
 
                 if (
@@ -10507,10 +10565,10 @@ class CustomStreamWrapper:
                             original_chunk.system_fingerprint
                         )
                         print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
-                        if self.sent_first_chunk == False:
+                        if self.sent_first_chunk is False:
                             model_response.choices[0].delta["role"] = "assistant"
                             self.sent_first_chunk = True
-                        elif self.sent_first_chunk == True and hasattr(
+                        elif self.sent_first_chunk is True and hasattr(
                             model_response.choices[0].delta, "role"
                         ):
                             _initial_delta = model_response.choices[
@@ -10575,7 +10633,7 @@ class CustomStreamWrapper:
                 model_response.choices[0].delta.tool_calls is not None
                 or model_response.choices[0].delta.function_call is not None
             ):
-                if self.sent_first_chunk == False:
+                if self.sent_first_chunk is False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 return model_response

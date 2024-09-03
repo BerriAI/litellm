@@ -75,7 +75,6 @@ from litellm.utils import (
 from ._logging import verbose_logger
 from .caching import disable_cache, enable_cache, update_cache
 from .llms import (
-    ai21,
     aleph_alpha,
     baseten,
     clarifai,
@@ -91,6 +90,7 @@ from .llms import (
     replicate,
     vllm,
 )
+from .llms.AI21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -125,6 +125,9 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
 )
 from .llms.vertex_ai_and_google_ai_studio.gemini_embeddings.batch_embed_content_handler import (
     GoogleBatchEmbeddings,
+)
+from .llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+    VertexImageGeneration,
 )
 from .llms.vertex_ai_and_google_ai_studio.multimodal_embeddings.embedding_handler import (
     VertexMultimodalEmbedding,
@@ -180,6 +183,7 @@ bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 vertex_chat_completion = VertexLLM()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
+vertex_image_generation = VertexImageGeneration()
 google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
@@ -387,6 +391,7 @@ async def acompletion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"
@@ -1293,6 +1298,7 @@ def completion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
             or custom_llm_provider == "deepseek"
@@ -3143,6 +3149,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"
@@ -3807,6 +3814,7 @@ async def atext_completion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
@@ -4534,7 +4542,7 @@ def image_generation(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
-            model_response = vertex_chat_completion.image_generation(
+            model_response = vertex_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -5431,6 +5439,9 @@ def stream_chunk_builder(
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        ## anthropic prompt caching information ##
+        cache_creation_input_tokens: Optional[int] = None
+        cache_read_input_tokens: Optional[int] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -5442,6 +5453,13 @@ def stream_chunk_builder(
                     prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
                 if "completion_tokens" in usage_chunk:
                     completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
+                if "cache_creation_input_tokens" in usage_chunk:
+                    cache_creation_input_tokens = usage_chunk.get(
+                        "cache_creation_input_tokens"
+                    )
+                if "cache_read_input_tokens" in usage_chunk:
+                    cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+
         try:
             response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
                 model=model, messages=messages
@@ -5459,6 +5477,13 @@ def stream_chunk_builder(
         response["usage"]["total_tokens"] = (
             response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
         )
+
+        if cache_creation_input_tokens is not None:
+            response["usage"][
+                "cache_creation_input_tokens"
+            ] = cache_creation_input_tokens
+        if cache_read_input_tokens is not None:
+            response["usage"]["cache_read_input_tokens"] = cache_read_input_tokens
 
         return convert_to_model_response_object(
             response_object=response,
