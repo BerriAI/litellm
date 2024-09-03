@@ -22,6 +22,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    ModelResponseIterator,
+)
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -32,7 +35,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
+from .streaming_handler import chunk_processor
 from .success_handler import PassThroughEndpointLogging
+from .types import EndpointType
 
 router = APIRouter()
 
@@ -284,6 +289,12 @@ def get_response_headers(headers: httpx.Headers) -> dict:
     return return_headers
 
 
+def get_endpoint_type(url: str) -> EndpointType:
+    if ("generateContent") in url or ("streamGenerateContent") in url:
+        return EndpointType.VERTEX_AI
+    return EndpointType.GENERIC
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -306,6 +317,8 @@ async def pass_through_request(
         headers = forward_headers_from_request(
             request=request, headers=headers, forward_headers=forward_headers
         )
+
+        endpoint_type: EndpointType = get_endpoint_type(str(url))
 
         _parsed_body = None
         if custom_body:
@@ -416,9 +429,15 @@ async def pass_through_request(
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
-            # Create an async generator to yield the response content
             async def stream_response() -> AsyncIterable[bytes]:
-                async for chunk in response.aiter_bytes():
+                async for chunk in chunk_processor(
+                    response.aiter_bytes(),
+                    litellm_logging_obj=logging_obj,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                    url_route=str(url),
+                ):
                     yield chunk
 
             return StreamingResponse(
@@ -454,10 +473,15 @@ async def pass_through_request(
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
-            # streaming response
-            # Create an async generator to yield the response content
             async def stream_response() -> AsyncIterable[bytes]:
-                async for chunk in response.aiter_bytes():
+                async for chunk in chunk_processor(
+                    response.aiter_bytes(),
+                    litellm_logging_obj=logging_obj,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                    url_route=str(url),
+                ):
                     yield chunk
 
             return StreamingResponse(

@@ -10,7 +10,12 @@ vertexai.init(
     api_transport="rest",
 )
 
-model = GenerativeModel(model_name="gemini-1.0-pro")
-response = model.generate_content("hi")
+model = GenerativeModel(model_name="gemini-1.5-flash-001")
+response = model.generate_content(
+    "hi tell me a joke and a very long story", stream=True
+)
 
 print("response", response)
+
+for chunk in response:
+    print(chunk)
