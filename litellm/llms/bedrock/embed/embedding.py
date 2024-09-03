@@ -11,7 +11,6 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 import httpx
 
 import litellm
-from litellm import get_secret
 from litellm.llms.cohere.embed import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -19,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_async_httpx_client,
     _get_httpx_client,
 )
+from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
