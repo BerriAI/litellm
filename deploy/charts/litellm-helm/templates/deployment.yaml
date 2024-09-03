@@ -66,6 +66,8 @@ spec:
                   key: {{ .Values.db.secret.passwordKey }}
             - name: DATABASE_HOST
               value: {{ .Values.db.endpoint }}
+            - name: STORE_MODEL_IN_DB
+              value: "true"
             - name: DATABASE_NAME
               value: litellm
             {{- end }}
