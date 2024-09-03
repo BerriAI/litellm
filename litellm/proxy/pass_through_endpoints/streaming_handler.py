@@ -98,6 +98,8 @@ async def chunk_processor(
         complete_streaming_response: Optional[
             Union[litellm.ModelResponse, litellm.TextCompletionResponse]
         ] = litellm.stream_chunk_builder(chunks=all_chunks)
+        if complete_streaming_response is None:
+            complete_streaming_response = litellm.ModelResponse()
         end_time = datetime.now()
 
         if passthrough_success_handler_obj.is_vertex_route(url_route):
