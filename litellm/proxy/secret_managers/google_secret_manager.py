@@ -7,7 +7,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.integrations.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.proxy._types import KeyManagementSystem
+from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
 
 
 class GoogleSecretManager(GCSBucketBase):
@@ -21,15 +21,36 @@ class GoogleSecretManager(GCSBucketBase):
             refresh_interval (int, optional): The refresh interval in seconds. Defaults to 86400. (24 hours)
             always_read_secret_manager (bool, optional): Whether to always read from the secret manager. Defaults to False. Since we do want to cache values
         """
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"Google Secret Manager requires an Enterprise License {CommonProxyErrors.not_premium_user.value}"
+            )
         super().__init__()
-        self.PROJECT_ID = "adroit-crow-413218"
+        self.PROJECT_ID = os.environ.get("GOOGLE_SECRET_MANAGER_PROJECT_ID", None)
+        if self.PROJECT_ID is None:
+            raise ValueError(
+                "Google Secret Manager requires a project ID, please set 'GOOGLE_SECRET_MANAGER_PROJECT_ID' in your .env"
+            )
         self.sync_httpx_client = _get_httpx_client()
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.GOOGLE_SECRET_MANAGER
+        _refresh_interval = os.environ.get(
+            "GOOGLE_SECRET_MANAGER_REFRESH_INTERVAL", refresh_interval
+        )
+        _refresh_interval = (
+            int(_refresh_interval) if _refresh_interval else refresh_interval
+        )
         self.cache = InMemoryCache(
-            default_ttl=refresh_interval
+            default_ttl=_refresh_interval
         )  # store in memory for 1 day
-        self.always_read_secret_manager = False
+
+        _always_read_secret_manager = os.environ.get(
+            "GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER",
+            always_read_secret_manager,
+        )
+        self.always_read_secret_manager = _always_read_secret_manager
 
     def get_secret_from_google_secret_manager(self, secret_name: str) -> Optional[str]:
         """
