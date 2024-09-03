@@ -195,6 +195,7 @@ def test_google_secret_manager():
     """
     Test that we can get a secret from Google Secret Manager
     """
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "adroit-crow-413218"
     from test_amazing_vertex_completion import load_vertex_ai_credentials
 
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
@@ -223,6 +224,7 @@ def test_google_secret_manager_read_in_memory():
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
     # load_vertex_ai_credentials()
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "adroit-crow-413218"
     secret_manager = GoogleSecretManager()
     secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
     secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
