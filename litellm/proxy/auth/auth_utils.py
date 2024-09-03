@@ -160,48 +160,6 @@ def route_in_additonal_public_routes(current_route: str):
         return False
 
 
-def is_llm_api_route(route: str) -> bool:
-    """
-    Helper to checks if provided route is an OpenAI route
-
-
-    Returns:
-        - True: if route is an OpenAI route
-        - False: if route is not an OpenAI route
-    """
-
-    if route in LiteLLMRoutes.openai_routes.value:
-        return True
-
-    if route in LiteLLMRoutes.anthropic_routes.value:
-        return True
-
-    # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
-    # Check for routes with placeholders
-    for openai_route in LiteLLMRoutes.openai_routes.value:
-        # Replace placeholders with regex pattern
-        # placeholders are written as "/threads/{thread_id}"
-        if "{" in openai_route:
-            pattern = re.sub(r"\{[^}]+\}", r"[^/]+", openai_route)
-            # Anchor the pattern to match the entire string
-            pattern = f"^{pattern}$"
-            if re.match(pattern, route):
-                return True
-
-    # Pass through Bedrock, VertexAI, and Cohere Routes
-    if "/bedrock/" in route:
-        return True
-    if "/vertex-ai/" in route:
-        return True
-    if "/gemini/" in route:
-        return True
-    if "/cohere/" in route:
-        return True
-    if "/langfuse/" in route:
-        return True
-    return False
-
-
 def get_request_route(request: Request) -> str:
     """
     Helper to get the route from the request
@@ -369,3 +327,21 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     """
     # by default we do not run virtual key auth checks on /vertex-ai/{endpoint} routes
     return False
+
+
+def _has_user_setup_sso():
+    """
+    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID, and UI username environment variables.
+    Returns a boolean indicating whether SSO has been set up.
+    """
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    ui_username = os.getenv("UI_USERNAME", None)
+
+    sso_setup = (
+        (microsoft_client_id is not None)
+        or (google_client_id is not None)
+        or (ui_username is not None)
+    )
+
+    return sso_setup
