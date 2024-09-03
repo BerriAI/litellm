@@ -189,3 +189,52 @@ def test_oidc_env_path():
         assert secret_val == secret_value
 
         del os.environ[env_var_name]
+
+
+def test_google_secret_manager():
+    """
+    Test that we can get a secret from Google Secret Manager
+    """
+    from test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
+
+    # load_vertex_ai_credentials()
+    secret_manager = GoogleSecretManager()
+
+    secret_val = secret_manager.get_secret_from_google_secret_manager(
+        secret_name="OPENAI_API_KEY"
+    )
+    print("secret_val: {}".format(secret_val))
+
+    assert (
+        secret_val == "anything"
+    ), "did not get expected secret value. expect 'anything', got '{}'".format(
+        secret_val
+    )
+
+
+def test_google_secret_manager_read_in_memory():
+    """
+    Test that Google Secret manager returs in memory value when it exists
+    """
+    from test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
+
+    # load_vertex_ai_credentials()
+    secret_manager = GoogleSecretManager()
+    secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
+    secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
+
+    secret_val = secret_manager.get_secret_from_google_secret_manager(
+        secret_name="UNIQUE_KEY"
+    )
+    print("secret_val: {}".format(secret_val))
+    assert secret_val == None
+
+    secret_val = secret_manager.get_secret_from_google_secret_manager(
+        secret_name="UNIQUE_KEY_2"
+    )
+    print("secret_val: {}".format(secret_val))
+    assert secret_val == "lite-llm"
