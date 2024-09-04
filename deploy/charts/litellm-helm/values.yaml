@@ -79,10 +79,38 @@ ingress:
 #  Reference: https://docs.litellm.ai/docs/proxy/configs
 proxy_config:
   model_list:
+    - model_name: gpt-3.5-turbo
+      litellm_params:
+        model: llm-gateway-gpt-35-turbo
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        description: "GPT-3.5 Turbo"
+    - model_name: gpt-4o
+      litellm_params:
+        model: llm-gateway-gpt-4o
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        description: "GPT-4o"
     - model_name: gpt-4o-mini
       litellm_params:
-        model: gpt-4o-mini
+        model: llm-gateway-gpt-4o-mini
         api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        description: "GPT-4o mini"
+    - model_name: text-embedding-ada-002
+      litellm_params:
+        model: llm-gateway-text-embedding-ada-002
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        mode: embedding
+        description: "text-embedding-ada-002"
+    - model_name: text-embedding-3-small
+      litellm_params:
+        model: llm-gateway-text-embedding-3-small
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        mode: embedding
+        description: "text-embedding-3-small"
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
