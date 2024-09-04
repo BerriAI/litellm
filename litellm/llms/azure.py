@@ -1033,6 +1033,7 @@ class AzureChatCompletion(BaseLLM):
             raw_response = await openai_aclient.embeddings.with_raw_response.create(
                 **data, timeout=timeout
             )
+            headers = dict(raw_response.headers)
             response = raw_response.parse()
             stringified_response = response.model_dump()
             ## LOGGING
@@ -1045,6 +1046,8 @@ class AzureChatCompletion(BaseLLM):
             return convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
+                hidden_params={"headers": headers},
+                _response_headers=headers,
                 response_type="embedding",
             )
         except Exception as e:

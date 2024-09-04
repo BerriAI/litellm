@@ -3694,6 +3694,7 @@ async def embeddings(
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
         litellm_call_id = hidden_params.get("litellm_call_id", None) or ""
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
             get_custom_headers(
@@ -3706,6 +3707,7 @@ async def embeddings(
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 call_id=litellm_call_id,
                 request_data=data,
+                **additional_headers,
             )
         )
         await check_response_size_is_safe(response=response)
