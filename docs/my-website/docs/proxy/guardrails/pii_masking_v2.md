@@ -36,6 +36,7 @@ export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
 
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
+- `logging_only` Run **after** LLM call, only apply PII Masking before logging to Langfuse, etc. Not on the actual llm api request / response.
 
 
 ### 2. Start LiteLLM Gateway 
@@ -119,8 +120,9 @@ curl http://localhost:4000/chat/completions \
 
 </Tabs>
 
+## Advanced
 
-## Set `language` per request
+###  Set `language` per request
 
 The Presidio API [supports passing the `language` param](https://microsoft.github.io/presidio/api-docs/api-docs.html#tag/Analyzer/paths/~1analyze/post). Here is how to set the `language` per request
 
@@ -178,11 +180,159 @@ print(response)
 </Tabs>
 
 
-## Output parsing 
+### Output parsing 
 
-## Ad Hoc Recognizers
 
-## Logging Only
+LLM responses can sometimes contain the masked tokens. 
 
+For presidio 'replace' operations, LiteLLM can check the LLM response and replace the masked token with the user-submitted values. 
+
+Define your guardrails under the `guardrails` section
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-pre-guard"
+    litellm_params:
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      mode: "pre_call"
+      output_parse_pii: True
+```
+
+**Expected Flow: **
+
+1. User Input: "hello world, my name is Jane Doe. My number is: 034453334"
+
+2. LLM Input: "hello world, my name is [PERSON]. My number is: [PHONE_NUMBER]"
+
+3. LLM Response: "Hey [PERSON], nice to meet you!"
+
+4. User Response: "Hey Jane Doe, nice to meet you!"
+
+### Ad Hoc Recognizers
+
+
+Send ad-hoc recognizers to presidio `/analyze` by passing a json file to the proxy 
+
+[**Example** ad-hoc recognizer](../../../../litellm/proxy/hooks/example_presidio_ad_hoc_recognize)
+
+#### Define ad-hoc recognizer on your LiteLLM config.yaml 
+
+Define your guardrails under the `guardrails` section
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-pre-guard"
+    litellm_params:
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      mode: "pre_call"
+      presidio_ad_hoc_recognizers: "./hooks/example_presidio_ad_hoc_recognizer.json"
+```
+
+Set the following env vars 
+
+```bash
+export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
+export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
+```
+
+
+You can see this working, when you run the proxy: 
+
+```bash
+litellm --config /path/to/config.yaml --debug
+```
+
+Make a chat completions request, example:
+
+```
+{
+  "model": "azure-gpt-3.5",
+  "messages": [{"role": "user", "content": "John Smith AHV number is 756.3026.0705.92. Zip code: 1334023"}]
+}
+```
+
+And search for any log starting with `Presidio PII Masking`, example:
+```
+Presidio PII Masking: Redacted pii message: <PERSON> AHV number is <AHV_NUMBER>. Zip code: <US_DRIVER_LICENSE>
+```
+
+### Logging Only
+
+
+Only apply PII Masking before logging to Langfuse, etc.
+
+Not on the actual llm api request / response.
+
+:::note
+This is currently only applied for 
+- `/chat/completion` requests
+- on 'success' logging
+
+:::
+
+1. Define mode: `logging_only` on your LiteLLM config.yaml 
+
+Define your guardrails under the `guardrails` section
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-pre-guard"
+    litellm_params:
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      mode: "logging_only"
+```
+
+Set the following env vars 
+
+```bash
+export PRESIDIO_ANALYZER_API_BASE="http://localhost:5002"
+export PRESIDIO_ANONYMIZER_API_BASE="http://localhost:5001"
+```
+
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hi, my name is Jane!"
+    }
+  ]
+  }'
+```
+
+
+**Expected Logged Response**
+
+```
+Hi, my name is <PERSON>!
+```
 
 
