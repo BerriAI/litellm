@@ -76,6 +76,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_anonymizer_api_base=presidio_anonymizer_api_base,
         )
 
+        super().__init__(**kwargs)
+
     def validate_environment(
         self,
         presidio_analyzer_api_base: Optional[str] = None,
@@ -125,39 +127,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except:
             pass
 
-    async def check_pii(self, text: str, output_parse_pii: bool) -> str:  # type: ignore
+    async def check_pii(self, text: str, output_parse_pii: bool) -> str:
         """
         [TODO] make this more performant for high-throughput scenario
         """
         try:
-            if self.mock_redacted_text is not None:
-                redacted_text = self.mock_redacted_text
-            else:
-                # Make the first request to /analyze
-                analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-                verbose_proxy_logger.debug("Making request to: %s", analyze_url)
-                analyze_payload = {"text": text, "language": "en"}
-                if self.ad_hoc_recognizers is not None:
-                    analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
-                redacted_text = None
+            async with aiohttp.ClientSession() as session:
+                if self.mock_redacted_text is not None:
+                    redacted_text = self.mock_redacted_text
+                else:
+                    # Make the first request to /analyze
+                    analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+                    verbose_proxy_logger.debug("Making request to: %s", analyze_url)
+                    analyze_payload = {"text": text, "language": "en"}
+                    if self.ad_hoc_recognizers is not None:
+                        analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
+                    redacted_text = None
 
-                reponse = await self.async_http_client.post(
-                    analyze_url, json=analyze_payload
-                )
-                analyze_results = await reponse.json()
+                    async with session.post(
+                        analyze_url, json=analyze_payload
+                    ) as response:
 
-                # Make the second request to /anonymize
-                anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-                anonymize_payload = {
-                    "text": text,
-                    "analyzer_results": analyze_results,
-                }
+                        analyze_results = await response.json()
 
-                response_2 = await self.async_http_client.post(
-                    anonymize_url, json=anonymize_payload
-                )
-                redacted_text = await response_2.json()
+                    # Make the second request to /anonymize
+                    anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+                    verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+                    anonymize_payload = {
+                        "text": text,
+                        "analyzer_results": analyze_results,
+                    }
+
+                    async with session.post(
+                        anonymize_url, json=anonymize_payload
+                    ) as response:
+                        redacted_text = await response.json()
 
                 new_text = text
                 if redacted_text is not None:
@@ -206,6 +210,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
+
         try:
             if (
                 self.logging_only is True
