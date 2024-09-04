@@ -1,5 +1,5 @@
 # LITELLM PROXY DEPENDENCIES #
-anyio==4.2.0 # openai + http req.
+anyio==4.4.0 # openai + http req.
 openai==1.40.0 # openai req. 
 fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
@@ -17,7 +17,7 @@ google-cloud-aiplatform==1.47.0 # for vertex ai calls
 anthropic[vertex]==0.21.3
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
-langfuse==2.27.1 # for langfuse self-hosted logging
+langfuse==2.45.0 # for langfuse self-hosted logging
 datadog-api-client==2.23.0 # for datadog logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 orjson==3.9.15 # fast /embedding responses
