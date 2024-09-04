@@ -165,6 +165,16 @@ def init_guardrails_v2(
                 category_thresholds=litellm_params.get("category_thresholds"),
             )
             litellm.callbacks.append(_lakera_callback)  # type: ignore
+        elif litellm_params["guardrail"] == "presidio":
+            from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+                _OPTIONAL_PresidioPIIMasking,
+            )
+
+            _presidio_callback = _OPTIONAL_PresidioPIIMasking(
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
+            litellm.callbacks.append(_presidio_callback)  # type: ignore
         elif (
             isinstance(litellm_params["guardrail"], str)
             and "." in litellm_params["guardrail"]
