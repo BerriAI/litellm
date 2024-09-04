@@ -868,6 +868,15 @@ class Logging:
                         model = self.model
                         messages = self.model_call_details["input"]
                         kwargs = self.model_call_details
+
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                continue
+                            else:
+                                print_verbose("reaches helicone for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
                         heliconeLogger.log_success(
                             model=model,
                             messages=messages,
