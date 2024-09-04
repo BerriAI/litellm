@@ -42,12 +42,12 @@ spec:
             - name: DATABASE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-secret
                   key: username
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-secret
                   key: password
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
@@ -113,12 +113,12 @@ spec:
             - name: DATABASE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-secret
                   key: username
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  name: {{ include "litellm.fullname" . }}-secret
                   key: password
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
@@ -147,7 +147,7 @@ spec:
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-masterkey
+                  name: {{ include "litellm.fullname" . }}-secret
                   key: masterkey
             {{- if .Values.redis.enabled }}
             - name: REDIS_HOST
