@@ -986,15 +986,10 @@ class AnthropicChatCompletion(BaseLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic"
                 )
             except Exception as e:
-                verbose_logger.exception(
-                    "litellm.llms.anthropic.chat.py::completion() - Exception occurred - {}\nReceived Messages: {}".format(
-                        str(e), messages
-                    )
-                )
                 raise AnthropicError(
                     status_code=400,
                     message="{}\nReceived Messages={}".format(str(e), messages),
-                )
+                )  # don't use verbose_logger.exception, if exception is raised
 
         ## Load Config
         config = litellm.AnthropicConfig.get_config()

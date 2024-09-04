@@ -493,10 +493,9 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
 
         return rendered_text
     except Exception as e:
-        verbose_logger.exception(
-            "Error rendering huggingface chat template - {}".format(str(e))
-        )
-        raise Exception(f"Error rendering template - {str(e)}")
+        raise Exception(
+            f"Error rendering template - {str(e)}"
+        )  # don't use verbose_logger.exception, if exception is raised
 
 
 # Anthropic template

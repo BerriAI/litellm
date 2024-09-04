@@ -168,9 +168,6 @@ def completion(
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
     except Exception as e:
-        verbose_logger.exception(
-            "litellm.llms.palm.py::completion(): Exception occured - {}".format(str(e))
-        )
         raise PalmError(
             message=traceback.format_exc(), status_code=response.status_code
         )

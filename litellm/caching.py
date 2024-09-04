@@ -2029,10 +2029,7 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.exception(
-                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
-            )
-            raise e
+            raise e  # don't log if exception is raised
 
     async def async_set_cache_sadd(
         self, key, value: List, local_only: bool = False, **kwargs
@@ -2059,10 +2056,7 @@ class DualCache(BaseCache):
 
             return None
         except Exception as e:
-            verbose_logger.exception(
-                "LiteLLM Cache: Excepton async set_cache_sadd: {}".format(str(e))
-            )
-            raise e
+            raise e  # don't log, if exception is raised
 
     def flush_cache(self):
         if self.in_memory_cache is not None:
@@ -2533,7 +2527,6 @@ class Cache:
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            pass
 
     async def async_add_cache(self, result, *args, **kwargs):
         """

@@ -9005,11 +9005,6 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         except Exception as e:
-            verbose_logger.exception(
-                "litellm.CustomStreamWrapper.handle_predibase_chunk(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
             raise e
 
     def handle_huggingface_chunk(self, chunk):
@@ -9053,11 +9048,6 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         except Exception as e:
-            verbose_logger.exception(
-                "litellm.CustomStreamWrapper.handle_huggingface_chunk(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
             raise e
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
@@ -9284,11 +9274,6 @@ class CustomStreamWrapper:
                 "usage": usage,
             }
         except Exception as e:
-            verbose_logger.exception(
-                "litellm.CustomStreamWrapper.handle_openai_chat_completion_chunk(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
             raise e
 
     def handle_azure_text_completion_chunk(self, chunk):
