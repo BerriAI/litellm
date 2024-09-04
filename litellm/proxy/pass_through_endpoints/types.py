@@ -7,7 +7,7 @@ class EndpointType(str, Enum):
     GENERIC = "generic"
 
 
-class PassthroughStandardLoggingObject(TypedDict, total=False):
+class PassthroughStandardLoggingPayload(TypedDict, total=False):
     """
     Standard logging payload for all pass through endpoints
     """
