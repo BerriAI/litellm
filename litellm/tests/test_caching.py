@@ -1992,7 +1992,8 @@ async def test_proxy_logging_setup():
     """
     Assert always_read_redis is True when used by internal usage cache
     """
+    from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
-    pl_obj = ProxyLogging()
+    pl_obj = ProxyLogging(user_api_key_cache=DualCache())
     assert pl_obj.internal_usage_cache.always_read_redis is True
