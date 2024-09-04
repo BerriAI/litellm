@@ -110,7 +110,7 @@ class LagoLogger(CustomLogger):
         return {
             "event": {
                 "transaction_id": str(uuid.uuid4()),
-                "external_customer_id": external_customer_id,
+                "external_subscription_id": external_customer_id,
                 "code": os.getenv("LAGO_API_EVENT_CODE"),
                 "properties": {"model": model, "response_cost": cost, **usage},
             }
