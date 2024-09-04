@@ -2757,3 +2757,69 @@ def test_gemini_function_call_parameter_in_messages():
             "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
             "generationConfig": {},
         } == mock_client.call_args.kwargs["json"]
+
+
+def test_gemini_function_call_parameter_in_messages_2():
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "search for weather in boston (use `search`)"},
+        {
+            "role": "assistant",
+            "content": "Sure, let me check.",
+            "function_call": {
+                "name": "search",
+                "arguments": '{"queries": ["weather in boston"]}',
+            },
+        },
+        {
+            "role": "function",
+            "name": "search",
+            "content": "The weather in Boston is 100 degrees.",
+        },
+    ]
+
+    returned_contents = _gemini_convert_messages_with_history(messages=messages)
+
+    assert returned_contents == [
+        {
+            "role": "user",
+            "parts": [{"text": "search for weather in boston (use `search`)"}],
+        },
+        {
+            "role": "model",
+            "parts": [
+                {"text": "Sure, let me check."},
+                {
+                    "function_call": {
+                        "name": "search",
+                        "args": {
+                            "fields": {
+                                "key": "queries",
+                                "value": {"list_value": ["weather in boston"]},
+                            }
+                        },
+                    }
+                },
+            ],
+        },
+        {
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "search",
+                        "response": {
+                            "fields": {
+                                "key": "content",
+                                "value": {
+                                    "string_value": "The weather in Boston is 100 degrees."
+                                },
+                            }
+                        },
+                    }
+                }
+            ]
+        },
+    ]

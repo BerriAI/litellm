@@ -105,9 +105,13 @@ class LagoLogger(CustomLogger):
             external_customer_id = user_id
 
         if external_customer_id is None:
-            raise Exception("External Customer ID is not set")
+            raise Exception(
+                "External Customer ID is not set. Charge_by={}. User_id={}. End_user_id={}. Team_id={}".format(
+                    charge_by, user_id, end_user_id, team_id
+                )
+            )
 
-        return {
+        returned_val = {
             "event": {
                 "transaction_id": str(uuid.uuid4()),
                 "external_customer_id": external_customer_id,
@@ -115,6 +119,11 @@ class LagoLogger(CustomLogger):
                 "properties": {"model": model, "response_cost": cost, **usage},
             }
         }
+
+        verbose_logger.debug(
+            "\033[91mLogged Lago Object:\n{}\033[0m\n".format(returned_val)
+        )
+        return returned_val
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("LAGO_API_BASE")
