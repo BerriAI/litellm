@@ -1985,3 +1985,14 @@ async def test_dual_cache_uses_redis():
     value = await _cache_obj.async_get_cache(key=f"current_usage: {current_usage}")
     print("value from dual cache", value)
     assert value == 10
+
+
+@pytest.mark.asyncio()
+async def test_proxy_logging_setup():
+    """
+    Assert always_read_redis is True when used by internal usage cache
+    """
+    from litellm.proxy.utils import ProxyLogging
+
+    pl_obj = ProxyLogging()
+    assert pl_obj.internal_usage_cache.always_read_redis is True
