@@ -177,7 +177,11 @@ def _gemini_convert_messages_with_history(
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-                assistant_msg = ChatCompletionAssistantMessage(**messages[msg_i])  # type: ignore
+                if isinstance(messages[msg_i], BaseModel):
+                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[msg_i].model_dump()  # type: ignore
+                else:
+                    msg_dict = messages[msg_i]  # type: ignore
+                assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
                 if assistant_msg.get("content", None) is not None and isinstance(
                     assistant_msg["content"], list
                 ):
