@@ -25,6 +25,7 @@ from litellm import (
 )
 from litellm.caching import DualCache, InMemoryCache, S3Cache
 from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -1350,7 +1351,23 @@ class Logging:
         ## LOGGING HOOK ##
 
         for callback in callbacks:
-            if isinstance(callback, CustomLogger):
+            if isinstance(callback, CustomGuardrail):
+                from litellm.types.guardrails import GuardrailEventHooks
+
+                if (
+                    callback.should_run_guardrail(
+                        data=self.model_call_details,
+                        event_type=GuardrailEventHooks.logging_only,
+                    )
+                    is not True
+                ):
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+                    continue
+            elif isinstance(callback, CustomLogger):
                 self.model_call_details, result = await callback.async_logging_hook(
                     kwargs=self.model_call_details,
                     result=result,

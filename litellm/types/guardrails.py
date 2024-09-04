@@ -84,6 +84,10 @@ class LitellmParams(TypedDict, total=False):
     guardrailIdentifier: Optional[str]
     guardrailVersion: Optional[str]
 
+    # Presidio params
+    output_parse_pii: Optional[bool]
+    presidio_ad_hoc_recognizers: Optional[str]
+
 
 class Guardrail(TypedDict):
     guardrail_name: str
@@ -98,6 +102,7 @@ class GuardrailEventHooks(str, Enum):
     pre_call = "pre_call"
     post_call = "post_call"
     during_call = "during_call"
+    logging_only = "logging_only"
 
 
 class BedrockTextContent(TypedDict, total=False):
