@@ -49,8 +49,8 @@ securityContext: {}
 # A list of Kubernetes Secret objects that will be exported to the LiteLLM proxy
 #  pod as environment variables.  These secrets can then be referenced in the
 #  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
-environmentSecrets: []
-  # - litellm-envsecrets
+environmentSecrets:
+  - litellm-secret
 
 service:
   type: ClusterIP
@@ -82,7 +82,7 @@ proxy_config:
     - model_name: gpt-4o-mini
       litellm_params:
         model: gpt-4o-mini
-        api_key: fake-key
+        api_key: os.environ/OPENAI_API_KEY
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
