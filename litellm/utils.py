@@ -6147,6 +6147,7 @@ def convert_to_model_response_object(
     ] = None,  # used for supporting 'json_schema' on older models
 ):
     received_args = locals()
+
     if _response_headers is not None:
         llm_response_headers = {
             "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
