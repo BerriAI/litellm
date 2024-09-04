@@ -156,14 +156,15 @@ postgresql:
 
     # You should override these on the helm command line with
     #  `--set postgresql.auth.postgres-password=<some good password>,postgresql.auth.password=<some good password>`
-    password: NoTaGrEaTpAsSwOrD
-    postgres-password: NoTaGrEaTpAsSwOrD
+    # password: NoTaGrEaTpAsSwOrD
+    # postgres-password: NoTaGrEaTpAsSwOrD
 
     # A secret is created by this chart (litellm-helm) with the credentials that
     #  the new Postgres instance should use.
-    # existingSecret: ""
-    # secretKeys:
-    #   userPasswordKey: password
+    existingSecret: "litellm-secret"
+    secretKeys:
+      userPasswordKey: password
+      postgresPasswordKey: postgres-password
 
 # requires cache: true in config file
 # either enable this or pass a secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL
