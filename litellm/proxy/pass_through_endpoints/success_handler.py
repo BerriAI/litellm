@@ -48,6 +48,7 @@ class PassThroughEndpointLogging:
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=False,
+                **kwargs,
             )
 
     def is_vertex_route(self, url_route: str):
@@ -103,6 +104,7 @@ class PassThroughEndpointLogging:
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=cache_hit,
+                **kwargs,
             )
         elif "predict" in url_route:
             from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
@@ -152,4 +154,5 @@ class PassThroughEndpointLogging:
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=cache_hit,
+                **kwargs,
             )
