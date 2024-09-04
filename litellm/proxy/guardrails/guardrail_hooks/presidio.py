@@ -396,8 +396,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if "metadata" in data:
             _metadata = data["metadata"]
             _guardrail_config = _metadata.get("guardrail_config")
-            _presidio_config = PresidioPerRequestConfig(**_guardrail_config)
-            return _presidio_config
+            if _guardrail_config:
+                _presidio_config = PresidioPerRequestConfig(**_guardrail_config)
+                return _presidio_config
 
         return None
 
