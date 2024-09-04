@@ -1063,6 +1063,7 @@ class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
     AWS_SECRET_MANAGER = "aws_secret_manager"
+    GOOGLE_SECRET_MANAGER = "google_secret_manager"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
 
@@ -1638,6 +1639,7 @@ class AllCallbacks(LiteLLMBase):
             "LAGO_API_BASE",
             "LAGO_API_KEY",
             "LAGO_API_EVENT_CODE",
+            "LAGO_API_CHARGE_BY",
         ],
         ui_callback_name="Lago Billing",
     )

@@ -5,7 +5,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache, InMemoryCache
-from litellm.utils import get_secret
+from litellm.secret_managers.main import get_secret
 
 from .base import BaseLLM
 
