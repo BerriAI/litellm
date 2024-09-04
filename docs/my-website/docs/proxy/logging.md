@@ -63,7 +63,7 @@ Removes any field with `user_api_key_*` from metadata.
 
 ## What gets logged?
 
-Found under `kwargs["standard_logging_payload"]`. This is a standard payload, logged for every response.
+Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
 ```python
 class StandardLoggingPayload(TypedDict):
