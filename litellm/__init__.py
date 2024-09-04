@@ -804,6 +804,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
@@ -828,7 +829,6 @@ from .utils import (
     register_prompt_template,
     validate_environment,
     check_valid_key,
-    get_llm_provider,
     register_model,
     encode,
     decode,
