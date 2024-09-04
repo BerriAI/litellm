@@ -13,6 +13,7 @@ guardrails:
     litellm_params:
       guardrail: presidio  # supported values: "aporia", "lakera", "presidio"
       mode: "pre_call"  # pre_call, during_call, post_call
+      output_parse_pii: True
 
 general_settings: 
  master_key: sk-1234 
