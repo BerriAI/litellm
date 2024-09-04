@@ -76,6 +76,7 @@ def test_get_llm_provider_vertex_ai_image_models():
     )
     assert custom_llm_provider == "vertex_ai"
 
+
 def test_get_llm_provider_ai21_chat():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="jamba-1.5-large",
@@ -100,3 +101,17 @@ def test_get_llm_provider_ai21_chat_test2():
     assert model == "jamba-1.5-large"
     assert api_base == "https://api.ai21.com/studio/v1"
 
+
+def test_get_llm_provider_cohere_chat_test2():
+    """
+    if user prefix with cohere/ but calls command-r-plus then it should be cohere_chat provider
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="cohere/command-r-plus",
+    )
+
+    print("model=", model)
+    print("custom_llm_provider=", custom_llm_provider)
+    print("api_base=", api_base)
+    assert custom_llm_provider == "cohere_chat"
+    assert model == "command-r-plus"
