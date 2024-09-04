@@ -475,7 +475,7 @@ def run_server(
 
         ### DECRYPT ENV VAR ###
 
-        from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
+        from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
         if (
             os.getenv("USE_AWS_KMS", None) is not None
@@ -544,6 +544,15 @@ def run_server(
                         load_aws_secret_manager(use_aws_secret_manager=True)
                     elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                         load_aws_kms(use_aws_kms=True)
+                    elif (
+                        key_management_system
+                        == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
+                    ):
+                        from litellm.secret_managers.google_secret_manager import (
+                            GoogleSecretManager,
+                        )
+
+                        GoogleSecretManager()
                     else:
                         raise ValueError("Invalid Key Management System selected")
             key_management_settings = general_settings.get(
@@ -598,7 +607,7 @@ def run_server(
             or os.getenv("DIRECT_URL", None) is not None
         ):
             try:
-                from litellm import get_secret
+                from litellm.secret_managers.main import get_secret
 
                 if os.getenv("DATABASE_URL", None) is not None:
                     ### add connection pool + pool timeout args

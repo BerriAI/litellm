@@ -25,6 +25,11 @@ If you want a server to load balance across different LLM APIs, use our [LiteLLM
 
 ### Quick Start
 
+Loadbalance across multiple [azure](./providers/azure.md)/[bedrock](./providers/bedrock.md)/[provider](./providers/) deployments. LiteLLM will handle retrying in different regions if a call fails.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router
 
@@ -84,6 +89,57 @@ response = await router.acompletion(model="gpt-4",
 
 print(response)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+:::info
+
+See detailed proxy loadbalancing/fallback docs [here](./proxy/reliability.md)
+
+:::
+
+1. Setup model_list with multiple deployments
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-large
+      api_base: https://openai-france-1234.openai.azure.com/
+      api_key: <your-azure-api-key>
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml 
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+        {"role": "user", "content": "Hi there!"}
+    ],
+    "mock_testing_rate_limit_error": true
+}'
+```
+</TabItem>
+</Tabs>
 
 ### Available Endpoints
 - `router.completion()` - chat completions endpoint to call 100+ LLMs

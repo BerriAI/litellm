@@ -31,7 +31,9 @@ model_list:
       api_base: https://openai-france-1234.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 1440
-routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+
+router_settings:
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
   model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
   num_retries: 2
   timeout: 30                                  # 30 seconds
@@ -84,8 +86,6 @@ print(response)
 </TabItem>
 
 <TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \

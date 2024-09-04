@@ -24,7 +24,6 @@ import httpx
 from fastapi import HTTPException
 
 import litellm
-from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -38,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     BedrockContentItem,
     BedrockRequest,

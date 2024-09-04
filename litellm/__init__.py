@@ -834,7 +834,6 @@ from .utils import (
     decode,
     _calculate_retry_after,
     _should_retry,
-    get_secret,
     get_supported_openai_params,
     get_api_base,
     get_first_chars_messages,

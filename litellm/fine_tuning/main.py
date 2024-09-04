@@ -17,7 +17,6 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union
 import httpx
 
 import litellm
-from litellm import get_secret
 from litellm._logging import verbose_logger
 from litellm.llms.fine_tuning_apis.azure import AzureOpenAIFineTuningAPI
 from litellm.llms.fine_tuning_apis.openai import (
@@ -26,6 +25,7 @@ from litellm.llms.fine_tuning_apis.openai import (
     OpenAIFineTuningAPI,
 )
 from litellm.llms.fine_tuning_apis.vertex_ai import VertexFineTuningAPI
+from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import Hyperparameters
 from litellm.types.router import *
 from litellm.utils import supports_httpx_timeout
