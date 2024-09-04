@@ -1777,6 +1777,7 @@ class DualCache(BaseCache):
         redis_cache: Optional[RedisCache] = None,
         default_in_memory_ttl: Optional[float] = None,
         default_redis_ttl: Optional[float] = None,
+        always_read_redis: Optional[bool] = True,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
@@ -1788,6 +1789,7 @@ class DualCache(BaseCache):
             default_in_memory_ttl or litellm.default_in_memory_ttl
         )
         self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
+        self.always_read_redis = always_read_redis
 
     def update_cache_ttl(
         self, default_in_memory_ttl: Optional[float], default_redis_ttl: Optional[float]
@@ -1847,8 +1849,12 @@ class DualCache(BaseCache):
                 if in_memory_result is not None:
                     result = in_memory_result
 
-            if result is None and self.redis_cache is not None and local_only == False:
-                # If not found in in-memory cache, try fetching from Redis
+            if (
+                (self.always_read_redis is True)
+                and self.redis_cache is not None
+                and local_only == False
+            ):
+                # If not found in in-memory cache or always_read_redis is True, try fetching from Redis
                 redis_result = self.redis_cache.get_cache(key, **kwargs)
 
                 if redis_result is not None:
@@ -1911,8 +1917,12 @@ class DualCache(BaseCache):
                 if in_memory_result is not None:
                     result = in_memory_result
 
-            if result is None and self.redis_cache is not None and local_only == False:
-                # If not found in in-memory cache, try fetching from Redis
+            if (
+                (self.always_read_redis is True)
+                and self.redis_cache is not None
+                and local_only == False
+            ):
+                # If not found in in-memory cache or always_read_redis is True, try fetching from Redis
                 redis_result = await self.redis_cache.async_get_cache(key, **kwargs)
 
                 if redis_result is not None:

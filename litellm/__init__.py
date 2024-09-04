@@ -147,6 +147,9 @@ enable_caching_on_provider_specific_optional_params: bool = (
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
+always_read_redis: bool = (
+    True  # always use redis for rate limiting logic on litellm proxy
+)
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
