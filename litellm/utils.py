@@ -6232,13 +6232,8 @@ def convert_to_model_response_object(
             model_response_object.choices = choice_list
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
-                special_keys = ["completion_tokens", "prompt_tokens", "total_tokens"]
-                for k, v in response_object["usage"].items():
-                    if k not in special_keys:
-                        setattr(model_response_object.usage, k, v)  # type: ignore
+                usage_object = litellm.Usage(**response_object["usage"])
+                setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
                 model_response_object.created = response_object["created"] or int(
                     time.time()
