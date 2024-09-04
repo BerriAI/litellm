@@ -2218,7 +2218,7 @@ def test_completion_openai_pydantic(model):
         print(f"response_str: {response_str}")
         json.loads(response_str)  # check valid json is returned
 
-    except Timeout as e:
+    except Timeout:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
