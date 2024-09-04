@@ -81,32 +81,32 @@ proxy_config:
   model_list:
     - model_name: gpt-3.5-turbo
       litellm_params:
-        model: gpt-35-turbo
+        model: openai/gpt-35-turbo
         api_key: os.environ/OPENAI_API_KEY
       model_info:
         description: "GPT-3.5 Turbo"
     - model_name: gpt-4o
       litellm_params:
-        model: gpt-4o
+        model: openai/gpt-4o
         api_key: os.environ/OPENAI_API_KEY
       model_info:
         description: "GPT-4o"
     - model_name: gpt-4o-mini
       litellm_params:
-        model: gpt-4o-mini
+        model: openai/gpt-4o-mini
         api_key: os.environ/OPENAI_API_KEY
       model_info:
         description: "GPT-4o mini"
     - model_name: text-embedding-ada-002
       litellm_params:
-        model: text-embedding-ada-002
+        model: openai/text-embedding-ada-002
         api_key: os.environ/OPENAI_API_KEY
       model_info:
         mode: embedding
         description: "text-embedding-ada-002"
     - model_name: text-embedding-3-small
       litellm_params:
-        model: text-embedding-3-small
+        model: openai/text-embedding-3-small
         api_key: os.environ/OPENAI_API_KEY
       model_info:
         mode: embedding
