@@ -534,6 +534,18 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
+    "azure/gpt-4o-2024-08-06": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
     "azure/global-standard/gpt-4o-mini": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
