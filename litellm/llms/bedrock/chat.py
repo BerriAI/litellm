@@ -728,7 +728,7 @@ class BedrockLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = get_runtime_endpoint(
+        endpoint_url = get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
@@ -736,10 +736,8 @@ class BedrockLLM(BaseAWSLLM):
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{proxy_endpoint_url}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{proxy_endpoint_url}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -905,7 +903,7 @@ class BedrockLLM(BaseAWSLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": proxy_endpoint_url,
+                "api_base": prepped.url,
                 "headers": prepped.headers,
             },
         )
@@ -919,7 +917,7 @@ class BedrockLLM(BaseAWSLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=proxy_endpoint_url,
+                    api_base=prepped.url,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -937,7 +935,7 @@ class BedrockLLM(BaseAWSLLM):
                 model=model,
                 messages=messages,
                 data=data,
-                api_base=proxy_endpoint_url,
+                api_base=prepped.url,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -962,7 +960,7 @@ class BedrockLLM(BaseAWSLLM):
             self.client = client
         if (stream is not None and stream == True) and provider != "ai21":
             response = self.client.post(
-                url=proxy_endpoint_url,
+                url=prepped.url,
                 headers=prepped.headers,  # type: ignore
                 data=data,
                 stream=stream,
@@ -993,7 +991,7 @@ class BedrockLLM(BaseAWSLLM):
             return streaming_response
 
         try:
-            response = self.client.post(url=proxy_endpoint_url, headers=prepped.headers, data=data)  # type: ignore
+            response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1606,17 +1604,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = get_runtime_endpoint(
+        endpoint_url = get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -1723,7 +1719,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": proxy_endpoint_url,
+                "api_base": prepped.url,
                 "headers": prepped.headers,
             },
         )
@@ -1737,7 +1733,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=proxy_endpoint_url,
+                    api_base=prepped.url,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -1755,7 +1751,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 model=model,
                 messages=messages,
                 data=data,
-                api_base=proxy_endpoint_url,
+                api_base=prepped.url,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -1776,7 +1772,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 make_call=partial(
                     make_sync_call,
                     client=None,
-                    api_base=proxy_endpoint_url,
+                    api_base=prepped.url,
                     headers=prepped.headers,  # type: ignore
                     data=data,
                     model=model,
@@ -1801,7 +1797,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             client = client
         try:
-            response = client.post(url=proxy_endpoint_url, headers=prepped.headers, data=data)  # type: ignore
+            response = client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
