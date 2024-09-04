@@ -11,6 +11,7 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 # v2 implementation
 from litellm.types.guardrails import (
     Guardrail,
+    GuardrailEventHooks,
     GuardrailItem,
     GuardrailItemSpec,
     LakeraCategoryThresholds,
@@ -104,6 +105,10 @@ def init_guardrails_v2(
             api_base=litellm_params_data.get("api_base"),
             guardrailIdentifier=litellm_params_data.get("guardrailIdentifier"),
             guardrailVersion=litellm_params_data.get("guardrailVersion"),
+            output_parse_pii=litellm_params_data.get("output_parse_pii"),
+            presidio_ad_hoc_recognizers=litellm_params_data.get(
+                "presidio_ad_hoc_recognizers"
+            ),
         )
 
         if (
@@ -173,7 +178,24 @@ def init_guardrails_v2(
             _presidio_callback = _OPTIONAL_PresidioPIIMasking(
                 guardrail_name=guardrail["guardrail_name"],
                 event_hook=litellm_params["mode"],
+                output_parse_pii=litellm_params["output_parse_pii"],
+                presidio_ad_hoc_recognizers=litellm_params[
+                    "presidio_ad_hoc_recognizers"
+                ],
             )
+
+            if litellm_params["output_parse_pii"] is True:
+                _success_callback = _OPTIONAL_PresidioPIIMasking(
+                    output_parse_pii=True,
+                    guardrail_name=guardrail["guardrail_name"],
+                    event_hook=GuardrailEventHooks.post_call.value,
+                    presidio_ad_hoc_recognizers=litellm_params[
+                        "presidio_ad_hoc_recognizers"
+                    ],
+                )
+
+                litellm.callbacks.append(_success_callback)  # type: ignore
+
             litellm.callbacks.append(_presidio_callback)  # type: ignore
         elif (
             isinstance(litellm_params["guardrail"], str)
