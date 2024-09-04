@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # PII Masking - Presidio
 
@@ -57,7 +59,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-4o-mini",
+    "model": "gpt-3.5-turbo",
     "messages": [
       {"role": "user", "content": "Hello my name is Jane Doe"}
     ],
@@ -83,7 +85,7 @@ Expected response on failure
    }
  ],
  "created": 1725479980,
- "model": "gpt-4o-mini-2024-07-18",
+ "model": "gpt-3.5-turbo-2024-07-18",
  "object": "chat.completion",
  "system_fingerprint": "fp_5bd87c427a",
  "usage": {
@@ -104,7 +106,7 @@ curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-4o-mini",
+    "model": "gpt-3.5-turbo",
     "messages": [
       {"role": "user", "content": "Hello good morning"}
     ],
@@ -120,10 +122,67 @@ curl http://localhost:4000/chat/completions \
 
 ## Set `language` per request
 
+The Presidio API [supports passing the `language` param](https://microsoft.github.io/presidio/api-docs/api-docs.html#tag/Analyzer/paths/~1analyze/post). Here is how to set the `language` per request
+
+<Tabs>
+<TabItem label="curl" value = "curl">
+
+```shell
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "is this credit card number 9283833 correct?"}
+    ],
+    "guardrails": ["presidio-pre-guard"],
+    "guardrail_config": {"language": "es"}
+  }'
+```
+
+</TabItem>
+
+
+<TabItem label="OpenAI Python SDK" value = "python">
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={ 
+        "metadata": {
+            "guardrails": ["presidio-pre-guard"],
+            "guardrail_config": {"language": "es"}
+        }
+    }
+)
+print(response)
+```
+
+</TabItem>
+
+</Tabs>
+
+
 ## Output parsing 
 
 ## Ad Hoc Recognizers
 
+## Logging Only
 
 
 
