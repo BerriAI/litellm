@@ -1777,7 +1777,7 @@ class DualCache(BaseCache):
         redis_cache: Optional[RedisCache] = None,
         default_in_memory_ttl: Optional[float] = None,
         default_redis_ttl: Optional[float] = None,
-        always_read_redis: Optional[bool] = False,
+        always_read_redis: Optional[bool] = True,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
