@@ -44,7 +44,7 @@ const sidebars = {
         "proxy/reliability",
         {
           type: "category",
-          label: "Use with Vertex, Bedrock, Cohere SDK",
+          label: "Use with Provider SDKs",
           items: [
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
