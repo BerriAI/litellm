@@ -420,6 +420,10 @@ def move_guardrails_to_metadata(
         data[_metadata_variable_name]["guardrails"] = data["guardrails"]
         del data["guardrails"]
 
+    if "guardrail_config" in data:
+        data[_metadata_variable_name]["guardrail_config"] = data["guardrail_config"]
+        del data["guardrail_config"]
+
 
 def add_provider_specific_headers_to_request(
     data: dict,

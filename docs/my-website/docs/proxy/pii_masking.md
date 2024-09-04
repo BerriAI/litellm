@@ -1,6 +1,14 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-# PII Masking
+# PII Masking - LiteLLM Gateway (Deprecated Version)
+
+:::warning
+
+This is deprecated, please use [our new Presidio pii masking integration](./guardrails/pii_masking_v2)
+
+:::
 
 LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) for PII masking. 
 
