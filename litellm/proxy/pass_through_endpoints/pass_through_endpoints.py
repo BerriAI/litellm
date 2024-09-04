@@ -37,7 +37,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 from .streaming_handler import chunk_processor
 from .success_handler import PassThroughEndpointLogging
-from .types import EndpointType, PassthroughStandardLoggingObject
+from .types import EndpointType, PassthroughStandardLoggingPayload
 
 router = APIRouter()
 
@@ -366,7 +366,7 @@ async def pass_through_request(
             litellm_call_id=str(uuid.uuid4()),
             function_id="1245",
         )
-        passthrough_logging_payload = PassthroughStandardLoggingObject(
+        passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
         )
