@@ -8,6 +8,10 @@ class EndpointType(str, Enum):
 
 
 class PassthroughStandardLoggingObject(TypedDict, total=False):
+    """
+    Standard logging payload for all pass through endpoints
+    """
+
     url: str
     request_body: Optional[dict]
-    response_body: Optional[dict]
+    response_body: Optional[dict]  # only tracked for non-streaming responses
