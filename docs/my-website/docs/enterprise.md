@@ -22,7 +22,7 @@ This covers:
         - ✅ [SSO for Admin UI](./proxy/ui#✨-enterprise-features)
         - ✅ [Audit Logs with retention policy](./proxy/enterprise#audit-logs)
         - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
-        - ✅ [Control available public, private routes](./proxy/enterprise#control-available-public-private-routes)
+        - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](./proxy/enterprise#control-available-public-private-routes)
         - ✅ [**Secret Managers** AWS Key Manager, Google Secret Manager, Azure Key](./secret)
         - ✅ IP address‑based access control lists
         - ✅ Track Request IP Address
