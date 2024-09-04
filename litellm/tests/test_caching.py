@@ -1958,3 +1958,42 @@ async def test_cache_default_off_acompletion():
     )
     print(f"Response4: {response4}")
     assert response3.id == response4.id
+
+
+@pytest.mark.asyncio()
+async def test_dual_cache_uses_redis():
+    """
+
+    - Store diff values in redis and in memory cache
+    - call get cache
+    - Assert that value from redis is used
+    """
+    litellm.set_verbose = True
+    from litellm.caching import DualCache, RedisCache
+
+    current_usage = uuid.uuid4()
+
+    _cache_obj = DualCache(redis_cache=RedisCache(), always_read_redis=True)
+
+    # set cache
+    await _cache_obj.async_set_cache(key=f"current_usage: {current_usage}", value=10)
+
+    # modify value of in memory cache
+    _cache_obj.in_memory_cache.cache_dict[f"current_usage: {current_usage}"] = 1
+
+    # get cache
+    value = await _cache_obj.async_get_cache(key=f"current_usage: {current_usage}")
+    print("value from dual cache", value)
+    assert value == 10
+
+
+@pytest.mark.asyncio()
+async def test_proxy_logging_setup():
+    """
+    Assert always_read_redis is True when used by internal usage cache
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    pl_obj = ProxyLogging(user_api_key_cache=DualCache())
+    assert pl_obj.internal_usage_cache.always_read_redis is True
