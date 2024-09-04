@@ -768,7 +768,8 @@ async def make_call(
 
 
 def make_sync_call(
-    client: Optional[HTTPHandler],
+    client: Optional[HTTPHandler],  # module-level client
+    gemini_client: Optional[HTTPHandler],  # if passed by user
     api_base: str,
     headers: dict,
     data: str,
@@ -776,6 +777,8 @@ def make_sync_call(
     messages: list,
     logging_obj,
 ):
+    if gemini_client is not None:
+        client = gemini_client
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
@@ -1061,10 +1064,17 @@ class VertexLLM(BaseLLM):
                 os.getcwd(),
             )
 
-            if os.path.exists(credentials):
-                json_obj = json.load(open(credentials))
-            else:
-                json_obj = json.loads(credentials)
+            try:
+                if os.path.exists(credentials):
+                    json_obj = json.load(open(credentials))
+                else:
+                    json_obj = json.loads(credentials)
+            except Exception:
+                raise Exception(
+                    "Unable to load vertex credentials from environment. Got={}".format(
+                        credentials
+                    )
+                )
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
@@ -1438,7 +1448,11 @@ class VertexLLM(BaseLLM):
                 completion_stream=None,
                 make_call=partial(
                     make_sync_call,
-                    client=None,
+                    gemini_client=(
+                        client
+                        if client is not None and isinstance(client, HTTPHandler)
+                        else None
+                    ),
                     api_base=url,
                     data=request_data_str,
                     model=model,
@@ -1491,6 +1505,9 @@ class VertexLLM(BaseLLM):
 class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
+        self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
+        self.accumulated_json = ""
+        self.sent_first_chunk = False
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -1560,29 +1577,80 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
+    def handle_valid_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+        chunk = chunk.strip()
+        try:
+            json_chunk = json.loads(chunk)
+
+        except json.JSONDecodeError as e:
+            if (
+                self.sent_first_chunk is False
+            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
+                self.chunk_type = "accumulated_json"
+                return self.handle_accumulated_json_chunk(chunk=chunk)
+            raise e
+
+        if self.sent_first_chunk is False:
+            self.sent_first_chunk = True
+
+        return self.chunk_parser(chunk=json_chunk)
+
+    def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+        message = chunk.replace("data:", "").replace("\n\n", "")
+
+        # Accumulate JSON data
+        self.accumulated_json += message
+
+        # Try to parse the accumulated JSON
+        try:
+            _data = json.loads(self.accumulated_json)
+            self.accumulated_json = ""  # reset after successful parsing
+            return self.chunk_parser(chunk=_data)
+        except json.JSONDecodeError:
+            # If it's not valid JSON yet, continue to the next event
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+    def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
+        chunk = chunk.replace("data:", "")
+        if len(chunk) > 0:
+            """
+            Check if initial chunk valid json
+            - if partial json -> enter accumulated json logic
+            - if valid - continue
+            """
+            if self.chunk_type == "valid_json":
+                return self.handle_valid_json_chunk(chunk=chunk)
+            elif self.chunk_type == "accumulated_json":
+                return self.handle_accumulated_json_chunk(chunk=chunk)
+        else:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
     def __next__(self):
         try:
             chunk = self.response_iterator.__next__()
         except StopIteration:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
+            return self._common_chunk_parsing_logic(chunk=chunk)
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -1597,25 +1665,14 @@ class ModelResponseIterator:
         try:
             chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
+            return self._common_chunk_parsing_logic(chunk=chunk)
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:

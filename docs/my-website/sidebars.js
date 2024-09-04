@@ -185,6 +185,7 @@ const sidebars = {
         "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",
+        "completion/usage",
         "exception_mapping",
         "completion/stream",
         "completion/message_trimming",

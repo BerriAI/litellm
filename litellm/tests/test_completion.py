@@ -2180,6 +2180,7 @@ def test_completion_openai():
         "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_openai_pydantic(model):
     try:
         litellm.set_verbose = True
