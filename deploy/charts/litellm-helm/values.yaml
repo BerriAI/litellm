@@ -132,25 +132,41 @@ affinity: {}
 
 db:
   # Use an existing postgres server/cluster
-  useExisting: false
-
-  # How to connect to the existing postgres server/cluster
-  endpoint: localhost
+  useExisting: True
+  endpoint: <db_endpoint>,
   database: litellm
   secret:
     name: postgres
-    usernameKey: username
-    passwordKey: password
+    usernameKey: 'LITELLM_DB_USER',
+    passwordKey: 'LITELLM_DB_PASSWORD'
+  deployStandalone: false
 
-  # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
-  #  The Stackgres Operator must already be installed within the target
-  #  Kubernetes cluster.
-  # TODO: Stackgres deployment currently unsupported
-  useStackgresOperator: false
+#########################################################################################
+################### Comment out if you want to provision a DB in the helm chart #########
+### [NOT-RECOMMENDED] DB Config if you want to provision in a DB in the helm chart 
+# db:
+#   # Use an existing postgres server/cluster
+#   useExisting: false
 
-  # Use the Postgres Helm chart to create a single node, stand alone postgres
-  #  instance.  See the "postgresql" top level key for additional configuration.
-  deployStandalone: true
+#   # How to connect to the existing postgres server/cluster
+#   endpoint: localhost
+#   database: litellm
+#   secret:
+#     name: postgres
+#     usernameKey: username
+#     passwordKey: password
+
+#   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
+#   #  The Stackgres Operator must already be installed within the target
+#   #  Kubernetes cluster.
+#   # TODO: Stackgres deployment currently unsupported
+#   useStackgresOperator: false
+
+#   # Use the Postgres Helm chart to create a single node, stand alone postgres
+#   #  instance.  See the "postgresql" top level key for additional configuration.
+#   deployStandalone: true
+################## End of DB Config if you want to provision in a DB in the helm chart ########
+###############################################################################################
 
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
 #  otherwise)
