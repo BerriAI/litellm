@@ -1222,3 +1222,13 @@ def test_not_found_error():
                 }
             ],
         )
+
+
+def test_bedrock_cross_region_inference():
+    litellm.set_verbose = True
+    response = completion(
+        model="bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        max_tokens=10,
+        temperature=0.1,
+    )

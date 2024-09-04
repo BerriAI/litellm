@@ -1033,6 +1033,7 @@ class AzureChatCompletion(BaseLLM):
             raw_response = await openai_aclient.embeddings.with_raw_response.create(
                 **data, timeout=timeout
             )
+            headers = dict(raw_response.headers)
             response = raw_response.parse()
             stringified_response = response.model_dump()
             ## LOGGING
@@ -1045,6 +1046,8 @@ class AzureChatCompletion(BaseLLM):
             return convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
+                hidden_params={"headers": headers},
+                _response_headers=headers,
                 response_type="embedding",
             )
         except Exception as e:
@@ -1606,7 +1609,7 @@ class AzureChatCompletion(BaseLLM):
         if max_retries is not None:
             azure_client_params["max_retries"] = max_retries
 
-        if atranscription == True:
+        if atranscription is True:
             return self.async_audio_transcriptions(
                 audio_file=audio_file,
                 data=data,
@@ -1693,9 +1696,14 @@ class AzureChatCompletion(BaseLLM):
                 },
             )
 
-            response = await async_azure_client.audio.transcriptions.create(
-                **data, timeout=timeout
+            raw_response = (
+                await async_azure_client.audio.transcriptions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
             )  # type: ignore
+
+            headers = dict(raw_response.headers)
+            response = raw_response.parse()
 
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()
@@ -1717,7 +1725,13 @@ class AzureChatCompletion(BaseLLM):
                 original_response=stringified_response,
             )
             hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
-            response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+            response = convert_to_model_response_object(
+                _response_headers=headers,
+                response_object=stringified_response,
+                model_response_object=model_response,
+                hidden_params=hidden_params,
+                response_type="audio_transcription",
+            )  # type: ignore
             return response
         except Exception as e:
             ## LOGGING
