@@ -347,7 +347,7 @@ class LiteLLMRoutes(enum.Enum):
             "/global/spend/tags",
             "/global/spend/keys",
             "/global/spend/models",
-            "global/spend/provider",
+            "/global/spend/provider",
             "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
