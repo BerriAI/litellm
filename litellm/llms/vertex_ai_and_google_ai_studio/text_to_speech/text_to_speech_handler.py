@@ -12,7 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_async_httpx_client,
     _get_httpx_client,
 )
-from litellm.llms.openai import HttpxBinaryResponseContent
+from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
