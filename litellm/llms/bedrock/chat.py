@@ -736,10 +736,10 @@ class BedrockLLM(BaseAWSLLM):
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{proxy_endpoint_url}/invoke-with-response-stream"
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{proxy_endpoint_url}/invoke"
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
