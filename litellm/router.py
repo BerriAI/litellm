@@ -97,6 +97,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLM_Params,
+    LiteLLMParamsTypedDict,
     ModelGroupInfo,
     ModelInfo,
     RetryPolicy,
@@ -4556,13 +4557,24 @@ class Router:
         self, model_name: Optional[str] = None
     ) -> Optional[List[DeploymentTypedDict]]:
         if hasattr(self, "model_list"):
-            if model_name is None:
-                return self.model_list
-
             returned_models: List[DeploymentTypedDict] = []
+
+            for model_alias, model_value in self.model_group_alias.items():
+                model_alias_item = DeploymentTypedDict(
+                    model_name=model_alias,
+                    litellm_params=LiteLLMParamsTypedDict(model=model_value),
+                )
+                returned_models.append(model_alias_item)
+
+            if model_name is None:
+                returned_models += self.model_list
+
+                return returned_models
+
             for model in self.model_list:
                 if model["model_name"] == model_name:
                     returned_models.append(model)
+
             return returned_models
         return None
 
