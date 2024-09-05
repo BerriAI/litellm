@@ -10,7 +10,12 @@ The proxy exposes:
 
 ## `/health`
 #### Request
-Make a GET Request to `/health` on the proxy
+Make a GET Request to `/health` on the proxy 
+
+:::info
+**This endpoint makes an LLM API call to each model to check if it is healthy.**
+:::
+
 ```shell
 curl --location 'http://0.0.0.0:4000/health' -H "Authorization: Bearer sk-1234"
 ```
@@ -150,7 +155,13 @@ Expected Response
 
 ## Background Health Checks 
 
-You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`.
+You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`. 
+
+:::info
+
+**This makes an LLM API call to each model to check if it is healthy.**
+
+:::
 
 Here's how to use it: 
 1. in the config.yaml add:

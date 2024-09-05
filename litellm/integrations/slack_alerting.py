@@ -1514,7 +1514,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url = self.alert_to_webhook_url[alert_type]
+            slack_webhook_url: Optional[Union[str, List[str]]] = (
+                self.alert_to_webhook_url[alert_type]
+            )
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
@@ -1525,17 +1527,38 @@ Model Info:
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
-        response = await self.async_http_handler.post(
-            url=slack_webhook_url,
-            headers=headers,
-            data=json.dumps(payload),
-        )
-        if response.status_code == 200:
-            pass
-        else:
-            verbose_proxy_logger.debug(
-                "Error sending slack alert. Error={}".format(response.text)
+        async def send_to_webhook(url: str):
+            return await self.async_http_handler.post(
+                url=url,
+                headers=headers,
+                data=json.dumps(payload),
             )
+
+        if isinstance(slack_webhook_url, list):
+            # Parallelize the calls if it's a list of URLs
+            responses = await asyncio.gather(
+                *[send_to_webhook(url) for url in slack_webhook_url]
+            )
+
+            for response, url in zip(responses, slack_webhook_url):
+                if response.status_code == 200:
+                    pass
+                else:
+                    verbose_proxy_logger.debug(
+                        "Error sending slack alert to url={}. Error={}".format(
+                            url, response.text
+                        )
+                    )
+        else:
+            # Single call if it's a single URL
+            response = await send_to_webhook(slack_webhook_url)
+
+            if response.status_code == 200:
+                pass
+            else:
+                verbose_proxy_logger.debug(
+                    "Error sending slack alert. Error={}".format(response.text)
+                )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
@@ -1718,7 +1741,9 @@ Model Info:
         try:
             from calendar import monthrange
 
-            from litellm.proxy.proxy_server import _get_spend_report_for_time_range
+            from litellm.proxy.spend_tracking.spend_management_endpoints import (
+                _get_spend_report_for_time_range,
+            )
 
             todays_date = datetime.datetime.now().date()
             first_day_of_month = todays_date.replace(day=1)
@@ -1763,7 +1788,7 @@ Model Info:
                 alerting_metadata={},
             )
         except Exception as e:
-            verbose_proxy_logger.error("Error sending weekly spend report %s", e)
+            verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
 
     async def send_fallback_stats_from_prometheus(self):
         """

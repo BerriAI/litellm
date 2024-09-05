@@ -63,7 +63,7 @@ Removes any field with `user_api_key_*` from metadata.
 
 ## What gets logged?
 
-Found under `kwargs["standard_logging_payload"]`. This is a standard payload, logged for every response.
+Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
 ```python
 class StandardLoggingPayload(TypedDict):
@@ -1426,6 +1426,7 @@ litellm_settings:
 ```shell
 DD_API_KEY="5f2d0f310***********" # your datadog API Key
 DD_SITE="us5.datadoghq.com"       # your datadog base url
+DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
 ```
 
 **Step 3**: Start the proxy, make a test request

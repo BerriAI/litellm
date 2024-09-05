@@ -1,11 +1,17 @@
 #### What this does ####
 #    On success + failure, log events to Datadog
 
-import dotenv, os
-import requests  # type: ignore
+import datetime
+import os
+import subprocess
+import sys
 import traceback
-import datetime, subprocess, sys
-import litellm, uuid
+import uuid
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 
 
@@ -57,9 +63,9 @@ class DataDogLogger:
     ):
         try:
             # Define DataDog client
-            from datadog_api_client.v2.api.logs_api import LogsApi
             from datadog_api_client.v2 import ApiClient
-            from datadog_api_client.v2.models import HTTPLogItem, HTTPLog
+            from datadog_api_client.v2.api.logs_api import LogsApi
+            from datadog_api_client.v2.models import HTTPLog, HTTPLogItem
 
             verbose_logger.debug(
                 f"datadog Logging - Enters logging function for model {kwargs}"
@@ -131,7 +137,7 @@ class DataDogLogger:
                 body = HTTPLog(
                     [
                         HTTPLogItem(
-                            ddsource="litellm",
+                            ddsource=os.getenv("DD_SOURCE", "litellm"),
                             message=payload,
                             service="litellm-server",
                         ),

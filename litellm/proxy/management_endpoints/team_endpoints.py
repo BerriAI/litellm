@@ -224,6 +224,13 @@ async def new_team(
         model_id=_model_id,
     )
 
+    # Set tags on the new team
+    if data.tags is not None:
+        if complete_team_data.metadata is None:
+            complete_team_data.metadata = {"tags": data.tags}
+        else:
+            complete_team_data.metadata["tags"] = data.tags
+
     # If budget_duration is set, set `budget_reset_at`
     if complete_team_data.budget_duration is not None:
         duration_s = _duration_in_seconds(duration=complete_team_data.budget_duration)
@@ -346,9 +353,10 @@ async def update_team(
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
     verbose_proxy_logger.debug("/team/update - %s", data)
 
-    existing_team_row = await prisma_client.get_data(
-        team_id=data.team_id, table_name="team", query_type="find_unique"
+    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
+
     if existing_team_row is None:
         raise HTTPException(
             status_code=404,
@@ -364,6 +372,15 @@ async def update_team(
 
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
+
+    # check if user is trying to update tags for team
+    if "tags" in updated_kv and updated_kv["tags"] is not None:
+        # remove tags from updated_kv
+        _tags = updated_kv.pop("tags")
+        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
+            updated_kv["metadata"]["tags"] = _tags
+        else:
+            updated_kv["metadata"] = {"tags": _tags}
 
     updated_kv = prisma_client.jsonify_object(data=updated_kv)
     team_row: Optional[
@@ -499,28 +516,10 @@ async def team_member_add(
             },
         )
 
-    if isinstance(data.member, Member):
-        # add to team db
-        new_member = data.member
-
-        complete_team_data.members_with_roles.append(new_member)
-
-    elif isinstance(data.member, List):
-        # add to team db
-        new_members = data.member
-
-        complete_team_data.members_with_roles.extend(new_members)
-
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-    )
-
     updated_users: List[LiteLLM_UserTable] = []
     updated_team_memberships: List[LiteLLM_TeamMembership] = []
 
+    ## VALIDATE IF NEW MEMBER ##
     if isinstance(data.member, Member):
         try:
             updated_user, updated_tm = await add_new_member(
@@ -570,6 +569,41 @@ async def team_member_add(
                 updated_team_memberships.append(updated_tm)
 
         await asyncio.gather(*tasks)
+
+    ## ADD TO TEAM ##
+    if isinstance(data.member, Member):
+        # add to team db
+        new_member = data.member
+
+        # get user id
+        if new_member.user_id is None and new_member.user_email is not None:
+            for user in updated_users:
+                if (
+                    user.user_email is not None
+                    and user.user_email == new_member.user_email
+                ):
+                    new_member.user_id = user.user_id
+
+        complete_team_data.members_with_roles.append(new_member)
+
+    elif isinstance(data.member, List):
+        # add to team db
+        new_members = data.member
+
+        for nm in new_members:
+            if nm.user_id is None and nm.user_email is not None:
+                for user in updated_users:
+                    if user.user_email is not None and user.user_email == nm.user_email:
+                        nm.user_id = user.user_id
+
+        complete_team_data.members_with_roles.extend(new_members)
+
+    # ADD MEMBER TO TEAM
+    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+    )
 
     # Check if updated_team is None
     if updated_team is None:
@@ -897,7 +931,18 @@ async def team_info(
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
-        return {"team_id": team_id, "team_info": team_info, "keys": keys}
+
+        ## GET ALL MEMBERSHIPS ##
+        team_memberships = await prisma_client.db.litellm_teammembership.find_many(
+            where={"team_id": team_id},
+            include={"litellm_budget_table": True},
+        )
+        return {
+            "team_id": team_id,
+            "team_info": team_info,
+            "keys": keys,
+            "team_memberships": team_memberships,
+        }
 
     except Exception as e:
         verbose_proxy_logger.error(

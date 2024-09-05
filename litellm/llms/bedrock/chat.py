@@ -1,6 +1,7 @@
-# What is this?
-## Initial implementation of calling bedrock via httpx client (allows for async calls).
-## V1 - covers cohere + anthropic claude-3 support
+"""
+Manages calling Bedrock's `/converse` API + `/invoke` API 
+"""
+
 import copy
 import json
 import os
@@ -28,7 +29,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.caching import DualCache, InMemoryCache
+from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
@@ -39,27 +40,20 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
-    ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolChoiceFunctionParam,
+    ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import Choices
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import Message
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    get_secret,
-    print_verbose,
-)
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
 
-from .base import BaseLLM
-from .base_aws_llm import BaseAWSLLM
-from .bedrock import BedrockError, ModelResponseIterator, convert_messages_to_prompt
-from .prompt_templates.factory import (
+from ..base_aws_llm import BaseAWSLLM
+from ..prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
     cohere_message_pt,
@@ -70,12 +64,21 @@ from .prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
+from .common_utils import BedrockError, ModelResponseIterator, get_runtime_endpoint
 
 BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
     "anthropic.claude-3-opus-20240229-v1:0",
+    "us.anthropic.claude-3-opus-20240229-v1:0",
+    "eu.anthropic.claude-3-opus-20240229-v1:0",
     "anthropic.claude-3-sonnet-20240229-v1:0",
+    "us.anthropic.claude-3-sonnet-20240229-v1:0",
+    "eu.anthropic.claude-3-sonnet-20240229-v1:0",
     "anthropic.claude-3-haiku-20240307-v1:0",
+    "us.anthropic.claude-3-haiku-20240307-v1:0",
+    "eu.anthropic.claude-3-haiku-20240307-v1:0",
     "anthropic.claude-v2",
     "anthropic.claude-v2:1",
     "anthropic.claude-v1",
@@ -646,6 +649,7 @@ class BedrockLLM(BaseAWSLLM):
         self,
         model: str,
         messages: list,
+        api_base: Optional[str],
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -724,20 +728,13 @@ class BedrockLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url = ""
-        env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if aws_bedrock_runtime_endpoint is not None and isinstance(
-            aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(
-            env_aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        endpoint_url = get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
 
-        if (stream is not None and stream == True) and provider != "ai21":
+        if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
@@ -1159,6 +1156,7 @@ class AmazonConverseConfig:
             "temperature",
             "top_p",
             "extra_headers",
+            "response_format",
         ]
 
         if (
@@ -1217,6 +1215,48 @@ class AmazonConverseConfig:
         drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
+            if param == "response_format":
+                json_schema: Optional[dict] = None
+                schema_name: str = ""
+                if "response_schema" in value:
+                    json_schema = value["response_schema"]
+                    schema_name = "json_tool_call"
+                elif "json_schema" in value:
+                    json_schema = value["json_schema"]["schema"]
+                    schema_name = value["json_schema"]["name"]
+                """
+                Follow similar approach to anthropic - translate to a single tool call. 
+
+                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+                - You usually want to provide a single tool
+                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+                """
+                if json_schema is not None:
+                    _tool_choice = self.map_tool_choice_values(
+                        model=model, tool_choice="required", drop_params=drop_params  # type: ignore
+                    )
+
+                    _tool = ChatCompletionToolParam(
+                        type="function",
+                        function=ChatCompletionToolParamFunctionChunk(
+                            name=schema_name, parameters=json_schema
+                        ),
+                    )
+
+                    optional_params["tools"] = [_tool]
+                    optional_params["tool_choice"] = _tool_choice
+                    optional_params["json_mode"] = True
+                else:
+                    if litellm.drop_params is True or drop_params is True:
+                        pass
+                    else:
+                        raise litellm.utils.UnsupportedParamsError(
+                            message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(
+                                value
+                            ),
+                            status_code=400,
+                        )
             if param == "max_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -1270,7 +1310,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         print_verbose(f"raw model_response: {response.text}")
-
+        json_mode: Optional[bool] = optional_params.pop("json_mode", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1339,6 +1379,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                         name=response_tool_name,
                         arguments=json.dumps(content["toolUse"]["input"]),
                     )
+
                     _tool_response_chunk = ChatCompletionToolCallChunk(
                         id=content["toolUse"]["toolUseId"],
                         type="function",
@@ -1347,7 +1388,14 @@ class BedrockConverseLLM(BaseAWSLLM):
                     )
                     tools.append(_tool_response_chunk)
         chat_completion_message["content"] = content_str
-        chat_completion_message["tool_calls"] = tools
+
+        if json_mode is True and tools is not None and len(tools) == 1:
+            # to support 'json_schema' logic on bedrock models
+            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
+            if json_mode_content_str is not None:
+                chat_completion_message["content"] = json_mode_content_str
+        else:
+            chat_completion_message["tool_calls"] = tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         input_tokens = completion_response["usage"]["inputTokens"]
@@ -1451,7 +1499,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(url=api_base, headers=headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1477,6 +1525,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         self,
         model: str,
         messages: list,
+        api_base: Optional[str],
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -1555,19 +1604,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url = ""
-        env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if aws_bedrock_runtime_endpoint is not None and isinstance(
-            aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(
-            env_aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
-
+        endpoint_url = get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
         else:
@@ -1600,6 +1641,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
+        json_mode: Optional[bool] = inference_params.pop(
+            "json_mode", None
+        )  # used for handling json_schema
         ## TRANSFORMATION ##
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
@@ -2042,8 +2086,14 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                 text=chunk_data.choices[0].message.content or "",  # type: ignore
                 tool_use=None,
                 is_finished=True,
-                finish_reason=chunk_data.choices[0].finish_reason,  # type: ignore
-                usage=chunk_usage,  # type: ignore
+                finish_reason=map_finish_reason(
+                    finish_reason=chunk_data.choices[0].finish_reason or ""
+                ),
+                usage=ChatCompletionUsageBlock(
+                    prompt_tokens=chunk_usage.prompt_tokens,
+                    completion_tokens=chunk_usage.completion_tokens,
+                    total_tokens=chunk_usage.total_tokens,
+                ),
                 index=0,
             )
             return processed_chunk

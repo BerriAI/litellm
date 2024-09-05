@@ -1531,28 +1531,103 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
 
-### Advanced Use `task_type` and `title` (Vertex Specific Params)
+### Supported OpenAI (Unified) Params
 
-👉 `task_type` and `title` are vertex specific params
+| [param](../embedding/supported_embedding.md#input-params-for-litellmembedding) | type | [vertex equivalent](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api) |
+|-------|-------------|--------------------|
+| `input` | **string or List[string]** | `instances` |
+| `dimensions` | **int** | `output_dimensionality` |
+| `input_type` | **Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]** | `task_type` |
 
-LiteLLM Supported Vertex Specific Params
+#### Usage with OpenAI (Unified) Params
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
-auto_truncate: Optional[bool] = None
-task_type: Optional[Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]] = None
-title: Optional[str] = None # The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    input_type = "RETRIEVAL_DOCUMENT",
+    dimensions=1,
+)
 ```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
 
-**Example Usage with LiteLLM**
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="text-embedding-004", 
+    input = ["good morning from litellm", "gm"],
+    dimensions=1,
+    extra_body = {
+        "input_type": "RETRIEVAL_QUERY",
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+
+### Supported Vertex Specific Params
+
+| param | type |
+|-------|-------------|
+| `auto_truncate` | **bool** |
+| `task_type` | **Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]** |
+| `title` | **str** |
+
+#### Usage with Vertex Specific Params  (Use `task_type` and `title`)
+
+You can pass any vertex specific params to the embedding model. Just pass them to the embedding function like this: 
+
+[Relevant Vertex AI doc with all embedding params](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#request_body)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 response = litellm.embedding(
     model="vertex_ai/text-embedding-004",
     input=["good morning from litellm", "gm"]
     task_type = "RETRIEVAL_DOCUMENT",
+    title = "test",
     dimensions=1,
     auto_truncate=True,
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="text-embedding-004", 
+    input = ["good morning from litellm", "gm"],
+    dimensions=1,
+    extra_body = {
+        "task_type": "RETRIEVAL_QUERY",
+        "auto_truncate": True,
+        "title": "test",
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
 
 ## **Multi-Modal Embeddings**
 
@@ -1758,6 +1833,19 @@ response = await litellm.aimage_generation(
 )
 ```
 
+### Supported Image Generation Models
+
+| Model Name                   | FUsage                                            |
+|------------------------------|--------------------------------------------------------------|
+| `imagen-3.0-generate-001`      | `litellm.image_generation('vertex_ai/imagen-3.0-generate-001', prompt)` |
+| `imagen-3.0-fast-generate-001` | `litellm.image_generation('vertex_ai/imagen-3.0-fast-generate-001', prompt)` |
+| `imagegeneration@006`          | `litellm.image_generation('vertex_ai/imagegeneration@006', prompt)`  |
+| `imagegeneration@005`          | `litellm.image_generation('vertex_ai/imagegeneration@005', prompt)`  |
+| `imagegeneration@002`          | `litellm.image_generation('vertex_ai/imagegeneration@002', prompt)`  |
+
+
+
+
 ## **Text to Speech APIs**
 
 :::info
@@ -1768,7 +1856,7 @@ LiteLLM supports calling [Vertex AI Text to Speech API](https://console.cloud.go
 
 
 
-Usage
+### Usage - Basic
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1839,6 +1927,150 @@ print("response from proxy", response)
 
 </TabItem>
 </Tabs>
+
+
+### Usage - `ssml` as input
+
+Pass your `ssml` as input to the `input` param, if it contains `<speak>`, it will be automatically detected and passed as `ssml` to the Vertex AI API
+
+If you need to force your `input` to be passed as `ssml`, set `use_ssml=True`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+
+
+```python
+speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+response = litellm.speech(
+    input=ssml,
+    model="vertex_ai/test",
+    voice={
+        "languageCode": "en-UK",
+        "name": "en-UK-Studio-O",
+    },
+    audioConfig={
+        "audioEncoding": "LINEAR22",
+        "speakingRate": "10",
+    },
+)
+response.stream_to_file(speech_file_path)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+# see supported values for "voice" on vertex here: 
+# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
+response = client.audio.speech.create(
+    model = "vertex-tts",
+    input=ssml,
+    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
+)
+print("response from proxy", response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### Forcing SSML Usage
+
+You can force the use of SSML by setting the `use_ssml` parameter to `True`. This is useful when you want to ensure that your input is treated as SSML, even if it doesn't contain the `<speak>` tags.
+
+Here are examples of how to force SSML usage:
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+
+
+```python
+speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+response = litellm.speech(
+    input=ssml,
+    use_ssml=True,
+    model="vertex_ai/test",
+    voice={
+        "languageCode": "en-UK",
+        "name": "en-UK-Studio-O",
+    },
+    audioConfig={
+        "audioEncoding": "LINEAR22",
+        "speakingRate": "10",
+    },
+)
+response.stream_to_file(speech_file_path)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+# see supported values for "voice" on vertex here: 
+# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
+response = client.audio.speech.create(
+    model = "vertex-tts",
+    input=ssml, # pass as None since OpenAI SDK requires this param
+    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
+    extra_body={"use_ssml": True},
+)
+print("response from proxy", response)
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+
 
 
 ## Extra

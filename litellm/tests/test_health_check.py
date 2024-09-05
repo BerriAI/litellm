@@ -1,14 +1,18 @@
 #### What this tests ####
 #    This tests if ahealth_check() actually works
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm, asyncio
+import asyncio
+
+import litellm
 
 
 @pytest.mark.asyncio
@@ -105,3 +109,27 @@ async def test_sagemaker_embedding_health_check():
 
 
 # asyncio.run(test_sagemaker_embedding_health_check())
+
+
+@pytest.mark.asyncio
+async def test_fireworks_health_check():
+    """
+    This should not fail
+
+    ensure that provider wildcard model passes health check
+    """
+    response = await litellm.ahealth_check(
+        model_params={
+            "api_key": os.environ.get("FIREWORKS_AI_API_KEY"),
+            "model": "fireworks_ai/*",
+            "messages": [{"role": "user", "content": "What's 1 + 1?"}],
+        },
+        mode=None,
+        prompt="What's 1 + 1?",
+        input=["test from litellm"],
+        default_timeout=6000,
+    )
+    print(f"response: {response}")
+    assert response == {}
+
+    return response

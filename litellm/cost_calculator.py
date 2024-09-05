@@ -19,8 +19,12 @@ from litellm.litellm_core_utils.llm_cost_calc.google import (
     cost_router as google_cost_router,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
+from litellm.llms.anthropic.cost_calculation import (
+    cost_per_token as anthropic_cost_per_token,
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
+from litellm.types.utils import PassthroughCallTypes, Usage
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -59,14 +63,17 @@ def _cost_per_token_custom_pricing_helper(
 
 def cost_per_token(
     model: str = "",
-    prompt_tokens: float = 0,
-    completion_tokens: float = 0,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
     response_time_ms=None,
     custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CHARACTER PRICING ###
-    prompt_characters: float = 0,
-    completion_characters: float = 0,
+    prompt_characters: int = 0,
+    completion_characters: int = 0,
+    ### PROMPT CACHING PRICING ### - used for anthropic
+    cache_creation_input_tokens: Optional[int] = 0,
+    cache_read_input_tokens: Optional[int] = 0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
@@ -108,6 +115,16 @@ def cost_per_token(
     """
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
+
+    ## RECONSTRUCT USAGE BLOCK ##
+    usage_block = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+    )
+
     ## CUSTOM PRICING ##
     response_cost = _cost_per_token_custom_pricing_helper(
         prompt_tokens=prompt_tokens,
@@ -137,6 +154,7 @@ def cost_per_token(
                 model_with_provider = model_with_provider_and_region
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
     model_without_prefix = model
     model_parts = model.split("/")
     if len(model_parts) > 1:
@@ -162,6 +180,7 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
+
     if custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
@@ -188,6 +207,8 @@ def cost_per_token(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
+    elif custom_llm_provider == "anthropic":
+        return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
@@ -520,6 +541,8 @@ def completion_cost(
         prompt_characters = 0
         completion_tokens = 0
         completion_characters = 0
+        cache_creation_input_tokens: Optional[int] = None
+        cache_read_input_tokens: Optional[int] = None
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
@@ -541,6 +564,13 @@ def completion_cost(
             completion_tokens = completion_response.get("usage", {}).get(
                 "completion_tokens", 0
             )
+            cache_creation_input_tokens = completion_response.get("usage", {}).get(
+                "cache_creation_input_tokens", 0
+            )
+            cache_read_input_tokens = completion_response.get("usage", {}).get(
+                "cache_read_input_tokens", 0
+            )
+
             total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(
                 f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
@@ -550,7 +580,7 @@ def completion_cost(
             )
             if hasattr(completion_response, "_hidden_params"):
                 custom_llm_provider = completion_response._hidden_params.get(
-                    "custom_llm_provider", custom_llm_provider or ""
+                    "custom_llm_provider", custom_llm_provider or None
                 )
                 region_name = completion_response._hidden_params.get(
                     "region_name", region_name
@@ -595,6 +625,7 @@ def completion_cost(
         if (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
+            or call_type == PassthroughCallTypes.passthrough_image_generation.value
         ):
             ### IMAGE GENERATION COST CALCULATION ###
             if custom_llm_provider == "vertex_ai":
@@ -697,6 +728,8 @@ def completion_cost(
             custom_cost_per_token=custom_cost_per_token,
             prompt_characters=prompt_characters,
             completion_characters=completion_characters,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
             call_type=call_type,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar

@@ -5,7 +5,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache, InMemoryCache
-from litellm.utils import get_secret
+from litellm.secret_managers.main import get_secret
 
 from .base import BaseLLM
 
@@ -119,8 +119,6 @@ class BaseAWSLLM(BaseLLM):
                     "aws_web_identity_token": aws_web_identity_token,
                     "aws_role_name": aws_role_name,
                     "aws_session_name": aws_session_name,
-                    "aws_region_name": aws_region_name,
-                    "aws_sts_endpoint": sts_endpoint,
                 }
             )
 
@@ -147,6 +145,7 @@ class BaseAWSLLM(BaseLLM):
                     RoleSessionName=aws_session_name,
                     WebIdentityToken=oidc_token,
                     DurationSeconds=3600,
+                    Policy='{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"},"StringLike":{"aws:UserAgent":"litellm/*"}}}]}',
                 )
 
                 iam_creds_dict = {
@@ -163,6 +162,11 @@ class BaseAWSLLM(BaseLLM):
                     value=json.dumps(iam_creds_dict),
                     ttl=3600 - 60,
                 )
+
+                if sts_response["PackedPolicySize"] > 75:
+                    verbose_logger.warning(
+                        f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
+                    )
 
             session = boto3.Session(**iam_creds_dict)
 

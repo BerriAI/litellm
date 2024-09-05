@@ -26,7 +26,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import is_llm_api_route
+from litellm.proxy.auth.route_checks import is_llm_api_route
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -60,6 +60,7 @@ def common_checks(
     6. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
     7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     8. [OPTIONAL] If guardrails modified - is request allowed to change this
+    9. Check if request body is safe
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:

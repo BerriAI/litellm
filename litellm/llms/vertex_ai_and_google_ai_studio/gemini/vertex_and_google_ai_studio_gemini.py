@@ -13,7 +13,6 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
-from openai.types.image import Image
 
 import litellm
 import litellm.litellm_core_utils
@@ -41,25 +40,29 @@ from litellm.types.llms.vertex_ai import (
     FunctionDeclaration,
     GenerateContentResponseBody,
     GenerationConfig,
-    Instance,
-    InstanceVideo,
     PartType,
     RequestBody,
     SafetSettingsConfig,
     SystemInstructions,
     ToolConfig,
     Tools,
-    VertexMultimodalEmbeddingRequest,
 )
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from ..base import BaseLLM
-from .common_utils import VertexAIError, get_supports_system_message
-from .context_caching.vertex_ai_context_caching import ContextCachingEndpoints
-from .gemini_transformation import transform_system_message
-
-context_caching_endpoints = ContextCachingEndpoints()
+from ...base import BaseLLM
+from ..common_utils import (
+    VertexAIError,
+    _get_gemini_url,
+    _get_vertex_url,
+    all_gemini_url_modes,
+    get_supports_system_message,
+)
+from .transformation import (
+    async_transform_request_body,
+    set_headers,
+    sync_transform_request_body,
+)
 
 
 class VertexAIConfig:
@@ -309,6 +312,7 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "n",
             "stop",
         ]
+
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
@@ -764,7 +768,8 @@ async def make_call(
 
 
 def make_sync_call(
-    client: Optional[HTTPHandler],
+    client: Optional[HTTPHandler],  # module-level client
+    gemini_client: Optional[HTTPHandler],  # if passed by user
     api_base: str,
     headers: dict,
     data: str,
@@ -772,6 +777,8 @@ def make_sync_call(
     messages: list,
     logging_obj,
 ):
+    if gemini_client is not None:
+        client = gemini_client
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
@@ -803,10 +810,6 @@ class VertexLLM(BaseLLM):
         self._credentials: Optional[Any] = None
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
-        self.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS = [
-            "multimodalembedding",
-            "multimodalembedding@001",
-        ]
 
     def _process_response(
         self,
@@ -817,7 +820,7 @@ class VertexLLM(BaseLLM):
         optional_params: dict,
         litellm_params: dict,
         api_key: str,
-        data: Union[dict, str],
+        data: Union[dict, str, RequestBody],
         messages: List,
         print_verbose,
         encoding,
@@ -1061,10 +1064,17 @@ class VertexLLM(BaseLLM):
                 os.getcwd(),
             )
 
-            if os.path.exists(credentials):
-                json_obj = json.load(open(credentials))
-            else:
-                json_obj = json.loads(credentials)
+            try:
+                if os.path.exists(credentials):
+                    json_obj = json.load(open(credentials))
+                else:
+                    json_obj = json.loads(credentials)
+            except Exception:
+                raise Exception(
+                    "Unable to load vertex credentials from environment. Got={}".format(
+                        credentials
+                    )
+                )
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
@@ -1164,6 +1174,7 @@ class VertexLLM(BaseLLM):
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
         should_use_v1beta1_features: Optional[bool] = False,
+        mode: all_gemini_url_modes = "chat",
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -1174,18 +1185,13 @@ class VertexLLM(BaseLLM):
             token, url
         """
         if custom_llm_provider == "gemini":
-            _gemini_model_name = "models/{}".format(model)
             auth_header = None
-            endpoint = "generateContent"
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
-            else:
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
+            url, endpoint = _get_gemini_url(
+                mode=mode,
+                model=model,
+                stream=stream,
+                gemini_api_key=gemini_api_key,
+            )
         else:
             auth_header, vertex_project = self._ensure_access_token(
                 credentials=vertex_credentials, project_id=vertex_project
@@ -1193,29 +1199,23 @@ class VertexLLM(BaseLLM):
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
             ### SET RUNTIME ENDPOINT ###
-            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
-            endpoint = "generateContent"
-            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-
-            # if model is only numeric chars then it's a fine tuned gemini model
-            # model = 4965075652664360960
-            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-            if model.isdigit():
-                # It's a fine-tuned Gemini model
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-                if stream is True:
-                    url += "?alt=sse"
+            version: Literal["v1beta1", "v1"] = (
+                "v1beta1" if should_use_v1beta1_features is True else "v1"
+            )
+            url, endpoint = _get_vertex_url(
+                mode=mode,
+                model=model,
+                stream=stream,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_api_version=version,
+            )
 
         if (
             api_base is not None
         ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
             if custom_llm_provider == "gemini":
-                url = "{}/{}".format(api_base, endpoint)
+                url = "{}:{}".format(api_base, endpoint)
                 auth_header = (
                     gemini_api_key  # cloudflare expects api key as bearer token
                 )
@@ -1234,7 +1234,7 @@ class VertexLLM(BaseLLM):
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        data: str,
+        data: dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
@@ -1245,6 +1245,9 @@ class VertexLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> CustomStreamWrapper:
+        request_body = await async_transform_request_body(**data)  # type: ignore
+
+        request_body_str = json.dumps(request_body)
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
             make_call=partial(
@@ -1252,7 +1255,7 @@ class VertexLLM(BaseLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=request_body_str,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -1270,18 +1273,20 @@ class VertexLLM(BaseLLM):
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        data: str,
+        data: dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
         stream,
         optional_params: dict,
         litellm_params: dict,
+        headers: dict,
         logger_fn=None,
-        headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        if client is None:
+
+        request_body = await async_transform_request_body(**data)  # type: ignore
+        if client is None or not isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
@@ -1290,9 +1295,19 @@ class VertexLLM(BaseLLM):
             client = AsyncHTTPHandler(**_params)  # type: ignore
         else:
             client = client  # type: ignore
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
 
         try:
-            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
+            response = await client.post(api_base, headers=headers, json=request_body)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1306,7 +1321,7 @@ class VertexLLM(BaseLLM):
             model_response=model_response,
             logging_obj=logging_obj,
             api_key="",
-            data=data,
+            data=request_body,
             messages=messages,
             print_verbose=print_verbose,
             optional_params=optional_params,
@@ -1356,89 +1371,65 @@ class VertexLLM(BaseLLM):
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
-        ## TRANSFORMATION ##
-        ### CHECK CONTEXT CACHING ###
-        if gemini_api_key is not None:
-            messages, cached_content = context_caching_endpoints.check_and_create_cache(
-                messages=messages,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
-        else:  # [TODO] implement context caching for gemini as well
-            cached_content = optional_params.pop("cached_content", None)
-
-        # Separate system prompt from rest of message
-        supports_system_message = get_supports_system_message(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        system_instructions, messages = transform_system_message(
-            supports_system_message=supports_system_message, messages=messages
-        )
-        # Checks for 'response_schema' support - if passed in
-        if "response_schema" in optional_params:
-            supports_response_schema = litellm.supports_response_schema(
-                model=model, custom_llm_provider="vertex_ai"
-            )
-            if supports_response_schema is False:
-                user_response_schema_message = response_schema_prompt(
-                    model=model, response_schema=optional_params.get("response_schema")  # type: ignore
-                )
-                messages.append(
-                    {"role": "user", "content": user_response_schema_message}
-                )
-                optional_params.pop("response_schema")
-
-        # Check for any 'litellm_param_*' set during optional param mapping
-
-        remove_keys = []
-        for k, v in optional_params.items():
-            if k.startswith("litellm_param_"):
-                litellm_params.update({k: v})
-                remove_keys.append(k)
-
-        optional_params = {
-            k: v for k, v in optional_params.items() if k not in remove_keys
+        transform_request_params = {
+            "gemini_api_key": gemini_api_key,
+            "messages": messages,
+            "api_base": api_base,
+            "model": model,
+            "client": client,
+            "timeout": timeout,
+            "extra_headers": extra_headers,
+            "optional_params": optional_params,
+            "logging_obj": logging_obj,
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": litellm_params,
         }
 
-        try:
-            content = _gemini_convert_messages_with_history(messages=messages)
-            tools: Optional[Tools] = optional_params.pop("tools", None)
-            tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-            safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
-                "safety_settings", None
-            )  # type: ignore
-            generation_config: Optional[GenerationConfig] = GenerationConfig(
-                **optional_params
-            )
-            data = RequestBody(contents=content)
-            if system_instructions is not None:
-                data["system_instruction"] = system_instructions
-            if tools is not None:
-                data["tools"] = tools
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if safety_settings is not None:
-                data["safetySettings"] = safety_settings
-            if generation_config is not None:
-                data["generationConfig"] = generation_config
-            if cached_content is not None:
-                data["cachedContent"] = cached_content
+        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
-            headers = {
-                "Content-Type": "application/json",
-            }
-            if auth_header is not None:
-                headers["Authorization"] = f"Bearer {auth_header}"
-            if extra_headers is not None:
-                headers.update(extra_headers)
-        except Exception as e:
-            raise e
+        ### ROUTING (ASYNC, STREAMING, SYNC)
+        if acompletion:
+            ### ASYNC STREAMING
+            if stream is True:
+                return self.async_streaming(
+                    model=model,
+                    messages=messages,
+                    api_base=url,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    encoding=encoding,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    stream=stream,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,
+                    client=client,  # type: ignore
+                    data=transform_request_params,
+                    headers=headers,
+                )
+            ### ASYNC COMPLETION
+            return self.async_completion(
+                model=model,
+                messages=messages,
+                data=transform_request_params,  # type: ignore
+                api_base=url,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,
+                client=client,  # type: ignore
+                headers=headers,
+            )
+
+        ## SYNC STREAMING CALL ##
+        ## TRANSFORMATION ##
+        data = sync_transform_request_body(**transform_request_params)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1451,59 +1442,23 @@ class VertexLLM(BaseLLM):
             },
         )
 
-        ### ROUTING (ASYNC, STREAMING, SYNC)
-        if acompletion:
-            ### ASYNC STREAMING
-            if stream is True:
-                return self.async_streaming(
-                    model=model,
-                    messages=messages,
-                    data=json.dumps(data),  # type: ignore
-                    api_base=url,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=stream,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    timeout=timeout,
-                    client=client,  # type: ignore
-                )
-            ### ASYNC COMPLETION
-            return self.async_completion(
-                model=model,
-                messages=messages,
-                data=data,  # type: ignore
-                api_base=url,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                encoding=encoding,
-                logging_obj=logging_obj,
-                optional_params=optional_params,
-                stream=stream,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                headers=headers,
-                timeout=timeout,
-                client=client,  # type: ignore
-            )
-
-        ## SYNC STREAMING CALL ##
-        if stream is not None and stream is True:
+        if stream is True:
+            request_data_str = json.dumps(data)
             streaming_response = CustomStreamWrapper(
                 completion_stream=None,
                 make_call=partial(
                     make_sync_call,
-                    client=None,
+                    gemini_client=(
+                        client
+                        if client is not None and isinstance(client, HTTPHandler)
+                        else None
+                    ),
                     api_base=url,
-                    headers=headers,  # type: ignore
-                    data=json.dumps(data),
+                    data=request_data_str,
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
+                    headers=headers,
                 ),
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
@@ -1512,6 +1467,7 @@ class VertexLLM(BaseLLM):
 
             return streaming_response
         ## COMPLETION CALL ##
+
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
@@ -1545,406 +1501,13 @@ class VertexLLM(BaseLLM):
             encoding=encoding,
         )
 
-    def image_generation(
-        self,
-        prompt: str,
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
-        model_response: litellm.ImageResponse,
-        model: Optional[
-            str
-        ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: Optional[Any] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[int] = None,
-        logging_obj=None,
-        aimg_generation=False,
-    ):
-        if aimg_generation is True:
-            return self.aimage_generation(
-                prompt=prompt,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_credentials=vertex_credentials,
-                model=model,
-                client=client,
-                optional_params=optional_params,
-                timeout=timeout,
-                logging_obj=logging_obj,
-                model_response=model_response,
-            )
-
-        if client is None:
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout = httpx.Timeout(timeout)
-                    _params["timeout"] = _httpx_timeout
-            else:
-                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
-
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
-        else:
-            sync_handler = client  # type: ignore
-
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
-        auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
-
-        request_data = {
-            "instances": [{"prompt": prompt}],
-            "parameters": optional_params,
-        }
-
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=prompt,
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        logging_obj.pre_call(
-            input=prompt,
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        response = sync_handler.post(
-            url=url,
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "Authorization": f"Bearer {auth_header}",
-            },
-            data=json.dumps(request_data),
-        )
-
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-        """
-        Vertex AI Image generation response example:
-        {
-            "predictions": [
-                {
-                "bytesBase64Encoded": "BASE64_IMG_BYTES",
-                "mimeType": "image/png"
-                },
-                {
-                "mimeType": "image/png",
-                "bytesBase64Encoded": "BASE64_IMG_BYTES"
-                }
-            ]
-        }
-        """
-
-        _json_response = response.json()
-        if "predictions" not in _json_response:
-            raise litellm.InternalServerError(
-                message=f"image generation response does not contain 'predictions', got {_json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
-        _predictions = _json_response["predictions"]
-
-        _response_data: List[Image] = []
-        for _prediction in _predictions:
-            _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = Image(b64_json=_bytes_base64_encoded)
-            _response_data.append(image_object)
-
-        model_response.data = _response_data
-
-        return model_response
-
-    async def aimage_generation(
-        self,
-        prompt: str,
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
-        model_response: litellm.ImageResponse,
-        model: Optional[
-            str
-        ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: Optional[AsyncHTTPHandler] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[int] = None,
-        logging_obj=None,
-    ):
-        response = None
-        if client is None:
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout = httpx.Timeout(timeout)
-                    _params["timeout"] = _httpx_timeout
-            else:
-                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
-
-            self.async_handler = AsyncHTTPHandler(**_params)  # type: ignore
-        else:
-            self.async_handler = client  # type: ignore
-
-        # make POST request to
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
-        """
-        Docs link: https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/imagegeneration?project=adroit-crow-413218
-        curl -X POST \
-        -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-        -H "Content-Type: application/json; charset=utf-8" \
-        -d {
-            "instances": [
-                {
-                    "prompt": "a cat"
-                }
-            ],
-            "parameters": {
-                "sampleCount": 1
-            }
-        } \
-        "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
-        """
-        auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
-
-        request_data = {
-            "instances": [{"prompt": prompt}],
-            "parameters": optional_params,
-        }
-
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=prompt,
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        response = await self.async_handler.post(
-            url=url,
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "Authorization": f"Bearer {auth_header}",
-            },
-            data=json.dumps(request_data),
-        )
-
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-        """
-        Vertex AI Image generation response example:
-        {
-            "predictions": [
-                {
-                "bytesBase64Encoded": "BASE64_IMG_BYTES",
-                "mimeType": "image/png"
-                },
-                {
-                "mimeType": "image/png",
-                "bytesBase64Encoded": "BASE64_IMG_BYTES"
-                }
-            ]
-        }
-        """
-
-        _json_response = response.json()
-
-        if "predictions" not in _json_response:
-            raise litellm.InternalServerError(
-                message=f"image generation response does not contain 'predictions', got {_json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
-
-        _predictions = _json_response["predictions"]
-
-        _response_data: List[Image] = []
-        for _prediction in _predictions:
-            _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = Image(b64_json=_bytes_base64_encoded)
-            _response_data.append(image_object)
-
-        model_response.data = _response_data
-
-        return model_response
-
-    def multimodal_embedding(
-        self,
-        model: str,
-        input: Union[list, str],
-        print_verbose,
-        model_response: litellm.EmbeddingResponse,
-        optional_params: dict,
-        api_key: Optional[str] = None,
-        logging_obj=None,
-        encoding=None,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
-        aembedding=False,
-        timeout=300,
-        client=None,
-    ):
-
-        if client is None:
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout = httpx.Timeout(timeout)
-                    _params["timeout"] = _httpx_timeout
-            else:
-                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
-
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
-        else:
-            sync_handler = client  # type: ignore
-
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
-        auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
-        optional_params = optional_params or {}
-
-        request_data = VertexMultimodalEmbeddingRequest()
-
-        if "instances" in optional_params:
-            request_data["instances"] = optional_params["instances"]
-        elif isinstance(input, list):
-            request_data["instances"] = input
-        else:
-            # construct instances
-            vertex_request_instance = Instance(**optional_params)
-
-            if isinstance(input, str):
-                vertex_request_instance["text"] = input
-
-            request_data["instances"] = [vertex_request_instance]
-
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        headers = {
-            "Content-Type": "application/json; charset=utf-8",
-            "Authorization": f"Bearer {auth_header}",
-        }
-
-        if aembedding is True:
-            return self.async_multimodal_embedding(
-                model=model,
-                api_base=url,
-                data=request_data,
-                timeout=timeout,
-                headers=headers,
-                client=client,
-                model_response=model_response,
-            )
-
-        response = sync_handler.post(
-            url=url,
-            headers=headers,
-            data=json.dumps(request_data),
-        )
-
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-
-        _json_response = response.json()
-        if "predictions" not in _json_response:
-            raise litellm.InternalServerError(
-                message=f"embedding response does not contain 'predictions', got {_json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
-        _predictions = _json_response["predictions"]
-
-        model_response.data = _predictions
-        model_response.model = model
-
-        return model_response
-
-    async def async_multimodal_embedding(
-        self,
-        model: str,
-        api_base: str,
-        data: VertexMultimodalEmbeddingRequest,
-        model_response: litellm.EmbeddingResponse,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        headers={},
-        client: Optional[AsyncHTTPHandler] = None,
-    ) -> litellm.EmbeddingResponse:
-        if client is None:
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
-        else:
-            client = client  # type: ignore
-
-        try:
-            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException:
-            raise VertexAIError(status_code=408, message="Timeout error occurred.")
-
-        _json_response = response.json()
-        if "predictions" not in _json_response:
-            raise litellm.InternalServerError(
-                message=f"embedding response does not contain 'predictions', got {_json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
-        _predictions = _json_response["predictions"]
-
-        model_response.data = _predictions
-        model_response.model = model
-
-        return model_response
-
 
 class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
+        self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
+        self.accumulated_json = ""
+        self.sent_first_chunk = False
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -2014,29 +1577,80 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         return self
 
+    def handle_valid_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+        chunk = chunk.strip()
+        try:
+            json_chunk = json.loads(chunk)
+
+        except json.JSONDecodeError as e:
+            if (
+                self.sent_first_chunk is False
+            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
+                self.chunk_type = "accumulated_json"
+                return self.handle_accumulated_json_chunk(chunk=chunk)
+            raise e
+
+        if self.sent_first_chunk is False:
+            self.sent_first_chunk = True
+
+        return self.chunk_parser(chunk=json_chunk)
+
+    def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
+        message = chunk.replace("data:", "").replace("\n\n", "")
+
+        # Accumulate JSON data
+        self.accumulated_json += message
+
+        # Try to parse the accumulated JSON
+        try:
+            _data = json.loads(self.accumulated_json)
+            self.accumulated_json = ""  # reset after successful parsing
+            return self.chunk_parser(chunk=_data)
+        except json.JSONDecodeError:
+            # If it's not valid JSON yet, continue to the next event
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+    def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
+        chunk = chunk.replace("data:", "")
+        if len(chunk) > 0:
+            """
+            Check if initial chunk valid json
+            - if partial json -> enter accumulated json logic
+            - if valid - continue
+            """
+            if self.chunk_type == "valid_json":
+                return self.handle_valid_json_chunk(chunk=chunk)
+            elif self.chunk_type == "accumulated_json":
+                return self.handle_accumulated_json_chunk(chunk=chunk)
+        else:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
     def __next__(self):
         try:
             chunk = self.response_iterator.__next__()
         except StopIteration:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
+            return self._common_chunk_parsing_logic(chunk=chunk)
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -2051,25 +1665,14 @@ class ModelResponseIterator:
         try:
             chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+                return self.handle_accumulated_json_chunk(chunk="")
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
+            return self._common_chunk_parsing_logic(chunk=chunk)
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:

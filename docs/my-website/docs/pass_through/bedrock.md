@@ -234,3 +234,60 @@ curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' 
     ]
 }'
 ```
+
+## Advanced - Bedrock Agents 
+
+Call Bedrock Agents via LiteLLM proxy
+
+```python
+import os 
+import boto3 
+from botocore.config import Config
+
+# # Define your proxy endpoint
+proxy_endpoint = "http://0.0.0.0:4000/bedrock" # 👈 your proxy base url
+
+# # Create a Config object with the proxy
+# Custom headers
+custom_headers = {
+    'litellm_user_api_key': 'sk-1234', # 👈 your proxy api key
+}
+
+
+os.environ["AWS_ACCESS_KEY_ID"] = "my-fake-key-id"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "my-fake-access-key"
+
+
+# Create the client
+runtime_client = boto3.client(
+    service_name="bedrock-agent-runtime", 
+    region_name="us-west-2", 
+    endpoint_url=proxy_endpoint
+)
+
+# Custom header injection
+def inject_custom_headers(request, **kwargs):
+    request.headers.update({
+        'litellm_user_api_key': 'sk-1234',
+    })
+
+# Attach the event to inject custom headers before the request is sent
+runtime_client.meta.events.register('before-send.*.*', inject_custom_headers)
+
+
+response = runtime_client.invoke_agent(
+            agentId="L1RT58GYRW",
+            agentAliasId="MFPSBCXYTW",
+            sessionId="12345",
+            inputText="Who do you know?"
+        )
+
+completion = ""
+
+for event in response.get("completion"):
+    chunk = event["chunk"]
+    completion += chunk["bytes"].decode()
+
+print(completion)
+
+```

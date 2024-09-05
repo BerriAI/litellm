@@ -3033,3 +3033,130 @@ async def test_regenerate_api_key(prisma_client):
     assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
 
     pass
+
+
+@pytest.mark.asyncio()
+async def test_team_tags(prisma_client):
+    """
+    - Test setting tags on a team
+    - Assert this is returned when calling /team/info
+    - Team/update with tags should update the tags
+    - Assert new tags are returned when calling /team/info
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    _new_team = NewTeamRequest(
+        team_alias="test-teamA",
+        tags=["teamA"],
+    )
+
+    new_team_response = await new_team(
+        data=_new_team,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("new_team_response", new_team_response)
+
+    # call /team/info
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+    print("team_info_response", team_info_response)
+
+    assert team_info_response["team_info"].metadata["tags"] == ["teamA"]
+
+    # team update with tags
+    team_update_response = await update_team(
+        data=UpdateTeamRequest(
+            team_id=new_team_response["team_id"],
+            tags=["teamA", "teamB"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_update_response", team_update_response)
+
+    # call /team/info again
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_info_response", team_info_response)
+    assert team_info_response["team_info"].metadata["tags"] == ["teamA", "teamB"]
+
+
+@pytest.mark.asyncio
+async def test_admin_only_routes(prisma_client):
+    """
+    Tests if setting admin_only_routes works
+
+    only an admin should be able to access admin only routes
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    general_settings = {
+        "allowed_routes": ["/embeddings", "/key/generate"],
+        "admin_only_routes": ["/key/generate"],
+    }
+    from litellm.proxy import proxy_server
+
+    initial_general_settings = getattr(proxy_server, "general_settings")
+
+    setattr(proxy_server, "general_settings", general_settings)
+
+    admin_user = await new_user(
+        data=NewUserRequest(
+            user_name="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    non_admin_user = await new_user(
+        data=NewUserRequest(
+            user_name="non-admin",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    admin_user_key = admin_user.key
+    non_admin_user_key = non_admin_user.key
+
+    assert admin_user_key is not None
+    assert non_admin_user_key is not None
+
+    # assert non-admin can not access admin routes
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/key/generate")
+    await user_api_key_auth(
+        request=request,
+        api_key="Bearer " + admin_user_key,
+    )
+
+    # this should pass
+
+    try:
+        await user_api_key_auth(
+            request=request,
+            api_key="Bearer " + non_admin_user_key,
+        )
+        pytest.fail("Expected this call to fail. User is over limit.")
+    except Exception as e:
+        print("error str=", str(e.message))
+        error_str = str(e.message)
+        assert "Route" in error_str and "admin only route" in error_str
+        pass
+
+    setattr(proxy_server, "general_settings", initial_general_settings)

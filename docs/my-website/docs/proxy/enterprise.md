@@ -16,6 +16,7 @@ Features:
     - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
     - ✅ [Audit Logs with retention policy](#audit-logs)
     - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
+    - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
@@ -609,24 +610,35 @@ Expected Response
 
 ## Control available public, private routes
 
+**Restrict certain endpoints of proxy**
+
 :::info
 
-❓ Use this when you want to make an existing private route -> public
-
-Example - Make `/spend/calculate` a publicly available route (by default `/spend/calculate` on LiteLLM Proxy requires authentication)
+❓ Use this when you want to:
+- make an existing private route -> public
+- set certain routes as admin_only routes 
 
 :::
 
-#### Usage - Define public routes
+#### Usage - Define public, admin only routes
 
-**Step 1** - set allowed public routes on config.yaml 
+**Step 1** - Set  on config.yaml 
+
+
+| Route Type | Optional | Requires Virtual Key Auth | Admin Can Access | All Roles Can Access | Description |
+|------------|----------|---------------------------|-------------------|----------------------|-------------|
+| `public_routes` | ✅ | ❌ | ✅ | ✅ | Routes that can be accessed without any authentication  |
+| `admin_only_routes` | ✅ | ✅ | ✅ | ❌ | Routes that can only be accessed by [Proxy Admin](./self_serve#available-roles) |
+| `allowed_routes` | ✅ | ✅ | ✅ | ✅ | Routes are exposed on the proxy. If not set then all routes exposed.  |
 
 `LiteLLMRoutes.public_routes` is an ENUM corresponding to the default public routes on LiteLLM. [You can see this here](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py)
 
 ```yaml
 general_settings:
   master_key: sk-1234
-  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]     # routes that can be accessed without any auth
+  admin_only_routes: ["/key/generate"]  # Optional - routes that can only be accessed by Proxy Admin
+  allowed_routes: ["/chat/completions", "/spend/calculate", "LiteLLMRoutes.public_routes"] # Optional - routes that can be accessed by anyone after Authentication
 ```
 
 **Step 2** - start proxy 
@@ -636,6 +648,10 @@ litellm --config config.yaml
 ```
 
 **Step 3** - Test it 
+
+<Tabs>
+
+<TabItem value="public" label="Test `public_routes`">
 
 ```shell
 curl --request POST \
@@ -649,6 +665,97 @@ curl --request POST \
 
 🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
 
+</TabItem>
+
+<TabItem value="admin_only_routes" label="Test `admin_only_routes`">
+
+
+**Successfull Request**
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data '{}'
+```
+
+
+**Un-successfull Request**
+
+```shell
+ curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <virtual-key-from-non-admin>' \
+--header 'Content-Type: application/json' \
+--data '{"user_role": "internal_user"}'
+```
+
+**Expected Response**
+
+```json
+{
+  "error": {
+    "message": "user not allowed to access this route. Route=/key/generate is an admin only route",
+    "type": "auth_error",
+    "param": "None",
+    "code": "403"
+  }
+}
+```
+
+
+</TabItem>
+
+<TabItem value="allowed_routes" label="Test `allowed_routes`">
+
+
+**Successfull Request**
+
+```shell
+curl http://localhost:4000/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer sk-1234" \
+-d '{
+"model": "fake-openai-endpoint",
+"messages": [
+    {"role": "user", "content": "Hello, Claude"}
+]
+}'
+```
+
+
+**Un-successfull Request**
+
+```shell
+curl --location 'http://0.0.0.0:4000/embeddings' \
+--header 'Content-Type: application/json' \
+-H "Authorization: Bearer sk-1234" \
+--data ' {
+"model": "text-embedding-ada-002",
+"input": ["write a litellm poem"]
+}'
+```
+
+**Expected Response**
+
+```json
+{
+  "error": {
+    "message": "Route /embeddings not allowed",
+    "type": "auth_error",
+    "param": "None",
+    "code": "403"
+  }
+}
+```
+
+
+</TabItem>
+
+
+
+
+
+</Tabs>
 
 ## Guardrails - Secret Detection/Redaction
 ❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 

@@ -5,11 +5,12 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
-from typing import Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .utils import ModelResponse
@@ -299,6 +300,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
     rpm: Optional[int]
+    order: Optional[int]
+    weight: Optional[int]
     api_key: Optional[str]
     api_base: Optional[str]
     api_version: Optional[str]
@@ -549,6 +552,20 @@ class RouterGeneralSettings(BaseModel):
     pass_through_all_models: bool = Field(
         default=False
     )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding
+
+
+class RouterRateLimitErrorBasic(ValueError):
+    """
+    Raise a basic error inside helper functions.
+    """
+
+    def __init__(
+        self,
+        model: str,
+    ):
+        self.model = model
+        _message = f"{RouterErrors.no_deployments_available.value}."
+        super().__init__(_message)
 
 
 class RouterRateLimitError(ValueError):

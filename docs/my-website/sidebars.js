@@ -29,6 +29,7 @@ const sidebars = {
       },
       items: [
         "proxy/quick_start",
+        "proxy/docker_quick_start",
         "proxy/deploy", 
         "proxy/prod", 
         {
@@ -43,7 +44,7 @@ const sidebars = {
         "proxy/reliability",
         {
           type: "category",
-          label: "Use with Vertex, Bedrock, Cohere SDK",
+          label: "Use with Provider SDKs",
           items: [
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
@@ -66,7 +67,15 @@ const sidebars = {
         {
           type: "category",
           label: "🛡️ [Beta] Guardrails",
-          items: ["proxy/guardrails/quick_start", "proxy/guardrails/aporia_api", "proxy/guardrails/lakera_ai", "proxy/guardrails/bedrock",  "proxy/guardrails/custom_guardrail", "prompt_injection"],
+          items: [
+            "proxy/guardrails/quick_start", 
+            "proxy/guardrails/aporia_api", 
+            "proxy/guardrails/lakera_ai", 
+            "proxy/guardrails/bedrock",  
+            "proxy/guardrails/pii_masking_v2", 
+            "proxy/guardrails/custom_guardrail", 
+            "prompt_injection"
+        ],
         },
         {
           type: "category", 
@@ -100,7 +109,6 @@ const sidebars = {
         "proxy/model_management",
         "proxy/health",
         "proxy/debugging",
-        "proxy/pii_masking",
         "proxy/call_hooks",
         "proxy/rules",
         "proxy/cli", 
@@ -137,6 +145,7 @@ const sidebars = {
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 
+        "providers/cerebras", 
         "providers/volcano", 
         "providers/triton-inference-server",
         "providers/ollama", 
@@ -183,6 +192,7 @@ const sidebars = {
         "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",
+        "completion/usage",
         "exception_mapping",
         "completion/stream",
         "completion/message_trimming",
@@ -288,6 +298,7 @@ const sidebars = {
         "data_security",
         "migration_policy",
         "contributing",
+        "proxy/pii_masking",
         "rules",
         "proxy_server",
         {

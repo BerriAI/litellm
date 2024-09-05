@@ -1,3 +1,7 @@
+"""
+Calling + translation logic for anthropic's `/v1/messages` endpoint
+"""
+
 import copy
 import json
 import os
@@ -26,6 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
+    AnthropicChatCompletionUsageBlock,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesTool,
@@ -70,8 +75,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ..base import BaseLLM
+from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class AnthropicConstants(Enum):
@@ -223,6 +228,54 @@ class AnthropicConfig:
 
         return False
 
+    def translate_system_message(
+        self, messages: List[AllMessageValues]
+    ) -> List[AnthropicSystemMessageContent]:
+        system_prompt_indices = []
+        anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                valid_content: bool = False
+                system_message_block = ChatCompletionSystemMessage(**message)
+                if isinstance(system_message_block["content"], str):
+                    anthropic_system_message_content = AnthropicSystemMessageContent(
+                        type="text",
+                        text=system_message_block["content"],
+                    )
+                    if "cache_control" in system_message_block:
+                        anthropic_system_message_content["cache_control"] = (
+                            system_message_block["cache_control"]
+                        )
+                    anthropic_system_message_list.append(
+                        anthropic_system_message_content
+                    )
+                    valid_content = True
+                elif isinstance(message["content"], list):
+                    for _content in message["content"]:
+                        anthropic_system_message_content = (
+                            AnthropicSystemMessageContent(
+                                type=_content.get("type"),
+                                text=_content.get("text"),
+                            )
+                        )
+                        if "cache_control" in _content:
+                            anthropic_system_message_content["cache_control"] = (
+                                _content["cache_control"]
+                            )
+
+                        anthropic_system_message_list.append(
+                            anthropic_system_message_content
+                        )
+                    valid_content = True
+
+                if valid_content:
+                    system_prompt_indices.append(idx)
+        if len(system_prompt_indices) > 0:
+            for idx in reversed(system_prompt_indices):
+                messages.pop(idx)
+
+        return anthropic_system_message_list
+
     ### FOR [BETA] `/v1/messages` endpoint support
 
     def translatable_anthropic_params(self) -> List:
@@ -309,7 +362,7 @@ class AnthropicConfig:
                 new_messages.append(user_message)
 
             if len(new_user_content_list) > 0:
-                new_messages.append({"role": "user", "content": new_user_content_list})
+                new_messages.append({"role": "user", "content": new_user_content_list})  # type: ignore
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
@@ -935,45 +988,11 @@ class AnthropicChatCompletion(BaseLLM):
             )
         else:
             # Separate system prompt from rest of message
-            system_prompt_indices = []
-            system_prompt = ""
-            anthropic_system_message_list = None
-            for idx, message in enumerate(messages):
-                if message["role"] == "system":
-                    valid_content: bool = False
-                    if isinstance(message["content"], str):
-                        system_prompt += message["content"]
-                        valid_content = True
-                    elif isinstance(message["content"], list):
-                        for _content in message["content"]:
-                            anthropic_system_message_content = (
-                                AnthropicSystemMessageContent(
-                                    type=_content.get("type"),
-                                    text=_content.get("text"),
-                                )
-                            )
-                            if "cache_control" in _content:
-                                anthropic_system_message_content["cache_control"] = (
-                                    _content["cache_control"]
-                                )
-
-                            if anthropic_system_message_list is None:
-                                anthropic_system_message_list = []
-                            anthropic_system_message_list.append(
-                                anthropic_system_message_content
-                            )
-                        valid_content = True
-
-                    if valid_content:
-                        system_prompt_indices.append(idx)
-            if len(system_prompt_indices) > 0:
-                for idx in reversed(system_prompt_indices):
-                    messages.pop(idx)
-            if len(system_prompt) > 0:
-                optional_params["system"] = system_prompt
-
+            anthropic_system_message_list = AnthropicConfig().translate_system_message(
+                messages=messages
+            )
             # Handling anthropic API Prompt Caching
-            if anthropic_system_message_list is not None:
+            if len(anthropic_system_message_list) > 0:
                 optional_params["system"] = anthropic_system_message_list
             # Format rest of message according to anthropic guidelines
             try:
@@ -981,15 +1000,10 @@ class AnthropicChatCompletion(BaseLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic"
                 )
             except Exception as e:
-                verbose_logger.exception(
-                    "litellm.llms.anthropic.py::completion() - Exception occurred - {}\nReceived Messages: {}".format(
-                        str(e), messages
-                    )
-                )
                 raise AnthropicError(
                     status_code=400,
                     message="{}\nReceived Messages={}".format(str(e), messages),
-                )
+                )  # don't use verbose_logger.exception, if exception is raised
 
         ## Load Config
         config = litellm.AnthropicConfig.get_config()
@@ -1173,6 +1187,30 @@ class ModelResponseIterator:
             return True
         return False
 
+    def _handle_usage(
+        self, anthropic_usage_chunk: dict
+    ) -> AnthropicChatCompletionUsageBlock:
+        special_fields = ["input_tokens", "output_tokens"]
+
+        usage_block = AnthropicChatCompletionUsageBlock(
+            prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
+            completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
+            total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
+            + anthropic_usage_chunk.get("output_tokens", 0),
+        )
+
+        if "cache_creation_input_tokens" in anthropic_usage_chunk:
+            usage_block["cache_creation_input_tokens"] = anthropic_usage_chunk[
+                "cache_creation_input_tokens"
+            ]
+
+        if "cache_read_input_tokens" in anthropic_usage_chunk:
+            usage_block["cache_read_input_tokens"] = anthropic_usage_chunk[
+                "cache_read_input_tokens"
+            ]
+
+        return usage_block
+
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -1248,12 +1286,7 @@ class ModelResponseIterator:
                     finish_reason=message_delta["delta"].get("stop_reason", "stop")
                     or "stop"
                 )
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=message_delta["usage"].get("input_tokens", 0),
-                    completion_tokens=message_delta["usage"].get("output_tokens", 0),
-                    total_tokens=message_delta["usage"].get("input_tokens", 0)
-                    + message_delta["usage"].get("output_tokens", 0),
-                )
+                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
                 is_finished = True
             elif type_chunk == "message_start":
                 """
@@ -1276,19 +1309,8 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=message_start_block["message"]
-                    .get("usage", {})
-                    .get("input_tokens", 0),
-                    completion_tokens=message_start_block["message"]
-                    .get("usage", {})
-                    .get("output_tokens", 0),
-                    total_tokens=message_start_block["message"]
-                    .get("usage", {})
-                    .get("input_tokens", 0)
-                    + message_start_block["message"]
-                    .get("usage", {})
-                    .get("output_tokens", 0),
+                usage = self._handle_usage(
+                    anthropic_usage_chunk=message_start_block["message"]["usage"]
                 )
             elif type_chunk == "error":
                 """

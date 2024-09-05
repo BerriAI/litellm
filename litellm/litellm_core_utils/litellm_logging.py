@@ -25,6 +25,7 @@ from litellm import (
 )
 from litellm.caching import DualCache, InMemoryCache, S3Cache
 from litellm.cost_calculator import _select_model_name_for_cost_calc
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -279,9 +280,7 @@ class Logging:
                 # Find the position of "key=" in the string
                 key_index = api_base.find("key=") + 4
                 # Mask the last 5 characters after "key="
-                masked_api_base = (
-                    api_base[:key_index] + "*" * 5 + api_base[key_index + 5 :]
-                )
+                masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
             else:
                 masked_api_base = api_base
             self.model_call_details["litellm_params"]["api_base"] = masked_api_base
@@ -610,12 +609,23 @@ class Logging:
                             self.model_call_details["litellm_params"]["metadata"][
                                 "hidden_params"
                             ] = result._hidden_params
+                    ## STANDARDIZED LOGGING PAYLOAD
+
+                    self.model_call_details["standard_logging_object"] = (
+                        get_standard_logging_object_payload(
+                            kwargs=self.model_call_details,
+                            init_response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            logging_obj=self,
+                        )
+                    )
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
             if (
                 litellm.max_budget
-                and self.stream == False
+                and self.stream is False
                 and result is not None
                 and "content" in result
             ):
@@ -628,17 +638,6 @@ class Logging:
                     total_time=float_diff,
                 )
 
-            ## STANDARDIZED LOGGING PAYLOAD
-
-            self.model_call_details["standard_logging_object"] = (
-                get_standard_logging_object_payload(
-                    kwargs=self.model_call_details,
-                    init_response_obj=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=self,
-                )
-            )
             return start_time, end_time, result
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
@@ -646,9 +645,7 @@ class Logging:
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        verbose_logger.debug(
-            f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
-        )
+        print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -695,6 +692,16 @@ class Logging:
                 self.model_call_details["response_cost"] = (
                     self._response_cost_calculator(result=complete_streaming_response)
                 )
+                ## STANDARDIZED LOGGING PAYLOAD
+                self.model_call_details["standard_logging_object"] = (
+                    get_standard_logging_object_payload(
+                        kwargs=self.model_call_details,
+                        init_response_obj=complete_streaming_response,
+                        start_time=start_time,
+                        end_time=end_time,
+                        logging_obj=self,
+                    )
+                )
             if self.dynamic_success_callbacks is not None and isinstance(
                 self.dynamic_success_callbacks, list
             ):
@@ -714,7 +721,6 @@ class Logging:
             )
 
             ## LOGGING HOOK ##
-
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
                     self.model_call_details, result = callback.logging_hook(
@@ -726,7 +732,7 @@ class Logging:
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
-                    if litellm_params.get("no-log", False) == True:
+                    if litellm_params.get("no-log", False) is True:
                         # proxy cost tracking cal backs should run
                         if not (
                             isinstance(callback, CustomLogger)
@@ -863,6 +869,15 @@ class Logging:
                         model = self.model
                         messages = self.model_call_details["input"]
                         kwargs = self.model_call_details
+
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                continue
+                            else:
+                                print_verbose("reaches helicone for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
                         heliconeLogger.log_success(
                             model=model,
                             messages=messages,
@@ -1192,6 +1207,7 @@ class Logging:
                                     )
                                 )
                                 result = self.model_call_details["complete_response"]
+
                             callback.log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=result,
@@ -1199,7 +1215,7 @@ class Logging:
                                 end_time=end_time,
                             )
                     if (
-                        callable(callback) == True
+                        callable(callback) is True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
                         )
@@ -1301,6 +1317,7 @@ class Logging:
                             result=complete_streaming_response
                         )
                     )
+
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                 )
@@ -1310,6 +1327,16 @@ class Logging:
                 )
                 self.model_call_details["response_cost"] = None
 
+            ## STANDARDIZED LOGGING PAYLOAD
+            self.model_call_details["standard_logging_object"] = (
+                get_standard_logging_object_payload(
+                    kwargs=self.model_call_details,
+                    init_response_obj=complete_streaming_response,
+                    start_time=start_time,
+                    end_time=end_time,
+                    logging_obj=self,
+                )
+            )
         if self.dynamic_async_success_callbacks is not None and isinstance(
             self.dynamic_async_success_callbacks, list
         ):
@@ -1333,7 +1360,24 @@ class Logging:
         ## LOGGING HOOK ##
 
         for callback in callbacks:
-            if isinstance(callback, CustomLogger):
+            if isinstance(callback, CustomGuardrail):
+                from litellm.types.guardrails import GuardrailEventHooks
+
+                if (
+                    callback.should_run_guardrail(
+                        data=self.model_call_details,
+                        event_type=GuardrailEventHooks.logging_only,
+                    )
+                    is not True
+                ):
+                    continue
+
+                self.model_call_details, result = await callback.async_logging_hook(
+                    kwargs=self.model_call_details,
+                    result=result,
+                    call_type=self.call_type,
+                )
+            elif isinstance(callback, CustomLogger):
                 self.model_call_details, result = await callback.async_logging_hook(
                     kwargs=self.model_call_details,
                     result=result,
@@ -1534,6 +1578,32 @@ class Logging:
             )
             metadata.update(exception.headers)
         return start_time, end_time
+
+    async def special_failure_handlers(self, exception: Exception):
+        """
+        Custom events, emitted for specific failures.
+
+        Currently just for router model group rate limit error
+        """
+        from litellm.types.router import RouterErrors
+
+        ## check if special error ##
+        if RouterErrors.no_deployments_available.value not in str(exception):
+            return
+
+        ## get original model group ##
+
+        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") or {}
+
+        model_group = metadata.get("model_group") or None
+        for callback in litellm._async_failure_callback:
+            if isinstance(callback, CustomLogger):  # custom logger class
+                await callback.log_model_group_rate_limit_error(
+                    exception=exception,
+                    original_model_group=model_group,
+                    kwargs=self.model_call_details,
+                )  # type: ignore
 
     def failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -1782,6 +1852,7 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
+        await self.special_failure_handlers(exception=exception)
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,

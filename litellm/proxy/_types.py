@@ -244,6 +244,13 @@ class LiteLLMRoutes(enum.Enum):
         "/utils/token_counter",
     ]
 
+    mapped_pass_through_routes: List = [
+        "/bedrock",
+        "/vertex-ai",
+        "/gemini",
+        "/langfuse",
+    ]
+
     anthropic_routes: List = [
         "/v1/messages",
     ]
@@ -587,6 +594,7 @@ class GenerateRequestBase(LiteLLMBase):
 
 class GenerateKeyRequest(GenerateRequestBase):
     key_alias: Optional[str] = None
+    key: Optional[str] = None
     duration: Optional[str] = None
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
@@ -812,6 +820,7 @@ class TeamBase(LiteLLMBase):
 
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
+    tags: Optional[list] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -882,6 +891,7 @@ class UpdateTeamRequest(LiteLLMBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+    tags: Optional[list] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMBase):
@@ -1060,6 +1070,7 @@ class KeyManagementSystem(enum.Enum):
     GOOGLE_KMS = "google_kms"
     AZURE_KEY_VAULT = "azure_key_vault"
     AWS_SECRET_MANAGER = "aws_secret_manager"
+    GOOGLE_SECRET_MANAGER = "google_secret_manager"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
 
@@ -1627,6 +1638,17 @@ class AllCallbacks(LiteLLMBase):
             "LANGSMITH_DEFAULT_RUN_NAME",
         ],
         ui_callback_name="Langsmith",
+    )
+
+    lago: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="lago",
+        litellm_callback_params=[
+            "LAGO_API_BASE",
+            "LAGO_API_KEY",
+            "LAGO_API_EVENT_CODE",
+            "LAGO_API_CHARGE_BY",
+        ],
+        ui_callback_name="Lago Billing",
     )
 
 

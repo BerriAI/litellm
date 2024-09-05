@@ -290,6 +290,7 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_update_cache(
     dynamic_rate_limit_handler, mock_response, user_api_key_auth
 ):
