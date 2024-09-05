@@ -1492,7 +1492,10 @@ def test_call_with_key_over_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
