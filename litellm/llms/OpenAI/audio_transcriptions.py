@@ -5,7 +5,7 @@ from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import get_audio_file_name
+from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import FileTypes
 from litellm.utils import TranscriptionResponse, convert_to_model_response_object

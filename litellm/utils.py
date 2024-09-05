@@ -55,12 +55,10 @@ from tokenizers import Tokenizer
 import litellm
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
+import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching import DualCache
-from litellm.litellm_core_utils.core_helpers import (
-    get_audio_file_name,
-    map_finish_reason,
-)
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.exception_mapping_utils import get_error_message
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     _is_non_openai_azure_model,
@@ -567,7 +565,11 @@ def function_setup(
             or call_type == CallTypes.transcription.value
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = get_audio_file_name(file_obj=_file_obj)
+            file_checksum = (
+                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
+                    file_obj=_file_obj
+                )
+            )
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
