@@ -1621,12 +1621,6 @@ class ProxyConfig:
                 elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
-                    if premium_user is not True:
-                        raise ValueError(
-                            "Trying to use `guardrails` on config.yaml "
-                            + CommonProxyErrors.not_premium_user.value
-                        )
-
                     guardrail_name_config_map = initialize_guardrails(
                         guardrails_config=value,
                         premium_user=premium_user,
