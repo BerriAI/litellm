@@ -1236,6 +1236,7 @@ async def global_view_spend_tags(
 -H "Authorization: Bearer sk-1234"
     ```
     """
+    import traceback
 
     from enterprise.utils import ui_get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
@@ -1262,9 +1263,11 @@ async def global_view_spend_tags(
 
         return response
     except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"/spend/tags Error({str(e)})"),
+                message=getattr(e, "detail", f"/spend/tags Error({error_str})"),
                 type="internal_error",
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1272,7 +1275,7 @@ async def global_view_spend_tags(
         elif isinstance(e, ProxyException):
             raise e
         raise ProxyException(
-            message="/spend/tags Error" + str(e),
+            message="/spend/tags Error" + error_str,
             type="internal_error",
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1749,32 +1752,53 @@ async def global_spend_logs(
 
     More efficient implementation of /spend/logs, by creating a view over the spend logs table.
     """
+    import traceback
+
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
+    try:
+        if prisma_client is None:
+            raise ProxyException(
+                message="Prisma Client is not initialized",
+                type="internal_error",
+                param="None",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if api_key is None:
+            sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
+
+            response = await prisma_client.db.query_raw(query=sql_query)
+
+            return response
+        else:
+            sql_query = """
+                SELECT * FROM "MonthlyGlobalSpendPerKey"
+                WHERE "api_key" = $1
+                ORDER BY "date";
+                """
+
+            response = await prisma_client.db.query_raw(sql_query, api_key)
+
+            return response
+
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
         raise ProxyException(
-            message="Prisma Client is not initialized",
+            message="/global/spend/logs Error" + error_str,
             type="internal_error",
-            param="None",
+            param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if api_key is None:
-        sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
-
-        response = await prisma_client.db.query_raw(query=sql_query)
-
-        return response
-    else:
-        sql_query = """
-            SELECT * FROM "MonthlyGlobalSpendPerKey"
-            WHERE "api_key" = $1
-            ORDER BY "date";
-            """
-
-        response = await prisma_client.db.query_raw(sql_query, api_key)
-
-        return response
-    return
 
 
 @router.get(
@@ -1789,20 +1813,42 @@ async def global_spend():
 
     View total spend across all proxy keys
     """
+    import traceback
+
     from litellm.proxy.proxy_server import prisma_client
 
-    total_spend = 0.0
-    total_proxy_budget = 0.0
+    try:
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-    response = await prisma_client.db.query_raw(query=sql_query)
-    if response is not None:
-        if isinstance(response, list) and len(response) > 0:
-            total_spend = response[0].get("total_spend", 0.0)
+        total_spend = 0.0
+        total_proxy_budget = 0.0
 
-    return {"spend": total_spend, "max_budget": litellm.max_budget}
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
+        if response is not None:
+            if isinstance(response, list) and len(response) > 0:
+                total_spend = response[0].get("total_spend", 0.0)
+
+        return {"spend": total_spend, "max_budget": litellm.max_budget}
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/global/spend Error({error_str})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/global/spend Error" + error_str,
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get(
