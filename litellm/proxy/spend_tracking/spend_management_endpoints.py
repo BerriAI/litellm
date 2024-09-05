@@ -1910,6 +1910,52 @@ async def global_spend():
         )
 
 
+async def global_spend_key_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, limit: int = 10
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+            WITH top_api_keys AS (
+            SELECT 
+                api_key,
+                SUM(spend) as total_spend
+            FROM 
+                "LiteLLM_SpendLogs"
+            WHERE 
+                "user" = $1
+            GROUP BY 
+                api_key
+            ORDER BY 
+                total_spend DESC
+            LIMIT $2  -- Adjust this number to get more or fewer top keys
+        )
+        SELECT 
+            t.api_key,
+            t.total_spend,
+            v.key_alias,
+            v.key_name
+        FROM 
+            top_api_keys t
+        LEFT JOIN 
+            "LiteLLM_VerificationToken" v ON t.api_key = v.token
+        ORDER BY 
+            t.total_spend DESC;
+    
+    """
+
+    response = await prisma_client.db.query_raw(sql_query, user_id, limit)
+
+    return response
+
+
 @router.get(
     "/global/spend/keys",
     tags=["Budget & Spend Tracking"],
@@ -1920,7 +1966,8 @@ async def global_spend_keys(
     limit: int = fastapi.Query(
         default=None,
         description="Number of keys to get. Will return Top 'n' keys.",
-    )
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     [BETA] This is a beta endpoint. It will change.
@@ -1929,6 +1976,15 @@ async def global_spend_keys(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        response = await global_spend_key_internal_user(
+            user_api_key_dict=user_api_key_dict
+        )
+
+        return response
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
     sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
