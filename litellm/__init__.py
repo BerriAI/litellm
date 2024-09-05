@@ -459,6 +459,7 @@ openai_compatible_endpoints: List = [
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
+    "fast-api.sambanova.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -468,6 +469,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "sambanova",
     "ai21_chat",
     "volcengine",
     "codestral",
@@ -709,6 +711,7 @@ provider_list: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "sambanova",
     "ai21_chat",
     "volcengine",
     "codestral",
@@ -934,6 +937,7 @@ from .llms.openai import (
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
+from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
