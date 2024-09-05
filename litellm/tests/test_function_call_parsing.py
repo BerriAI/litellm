@@ -134,11 +134,11 @@ def trade(model_name: str) -> List[Trade]:
                 "function": {"name": tool_spec["function"]["name"]},  # type: ignore
             },
         )
+        calls = response.choices[0].message.tool_calls
+        trades = [trade for call in calls for trade in parse_call(call)]
+        return trades
     except litellm.InternalServerError:
         pass
-    calls = response.choices[0].message.tool_calls
-    trades = [trade for call in calls for trade in parse_call(call)]
-    return trades
 
 
 @pytest.mark.parametrize(
