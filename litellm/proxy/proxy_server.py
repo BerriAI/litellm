@@ -6227,32 +6227,20 @@ async def new_budget(
         )
 
     try:
-        # Check if the budget already exists
-        existing_budget = await prisma_client.db.litellm_budgettable.find_unique(
-            where={"budget_id": budget_obj.budget_id}
-        )
-    
-        if existing_budget:
-            # Update the existing budget
-            response = await prisma_client.db.litellm_budgettable.update(
-                where={"budget_id": budget_obj.budget_id},
-                data={
-                    **budget_obj.model_dump(exclude_none=True),  # type: ignore
-                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                }
-            )
-        else:
-            # Create a new budget
-            response = await prisma_client.db.litellm_budgettable.create(
-                data={
-                    **budget_obj.model_dump(exclude_none=True),  # type: ignore
-                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                }  # type: ignore
-            )
-
+        
+        response = await prisma_client.db.litellm_budgettable.upsert(
+            where={"budget_id": budget_obj.budget_id},
+            data = {
+            "create": {
+                **budget_obj.model_dump(exclude_none=True),  # type: ignore
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,},
+            "update": {
+                **budget_obj.model_dump(exclude_none=True),  # type: ignore
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,}}
+           )
         return response
-
+        
     except Exception as e:
         raise HTTPException(
             status_code=500,
