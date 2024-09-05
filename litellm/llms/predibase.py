@@ -564,12 +564,9 @@ class PredibaseChatCompletion(BaseLLM):
             for exception in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, exception):
                     raise e
-            verbose_logger.exception(
-                "litellm.llms.predibase.py::async_completion() - Exception occurred - {}".format(
-                    str(e)
-                )
-            )
-            raise PredibaseError(status_code=500, message="{}".format(str(e)))
+            raise PredibaseError(
+                status_code=500, message="{}".format(str(e))
+            )  # don't use verbose_logger.exception, if exception is raised
         return self.process_response(
             model=model,
             response=response,

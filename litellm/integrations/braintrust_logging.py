@@ -235,10 +235,7 @@ class BraintrustLogger(CustomLogger):
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
-            verbose_logger.exception(
-                "Error logging to braintrust - Exception received - {}".format(str(e))
-            )
-            raise e
+            raise e  # don't use verbose_logger.exception, if exception is raised
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
@@ -360,10 +357,7 @@ class BraintrustLogger(CustomLogger):
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
-            verbose_logger.exception(
-                "Error logging to braintrust - Exception received - {}".format(str(e))
-            )
-            raise e
+            raise e  # don't use verbose_logger.exception, if exception is raised
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         return super().log_failure_event(kwargs, response_obj, start_time, end_time)
