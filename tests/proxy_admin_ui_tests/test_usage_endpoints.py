@@ -73,6 +73,8 @@ from litellm.proxy.proxy_server import (
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
     global_spend_logs,
+    global_spend_models,
+    global_spend_keys,
     spend_key_fn,
     spend_user_fn,
     view_spend_logs,
@@ -171,3 +173,149 @@ async def test_view_daily_spend_ui(prisma_client):
     assert (
         admin_total_spend > internal_user_total_spend
     ), "Admin should have more spend than internal user"
+
+
+@pytest.mark.asyncio
+async def test_global_spend_models(prisma_client):
+    print("prisma client=", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Test for admin user
+    models_spend_for_admin = await global_spend_models(
+        limit=10,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    print("models_spend_for_admin=", models_spend_for_admin)
+
+    # Test for internal user
+    models_spend_for_internal_user = await global_spend_models(
+        limit=10,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234", user_role=LitellmUserRoles.INTERNAL_USER, user_id="1234"
+        ),
+    )
+
+    print("models_spend_for_internal_user=", models_spend_for_internal_user)
+
+    # Assertions
+    assert isinstance(models_spend_for_admin, list), "Admin response should be a list"
+    assert isinstance(
+        models_spend_for_internal_user, list
+    ), "Internal user response should be a list"
+
+    # Check if the response has the expected shape for both admin and internal user
+    expected_keys = ["model", "total_spend"]
+
+    if len(models_spend_for_admin) > 0:
+        assert all(
+            key in models_spend_for_admin[0] for key in expected_keys
+        ), f"Admin response should contain keys: {expected_keys}"
+        assert isinstance(
+            models_spend_for_admin[0]["model"], str
+        ), "Model should be a string"
+        assert isinstance(
+            models_spend_for_admin[0]["total_spend"], (int, float)
+        ), "Total spend should be a number"
+
+    if len(models_spend_for_internal_user) > 0:
+        assert all(
+            key in models_spend_for_internal_user[0] for key in expected_keys
+        ), f"Internal user response should contain keys: {expected_keys}"
+        assert isinstance(
+            models_spend_for_internal_user[0]["model"], str
+        ), "Model should be a string"
+        assert isinstance(
+            models_spend_for_internal_user[0]["total_spend"], (int, float)
+        ), "Total spend should be a number"
+
+    # Check if the lists are sorted by total_spend in descending order
+    if len(models_spend_for_admin) > 1:
+        assert all(
+            models_spend_for_admin[i]["total_spend"]
+            >= models_spend_for_admin[i + 1]["total_spend"]
+            for i in range(len(models_spend_for_admin) - 1)
+        ), "Admin response should be sorted by total_spend in descending order"
+
+    if len(models_spend_for_internal_user) > 1:
+        assert all(
+            models_spend_for_internal_user[i]["total_spend"]
+            >= models_spend_for_internal_user[i + 1]["total_spend"]
+            for i in range(len(models_spend_for_internal_user) - 1)
+        ), "Internal user response should be sorted by total_spend in descending order"
+
+    # Check if admin has access to more or equal models compared to internal user
+    assert len(models_spend_for_admin) >= len(
+        models_spend_for_internal_user
+    ), "Admin should have access to at least as many models as internal user"
+
+    # Check if the response contains expected fields
+    if len(models_spend_for_admin) > 0:
+        assert all(
+            key in models_spend_for_admin[0] for key in ["model", "total_spend"]
+        ), "Admin response should contain model, total_spend, and total_tokens"
+
+    if len(models_spend_for_internal_user) > 0:
+        assert all(
+            key in models_spend_for_internal_user[0] for key in ["model", "total_spend"]
+        ), "Internal user response should contain model, total_spend, and total_tokens"
+
+
+@pytest.mark.asyncio
+async def test_global_spend_keys(prisma_client):
+    print("prisma client=", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Test for admin user
+    keys_spend_for_admin = await global_spend_keys(
+        limit=10,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    print("keys_spend_for_admin=", keys_spend_for_admin)
+
+    # Test for internal user
+    keys_spend_for_internal_user = await global_spend_keys(
+        limit=10,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234", user_role=LitellmUserRoles.INTERNAL_USER, user_id="1234"
+        ),
+    )
+
+    print("keys_spend_for_internal_user=", keys_spend_for_internal_user)
+
+    # Assertions
+    assert isinstance(keys_spend_for_admin, list), "Admin response should be a list"
+    assert isinstance(
+        keys_spend_for_internal_user, list
+    ), "Internal user response should be a list"
+
+    # Check if admin has access to more or equal keys compared to internal user
+    assert len(keys_spend_for_admin) >= len(
+        keys_spend_for_internal_user
+    ), "Admin should have access to at least as many keys as internal user"
+
+    # Check if the response contains expected fields
+    if len(keys_spend_for_admin) > 0:
+        assert all(
+            key in keys_spend_for_admin[0]
+            for key in ["api_key", "total_spend", "key_alias", "key_name"]
+        ), "Admin response should contain api_key, total_spend, key_alias, and key_name"
+
+    if len(keys_spend_for_internal_user) > 0:
+        assert all(
+            key in keys_spend_for_internal_user[0]
+            for key in ["api_key", "total_spend", "key_alias", "key_name"]
+        ), "Internal user response should contain api_key, total_spend, key_alias, and key_name"
