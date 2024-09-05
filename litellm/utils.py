@@ -574,7 +574,7 @@ def function_setup(
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
                 kwargs["metadata"] = {"file_checksum": file_checksum}
-            messages = _file_obj
+            messages = file_checksum
         elif (
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
