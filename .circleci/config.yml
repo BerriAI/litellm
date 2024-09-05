@@ -111,6 +111,73 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+  ui_endpoint_testing:
+    docker:
+      - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Check if litellm dir was updated or if pyproject.toml was modified
+          command: |
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
+              echo "litellm updated"
+            else
+              echo "No changes to litellm or pyproject.toml. Skipping tests."
+              circleci step halt
+            fi
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install pyarrow
+            pip install numpydoc
+            pip install openai==1.40.0
+            pip install prisma==0.11.0       
+            pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install "pydantic==2.7.1"
+            pip install "jsonschema==4.22.0"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./entrypoint.sh
+          command: |
+            set +e
+            chmod +x entrypoint.sh
+            ./entrypoint.sh
+            set -e
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
 
   installing_litellm_on_python:
     docker:
@@ -534,6 +601,12 @@ workflows:
   build_and_test:
     jobs:
       - local_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - ui_endpoint_testing:
           filters:
             branches:
               only:
