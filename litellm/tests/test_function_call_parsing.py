@@ -37,7 +37,7 @@ class Trade:
         return Trade(order)
 
 
-def trade(model_name: str) -> List[Trade]:
+def trade(model_name: str) -> List[Trade]:  # type: ignore
     def parse_order(order: dict) -> Trade:
         action = order["action"]
 
