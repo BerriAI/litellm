@@ -504,7 +504,7 @@ class Usage(CompletionUsage):
         if "prompt_cache_hit_tokens" in params and isinstance(
             params["prompt_cache_hit_tokens"], int
         ):
-            self._cache_read_input_tokens = params["prompt_cache_hit_tokens=0"]
+            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
         for k, v in params.items():
             setattr(self, k, v)
