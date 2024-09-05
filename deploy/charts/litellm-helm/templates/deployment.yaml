@@ -102,7 +102,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: HOST
-              value: "{{ .Values.listen | default ":" }}"
+              value: "{{ .Values.listen | default "::" }}"
             - name: PORT
               value: {{ .Values.service.port | quote}}
             {{- if .Values.db.deployStandalone }}
