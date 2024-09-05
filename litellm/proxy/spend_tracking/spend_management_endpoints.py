@@ -1813,20 +1813,42 @@ async def global_spend():
 
     View total spend across all proxy keys
     """
+    import traceback
+
     from litellm.proxy.proxy_server import prisma_client
 
-    total_spend = 0.0
-    total_proxy_budget = 0.0
+    try:
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-    response = await prisma_client.db.query_raw(query=sql_query)
-    if response is not None:
-        if isinstance(response, list) and len(response) > 0:
-            total_spend = response[0].get("total_spend", 0.0)
+        total_spend = 0.0
+        total_proxy_budget = 0.0
 
-    return {"spend": total_spend, "max_budget": litellm.max_budget}
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
+        if response is not None:
+            if isinstance(response, list) and len(response) > 0:
+                total_spend = response[0].get("total_spend", 0.0)
+
+        return {"spend": total_spend, "max_budget": litellm.max_budget}
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/global/spend Error({error_str})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/global/spend Error" + error_str,
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get(
