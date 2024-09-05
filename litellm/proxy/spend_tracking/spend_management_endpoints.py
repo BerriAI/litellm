@@ -2172,6 +2172,39 @@ LIMIT 100
     return response
 
 
+async def global_spend_models_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, limit: int = 10
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+        SELECT 
+            model,
+            SUM(spend) as total_spend,
+            SUM(total_tokens) as total_tokens
+        FROM 
+            "LiteLLM_SpendLogs"
+        WHERE 
+            "user" = $1
+        GROUP BY 
+            model
+        ORDER BY 
+            total_spend DESC
+        LIMIT $2;
+    """
+
+    response = await prisma_client.db.query_raw(sql_query, user_id, limit)
+
+    return response
+
+
 @router.get(
     "/global/spend/models",
     tags=["Budget & Spend Tracking"],
@@ -2180,16 +2213,26 @@ LIMIT 100
 )
 async def global_spend_models(
     limit: int = fastapi.Query(
-        default=None,
+        default=10,
         description="Number of models to get. Will return Top 'n' models.",
-    )
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     [BETA] This is a beta endpoint. It will change.
 
-    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    Use this to get the top 'n' models with the highest spend, ordered by spend.
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        response = await global_spend_models_internal_user(
+            user_api_key_dict=user_api_key_dict, limit=limit
+        )
+        return response
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
