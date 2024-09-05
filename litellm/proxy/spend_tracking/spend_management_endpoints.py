@@ -1515,6 +1515,7 @@ async def view_spend_logs(
         default=None,
         description="Time till which to view key spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
@@ -1544,6 +1545,12 @@ async def view_spend_logs(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        user_id = user_api_key_dict.user_id
 
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
@@ -1733,6 +1740,45 @@ async def global_spend_reset():
     }
 
 
+async def global_spend_for_internal_user(
+    api_key: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    try:
+
+        user_id = user_api_key_dict.user_id
+        if user_id is None:
+            raise ValueError(f"/global/spend/logs Error: User ID is None")
+        if api_key is not None:
+            sql_query = """
+                SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"
+                WHERE "api_key" = $1 AND "user" = $2
+                ORDER BY "date";
+                """
+
+            response = await prisma_client.db.query_raw(sql_query, api_key, user_id)
+
+            return response
+
+        sql_query = """SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"  WHERE "user" = $1 ORDER BY "date";"""
+
+        response = await prisma_client.db.query_raw(sql_query, user_id)
+
+        return response
+    except Exception as e:
+        verbose_proxy_logger.error(f"/global/spend/logs Error: {str(e)}")
+        raise e
+
+
 @router.get(
     "/global/spend/logs",
     tags=["Budget & Spend Tracking"],
@@ -1743,7 +1789,8 @@ async def global_spend_logs(
     api_key: str = fastapi.Query(
         default=None,
         description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
-    )
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     [BETA] This is a beta endpoint. It will change.
@@ -1764,6 +1811,17 @@ async def global_spend_logs(
                 param="None",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            response = await global_spend_for_internal_user(
+                api_key=api_key, user_api_key_dict=user_api_key_dict
+            )
+
+            return response
+
         if api_key is None:
             sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
 
@@ -1784,6 +1842,7 @@ async def global_spend_logs(
     except Exception as e:
         error_trace = traceback.format_exc()
         error_str = str(e) + "\n" + error_trace
+        verbose_proxy_logger.error(f"/global/spend/logs Error: {error_str}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
