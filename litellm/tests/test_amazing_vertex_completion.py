@@ -648,19 +648,18 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test gemini-pro-vision, this is just another way to pass images"
-)
+# @pytest.mark.skip(
+#     reason="we already test gemini-pro-vision, this is just another way to pass images"
+# )
 def test_gemini_pro_vision_base64():
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
-        litellm.num_retries = 3
         image_path = "../proxy/cached_logo.jpg"
         # Getting the base64 string
         base64_image = encode_image(image_path)
         resp = litellm.completion(
-            model="vertex_ai/gemini-pro-vision",
+            model="vertex_ai/gemini-1.5-pro",
             messages=[
                 {
                     "role": "user",
@@ -679,6 +678,8 @@ def test_gemini_pro_vision_base64():
         print(resp)
 
         prompt_tokens = resp.usage.prompt_tokens
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:

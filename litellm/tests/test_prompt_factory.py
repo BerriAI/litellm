@@ -22,6 +22,9 @@ from litellm.llms.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    _gemini_convert_messages_with_history,
+)
 
 
 def test_llama_3_prompt():
@@ -388,3 +391,44 @@ def test_bedrock_parallel_tool_calling_pt(provider):
         translated_messages[number_of_messages - 1]["role"]
         != translated_messages[number_of_messages - 2]["role"]
     )
+
+
+def test_vertex_only_image_user_message():
+    base64_image = "/9j/2wCEAAgGBgcGBQ"
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                },
+            ],
+        },
+    ]
+
+    response = _gemini_convert_messages_with_history(messages=messages)
+
+    expected_response = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "inline_data": {
+                        "data": "/9j/2wCEAAgGBgcGBQ",
+                        "mime_type": "image/jpeg",
+                    }
+                },
+                {"text": " "},
+            ],
+        }
+    ]
+
+    assert len(response) == len(expected_response)
+    for idx, content in enumerate(response):
+        assert (
+            content == expected_response[idx]
+        ), "Invalid gemini input. Got={}, Expected={}".format(
+            content, expected_response[idx]
+        )
