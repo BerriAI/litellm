@@ -37,7 +37,7 @@ class Trade:
         return Trade(order)
 
 
-def trade(model_name: str) -> List[Trade]:
+def trade(model_name: str):
     def parse_order(order: dict) -> Trade:
         action = order["action"]
 
@@ -146,4 +146,4 @@ def trade(model_name: str) -> List[Trade]:
 )
 def test_function_call_parsing(model):
     trades = trade(model)
-    print([trade.order for trade in trades])
+    print([trade.order for trade in trades if trade is not None])
