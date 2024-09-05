@@ -4545,7 +4545,12 @@ class Router:
         return ids
 
     def get_model_names(self) -> List[str]:
-        return self.model_names
+        """
+        Returns all possible model names for router.
+
+        Includes model_group_alias models too.
+        """
+        return self.model_names + list(self.model_group_alias.keys())
 
     def get_model_list(
         self, model_name: Optional[str] = None

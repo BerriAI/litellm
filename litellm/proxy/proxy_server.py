@@ -2997,13 +2997,13 @@ def model_list(
 
     This is just for compatibility with openai projects like aider.
     """
-    global llm_model_list, general_settings
+    global llm_model_list, general_settings, llm_router
     all_models = []
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_model_list is None:
+    if llm_router is None:
         proxy_model_list = []
     else:
-        proxy_model_list = [m["model_name"] for m in llm_model_list]
+        proxy_model_list = llm_router.get_model_names()
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict, proxy_model_list=proxy_model_list
     )
