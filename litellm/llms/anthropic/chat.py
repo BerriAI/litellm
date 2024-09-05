@@ -674,7 +674,7 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
 ):
     if client is None:
-        client = _get_async_httpx_client()  # Create a new client if none provided
+        client = litellm.module_level_aclient
 
     try:
         response = await client.post(
@@ -716,7 +716,7 @@ def make_sync_call(
     timeout: Optional[Union[float, httpx.Timeout]],
 ):
     if client is None:
-        client = HTTPHandler()  # Create a new client if none provided
+        client = litellm.module_level_client  # re-use a module level client
 
     try:
         response = client.post(
@@ -1105,10 +1105,6 @@ class AnthropicChatCompletion(BaseLLM):
                 )
         else:
             ## COMPLETION CALL
-            if client is None or not isinstance(client, HTTPHandler):
-                client = HTTPHandler(timeout=timeout)  # type: ignore
-            else:
-                client = client
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
@@ -1131,6 +1127,10 @@ class AnthropicChatCompletion(BaseLLM):
                 )
 
             else:
+                if client is None or not isinstance(client, HTTPHandler):
+                    client = HTTPHandler(timeout=timeout)  # type: ignore
+                else:
+                    client = client
                 response = client.post(
                     api_base, headers=headers, data=json.dumps(data), timeout=timeout
                 )
