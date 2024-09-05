@@ -1,9 +1,10 @@
 # What is this?
 ## Helper utilities
 import os
-from typing import BinaryIO, List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
+from litellm.types.utils import FileTypes
 
 
 def map_finish_reason(
@@ -88,18 +89,19 @@ def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
         return None
 
 
-def get_file_check_sum(_file: BinaryIO):
+def get_audio_file_name(file_obj: FileTypes) -> str:
     """
-    Helper to safely get file checksum - used as a cache key
+    Safely get the name of a file-like object or return its string representation.
+
+    Args:
+        file_obj (Any): A file-like object or any other object.
+
+    Returns:
+        str: The name of the file if available, otherwise a string representation of the object.
     """
-    try:
-        file_descriptor = _file.fileno()
-        file_stat = os.fstat(file_descriptor)
-        file_size = str(file_stat.st_size)
-        file_checksum = _file.name + file_size
-        return file_checksum
-    except Exception as e:
-        verbose_logger.error(f"Error getting file_checksum: {(str(e))}")
-        file_checksum = _file.name
-        return file_checksum
-    return file_checksum
+    if hasattr(file_obj, "name"):
+        return getattr(file_obj, "name")
+    elif hasattr(file_obj, "__str__"):
+        return str(file_obj)
+    else:
+        return repr(file_obj)
