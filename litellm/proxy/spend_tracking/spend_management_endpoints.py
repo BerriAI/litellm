@@ -711,6 +711,7 @@ async def get_global_spend_provider(
         default=None,
         description="Time till which to view spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get breakdown of spend per provider
@@ -748,19 +749,42 @@ async def get_global_spend_provider(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            user_id = user_api_key_dict.user_id
+            if user_id is None:
+                raise HTTPException(
+                    status_code=400, detail={"error": "No user_id found"}
+                )
 
-        SELECT
-        model_id,
-        SUM(spend) AS spend
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date AND length(model_id) > 0
-        GROUP BY model_id
-        """
+            sql_query = """
+            SELECT
+            model_id,
+            SUM(spend) AS spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date 
+            AND length(model_id) > 0
+            AND "user" = $3
+            GROUP BY model_id
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj, user_id
+            )
+        else:
+            sql_query = """
+            SELECT
+            model_id,
+            SUM(spend) AS spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date AND length(model_id) > 0
+            GROUP BY model_id
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
 
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
         if db_response is None:
             return []
 
