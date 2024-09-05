@@ -491,14 +491,9 @@ class CodestralTextCompletion(BaseLLM):
                 message="HTTPStatusError - {}".format(e.response.text),
             )
         except Exception as e:
-            verbose_logger.exception(
-                "litellm.llms.text_completion_codestral.py::async_completion() - Exception occurred - {}".format(
-                    str(e)
-                )
-            )
             raise TextCompletionCodestralError(
                 status_code=500, message="{}".format(str(e))
-            )
+            )  # don't use verbose_logger.exception, if exception is raised
         return self.process_text_completion_response(
             model=model,
             response=response,
