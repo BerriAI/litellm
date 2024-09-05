@@ -576,6 +576,8 @@ def mock_completion(
                 custom_llm_provider="openai",
                 logging_obj=logging,
             )
+        if isinstance(mock_response, litellm.MockException):
+            raise mock_response
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:
