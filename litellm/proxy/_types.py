@@ -344,6 +344,7 @@ class LiteLLMRoutes(enum.Enum):
             "/key/update",
             "/key/delete",
             "/key/info",
+            "/global/spend/tags",
         ]
         + spend_tracking_routes
         + sso_only_routes
