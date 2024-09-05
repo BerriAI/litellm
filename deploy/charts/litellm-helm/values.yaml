@@ -74,6 +74,10 @@ ingress:
 
 # masterkey: changeit
 
+# Define on which stack the unicorn process will listen, it can be ":" or "0.0.0.0"
+# This can be used if your cluster is for instance on a single stack (IPV4)
+# listen: ""
+
 # The elements within proxy_config are rendered as config.yaml for the proxy
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
 #  Reference: https://docs.litellm.ai/docs/proxy/configs
