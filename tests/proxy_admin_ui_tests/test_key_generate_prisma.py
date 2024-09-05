@@ -537,6 +537,7 @@ def test_call_with_user_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
+        print("got an errror=", e)
         error_detail = e.message
         assert "ExceededBudget:" in error_detail
         assert isinstance(e, ProxyException)
