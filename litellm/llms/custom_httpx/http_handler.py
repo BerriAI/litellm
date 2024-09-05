@@ -37,16 +37,10 @@ class AsyncHTTPHandler:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
-        ssl_verify = os.getenv(
-            "SSL_VERIFY",
-            litellm.ssl_verify
-        )
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
-        cert = os.getenv(
-            "SSL_CERTIFICATE",
-            litellm.ssl_certificate
-        )
+        cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -277,16 +271,10 @@ class HTTPHandler:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
-        ssl_verify = os.getenv(
-            "SSL_VERIFY",
-            litellm.ssl_verify
-        )
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
-        cert = os.getenv(
-            "SSL_CERTIFICATE",
-            litellm.ssl_certificate
-        )
+        cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
             # Create a client with a connection pool
@@ -334,6 +322,7 @@ class HTTPHandler:
                     "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
+            response.raise_for_status()
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
@@ -374,7 +363,6 @@ class HTTPHandler:
             )
         except Exception as e:
             raise e
-
 
     def __del__(self) -> None:
         try:

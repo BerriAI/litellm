@@ -10459,6 +10459,8 @@ class TextCompletionStreamWrapper:
 def mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
+    if isinstance(mock_response, litellm.MockException):
+        raise mock_response
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -10480,6 +10482,8 @@ def mock_completion_streaming_obj(
 async def async_mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
+    if isinstance(mock_response, litellm.MockException):
+        raise mock_response
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:

@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import Router
@@ -1266,3 +1267,73 @@ async def test_using_default_working_fallback(sync_mode):
         )
     print("got response=", response)
     assert response is not None
+
+
+# asyncio.run(test_acompletion_gemini_stream())
+def mock_post_streaming(url, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 529
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.return_value = {"detail": "Overloaded!"}
+
+    return mock_response
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_streaming_fallbacks(sync_mode):
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    if sync_mode:
+        client = HTTPHandler(concurrent_limit=1)
+    else:
+        client = AsyncHTTPHandler(concurrent_limit=1)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic/claude-3-5-sonnet-20240620",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "mock_response": "Hey, how's it going?",
+                },
+            },
+        ],
+        fallbacks=[{"anthropic/claude-3-5-sonnet-20240620": ["gpt-3.5-turbo"]}],
+        num_retries=0,
+    )
+
+    with patch.object(client, "post", side_effect=mock_post_streaming) as mock_client:
+        chunks = []
+        if sync_mode:
+            response = router.completion(
+                model="anthropic/claude-3-5-sonnet-20240620",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                stream=True,
+                client=client,
+            )
+            for chunk in response:
+                print(chunk)
+                chunks.append(chunk)
+        else:
+            response = await router.acompletion(
+                model="anthropic/claude-3-5-sonnet-20240620",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                stream=True,
+                client=client,
+            )
+            async for chunk in response:
+                print(chunk)
+                chunks.append(chunk)
+        print(f"RETURNED response: {response}")
+
+        mock_client.assert_called_once()
+        print(chunks)
+        assert len(chunks) > 0
