@@ -4309,7 +4309,9 @@ class Router:
                     return model
         return None
 
-    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+    def _set_model_group_info(
+        self, model_group: str, user_facing_model_group_name: str
+    ) -> Optional[ModelGroupInfo]:
         """
         For a given model group name, return the combined model info
 
@@ -4391,7 +4393,7 @@ class Router:
 
                 if model_group_info is None:
                     model_group_info = ModelGroupInfo(
-                        model_group=model_group, providers=[llm_provider], **model_info  # type: ignore
+                        model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
                     )
                 else:
                     # if max_input_tokens > curr
@@ -4475,6 +4477,26 @@ class Router:
             model_group_info.rpm = total_rpm
 
         return model_group_info
+
+    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+        """
+        For a given model group name, return the combined model info
+
+        Returns:
+        - ModelGroupInfo if able to construct a model group
+        - None if error constructing model group info
+        """
+        ## Check if model group alias
+        if model_group in self.model_group_alias:
+            return self._set_model_group_info(
+                model_group=self.model_group_alias[model_group],
+                user_facing_model_group_name=model_group,
+            )
+
+        ## Check if actual model
+        return self._set_model_group_info(
+            model_group=model_group, user_facing_model_group_name=model_group
+        )
 
     async def get_model_group_usage(
         self, model_group: str

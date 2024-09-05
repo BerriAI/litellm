@@ -7585,12 +7585,12 @@ async def model_group_info(
         raise HTTPException(
             status_code=500, detail={"error": "LLM Router is not loaded in"}
         )
-    all_models: List[dict] = []
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_model_list is None:
+    if llm_router is None:
         proxy_model_list = []
     else:
-        proxy_model_list = [m["model_name"] for m in llm_model_list]
+        proxy_model_list = llm_router.get_model_names()
+
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict, proxy_model_list=proxy_model_list
     )
