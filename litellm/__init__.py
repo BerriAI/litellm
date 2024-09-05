@@ -257,7 +257,12 @@ upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = 
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
-max_internal_user_budget: Optional[float] = None
+default_max_internal_user_budget: Optional[float] = None
+max_internal_user_budget: Optional[float] = (
+    float(os.getenv("MAX_INTERNAL_USER_BUDGET"))
+    if os.getenv("MAX_INTERNAL_USER_BUDGET") is not None
+    else None
+)
 internal_user_budget_duration: Optional[str] = None
 max_end_user_budget: Optional[float] = None
 #### REQUEST PRIORITIZATION ####
