@@ -353,9 +353,10 @@ async def update_team(
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
     verbose_proxy_logger.debug("/team/update - %s", data)
 
-    existing_team_row = await prisma_client.get_data(
-        team_id=data.team_id, table_name="team", query_type="find_unique"
+    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
+
     if existing_team_row is None:
         raise HTTPException(
             status_code=404,

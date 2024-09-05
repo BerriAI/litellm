@@ -386,7 +386,6 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                 )
         #### ELSE ####
-
         ## CHECK PASS-THROUGH ENDPOINTS ##
         is_mapped_pass_through_route: bool = False
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:

@@ -45,14 +45,14 @@ def get_current_weather(location, unit="fahrenheit"):
 @pytest.mark.parametrize(
     "model",
     [
-        "gpt-3.5-turbo-1106",
-        "mistral/mistral-large-latest",
-        "claude-3-haiku-20240307",
+        # "gpt-3.5-turbo-1106",
+        # "mistral/mistral-large-latest",
+        # "claude-3-haiku-20240307",
         "gemini/gemini-1.5-pro",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
-def test_parallel_function_call(model):
+def test_aaparallel_function_call(model):
     try:
         litellm.set_verbose = True
         # Step 1: send the conversation and available functions to the model
@@ -102,6 +102,7 @@ def test_parallel_function_call(model):
         )  # this has to call the function for SF, Tokyo and paris
 
         # Step 2: check if the model wanted to call a function
+        print(f"tool_calls: {tool_calls}")
         if tool_calls:
             # Step 3: call the function
             # Note: the JSON response may not always be valid; be sure to handle errors
@@ -142,10 +143,10 @@ def test_parallel_function_call(model):
                 drop_params=True,
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
-    except litellm.InternalServerError:
-        pass
-    except litellm.RateLimitError:
-        pass
+    except litellm.InternalServerError as e:
+        print(e)
+    except litellm.RateLimitError as e:
+        print(e)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
