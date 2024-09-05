@@ -132,6 +132,13 @@ type DataDict = { [key: string]: unknown };
 type UserData = { user_id: string; spend: number };
 
 
+const isAdminOrAdminViewer = (role: string | null): boolean => {
+  if (role === null) return false;
+  return role === 'Admin' || role === 'Admin Viewer';
+};
+
+
+
 const UsagePage: React.FC<UsagePageProps> = ({
   accessToken,
   token,
@@ -379,16 +386,21 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   useEffect(() => {
     if (accessToken && token && userRole && userID) {
+
+
       fetchOverallSpend();
       fetchProviderSpend();
       fetchTopKeys();
       fetchTopModels();
-      fetchTeamSpend();
-      fetchTagNames();
-      fetchTopTags();
-      fetchTopEndUsers();
       fetchGlobalActivity();
       fetchGlobalActivityPerModel();
+
+      if (isAdminOrAdminViewer(userRole)) {
+        fetchTeamSpend();
+        fetchTagNames();
+        fetchTopTags();
+        fetchTopEndUsers();
+      }
     }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
@@ -399,9 +411,17 @@ const UsagePage: React.FC<UsagePageProps> = ({
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
-          <Tab>Team Based Usage</Tab>
-          <Tab>Customer Usage</Tab>
-           <Tab>Tag Based Usage</Tab>
+          
+          {isAdminOrAdminViewer(userRole) ? (
+            <>
+              <Tab>Team Based Usage</Tab>
+              <Tab>Customer Usage</Tab>
+              <Tab>Tag Based Usage</Tab>
+            </>
+          ) : (
+            <><div></div>
+            </>
+          )}
         </TabList>
         <TabPanels>
           <TabPanel>
