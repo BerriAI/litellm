@@ -12,3 +12,162 @@ For all tests - test the following:
 - Response is valid 
 - Response for Admin User is different from response from Internal User
 """
+
+import os
+import sys
+import traceback
+import uuid
+from datetime import datetime
+
+from dotenv import load_dotenv
+from fastapi import Request
+from fastapi.routing import APIRoute
+
+load_dotenv()
+import io
+import os
+import time
+
+# this file is to test litellm/proxy
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+import asyncio
+import logging
+
+import pytest
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    new_user,
+    user_info,
+    user_update,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    delete_key_fn,
+    generate_key_fn,
+    generate_key_helper_fn,
+    info_key_fn,
+    regenerate_key_fn,
+    update_key_fn,
+)
+from litellm.proxy.management_endpoints.team_endpoints import (
+    new_team,
+    team_info,
+    update_team,
+)
+from litellm.proxy.proxy_server import (
+    LitellmUserRoles,
+    audio_transcriptions,
+    chat_completion,
+    completion,
+    embeddings,
+    image_generation,
+    model_list,
+    moderations,
+    new_end_user,
+    user_api_key_auth,
+)
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
+    global_spend,
+    global_spend_logs,
+    spend_key_fn,
+    spend_user_fn,
+    view_spend_logs,
+)
+from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
+
+verbose_proxy_logger.setLevel(level=logging.DEBUG)
+
+from starlette.datastructures import URL
+
+from litellm.caching import DualCache
+from litellm.proxy._types import (
+    DynamoDBArgs,
+    GenerateKeyRequest,
+    KeyRequest,
+    LiteLLM_UpperboundKeyGenerateParams,
+    NewCustomerRequest,
+    NewTeamRequest,
+    NewUserRequest,
+    ProxyErrorTypes,
+    ProxyException,
+    UpdateKeyRequest,
+    UpdateTeamRequest,
+    UpdateUserRequest,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.utils import DBClient
+
+proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+
+@pytest.fixture
+def prisma_client():
+    from litellm.proxy.proxy_cli import append_query_params
+
+    ### add connection pool + pool timeout args
+    params = {"connection_limit": 100, "pool_timeout": 60}
+    database_url = os.getenv("DATABASE_URL")
+    modified_url = append_query_params(database_url, params)
+    os.environ["DATABASE_URL"] = modified_url
+
+    # Assuming DBClient is a class that needs to be instantiated
+    prisma_client = PrismaClient(
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
+    )
+
+    # Reset litellm.proxy.proxy_server.prisma_client to None
+    litellm.proxy.proxy_server.custom_db_client = None
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
+        f"litellm-proxy-budget-{time.time()}"
+    )
+    litellm.proxy.proxy_server.user_custom_key_generate = None
+
+    return prisma_client
+
+
+@pytest.mark.asyncio()
+async def test_view_daily_spend_ui(prisma_client):
+    print("prisma client=", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    spend_logs_for_admin = await global_spend_logs(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+        api_key=None,
+    )
+
+    print("spend_logs_for_admin=", spend_logs_for_admin)
+
+    spend_logs_for_internal_user = await global_spend_logs(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-1234", user_role=LitellmUserRoles.INTERNAL_USER, user_id="1234"
+        ),
+        api_key=None,
+    )
+
+    print("spend_logs_for_internal_user=", spend_logs_for_internal_user)
+
+    # Calculate total spend for admin
+    admin_total_spend = sum(log.get("spend", 0) for log in spend_logs_for_admin)
+
+    # Calculate total spend for internal user (0 in this case, but we'll keep it generic)
+    internal_user_total_spend = sum(
+        log.get("spend", 0) for log in spend_logs_for_internal_user
+    )
+
+    print("total_spend_for_admin=", admin_total_spend)
+    print("total_spend_for_internal_user=", internal_user_total_spend)
+
+    assert (
+        admin_total_spend > internal_user_total_spend
+    ), "Admin should have more spend than internal user"
