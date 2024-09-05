@@ -58,7 +58,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import (
-    get_file_check_sum,
+    get_audio_file_name,
     map_finish_reason,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import get_error_message
@@ -86,6 +86,7 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
+    FileTypes,
     ImageResponse,
     Message,
     ModelInfo,
@@ -161,7 +162,6 @@ except Exception as e:
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
-    BinaryIO,
     Callable,
     Dict,
     Iterable,
@@ -566,14 +566,13 @@ def function_setup(
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
         ):
-            _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = get_file_check_sum(_file=_file_name)
-            file_name = _file_name.name
+            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
+            file_checksum = get_audio_file_name(file_obj=_file_obj)
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
                 kwargs["metadata"] = {"file_checksum": file_checksum}
-            messages = file_name
+            messages = _file_obj
         elif (
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
