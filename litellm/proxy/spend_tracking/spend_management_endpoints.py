@@ -1236,6 +1236,7 @@ async def global_view_spend_tags(
 -H "Authorization: Bearer sk-1234"
     ```
     """
+    import traceback
 
     from enterprise.utils import ui_get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
@@ -1262,9 +1263,11 @@ async def global_view_spend_tags(
 
         return response
     except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"/spend/tags Error({str(e)})"),
+                message=getattr(e, "detail", f"/spend/tags Error({error_str})"),
                 type="internal_error",
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1272,7 +1275,7 @@ async def global_view_spend_tags(
         elif isinstance(e, ProxyException):
             raise e
         raise ProxyException(
-            message="/spend/tags Error" + str(e),
+            message="/spend/tags Error" + error_str,
             type="internal_error",
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
