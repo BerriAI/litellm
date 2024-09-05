@@ -3,6 +3,8 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
+from .openai import ChatCompletionCachedContent
+
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
     type: Required[Literal["auto", "any", "tool"]]
@@ -18,7 +20,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
 class AnthropicMessagesTextParam(TypedDict, total=False):
     type: Literal["text"]
     text: str
-    cache_control: Optional[dict]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolUseParam(TypedDict):
@@ -58,7 +60,7 @@ class AnthropicImageParamSource(TypedDict):
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Literal["image"]
     source: AnthropicImageParamSource
-    cache_control: Optional[dict]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultContent(TypedDict):
@@ -97,7 +99,7 @@ class AnthropicMetadata(TypedDict, total=False):
 class AnthropicSystemMessageContent(TypedDict, total=False):
     type: str
     text: str
-    cache_control: Optional[dict]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesRequest(TypedDict, total=False):

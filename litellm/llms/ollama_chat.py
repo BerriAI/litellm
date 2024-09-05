@@ -583,8 +583,4 @@ async def ollama_acompletion(
             )
             return model_response
     except Exception as e:
-        verbose_logger.exception(
-            "LiteLLM.ollama_acompletion(): Exception occured - {}".format(str(e))
-        )
-
-        raise e
+        raise e  # don't use verbose_logger.exception, if exception is raised
