@@ -5134,7 +5134,7 @@ async def ahealth_check(
 
         if passed_in_mode is None:
             return {
-                "error": "Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models"
+                "error": f"Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models \n error:{str(e)}, \nstacktrace: {stack_trace}"
             }
 
         error_to_return = (
