@@ -21,8 +21,8 @@ from litellm.utils import (
     supports_httpx_timeout,
 )
 
-from ..llms.azure import AzureAssistantsAPI
-from ..llms.openai import OpenAIAssistantsAPI
+from ..llms.AzureOpenAI.azure import AzureAssistantsAPI
+from ..llms.OpenAI.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
 from .utils import get_optional_params_add_message
@@ -184,6 +184,21 @@ def get_assistants(
                 request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
+
+    if response is None:
+        raise litellm.exceptions.BadRequestError(
+            message="LiteLLM doesn't support {} for 'get_assistants'. Only 'openai' is supported.".format(
+                custom_llm_provider
+            ),
+            model="n/a",
+            llm_provider=custom_llm_provider,
+            response=httpx.Response(
+                status_code=400,
+                content="Unsupported provider",
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+            ),
+        )
+
     return response
 
 
