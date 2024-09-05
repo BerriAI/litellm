@@ -244,6 +244,13 @@ class LiteLLMRoutes(enum.Enum):
         "/utils/token_counter",
     ]
 
+    mapped_pass_through_routes: List = [
+        "/bedrock",
+        "/vertex-ai",
+        "/gemini",
+        "/langfuse",
+    ]
+
     anthropic_routes: List = [
         "/v1/messages",
     ]

@@ -6189,6 +6189,64 @@ async def delete_end_user(
     pass
 
 
+@router.get(
+    "/customer/list",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[LiteLLM_EndUserTable],
+)
+@router.get(
+    "/end_user/list",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_team(
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [Admin-only] List all available customers
+
+    ```
+    curl --location --request GET 'http://0.0.0.0:4000/customer/list' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        _duration_in_seconds,
+        create_audit_log_for_update,
+        litellm_proxy_admin_name,
+        prisma_client,
+    )
+
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Admin-only endpoint. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    response = await prisma_client.db.litellm_endusertable.find_many()
+
+    returned_response: List[LiteLLM_EndUserTable] = []
+    for item in response:
+        returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
+    return returned_response
+
+
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     if premium_user is not True:
         return
