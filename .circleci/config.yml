@@ -158,6 +158,7 @@ jobs:
             pip install python-multipart
             pip install "pydantic==2.7.1"
             pip install "jsonschema==4.22.0"
+            pip install "backoff==2.2.1"
       - save_cache:
           paths:
             - ./venv
