@@ -330,6 +330,13 @@ class HTTPHandler:
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
+        except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", e.response.read())
+            else:
+                setattr(e, "message", e.response.text)
+            raise e
         except Exception as e:
             raise e
 
