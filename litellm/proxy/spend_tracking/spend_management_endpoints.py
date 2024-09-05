@@ -177,6 +177,35 @@ async def view_spend_tags(
         )
 
 
+async def get_global_activity_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, start_date: datetime, end_date: datetime
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+    SELECT
+        date_trunc('day', "startTime") AS date,
+        COUNT(*) AS api_requests,
+        SUM(total_tokens) AS total_tokens
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+    AND "user" = $3
+    GROUP BY date_trunc('day', "startTime")
+    """
+    db_response = await prisma_client.db.query_raw(
+        sql_query, start_date, end_date, user_id
+    )
+
+    return db_response
+
+
 @router.get(
     "/global/activity",
     tags=["Budget & Spend Tracking"],
@@ -195,6 +224,7 @@ async def get_global_activity(
         default=None,
         description="Time till which to view spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get number of API Requests, total tokens through proxy
@@ -236,18 +266,27 @@ async def get_global_activity(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
-        SELECT
-            date_trunc('day', "startTime") AS date,
-            COUNT(*) AS api_requests,
-            SUM(total_tokens) AS total_tokens
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
-        GROUP BY date_trunc('day', "startTime")
-        """
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            db_response = await get_global_activity_internal_user(
+                user_api_key_dict, start_date_obj, end_date_obj
+            )
+        else:
+
+            sql_query = """
+            SELECT
+                date_trunc('day', "startTime") AS date,
+                COUNT(*) AS api_requests,
+                SUM(total_tokens) AS total_tokens
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+            GROUP BY date_trunc('day', "startTime")
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
 
         if db_response is None:
             return []
@@ -282,6 +321,36 @@ async def get_global_activity(
         )
 
 
+async def get_global_activity_model_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, start_date: datetime, end_date: datetime
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+    SELECT
+        model_group,
+        date_trunc('day', "startTime") AS date,
+        COUNT(*) AS api_requests,
+        SUM(total_tokens) AS total_tokens
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+    AND "user" = $3
+    GROUP BY model_group, date_trunc('day', "startTime")
+    """
+    db_response = await prisma_client.db.query_raw(
+        sql_query, start_date, end_date, user_id
+    )
+
+    return db_response
+
+
 @router.get(
     "/global/activity/model",
     tags=["Budget & Spend Tracking"],
@@ -300,6 +369,7 @@ async def get_global_activity_model(
         default=None,
         description="Time till which to view spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get number of API Requests, total tokens through proxy - Grouped by MODEL
@@ -364,19 +434,28 @@ async def get_global_activity_model(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
-        SELECT
-            model_group,
-            date_trunc('day', "startTime") AS date,
-            COUNT(*) AS api_requests,
-            SUM(total_tokens) AS total_tokens
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
-        GROUP BY model_group, date_trunc('day', "startTime")
-        """
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            db_response = await get_global_activity_model_internal_user(
+                user_api_key_dict, start_date_obj, end_date_obj
+            )
+        else:
+
+            sql_query = """
+            SELECT
+                model_group,
+                date_trunc('day', "startTime") AS date,
+                COUNT(*) AS api_requests,
+                SUM(total_tokens) AS total_tokens
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+            GROUP BY model_group, date_trunc('day', "startTime")
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
         if db_response is None:
             return []
 
