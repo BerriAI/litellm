@@ -37,11 +37,18 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 from .streaming_handler import chunk_processor
 from .success_handler import PassThroughEndpointLogging
-from .types import EndpointType
+from .types import EndpointType, PassthroughStandardLoggingPayload
 
 router = APIRouter()
 
 pass_through_endpoint_logging = PassThroughEndpointLogging()
+
+
+def get_response_body(response: httpx.Response):
+    try:
+        return response.json()
+    except Exception:
+        return response.text
 
 
 async def set_env_variables_in_header(custom_headers: dict):
@@ -359,6 +366,10 @@ async def pass_through_request(
             litellm_call_id=str(uuid.uuid4()),
             function_id="1245",
         )
+        passthrough_logging_payload = PassthroughStandardLoggingPayload(
+            url=str(url),
+            request_body=_parsed_body,
+        )
 
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         kwargs = {
@@ -371,6 +382,7 @@ async def pass_through_request(
                 }
             },
             "call_type": "pass_through_endpoint",
+            "passthrough_logging_payload": passthrough_logging_payload,
         }
         logging_obj.update_environment_variables(
             model="unknown",
@@ -503,8 +515,8 @@ async def pass_through_request(
         content = await response.aread()
 
         ## LOG SUCCESS
+        passthrough_logging_payload["response_body"] = get_response_body(response)
         end_time = datetime.now()
-
         await pass_through_endpoint_logging.pass_through_async_success_handler(
             httpx_response=response,
             url_route=str(url),
@@ -513,6 +525,7 @@ async def pass_through_request(
             end_time=end_time,
             logging_obj=logging_obj,
             cache_hit=False,
+            **kwargs,
         )
 
         return Response(
