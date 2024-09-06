@@ -393,7 +393,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 batch_data.append(transformed_request)
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url = get_runtime_endpoint(
+        endpoint_url, proxy_endpoint_url = get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=optional_params.pop(
                 "aws_bedrock_runtime_endpoint", None

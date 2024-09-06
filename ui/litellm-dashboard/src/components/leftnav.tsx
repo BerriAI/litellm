@@ -12,6 +12,8 @@ interface SidebarProps {
   defaultSelectedKey: string[] | null;
 }
 
+const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"];
+
 const Sidebar: React.FC<SidebarProps> = ({
   setPage,
   userRole,
@@ -62,7 +64,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               <Text>Models</Text>
             </Menu.Item>
           ) : null}
-          {userRole == "Admin" ? (
+          {rolesAllowedToSeeUsage.includes(userRole) ? (
             <Menu.Item key="4" onClick={() => setPage("usage")}>
               <Text>Usage</Text>
             </Menu.Item>

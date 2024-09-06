@@ -111,6 +111,44 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+  ui_endpoint_testing:
+    docker:
+      - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./entrypoint.sh
+          command: |
+            set +e
+            chmod +x entrypoint.sh
+            ./entrypoint.sh
+            set -e
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
 
   installing_litellm_on_python:
     docker:
@@ -251,7 +289,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests
+            python -m pytest -s -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests
           no_output_timeout: 120m
 
       # Store test results
@@ -534,6 +572,12 @@ workflows:
   build_and_test:
     jobs:
       - local_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - ui_endpoint_testing:
           filters:
             branches:
               only:

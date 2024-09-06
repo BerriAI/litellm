@@ -8,7 +8,7 @@ import openai
 
 import litellm
 from litellm._logging import verbose_router_logger
-from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -337,7 +337,9 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     azure_client_params["azure_ad_token_provider"] = (
                         azure_ad_token_provider
                     )
-                from litellm.llms.azure import select_azure_base_url_or_endpoint
+                from litellm.llms.AzureOpenAI.azure import (
+                    select_azure_base_url_or_endpoint,
+                )
 
                 # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
                 # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client

@@ -16,7 +16,7 @@ import httpx
 import litellm
 from litellm import client, get_secret
 from litellm.llms.files_apis.azure import AzureOpenAIFilesAPI
-from litellm.llms.openai import FileDeleted, FileObject, OpenAIFilesAPI
+from litellm.llms.OpenAI.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.types.llms.openai import (
     Batch,
     CreateFileRequest,
