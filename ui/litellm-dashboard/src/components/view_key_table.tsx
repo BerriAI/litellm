@@ -22,6 +22,7 @@ import {
   Subtitle,
   Icon,
   BarChart,
+  TextInput,
 } from "@tremor/react";
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
@@ -33,7 +34,8 @@ import {
   InputNumber,
   message,
   Select,
-  Tooltip
+  Tooltip,
+  DatePicker,
 } from "antd";
 
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -120,6 +122,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
   const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
+  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
@@ -145,6 +148,42 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
     fetchUserModels();
   }, [accessToken, userID, userRole]);
+
+  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (regenerateFormData?.duration) {
+      try {
+        const now = new Date();
+        const duration = regenerateFormData.duration;
+        let newExpiry: Date;
+
+        if (duration.endsWith('s')) {
+          newExpiry = add(now, { seconds: parseInt(duration) });
+        } else if (duration.endsWith('h')) {
+          newExpiry = add(now, { hours: parseInt(duration) });
+        } else if (duration.endsWith('d')) {
+          newExpiry = add(now, { days: parseInt(duration) });
+        } else {
+          throw new Error('Invalid duration format');
+        }
+
+        setNewExpiryTime(newExpiry.toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          second: 'numeric',
+          hour12: true
+        }));
+      } catch (error) {
+        setNewExpiryTime(null);
+      }
+    } else {
+      setNewExpiryTime(null);
+    }
+  }, [regenerateFormData?.duration]);
 
   const handleModelLimitClick = (token: ItemData) => {
     setSelectedToken(token);
@@ -678,6 +717,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setKeyToDelete(null);
   };
 
+  const handleRegenerateClick = (token: any) => {
+    setSelectedToken(token);
+    setRegenerateFormData({
+      ...token,
+      duration: token.duration || 'none', // Set a default value if duration is not present
+    });
+    setRegenerateDialogVisible(true);
+  };
+
+  const handleRegenerateFormChange = (field: string, value: any) => {
+    setRegenerateFormData((prev: any) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
   const handleRegenerateKey = async () => {
     if (!premiumUser) {
       message.error("Regenerate API Key is an Enterprise feature. Please upgrade to use this feature.");
@@ -685,24 +740,25 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
 
     try {
-      if (selectedToken == null) {
-        message.error("Please select a key to regenerate");
+      if (regenerateFormData == null) {
+        message.error("Please fill in the key details");
         return;
       }
-      const response = await regenerateKeyCall(accessToken, selectedToken.token);
+      const response = await regenerateKeyCall(accessToken, regenerateFormData);
       setRegeneratedKey(response.key);
 
       // Update the data state with the new key_name
       if (data) {
         const updatedData = data.map(item => 
-          item.token === selectedToken.token 
-            ? { ...item, key_name: response.key_name } 
+          item.token === selectedToken?.token 
+            ? { ...item, key_name: response.key_name, ...regenerateFormData } 
             : item
         );
         setData(updatedData);
       }
 
       setRegenerateDialogVisible(false);
+      setRegenerateFormData(null);
       message.success("API Key regenerated successfully");
     } catch (error) {
       console.error("Error regenerating key:", error);
@@ -997,10 +1053,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     onClick={() => handleEditClick(item)}
                   />
                   <Icon
-                      onClick={() => {
-                        setSelectedToken(item);
-                        setRegenerateDialogVisible(true);
-                      }}
+                      onClick={() => handleRegenerateClick(item)}
                       icon={RefreshIcon}
                       size="sm"
                     />
@@ -1080,13 +1133,19 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         />
       )}
 
-    {/* Regenerate Key Confirmation Dialog */}
+    {/* Regenerate Key Form Modal */}
     <Modal
       title="Regenerate API Key"
       visible={regenerateDialogVisible}
-      onCancel={() => setRegenerateDialogVisible(false)}
+      onCancel={() => {
+        setRegenerateDialogVisible(false);
+        setRegenerateFormData(null);
+      }}
       footer={[
-        <Button key="cancel" onClick={() => setRegenerateDialogVisible(false)} className="mr-2">
+        <Button key="cancel" onClick={() => {
+          setRegenerateDialogVisible(false);
+          setRegenerateFormData(null);
+        }} className="mr-2">
           Cancel
         </Button>,
         <Button
@@ -1099,11 +1158,59 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       ]}
     >
       {premiumUser ? (
-        <>
-          <p>Are you sure you want to regenerate this key?</p>
-          <p>Key Alias:</p>
-          <pre>{selectedToken?.key_alias || 'No alias set'}</pre>
-        </>
+        <Form layout="vertical">
+          <Form.Item label="Key Alias">
+            <TextInput 
+              value={regenerateFormData?.key_alias} 
+              onChange={(e) => handleRegenerateFormChange('key_alias', e.target.value)}
+            />
+          </Form.Item>
+          <Form.Item label="Max Budget (USD)">
+            <InputNumber 
+              value={regenerateFormData?.max_budget} 
+              onChange={(value) => handleRegenerateFormChange('max_budget', value)}
+            />
+          </Form.Item>
+          <Form.Item label="TPM Limit">
+            <InputNumber 
+              value={regenerateFormData?.tpm_limit} 
+              onChange={(value) => handleRegenerateFormChange('tpm_limit', value)}
+            />
+          </Form.Item>
+          <Form.Item label="RPM Limit">
+            <InputNumber 
+              value={regenerateFormData?.rpm_limit} 
+              onChange={(value) => handleRegenerateFormChange('rpm_limit', value)}
+            />
+          </Form.Item>
+          <Form.Item
+              label="Expire Key (eg: 30s, 30h, 30d)"
+              name="duration"
+              className="mt-8"
+            >
+              <TextInput 
+                placeholder="" 
+                value={regenerateFormData?.duration || ''}
+                onChange={(e) => handleRegenerateFormChange('duration', e.target.value)}
+              />
+              <div className="mt-2 text-sm text-gray-500">
+                Current expiry: {
+                  selectedToken?.expires != null ? (
+                    new Date(selectedToken.expires).toLocaleString(undefined, {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric',
+                      hour: 'numeric',
+                      minute: 'numeric',
+                      second: 'numeric'
+                    })
+                  ) : (
+                    'Never'
+                  )
+                }
+              </div>
+            </Form.Item>
+        </Form>
       ) : (
         <div>
           <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
