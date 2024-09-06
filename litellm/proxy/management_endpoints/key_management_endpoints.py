@@ -280,7 +280,9 @@ async def generate_key_fn(
         )
 
 
-async def prepare_key_update_data(data: UpdateKeyRequest, existing_key_row):
+async def prepare_key_update_data(
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
+):
     data_json: dict = data.dict(exclude_unset=True)
     key = data_json.pop("key", None)
 
@@ -1055,7 +1057,7 @@ async def regenerate_key_fn(
     # Update the token in the database
     updated_token = await prisma_client.db.litellm_verificationtoken.update(
         where={"token": hashed_api_key},
-        data=update_data,
+        data=update_data,  # type: ignore
     )
 
     updated_token_dict = {}
