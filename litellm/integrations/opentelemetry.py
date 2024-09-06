@@ -41,7 +41,7 @@ LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 class OpenTelemetryConfig:
     from opentelemetry.sdk.trace.export import SpanExporter
 
-    exporter: str | SpanExporter = "console"
+    exporter: Union[str, SpanExporter] = "console"
     endpoint: Optional[str] = None
     headers: Optional[str] = None
 
