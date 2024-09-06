@@ -1,7 +1,7 @@
 import json
 import types  # type: ignore
 import uuid
-from typing import Any, BinaryIO, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import httpx
 import requests
@@ -19,8 +19,8 @@ from litellm.utils import (
     convert_to_model_response_object,
 )
 
-from ..llms.openai import OpenAITextCompletion, OpenAITextCompletionConfig
 from .base import BaseLLM
+from .OpenAI.openai import OpenAITextCompletion, OpenAITextCompletionConfig
 from .prompt_templates.factory import custom_prompt, prompt_factory
 
 openai_text_completion_config = OpenAITextCompletionConfig()

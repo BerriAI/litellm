@@ -24,18 +24,7 @@ import traceback
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import (
-    Any,
-    BinaryIO,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypedDict,
-    Union,
-)
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple, TypedDict, Union
 
 import httpx
 import openai
@@ -48,7 +37,7 @@ from litellm.assistants.main import AssistantDeleted
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -1342,7 +1331,7 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def atranscription(self, file: BinaryIO, model: str, **kwargs):
+    async def atranscription(self, file: FileTypes, model: str, **kwargs):
         """
         Example Usage:
 
@@ -1386,7 +1375,7 @@ class Router:
             )
             raise e
 
-    async def _atranscription(self, file: BinaryIO, model: str, **kwargs):
+    async def _atranscription(self, file: FileTypes, model: str, **kwargs):
         try:
             verbose_router_logger.debug(
                 f"Inside _atranscription()- model: {model}; kwargs: {kwargs}"
