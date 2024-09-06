@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -184,11 +185,14 @@ class TestLogger(CustomLogger):
 
     def __init__(self):
         self.kwargs = None
+        self.response_obj = None
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print("in success event for rerank, kwargs = ", kwargs)
+        print("in success event for rerank, response_obj = ", response_obj)
         self.kwargs = kwargs
+        self.response_obj = response_obj
 
 
 @pytest.mark.asyncio()
@@ -202,6 +206,10 @@ async def test_rerank_custom_callbacks():
         top_n=3,
     )
 
-    assert self.kwargs is not None
+    await asyncio.sleep(5)
 
     print("async re rank response: ", response)
+    assert custom_logger.kwargs is not None
+    assert custom_logger.kwargs.get("response_cost") > 0.0
+    assert custom_logger.response_obj is not None
+    assert custom_logger.response_obj.results is not None
