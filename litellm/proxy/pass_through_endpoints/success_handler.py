@@ -1,4 +1,6 @@
+import json
 import re
+import threading
 from datetime import datetime
 from typing import Union
 
@@ -6,10 +8,14 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.bedrock.pass_through.logging import BedrockPassThroughLogging
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.utils import StandardPassThroughResponseObject
+
+bedrock_pass_through_logging = BedrockPassThroughLogging()
 
 
 class PassThroughEndpointLogging:
@@ -43,8 +49,24 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
         else:
+            standard_logging_response_object: StandardPassThroughResponseObject = {
+                "response": httpx_response.text  # using text, as .json throws errors for bedrock 'invoke agent'.
+            }
+            threading.Thread(
+                target=logging_obj.success_handler,
+                args=(
+                    standard_logging_response_object,
+                    start_time,
+                    end_time,
+                    cache_hit,
+                ),
+            ).start()
             await logging_obj.async_success_handler(
-                result="",
+                result=(
+                    json.dumps(result)
+                    if isinstance(result, dict)
+                    else standard_logging_response_object
+                ),
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=False,

@@ -1297,3 +1297,7 @@ class CustomStreamingDecoder:
         self, iterator: Iterator[bytes]
     ) -> Iterator[Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]]:
         raise NotImplementedError
+
+
+class StandardPassThroughResponseObject:
+    response: str
