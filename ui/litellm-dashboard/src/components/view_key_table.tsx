@@ -123,6 +123,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
+  const [regenerateForm] = Form.useForm();
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
@@ -719,9 +720,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const handleRegenerateClick = (token: any) => {
     setSelectedToken(token);
-    setRegenerateFormData({
-      ...token,
-      duration: token.duration || 'none', // Set a default value if duration is not present
+    regenerateForm.setFieldsValue({
+      key_alias: token.key_alias,
+      max_budget: token.max_budget,
+      tpm_limit: token.tpm_limit,
+      rpm_limit: token.rpm_limit,
+      duration: token.duration || '',
     });
     setRegenerateDialogVisible(true);
   };
@@ -740,25 +744,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
 
     try {
-      if (regenerateFormData == null) {
-        message.error("Please fill in the key details");
-        return;
-      }
-      const response = await regenerateKeyCall(accessToken, regenerateFormData);
+      const formValues = await regenerateForm.validateFields();
+      const response = await regenerateKeyCall(accessToken, { ...formValues, token: selectedToken?.token });
       setRegeneratedKey(response.key);
 
       // Update the data state with the new key_name
       if (data) {
         const updatedData = data.map(item => 
           item.token === selectedToken?.token 
-            ? { ...item, key_name: response.key_name, ...regenerateFormData } 
+            ? { ...item, key_name: response.key_name, ...formValues } 
             : item
         );
         setData(updatedData);
       }
 
       setRegenerateDialogVisible(false);
-      setRegenerateFormData(null);
+      regenerateForm.resetFields();
       message.success("API Key regenerated successfully");
     } catch (error) {
       console.error("Error regenerating key:", error);
@@ -1139,12 +1140,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       visible={regenerateDialogVisible}
       onCancel={() => {
         setRegenerateDialogVisible(false);
-        setRegenerateFormData(null);
+        regenerateForm.resetFields();
       }}
       footer={[
         <Button key="cancel" onClick={() => {
           setRegenerateDialogVisible(false);
-          setRegenerateFormData(null);
+          regenerateForm.resetFields();
         }} className="mr-2">
           Cancel
         </Button>,
@@ -1158,58 +1159,42 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       ]}
     >
       {premiumUser ? (
-        <Form layout="vertical">
-          <Form.Item label="Key Alias">
-            <TextInput 
-              value={regenerateFormData?.key_alias} 
-              onChange={(e) => handleRegenerateFormChange('key_alias', e.target.value)}
-            />
+        <Form form={regenerateForm} layout="vertical">
+          <Form.Item name="key_alias" label="Key Alias">
+            <TextInput />
           </Form.Item>
-          <Form.Item label="Max Budget (USD)">
-            <InputNumber 
-              value={regenerateFormData?.max_budget} 
-              onChange={(value) => handleRegenerateFormChange('max_budget', value)}
-            />
+          <Form.Item name="max_budget" label="Max Budget (USD)">
+            <InputNumber step={0.01} precision={2} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="TPM Limit">
-            <InputNumber 
-              value={regenerateFormData?.tpm_limit} 
-              onChange={(value) => handleRegenerateFormChange('tpm_limit', value)}
-            />
+          <Form.Item name="tpm_limit" label="TPM Limit">
+            <InputNumber style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item label="RPM Limit">
-            <InputNumber 
-              value={regenerateFormData?.rpm_limit} 
-              onChange={(value) => handleRegenerateFormChange('rpm_limit', value)}
-            />
+          <Form.Item name="rpm_limit" label="RPM Limit">
+            <InputNumber style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item
-              label="Expire Key (eg: 30s, 30h, 30d)"
-              name="duration"
-              className="mt-8"
-            >
-              <TextInput 
-                placeholder="" 
-                value={regenerateFormData?.duration || ''}
-                onChange={(e) => handleRegenerateFormChange('duration', e.target.value)}
-              />
-              <div className="mt-2 text-sm text-gray-500">
-                Current expiry: {
-                  selectedToken?.expires != null ? (
-                    new Date(selectedToken.expires).toLocaleString(undefined, {
-                      day: 'numeric',
-                      month: 'long',
-                      year: 'numeric',
-                      hour: 'numeric',
-                      minute: 'numeric',
-                      second: 'numeric'
-                    })
-                  ) : (
-                    'Never'
-                  )
-                }
-              </div>
-            </Form.Item>
+            name="duration"
+            label="Expire Key (eg: 30s, 30h, 30d)"
+            className="mt-8"
+          >
+            <TextInput placeholder="" />
+          </Form.Item>
+          <div className="mt-2 text-sm text-gray-500">
+            Current expiry: {
+              selectedToken?.expires != null ? (
+                new Date(selectedToken.expires).toLocaleString(undefined, {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: 'numeric',
+                  second: 'numeric'
+                })
+              ) : (
+                'Never'
+              )
+            }
+          </div>
         </Form>
       ) : (
         <div>
