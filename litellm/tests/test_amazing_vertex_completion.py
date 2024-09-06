@@ -648,9 +648,9 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-# @pytest.mark.skip(
-#     reason="we already test gemini-pro-vision, this is just another way to pass images"
-# )
+@pytest.mark.skip(
+    reason="we already test gemini-pro-vision, this is just another way to pass images"
+)
 def test_gemini_pro_vision_base64():
     try:
         load_vertex_ai_credentials()
