@@ -23,7 +23,7 @@ class RerankResponse(BaseModel):
     id: str
     results: List[dict]  # Contains index and relevance_score
     meta: dict  # Contains api_version and billed_units
-    _hidden_params: Optional[dict] = {}
+    _hidden_params: dict = {}
 
     class Config:
         underscore_attrs_are_private = True
