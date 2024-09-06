@@ -1,8 +1,9 @@
-from typing import Literal, Tuple
+from typing import List, Literal, Tuple
 
 import httpx
 
 from litellm import supports_system_messages, verbose_logger
+from litellm.types.llms.vertex_ai import PartType
 
 
 class VertexAIError(Exception):
@@ -108,3 +109,18 @@ def _get_gemini_url(
         )
 
     return url, endpoint
+
+
+def _check_text_in_content(parts: List[PartType]) -> bool:
+    """
+    check that user_content has 'text' parameter.
+        - Known Vertex Error: Unable to submit request because it must have a text parameter.
+        - 'text' param needs to be len > 0
+        - Relevant Issue: https://github.com/BerriAI/litellm/issues/5515
+    """
+    has_text_param = False
+    for part in parts:
+        if "text" in part and part.get("text"):
+            has_text_param = True
+
+    return has_text_param
