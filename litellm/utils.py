@@ -617,6 +617,34 @@ def function_setup(
         raise e
 
 
+_futures_set = set()  # set to create strong refs for tasks
+
+
+# ======================================
+# Wraps asyncio.create_task to create a strong ref
+# ======================================
+def create_task(coro, *, done_callback=None, name=None, context=None):
+    task = asyncio.create_task(coro, name=name, context=context)
+    _futures_set.add(task)
+
+    def dcb(t):
+        # NOTE: if the result is not assigned, sometimes you'll get:
+        # RuntimeWarning: coroutine 'acompletion' was never awaited
+        # I do not know why but this removes that problem
+        try:
+            r = t.result()
+        except Exception:
+            pass
+        finally:
+            _futures_set.discard(t)
+
+    if done_callback is not None:
+        task.add_done_callback(done_callback)
+    task.add_done_callback(dcb)
+
+    return task
+
+
 def client(original_function):
     global liteDebuggerClient, get_all_keys
     rules_obj = Rules()
@@ -1294,7 +1322,7 @@ def client(original_function):
                             )
                         if kwargs.get("stream", False) == False:
                             # LOG SUCCESS
-                            asyncio.create_task(
+                            create_task(
                                 logging_obj.async_success_handler(
                                     cached_result, start_time, end_time, cache_hit
                                 )
@@ -1392,7 +1420,7 @@ def client(original_function):
                                 additional_args=None,
                                 stream=kwargs.get("stream", False),
                             )
-                            asyncio.create_task(
+                            create_task(
                                 logging_obj.async_success_handler(
                                     final_embedding_cached_response,
                                     start_time,
@@ -1478,7 +1506,7 @@ def client(original_function):
                             litellm.cache.cache, S3Cache
                         )  # s3 doesn't support bulk writing. Exclude.
                     ):
-                        asyncio.create_task(
+                        create_task(
                             litellm.cache.async_add_cache_pipeline(
                                 result, *args, **kwargs
                             )
@@ -1490,23 +1518,19 @@ def client(original_function):
                             kwargs=kwargs,
                         ).start()
                     else:
-                        asyncio.create_task(
+                        create_task(
                             litellm.cache.async_add_cache(
                                 result.json(), *args, **kwargs
                             )
                         )
                 else:
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache(result, *args, **kwargs)
-                    )
+                    create_task(litellm.cache.async_add_cache(result, *args, **kwargs))
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             print_verbose(
                 f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
             )
             # check if user does not want this to be logged
-            asyncio.create_task(
-                logging_obj.async_success_handler(result, start_time, end_time)
-            )
+            create_task(logging_obj.async_success_handler(result, start_time, end_time))
             threading.Thread(
                 target=logging_obj.success_handler,
                 args=(result, start_time, end_time),
@@ -10188,7 +10212,7 @@ class CustomStreamWrapper:
                         target=self.logging_obj.success_handler,
                         args=(processed_chunk, None, None, cache_hit),
                     ).start()  # log response
-                    asyncio.create_task(
+                    create_task(
                         self.logging_obj.async_success_handler(
                             processed_chunk, cache_hit=cache_hit
                         )
@@ -10239,7 +10263,7 @@ class CustomStreamWrapper:
                             target=self.logging_obj.success_handler,
                             args=(processed_chunk, None, None, cache_hit),
                         ).start()  # log processed_chunk
-                        asyncio.create_task(
+                        create_task(
                             self.logging_obj.async_success_handler(
                                 processed_chunk, cache_hit=cache_hit
                             )
@@ -10273,7 +10297,7 @@ class CustomStreamWrapper:
                         target=self.logging_obj.success_handler,
                         args=(response, None, None, cache_hit),
                     ).start()  # log response
-                    asyncio.create_task(
+                    create_task(
                         self.logging_obj.async_success_handler(
                             response, cache_hit=cache_hit
                         )
@@ -10289,7 +10313,7 @@ class CustomStreamWrapper:
                     target=self.logging_obj.success_handler,
                     args=(processed_chunk, None, None, cache_hit),
                 ).start()  # log response
-                asyncio.create_task(
+                create_task(
                     self.logging_obj.async_success_handler(
                         processed_chunk, cache_hit=cache_hit
                     )
@@ -10314,7 +10338,7 @@ class CustomStreamWrapper:
                         target=self.logging_obj.success_handler,
                         args=(response, None, None, cache_hit),
                     ).start()  # log response
-                    asyncio.create_task(
+                    create_task(
                         self.logging_obj.async_success_handler(
                             response, cache_hit=cache_hit
                         )
@@ -10330,7 +10354,7 @@ class CustomStreamWrapper:
                     target=self.logging_obj.success_handler,
                     args=(processed_chunk, None, None, cache_hit),
                 ).start()  # log response
-                asyncio.create_task(
+                create_task(
                     self.logging_obj.async_success_handler(
                         processed_chunk, cache_hit=cache_hit
                     )
@@ -10349,7 +10373,7 @@ class CustomStreamWrapper:
                     args=(e, traceback_exception),
                 ).start()  # log response
                 # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
+                create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)
                 )
             raise e
@@ -10362,7 +10386,7 @@ class CustomStreamWrapper:
                     args=(e, traceback_exception),
                 ).start()  # log response
                 # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
+                create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
             ## Map to OpenAI Exception
