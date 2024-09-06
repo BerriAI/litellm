@@ -114,7 +114,7 @@ class LagoLogger(CustomLogger):
         returned_val = {
             "event": {
                 "transaction_id": str(uuid.uuid4()),
-                "external_customer_id": external_customer_id,
+                "external_subscription_id": external_customer_id,
                 "code": os.getenv("LAGO_API_EVENT_CODE"),
                 "properties": {"model": model, "response_cost": cost, **usage},
             }
@@ -189,6 +189,8 @@ class LagoLogger(CustomLogger):
             )
 
             response.raise_for_status()
+
+            verbose_logger.debug(f"Logged Lago Object: {response.text}")
         except Exception as e:
             if response is not None and hasattr(response, "text"):
                 litellm.print_verbose(f"\nError Message: {response.text}")
