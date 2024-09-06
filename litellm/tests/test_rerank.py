@@ -20,6 +20,7 @@ import pytest
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -177,3 +178,30 @@ async def test_rerank_custom_api_base():
         assert response.results is not None
 
         assert_response_shape(response, custom_llm_provider="cohere")
+
+
+class TestLogger(CustomLogger):
+
+    def __init__(self):
+        self.kwargs = None
+        super().__init__()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print("in success event for rerank, kwargs = ", kwargs)
+        self.kwargs = kwargs
+
+
+@pytest.mark.asyncio()
+async def test_rerank_custom_callbacks():
+    custom_logger = TestLogger()
+    litellm.callbacks = [custom_logger]
+    response = await litellm.arerank(
+        model="cohere/rerank-english-v3.0",
+        query="hello",
+        documents=["hello", "world"],
+        top_n=3,
+    )
+
+    assert self.kwargs is not None
+
+    print("async re rank response: ", response)
