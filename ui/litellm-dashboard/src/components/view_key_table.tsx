@@ -131,12 +131,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
 
   useEffect(() => {
-    if (regenerateFormData?.duration) {
+    const calculateNewExpiryTime = (duration: string | undefined) => {
+      if (!duration) {
+        return null;
+      }
+  
       try {
         const now = new Date();
-        const duration = regenerateFormData.duration;
         let newExpiry: Date;
-
+  
         if (duration.endsWith('s')) {
           newExpiry = add(now, { seconds: parseInt(duration) });
         } else if (duration.endsWith('h')) {
@@ -146,8 +149,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         } else {
           throw new Error('Invalid duration format');
         }
-
-        setNewExpiryTime(newExpiry.toLocaleString('en-US', {
+  
+        return newExpiry.toLocaleString('en-US', {
           year: 'numeric',
           month: 'numeric',
           day: 'numeric',
@@ -155,14 +158,25 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           minute: 'numeric',
           second: 'numeric',
           hour12: true
-        }));
+        });
       } catch (error) {
-        setNewExpiryTime(null);
+        return null;
       }
+    };
+
+    console.log("in calculateNewExpiryTime for selectedToken", selectedToken);
+        
+  
+    // When a new duration is entered
+    if (regenerateFormData?.duration) {
+      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
     } else {
       setNewExpiryTime(null);
     }
-  }, [regenerateFormData?.duration]);
+
+    console.log("calculateNewExpiryTime:", newExpiryTime);
+  }, [selectedToken, regenerateFormData?.duration]);
+  
 
   
 
@@ -724,6 +738,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const handleRegenerateClick = (token: any) => {
     setSelectedToken(token);
+    setNewExpiryTime(null);
     regenerateForm.setFieldsValue({
       key_alias: token.key_alias,
       max_budget: token.max_budget,
@@ -1166,7 +1181,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form 
         form={regenerateForm} 
         layout="vertical"
-        onValuesChange={(changedValues) => {
+        onValuesChange={(changedValues, allValues) => {
           if ('duration' in changedValues) {
             handleRegenerateFormChange('duration', changedValues.duration);
           }
