@@ -722,6 +722,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
+            <TableHeaderCell>Expires</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
             <TableHeaderCell>Budget Reset</TableHeaderCell>
@@ -762,6 +763,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <TableCell>
                   <Text>{item.key_name}</Text>
                 </TableCell>
+                <TableCell>
+                {item.expires != null ? (
+                  <div>
+                    <p style={{ fontSize: '0.70rem' }}>{new Date(item.expires).toLocaleString()}</p>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '0.70rem' }}>Never</p>
+                )}
+              </TableCell>
                 <TableCell>
                   <Text>
                     {(() => {

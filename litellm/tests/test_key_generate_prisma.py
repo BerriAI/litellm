@@ -537,6 +537,7 @@ def test_call_with_user_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
+        print("got an errror=", e)
         error_detail = e.message
         assert "ExceededBudget:" in error_detail
         assert isinstance(e, ProxyException)
@@ -1492,7 +1493,10 @@ def test_call_with_key_over_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1607,7 +1611,10 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1727,7 +1734,10 @@ def test_call_with_key_over_model_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -2296,7 +2306,10 @@ async def test_proxy_load_test_db(prisma_client):
         await asyncio.sleep(120)
         try:
             # call spend logs
-            spend_logs = await view_spend_logs(api_key=generated_key)
+            spend_logs = await view_spend_logs(
+                api_key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print(f"len responses: {len(spend_logs)}")
             assert len(spend_logs) == n
