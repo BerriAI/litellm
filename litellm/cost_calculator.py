@@ -94,6 +94,8 @@ def cost_per_token(
         "transcription",
         "aspeech",
         "speech",
+        "rerank",
+        "arerank",
     ] = "completion",
 ) -> Tuple[float, float]:
     """
@@ -488,6 +490,8 @@ def completion_cost(
         "transcription",
         "aspeech",
         "speech",
+        "rerank",
+        "arerank",
     ] = "completion",
     ### REGION ###
     custom_llm_provider=None,
@@ -793,7 +797,9 @@ def response_cost_calculator(
                     call_type=call_type,
                     custom_llm_provider=custom_llm_provider,
                 )
-            elif isinstance(response_object, RerankResponse):
+            elif isinstance(response_object, RerankResponse) and (
+                call_type == "arerank" or call_type == "rerank"
+            ):
                 response_cost = rerank_cost(
                     rerank_response=response_object,
                     model=model,
@@ -838,7 +844,7 @@ def rerank_cost(
     model: str,
     call_type: Literal["rerank", "arerank"],
     custom_llm_provider: Optional[str],
-) -> Optional[float]:
+) -> float:
     """
     Returns
     - float or None: cost of response OR none if error.
@@ -848,5 +854,11 @@ def rerank_cost(
     try:
         if custom_llm_provider == "cohere":
             return 0.002
+        raise ValueError(
+            f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
+        )
     except Exception as e:
+        verbose_logger.exception(
+            f"litellm.cost_calculator.py::rerank_cost - Exception occurred - {str(e)}"
+        )
         raise e
