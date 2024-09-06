@@ -49,9 +49,9 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
         else:
-            standard_logging_response_object: StandardPassThroughResponseObject = {
-                "response": httpx_response.text  # using text, as .json throws errors for bedrock 'invoke agent'.
-            }
+            standard_logging_response_object = StandardPassThroughResponseObject(
+                response=httpx_response.text
+            )
             threading.Thread(
                 target=logging_obj.success_handler,
                 args=(

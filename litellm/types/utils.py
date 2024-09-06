@@ -1299,5 +1299,5 @@ class CustomStreamingDecoder:
         raise NotImplementedError
 
 
-class StandardPassThroughResponseObject:
+class StandardPassThroughResponseObject(TypedDict):
     response: str
