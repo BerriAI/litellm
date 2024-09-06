@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall, modelAvailableCall } from "./networking";
+import { add } from 'date-fns';
 import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall, regenerateKeyCall } from "./networking";
 import {
@@ -124,33 +125,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [regenerateForm] = Form.useForm();
+  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
-  useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null) {
-          return;
-        }
-
-        if (accessToken !== null && userRole !== null) {
-          const model_available = await modelAvailableCall(accessToken, userID, userRole);
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
-      } catch (error) {
-        console.error("Error fetching user models:", error);
-      }
-    };
-  
-    fetchUserModels();
-  }, [accessToken, userID, userRole]);
-
-  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
 
   useEffect(() => {
     if (regenerateFormData?.duration) {
@@ -185,6 +163,32 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       setNewExpiryTime(null);
     }
   }, [regenerateFormData?.duration]);
+
+  
+
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        if (userID === null) {
+          return;
+        }
+
+        if (accessToken !== null && userRole !== null) {
+          const model_available = await modelAvailableCall(accessToken, userID, userRole);
+          let available_model_names = model_available["data"].map(
+            (element: { id: string }) => element.id
+          );
+          console.log("available_model_names:", available_model_names);
+          setUserModels(available_model_names);
+        }
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
+  
+    fetchUserModels();
+  }, [accessToken, userID, userRole]);
+
 
   const handleModelLimitClick = (token: ItemData) => {
     setSelectedToken(token);
@@ -1159,7 +1163,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       ]}
     >
       {premiumUser ? (
-        <Form form={regenerateForm} layout="vertical">
+        <Form 
+        form={regenerateForm} 
+        layout="vertical"
+        onValuesChange={(changedValues) => {
+          if ('duration' in changedValues) {
+            handleRegenerateFormChange('duration', changedValues.duration);
+          }
+        }}
+      >
           <Form.Item name="key_alias" label="Key Alias">
             <TextInput />
           </Form.Item>
@@ -1182,19 +1194,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           <div className="mt-2 text-sm text-gray-500">
             Current expiry: {
               selectedToken?.expires != null ? (
-                new Date(selectedToken.expires).toLocaleString(undefined, {
-                  day: 'numeric',
-                  month: 'long',
-                  year: 'numeric',
-                  hour: 'numeric',
-                  minute: 'numeric',
-                  second: 'numeric'
-                })
+                new Date(selectedToken.expires).toLocaleString()
               ) : (
                 'Never'
               )
             }
           </div>
+          {newExpiryTime && (
+            <div className="mt-2 text-sm text-green-600">
+              New expiry: {newExpiryTime}
+            </div>
+          )}
         </Form>
       ) : (
         <div>
