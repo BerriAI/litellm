@@ -257,6 +257,7 @@ upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = 
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
+default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 internal_user_budget_duration: Optional[str] = None
 max_end_user_budget: Optional[float] = None
@@ -923,7 +924,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.openai import (
+from .llms.OpenAI.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
@@ -938,7 +939,7 @@ from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
-from .llms.azure import (
+from .llms.AzureOpenAI.azure import (
     AzureOpenAIConfig,
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,

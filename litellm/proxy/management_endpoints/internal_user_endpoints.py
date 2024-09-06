@@ -392,7 +392,6 @@ async def user_info(
             user_id=user_id,
             table_name="key",
             query_type="find_all",
-            expires=datetime.now(),
         )
 
         if user_info is None:

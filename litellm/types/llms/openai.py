@@ -1,16 +1,5 @@
 from os import PathLike
-from typing import (
-    IO,
-    Any,
-    BinaryIO,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.lib.streaming._assistants import (
