@@ -20,8 +20,8 @@ import httpx
 
 import litellm
 from litellm import client
-from litellm.llms.azure import AzureBatchesAPI
-from litellm.llms.openai import OpenAIBatchesAPI
+from litellm.llms.AzureOpenAI.azure import AzureBatchesAPI
+from litellm.llms.OpenAI.openai import OpenAIBatchesAPI
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     Batch,

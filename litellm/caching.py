@@ -17,7 +17,7 @@ import time
 import traceback
 from datetime import timedelta
 from enum import Enum
-from typing import Any, BinaryIO, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from openai._models import BaseModel as OpenAIObject
 
