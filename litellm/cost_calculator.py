@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_cha
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
+from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import PassthroughCallTypes, Usage
@@ -747,6 +748,7 @@ def response_cost_calculator(
         TranscriptionResponse,
         TextCompletionResponse,
         HttpxBinaryResponseContent,
+        RerankResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -765,6 +767,8 @@ def response_cost_calculator(
         "transcription",
         "aspeech",
         "speech",
+        "rerank",
+        "arerank",
     ],
     optional_params: dict,
     cache_hit: Optional[bool] = None,
@@ -785,6 +789,13 @@ def response_cost_calculator(
             if isinstance(response_object, ImageResponse):
                 response_cost = completion_cost(
                     completion_response=response_object,
+                    model=model,
+                    call_type=call_type,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            elif isinstance(response_object, RerankResponse):
+                response_cost = rerank_cost(
+                    rerank_response=response_object,
                     model=model,
                     call_type=call_type,
                     custom_llm_provider=custom_llm_provider,
@@ -820,3 +831,22 @@ def response_cost_calculator(
                 )
             )
         return None
+
+
+def rerank_cost(
+    rerank_response: RerankResponse,
+    model: str,
+    call_type: Literal["rerank", "arerank"],
+    custom_llm_provider: Optional[str],
+) -> Optional[float]:
+    """
+    Returns
+    - float or None: cost of response OR none if error.
+    """
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
+    try:
+        if custom_llm_provider == "cohere":
+            return 0.002
+    except Exception as e:
+        raise e
