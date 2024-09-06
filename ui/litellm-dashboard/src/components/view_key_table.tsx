@@ -749,7 +749,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     try {
       const formValues = await regenerateForm.validateFields();
-      const response = await regenerateKeyCall(accessToken, { ...formValues, token: selectedToken?.token });
+      const response = await regenerateKeyCall(accessToken, selectedToken.token, formValues);
       setRegeneratedKey(response.key);
 
       // Update the data state with the new key_name
@@ -1173,7 +1173,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         }}
       >
           <Form.Item name="key_alias" label="Key Alias">
-            <TextInput />
+            <TextInput disabled={true} />
           </Form.Item>
           <Form.Item name="max_budget" label="Max Budget (USD)">
             <InputNumber step={0.01} precision={2} style={{ width: '100%' }} />
