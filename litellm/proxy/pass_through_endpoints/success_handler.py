@@ -8,14 +8,11 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.pass_through.logging import BedrockPassThroughLogging
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import StandardPassThroughResponseObject
-
-bedrock_pass_through_logging = BedrockPassThroughLogging()
 
 
 class PassThroughEndpointLogging:
