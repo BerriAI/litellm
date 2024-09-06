@@ -402,7 +402,8 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
     if azure_ad_token_access_token is not None:
         return azure_ad_token_access_token
 
-    req_token = httpx.post(
+    client = litellm.module_level_client
+    req_token = client.post(
         f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
         data={
             "client_id": azure_client_id,
