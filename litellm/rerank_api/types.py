@@ -23,3 +23,16 @@ class RerankResponse(BaseModel):
     id: str
     results: List[dict]  # Contains index and relevance_score
     meta: dict  # Contains api_version and billed_units
+    _hidden_params: Optional[dict] = {}
+
+    class Config:
+        underscore_attrs_are_private = True
+
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def get(self, key, default=None):
+        return self.__dict__.get(key, default)
+
+    def __contains__(self, key):
+        return key in self.__dict__
