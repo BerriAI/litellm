@@ -4816,6 +4816,15 @@
         "litellm_provider": "ollama",
         "mode": "completion"
     },
+     "ollama/hermes3": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 4096, 
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
+    },
     "deepinfra/lizpreciatior/lzlv_70b_fp16_hf": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
