@@ -28,8 +28,11 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamAddMemberResponse,
+    TeamInfoResponseObject,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
+    TeamMemberUpdateRequest,
+    TeamMemberUpdateResponse,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
@@ -751,6 +754,131 @@ async def team_member_delete(
 
 
 @router.post(
+    "/team/member_update",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamMemberUpdateResponse,
+)
+@management_endpoint_wrapper
+async def team_member_update(
+    data: TeamMemberUpdateRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [BETA]
+
+    Update team member budgets
+    """
+    from litellm.proxy.proxy_server import (
+        _duration_in_seconds,
+        create_audit_log_for_update,
+        litellm_proxy_admin_name,
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.team_id is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    if data.user_id is None and data.user_email is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either user_id or user_email needs to be passed in"},
+        )
+
+    _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
+    )
+
+    if _existing_team_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Team id={} does not exist in db".format(data.team_id)},
+        )
+    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_delete", existing_team_row.team_id
+                )
+            },
+        )
+
+    returned_team_info: TeamInfoResponseObject = await team_info(
+        http_request=http_request,
+        team_id=data.team_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    ## get user id
+    received_user_id: Optional[str] = None
+    if data.user_id is not None:
+        received_user_id = data.user_id
+    elif data.user_email is not None:
+        for member in returned_team_info["team_info"].members_with_roles:
+            if member.user_email is not None and member.user_email == data.user_email:
+                received_user_id = member.user_id
+                break
+
+    if received_user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "User id doesn't exist in team table. Data={}".format(data)
+            },
+        )
+    ## find the relevant team membership
+    identified_budget_id: Optional[str] = None
+    for tm in returned_team_info["team_memberships"]:
+        if tm.user_id == received_user_id:
+            identified_budget_id = tm.budget_id
+            break
+
+    ### upsert new budget
+    if identified_budget_id is None:
+        new_budget = await prisma_client.db.litellm_budgettable.create(
+            data={
+                "max_budget": data.max_budget_in_team,
+                "created_by": user_api_key_dict.user_id or "",
+                "updated_by": user_api_key_dict.user_id or "",
+            }
+        )
+
+        await prisma_client.db.litellm_teammembership.create(
+            data={
+                "team_id": data.team_id,
+                "user_id": received_user_id,
+                "budget_id": new_budget.budget_id,
+            },
+        )
+    else:
+        await prisma_client.db.litellm_budgettable.update(
+            where={"budget_id": identified_budget_id},
+            data={"max_budget": data.max_budget_in_team},
+        )
+
+    return TeamMemberUpdateResponse(
+        team_id=data.team_id,
+        user_id=received_user_id,
+        user_email=data.user_email,
+        max_budget_in_team=data.max_budget_in_team,
+    )
+
+
+@router.post(
     "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
@@ -937,12 +1065,18 @@ async def team_info(
             where={"team_id": team_id},
             include={"litellm_budget_table": True},
         )
-        return {
-            "team_id": team_id,
-            "team_info": team_info,
-            "keys": keys,
-            "team_memberships": team_memberships,
-        }
+
+        returned_tm: List[LiteLLM_TeamMembership] = []
+        for tm in team_memberships:
+            returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
+
+        response_object = TeamInfoResponseObject(
+            team_id=team_id,
+            team_info=team_info,
+            keys=keys,
+            team_memberships=returned_tm,
+        )
+        return response_object
 
     except Exception as e:
         verbose_proxy_logger.error(
