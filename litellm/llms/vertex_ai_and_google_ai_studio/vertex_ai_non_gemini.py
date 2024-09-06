@@ -29,6 +29,8 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantM
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
+from .common_utils import _check_text_in_content
+
 
 class VertexAIError(Exception):
     def __init__(self, status_code, message):
@@ -173,6 +175,19 @@ def _gemini_convert_messages_with_history(
                 msg_i += 1
 
             if user_content:
+                """
+                check that user_content has 'text' parameter.
+                    - Known Vertex Error: Unable to submit request because it must have a text parameter.
+                    - Relevant Issue: https://github.com/BerriAI/litellm/issues/5515
+                """
+                has_text_in_content = _check_text_in_content(user_content)
+                if has_text_in_content is False:
+                    verbose_logger.warning(
+                        "No text in user content. Adding a blank text to user content, to ensure Gemini doesn't fail the request. Relevant Issue - https://github.com/BerriAI/litellm/issues/5515"
+                    )
+                    user_content.append(
+                        PartType(text=" ")
+                    )  # add a blank text, to ensure Gemini doesn't fail the request.
                 contents.append(ContentType(role="user", parts=user_content))
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
