@@ -29,6 +29,9 @@ def test_create_batch(provider):
     2. Create Batch Request
     3. Retrieve the specific batch
     """
+    if provider == "azure":
+        # Don't have anymore Azure Quota
+        return
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
@@ -103,6 +106,9 @@ async def test_async_create_batch(provider):
     3. Retrieve the specific batch
     """
     print("Testing async create batch")
+    if provider == "azure":
+        # Don't have anymore Azure Quota
+        return
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
