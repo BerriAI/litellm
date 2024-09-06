@@ -7516,10 +7516,14 @@ async def model_info_v1(
 
     if len(all_models_str) > 0:
         model_names = all_models_str
-        _relevant_models = [
-            m for m in llm_router.get_model_list() if m["model_name"] in model_names
-        ]
-        all_models = copy.deepcopy(_relevant_models)
+        llm_model_list = llm_router.get_model_list()
+        if llm_model_list is not None:
+            _relevant_models = [
+                m for m in llm_router.get_model_list() if m["model_name"] in model_names
+            ]
+            all_models = copy.deepcopy(_relevant_models)  # type: ignore
+        else:
+            all_models = []
 
     for model in all_models:
         # provided model_info in config.yaml
