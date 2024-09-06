@@ -745,6 +745,7 @@ def client(original_function):
             or kwargs.get("amoderation", False) == True
             or kwargs.get("atext_completion", False) == True
             or kwargs.get("atranscription", False) == True
+            or kwargs.get("arerank", False) == True
         ):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
