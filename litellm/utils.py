@@ -9845,6 +9845,9 @@ class CustomStreamWrapper:
                         model_response.system_fingerprint = (
                             original_chunk.system_fingerprint
                         )
+                        model_response.citations = getattr(
+                            original_chunk, "citations", None
+                        )
                         print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                         if self.sent_first_chunk is False:
                             model_response.choices[0].delta["role"] = "assistant"

@@ -534,7 +534,9 @@ class Logging:
         """
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
-            litellm_params=self.litellm_params
+            litellm_params=(
+                self.litellm_params if hasattr(self, "litellm_params") else None
+            )
         )
 
         if cache_hit is None:

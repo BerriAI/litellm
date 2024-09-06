@@ -3827,6 +3827,65 @@ def test_unit_test_custom_stream_wrapper_function_call():
     assert len(new_model.choices[0].delta.tool_calls) > 0
 
 
+def test_unit_test_perplexity_citations_chunk():
+    """
+    Test if model returns a tool call, the finish reason is correctly set to 'tool_calls'
+    """
+    from litellm.types.llms.openai import ChatCompletionDeltaChunk
+
+    litellm.set_verbose = False
+    delta: ChatCompletionDeltaChunk = {
+        "content": "B",
+        "role": "assistant",
+    }
+    chunk = {
+        "id": "xxx",
+        "model": "llama-3.1-sonar-small-128k-online",
+        "created": 1725494279,
+        "usage": {"prompt_tokens": 15, "completion_tokens": 1, "total_tokens": 16},
+        "citations": [
+            "https://x.com/bizzabo?lang=ur",
+            "https://apps.apple.com/my/app/bizzabo/id408705047",
+            "https://www.bizzabo.com/blog/maximize-event-data-strategies-for-success",
+        ],
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": None,
+                "message": {"role": "assistant", "content": "B"},
+                "delta": delta,
+            }
+        ],
+    }
+    chunk = litellm.ModelResponse(**chunk, stream=True)
+
+    completion_stream = ModelResponseIterator(model_response=chunk)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="cached_response",
+        logging_obj=litellm.litellm_core_utils.litellm_logging.Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    finish_reason: Optional[str] = None
+    for response_chunk in response:
+        if response_chunk.choices[0].delta.content is not None:
+            print(
+                f"response_chunk.choices[0].delta.content: {response_chunk.choices[0].delta.content}"
+            )
+            assert "citations" in response_chunk
+
+
 @pytest.mark.parametrize(
     "model",
     [
