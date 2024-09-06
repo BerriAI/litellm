@@ -5,7 +5,7 @@ Common utilities used across bedrock chat/embedding/image generation
 import os
 import types
 from enum import Enum
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import httpx
 
@@ -729,7 +729,7 @@ def get_runtime_endpoint(
     api_base: Optional[str],
     aws_bedrock_runtime_endpoint: Optional[str],
     aws_region_name: str,
-) -> str:
+) -> Tuple[str, str]:
     env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
     if api_base is not None:
         endpoint_url = api_base
@@ -744,7 +744,19 @@ def get_runtime_endpoint(
     else:
         endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-    return endpoint_url
+    # Determine proxy_endpoint_url
+    if env_aws_bedrock_runtime_endpoint and isinstance(
+        env_aws_bedrock_runtime_endpoint, str
+    ):
+        proxy_endpoint_url = env_aws_bedrock_runtime_endpoint
+    elif aws_bedrock_runtime_endpoint is not None and isinstance(
+        aws_bedrock_runtime_endpoint, str
+    ):
+        proxy_endpoint_url = aws_bedrock_runtime_endpoint
+    else:
+        proxy_endpoint_url = endpoint_url
+
+    return endpoint_url, proxy_endpoint_url
 
 
 class ModelResponseIterator:
