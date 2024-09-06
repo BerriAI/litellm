@@ -7519,7 +7519,7 @@ async def model_info_v1(
         llm_model_list = llm_router.get_model_list()
         if llm_model_list is not None:
             _relevant_models = [
-                m for m in llm_router.get_model_list() if m["model_name"] in model_names
+                m for m in llm_model_list if m["model_name"] in model_names
             ]
             all_models = copy.deepcopy(_relevant_models)  # type: ignore
         else:
