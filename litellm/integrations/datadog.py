@@ -149,7 +149,7 @@ class DataDogLogger:
                 f"Datadog Layer Logging - final response object: {response_obj}"
             )
         except Exception as e:
-            verbose_logger.debug(
+            verbose_logger.exception(
                 f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
             )
             pass
