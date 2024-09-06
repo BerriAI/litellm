@@ -656,6 +656,10 @@ class UpdateKeyRequest(GenerateKeyRequest):
     metadata: Optional[dict] = None
 
 
+class RegenerateKeyRequest(UpdateKeyRequest):
+    key: Optional[str] = None
+
+
 class KeyRequest(LiteLLMBase):
     keys: List[str]
 
