@@ -189,6 +189,8 @@ class LagoLogger(CustomLogger):
             )
 
             response.raise_for_status()
+
+            verbose_logger.debug(f"Logged Lago Object: {response.text}")
         except Exception as e:
             if response is not None and hasattr(response, "text"):
                 litellm.print_verbose(f"\nError Message: {response.text}")
