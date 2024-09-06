@@ -146,4 +146,4 @@ def trade(model_name: str) -> List[Trade]:  # type: ignore
 )
 def test_function_call_parsing(model):
     trades = trade(model)
-    print([trade.order for trade in trades])
+    print([trade.order for trade in trades if trade is not None])
