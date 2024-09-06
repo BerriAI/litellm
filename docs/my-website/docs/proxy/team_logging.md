@@ -221,6 +221,9 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 ```
 
+<iframe width="840" height="500" src="https://www.youtube.com/embed/8iF0Hvwk0YU" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+
 ---
 
 Help us improve this feature, by filing a [ticket here](https://github.com/BerriAI/litellm/issues)
