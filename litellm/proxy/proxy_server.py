@@ -2961,11 +2961,26 @@ async def startup_event():
             and prisma_client is not None
         ):
             print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
-            ### Schedule weekly/monhtly spend reports ###
+            ### Schedule weekly/monthly spend reports ###
+            ### Schedule spend reports ###
+            spend_report_frequency: str = (
+                general_settings.get("spend_report_frequency", "7d") or "7d"
+            )
+
+            # Parse the frequency
+            days = int(spend_report_frequency[:-1])
+            if spend_report_frequency[-1].lower() != "d":
+                raise ValueError(
+                    "spend_report_frequency must be specified in days, e.g., '1d', '7d'"
+                )
+
             scheduler.add_job(
                 proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
-                "cron",
-                day_of_week="mon",
+                "interval",
+                days=days,
+                next_run_time=datetime.now()
+                + timedelta(seconds=10),  # Start 10 seconds from now
+                args=[spend_report_frequency],
             )
 
             scheduler.add_job(
