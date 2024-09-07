@@ -762,6 +762,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       return;
     }
 
+    if (selectedToken == null) {
+      return;
+    }
+
     try {
       const formValues = await regenerateForm.validateFields();
       const response = await regenerateKeyCall(accessToken, selectedToken.token, formValues);
