@@ -110,7 +110,7 @@ class BedrockEmbedding(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise BedrockError(status_code=error_code, message=response.text)
+            raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 

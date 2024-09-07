@@ -41,6 +41,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardPassThroughResponseObject,
     TextCompletionResponse,
     TranscriptionResponse,
 )
@@ -534,7 +535,9 @@ class Logging:
         """
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
-            litellm_params=self.litellm_params
+            litellm_params=(
+                self.litellm_params if hasattr(self, "litellm_params") else None
+            )
         )
 
         if cache_hit is None:
@@ -611,6 +614,17 @@ class Logging:
                             ] = result._hidden_params
                     ## STANDARDIZED LOGGING PAYLOAD
 
+                    self.model_call_details["standard_logging_object"] = (
+                        get_standard_logging_object_payload(
+                            kwargs=self.model_call_details,
+                            init_response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            logging_obj=self,
+                        )
+                    )
+                elif isinstance(result, dict):  # pass-through endpoints
+                    ## STANDARDIZED LOGGING PAYLOAD
                     self.model_call_details["standard_logging_object"] = (
                         get_standard_logging_object_payload(
                             kwargs=self.model_call_details,
@@ -2271,6 +2285,8 @@ def get_standard_logging_object_payload(
         elif isinstance(init_response_obj, BaseModel):
             response_obj = init_response_obj.model_dump()
             hidden_params = getattr(init_response_obj, "_hidden_params", None)
+        elif isinstance(init_response_obj, dict):
+            response_obj = init_response_obj
         else:
             response_obj = {}
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
