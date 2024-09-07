@@ -67,7 +67,7 @@ spec:
             - name: DATABASE_HOST
               value: {{ .Values.db.endpoint }}
             - name: DATABASE_NAME
-              value: litellm
+              value: {{ .Values.db.database }}
             {{- end }}
           command:
             - sh
@@ -89,6 +89,8 @@ spec:
               else
                 echo "Database failed to become ready before we gave up waiting."
               fi
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           {{ if .Values.securityContext.readOnlyRootFilesystem }}
           volumeMounts:
             - name: tmp
