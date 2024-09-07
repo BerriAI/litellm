@@ -656,6 +656,14 @@ class UpdateKeyRequest(GenerateKeyRequest):
     metadata: Optional[dict] = None
 
 
+class RegenerateKeyRequest(GenerateKeyRequest):
+    # This needs to be different from UpdateKeyRequest, because "key" is optional for this
+    key: Optional[str] = None
+    duration: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+
+
 class KeyRequest(LiteLLMBase):
     keys: List[str]
 
