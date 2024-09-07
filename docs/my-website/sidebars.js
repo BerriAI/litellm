@@ -64,8 +64,8 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "🪢 Logging",
-          items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging"],
+          label: "🪢 Logging, Alerting, Metrics",
+          items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging", "proxy/alerting", "proxy/prometheus",],
         },
         {
           type: "category",
@@ -95,8 +95,6 @@ const sidebars = {
         "proxy/billing",
         "proxy/token_auth",
         "proxy/oauth2",
-        "proxy/alerting",
-        "proxy/prometheus",
         "proxy/caching",
         "proxy/pass_through",
         "proxy/email",
