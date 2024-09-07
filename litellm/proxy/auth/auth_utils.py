@@ -47,6 +47,31 @@ def _check_valid_ip(
     return True, client_ip
 
 
+def check_complete_credentials(request_body: dict) -> bool:
+    """
+    if 'api_base' in request body. Check if complete credentials given. Prevent malicious attacks.
+    """
+    given_model: Optional[str] = None
+
+    given_model = request_body.get("model")
+    if given_model is None:
+        return False
+
+    if (
+        "sagemaker" in given_model
+        or "bedrock" in given_model
+        or "vertex_ai" in given_model
+        or "vertex_ai_beta" in given_model
+    ):
+        # complex credentials - easier to make a malicious request
+        return False
+
+    if "api_key" in request_body:
+        return True
+
+    return False
+
+
 def is_request_body_safe(request_body: dict) -> bool:
     """
     Check if the request body is safe.
@@ -57,7 +82,12 @@ def is_request_body_safe(request_body: dict) -> bool:
     banned_params = ["api_base", "base_url"]
 
     for param in banned_params:
-        if param in request_body:
+        if (
+            param in request_body
+            and not check_complete_credentials(  # allow client-credentials to be passed to proxy
+                request_body=request_body
+            )
+        ):
             raise ValueError(f"BadRequest: {param} is not allowed in request body")
 
     return True
