@@ -86,6 +86,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLM_Params,
+    LiteLLMParamsTypedDict,
     ModelGroupInfo,
     ModelInfo,
     RetryPolicy,
@@ -4297,7 +4298,9 @@ class Router:
                     return model
         return None
 
-    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+    def _set_model_group_info(
+        self, model_group: str, user_facing_model_group_name: str
+    ) -> Optional[ModelGroupInfo]:
         """
         For a given model group name, return the combined model info
 
@@ -4379,7 +4382,7 @@ class Router:
 
                 if model_group_info is None:
                     model_group_info = ModelGroupInfo(
-                        model_group=model_group, providers=[llm_provider], **model_info  # type: ignore
+                        model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
                     )
                 else:
                     # if max_input_tokens > curr
@@ -4464,6 +4467,26 @@ class Router:
 
         return model_group_info
 
+    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+        """
+        For a given model group name, return the combined model info
+
+        Returns:
+        - ModelGroupInfo if able to construct a model group
+        - None if error constructing model group info
+        """
+        ## Check if model group alias
+        if model_group in self.model_group_alias:
+            return self._set_model_group_info(
+                model_group=self.model_group_alias[model_group],
+                user_facing_model_group_name=model_group,
+            )
+
+        ## Check if actual model
+        return self._set_model_group_info(
+            model_group=model_group, user_facing_model_group_name=model_group
+        )
+
     async def get_model_group_usage(
         self, model_group: str
     ) -> Tuple[Optional[int], Optional[int]]:
@@ -4534,19 +4557,35 @@ class Router:
         return ids
 
     def get_model_names(self) -> List[str]:
-        return self.model_names
+        """
+        Returns all possible model names for router.
+
+        Includes model_group_alias models too.
+        """
+        return self.model_names + list(self.model_group_alias.keys())
 
     def get_model_list(
         self, model_name: Optional[str] = None
     ) -> Optional[List[DeploymentTypedDict]]:
         if hasattr(self, "model_list"):
-            if model_name is None:
-                return self.model_list
-
             returned_models: List[DeploymentTypedDict] = []
+
+            for model_alias, model_value in self.model_group_alias.items():
+                model_alias_item = DeploymentTypedDict(
+                    model_name=model_alias,
+                    litellm_params=LiteLLMParamsTypedDict(model=model_value),
+                )
+                returned_models.append(model_alias_item)
+
+            if model_name is None:
+                returned_models += self.model_list
+
+                return returned_models
+
             for model in self.model_list:
                 if model["model_name"] == model_name:
                     returned_models.append(model)
+
             return returned_models
         return None
 

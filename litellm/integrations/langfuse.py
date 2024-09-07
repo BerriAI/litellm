@@ -208,6 +208,14 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["text"]
+            elif (
+                kwargs.get("call_type") is not None
+                and kwargs.get("call_type") == "pass_through_endpoint"
+                and response_obj is not None
+                and isinstance(response_obj, dict)
+            ):
+                input = prompt
+                output = response_obj.get("response", "")
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             trace_id = None
             generation_id = None

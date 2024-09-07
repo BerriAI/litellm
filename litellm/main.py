@@ -534,6 +534,15 @@ def mock_completion(
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
+        elif isinstance(mock_response, str) and mock_response.startswith(
+            "Exception: mock_streaming_error"
+        ):
+            mock_response = litellm.MockException(
+                message="This is a mock error raised mid-stream",
+                llm_provider="anthropic",
+                model=model,
+                status_code=529,
+            )
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
             time.sleep(time_delay)
@@ -561,6 +570,8 @@ def mock_completion(
                 custom_llm_provider="openai",
                 logging_obj=logging,
             )
+        if isinstance(mock_response, litellm.MockException):
+            raise mock_response
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:

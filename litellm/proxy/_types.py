@@ -872,6 +872,17 @@ class TeamMemberDeleteRequest(LiteLLMBase):
         return values
 
 
+class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
+    max_budget_in_team: float
+
+
+class TeamMemberUpdateResponse(LiteLLMBase):
+    team_id: str
+    user_id: str
+    user_email: Optional[str] = None
+    max_budget_in_team: float
+
+
 class UpdateTeamRequest(LiteLLMBase):
     """
     UpdateTeamRequest, used by /team/update when you need to update a team
@@ -1854,3 +1865,10 @@ class LiteLLM_TeamMembership(LiteLLMBase):
 class TeamAddMemberResponse(LiteLLM_TeamTable):
     updated_users: List[LiteLLM_UserTable]
     updated_team_memberships: List[LiteLLM_TeamMembership]
+
+
+class TeamInfoResponseObject(TypedDict):
+    team_id: str
+    team_info: TeamBase
+    keys: List
+    team_memberships: List[LiteLLM_TeamMembership]
