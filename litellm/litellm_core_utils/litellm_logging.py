@@ -30,6 +30,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
+from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
@@ -525,6 +526,7 @@ class Logging:
             TranscriptionResponse,
             TextCompletionResponse,
             HttpxBinaryResponseContent,
+            RerankResponse,
         ],
         cache_hit: Optional[bool] = None,
     ):
@@ -588,6 +590,7 @@ class Logging:
                     or isinstance(result, TranscriptionResponse)
                     or isinstance(result, TextCompletionResponse)
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
+                    or isinstance(result, RerankResponse)
                 ):
                     ## RESPONSE COST ##
                     self.model_call_details["response_cost"] = (
