@@ -1093,6 +1093,36 @@ async def list_keys(
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
 ):
+    """
+    List Virtual Keys (Requires Master Key to access this route)
+
+    Request:
+        ```
+        curl -X GET "http://localhost:4000/key/list?page=1&size=10" \
+         -H "Authorization: Bearer sk-1234"
+        ```
+
+    Response:
+        ```
+        {
+            "keys": [
+                "03d584aa0739bb49d123a2d24351683d4d129fd68646c572e53eab1bc71923c7",
+                "047db2ebc6d58522fcfb5336c641472fafb97902be5a6aa0145f70ebdc41eaec",
+                "06258928b151b5412c749112e9b3d8eb8178944edd6735cfc808d9f62546d219",
+                "06ceba6e86bcdbc331338ba56668d4d6e392f4825fc5fdc43bbfe70128de3d25",
+                "06eebb9f72934bc7843ca0c2b85dd0c8b155027452988c84df55f95dc706c0f8",
+                "071f922ea8afaf6e4748a4f166f532391387cc512c872db5503cb6bc5161dc4e",
+                "0828566f23a9eb92880bbda3543396b490d937d9fca9973988be64e1dbeec21e",
+                "0951db270baef6ddbc181dff2c8d882d518b13e0cd69ee11ae99714e64181bbc",
+                "0b942a3a558fd073f0f8e3f6e30b2dca8cb7af434f21b3d2b92073a85551f9ca",
+                "0e0a2751cc9994ab034c6b1b44e49aa39e8a86175a10a5176d47f88ce87e53d1"
+            ],
+            "total_count": 277,
+            "current_page": 1,
+            "total_pages": 28
+        }
+        ```
+    """
     try:
         import logging
 
