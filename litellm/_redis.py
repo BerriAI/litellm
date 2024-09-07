@@ -8,6 +8,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import inspect
+import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
@@ -142,7 +143,14 @@ def get_redis_client(**env_overrides):
 
         return redis.Redis.from_url(**url_kwargs)
 
-    if "startup_nodes" in redis_kwargs:
+    if (
+        "startup_nodes" in redis_kwargs
+        or litellm.get_secret("REDIS_CLUSTER_NODES") is not None
+    ):
+        _redis_cluster_nodes_in_env = litellm.get_secret("REDIS_CLUSTER_NODES")
+        if _redis_cluster_nodes_in_env is not None:
+            redis_kwargs["startup_nodes"] = json.loads(_redis_cluster_nodes_in_env)
+
         from redis.cluster import ClusterNode
 
         args = _get_redis_cluster_kwargs()
