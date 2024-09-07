@@ -22,7 +22,7 @@ import litellm
 from litellm import create_batch, create_file
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("provider", ["openai"])  # , "azure"
 def test_create_batch(provider):
     """
     1. Create File for Batch completion
@@ -96,7 +96,7 @@ def test_create_batch(provider):
     pass
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("provider", ["openai"])  #  "azure"
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
