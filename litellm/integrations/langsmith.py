@@ -2,6 +2,7 @@
 #    On success, logs events to Langsmith
 import asyncio
 import os
+import random
 import traceback
 import types
 from datetime import datetime
@@ -171,6 +172,20 @@ class LangsmithLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            sampling_rate = (
+                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
+                if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
+                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
+                else 1.0
+            )
+            random_sample = random.random()
+            if random_sample > sampling_rate:
+                verbose_logger.info(
+                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
+                        sampling_rate, random_sample
+                    )
+                )
+                return  # Skip logging
             verbose_logger.debug(
                 "Langsmith Async Layer Logging - kwargs: %s, response_obj: %s",
                 kwargs,
@@ -201,6 +216,20 @@ class LangsmithLogger(CustomLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            sampling_rate = (
+                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
+                if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
+                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
+                else 1.0
+            )
+            random_sample = random.random()
+            if random_sample > sampling_rate:
+                verbose_logger.info(
+                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
+                        sampling_rate, random_sample
+                    )
+                )
+                return  # Skip logging
             verbose_logger.debug(
                 "Langsmith Sync Layer Logging - kwargs: %s, response_obj: %s",
                 kwargs,
