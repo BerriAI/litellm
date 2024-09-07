@@ -17,4 +17,6 @@ guardrails:
 
 general_settings: 
  master_key: sk-1234 
+ alerting: ["slack"]
+ spend_report_frequency: "1d"
 
