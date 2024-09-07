@@ -31,7 +31,12 @@ const sidebars = {
         "proxy/quick_start",
         "proxy/docker_quick_start",
         "proxy/deploy", 
-        "proxy/prod", 
+        "proxy/prod",
+        {
+          type: "category",
+          label: "Architecture",
+          items: ["proxy/architecture"],
+        }, 
         {
           type: "link",
           label: "📖 All Endpoints (Swagger)",
