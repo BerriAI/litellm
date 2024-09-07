@@ -826,7 +826,7 @@ async def test_redis_cache_cluster_init_unit_test():
         assert isinstance(resp.redis_client, RedisCluster)
         assert isinstance(resp.init_async_client(), AsyncRedisCluster)
 
-        resp = litellm.Cache(type="redis", redis_startup_nodes=startup_nodes)
+        resp = litellm.Cache(type="redis", redis_startup_nodes=startup_nodes, password="my-cluster-password")
 
         assert isinstance(resp.cache, RedisCache)
         assert isinstance(resp.cache.redis_client, RedisCluster)
