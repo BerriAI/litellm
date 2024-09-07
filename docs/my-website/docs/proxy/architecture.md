@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 
 ## High Level architecture
 
-<Image img={require('../../img/litellm_gateway.png')} />
+<Image img={require('../../img/litellm_gateway.png')} style={{ width: '100%', maxWidth: '4000px' }} />
 
 
 ### Request Flow 
