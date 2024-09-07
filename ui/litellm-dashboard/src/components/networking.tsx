@@ -771,7 +771,7 @@ export const claimOnboardingToken = async (
   }
 };
 
-export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string) => {
+export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/key/${keyToRegenerate}/regenerate`
@@ -783,7 +783,7 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(formData),
     });
 
     if (!response.ok) {

@@ -55,12 +55,10 @@ from tokenizers import Tokenizer
 import litellm
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
+import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching import DualCache
-from litellm.litellm_core_utils.core_helpers import (
-    get_file_check_sum,
-    map_finish_reason,
-)
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.exception_mapping_utils import get_error_message
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     _is_non_openai_azure_model,
@@ -86,6 +84,7 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
+    FileTypes,
     ImageResponse,
     Message,
     ModelInfo,
@@ -161,7 +160,6 @@ except Exception as e:
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
-    BinaryIO,
     Callable,
     Dict,
     Iterable,
@@ -566,14 +564,17 @@ def function_setup(
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
         ):
-            _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = get_file_check_sum(_file=_file_name)
-            file_name = _file_name.name
+            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
+            file_checksum = (
+                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
+                    file_obj=_file_obj
+                )
+            )
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
                 kwargs["metadata"] = {"file_checksum": file_checksum}
-            messages = file_name
+            messages = file_checksum
         elif (
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
@@ -744,6 +745,7 @@ def client(original_function):
             or kwargs.get("amoderation", False) == True
             or kwargs.get("atext_completion", False) == True
             or kwargs.get("atranscription", False) == True
+            or kwargs.get("arerank", False) == True
         ):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
@@ -9844,6 +9846,9 @@ class CustomStreamWrapper:
                         model_response.system_fingerprint = (
                             original_chunk.system_fingerprint
                         )
+                        model_response.citations = getattr(
+                            original_chunk, "citations", None
+                        )
                         print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                         if self.sent_first_chunk is False:
                             model_response.choices[0].delta["role"] = "assistant"
@@ -10459,6 +10464,8 @@ class TextCompletionStreamWrapper:
 def mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
+    if isinstance(mock_response, litellm.MockException):
+        raise mock_response
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -10480,6 +10487,8 @@ def mock_completion_streaming_obj(
 async def async_mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
+    if isinstance(mock_response, litellm.MockException):
+        raise mock_response
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:

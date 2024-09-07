@@ -656,6 +656,14 @@ class UpdateKeyRequest(GenerateKeyRequest):
     metadata: Optional[dict] = None
 
 
+class RegenerateKeyRequest(GenerateKeyRequest):
+    # This needs to be different from UpdateKeyRequest, because "key" is optional for this
+    key: Optional[str] = None
+    duration: Optional[str] = None
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
+
+
 class KeyRequest(LiteLLMBase):
     keys: List[str]
 
@@ -870,6 +878,17 @@ class TeamMemberDeleteRequest(LiteLLMBase):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
+    max_budget_in_team: float
+
+
+class TeamMemberUpdateResponse(LiteLLMBase):
+    team_id: str
+    user_id: str
+    user_email: Optional[str] = None
+    max_budget_in_team: float
 
 
 class UpdateTeamRequest(LiteLLMBase):
@@ -1854,3 +1873,10 @@ class LiteLLM_TeamMembership(LiteLLMBase):
 class TeamAddMemberResponse(LiteLLM_TeamTable):
     updated_users: List[LiteLLM_UserTable]
     updated_team_memberships: List[LiteLLM_TeamMembership]
+
+
+class TeamInfoResponseObject(TypedDict):
+    team_id: str
+    team_info: TeamBase
+    keys: List
+    team_memberships: List[LiteLLM_TeamMembership]

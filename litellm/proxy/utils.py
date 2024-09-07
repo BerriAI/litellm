@@ -974,7 +974,7 @@ class PrismaClient:
                     )
                     """
             )
-            if ret[0]["sum"] == 7:
+            if ret[0]["sum"] == 8:
                 print("All necessary views exist!")  # noqa
                 return
         except Exception:
@@ -1123,6 +1123,24 @@ class PrismaClient:
             await self.db.execute_raw(query=sql_query)
 
             print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
+
+        try:
+            await self.db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
+            print("DailyTagSpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE OR REPLACE VIEW DailyTagSpend AS
+            SELECT
+                jsonb_array_elements_text(request_tags) AS individual_request_tag,
+                DATE(s."startTime") AS spend_date,
+                COUNT(*) AS log_count,
+                SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs" s
+            GROUP BY individual_request_tag, DATE(s."startTime");
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("DailyTagSpend Created!")  # noqa
 
         try:
             await self.db.query_raw(

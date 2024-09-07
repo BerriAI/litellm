@@ -674,7 +674,7 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
 ):
     if client is None:
-        client = _get_async_httpx_client()  # Create a new client if none provided
+        client = litellm.module_level_aclient
 
     try:
         response = await client.post(
@@ -689,11 +689,6 @@ async def make_call(
             if isinstance(e, exception):
                 raise e
         raise AnthropicError(status_code=500, message=str(e))
-
-    if response.status_code != 200:
-        raise AnthropicError(
-            status_code=response.status_code, message=await response.aread()
-        )
 
     completion_stream = ModelResponseIterator(
         streaming_response=response.aiter_lines(), sync_stream=False
@@ -721,7 +716,7 @@ def make_sync_call(
     timeout: Optional[Union[float, httpx.Timeout]],
 ):
     if client is None:
-        client = HTTPHandler()  # Create a new client if none provided
+        client = litellm.module_level_client  # re-use a module level client
 
     try:
         response = client.post(
@@ -869,6 +864,7 @@ class AnthropicChatCompletion(BaseLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
+        client: Optional[AsyncHTTPHandler],
         encoding,
         api_key,
         logging_obj,
@@ -882,19 +878,18 @@ class AnthropicChatCompletion(BaseLLM):
     ):
         data["stream"] = True
 
+        completion_stream = await make_call(
+            client=client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
         streamwrapper = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_call,
-                client=None,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                timeout=timeout,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="anthropic",
             logging_obj=logging_obj,
@@ -1080,6 +1075,11 @@ class AnthropicChatCompletion(BaseLLM):
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
+                    client=(
+                        client
+                        if client is not None and isinstance(client, AsyncHTTPHandler)
+                        else None
+                    ),
                 )
             else:
                 return self.acompletion_function(
@@ -1105,33 +1105,32 @@ class AnthropicChatCompletion(BaseLLM):
                 )
         else:
             ## COMPLETION CALL
-            if client is None or not isinstance(client, HTTPHandler):
-                client = HTTPHandler(timeout=timeout)  # type: ignore
-            else:
-                client = client
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 data["stream"] = stream
+                completion_stream = make_sync_call(
+                    client=client,
+                    api_base=api_base,
+                    headers=headers,  # type: ignore
+                    data=json.dumps(data),
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                    timeout=timeout,
+                )
                 return CustomStreamWrapper(
-                    completion_stream=None,
-                    make_call=partial(
-                        make_sync_call,
-                        client=None,
-                        api_base=api_base,
-                        headers=headers,  # type: ignore
-                        data=json.dumps(data),
-                        model=model,
-                        messages=messages,
-                        logging_obj=logging_obj,
-                        timeout=timeout,
-                    ),
+                    completion_stream=completion_stream,
                     model=model,
                     custom_llm_provider="anthropic",
                     logging_obj=logging_obj,
                 )
 
             else:
+                if client is None or not isinstance(client, HTTPHandler):
+                    client = HTTPHandler(timeout=timeout)  # type: ignore
+                else:
+                    client = client
                 response = client.post(
                     api_base, headers=headers, data=json.dumps(data), timeout=timeout
                 )

@@ -30,6 +30,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
+from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
@@ -41,6 +42,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardPassThroughResponseObject,
     TextCompletionResponse,
     TranscriptionResponse,
 )
@@ -524,6 +526,7 @@ class Logging:
             TranscriptionResponse,
             TextCompletionResponse,
             HttpxBinaryResponseContent,
+            RerankResponse,
         ],
         cache_hit: Optional[bool] = None,
     ):
@@ -534,7 +537,9 @@ class Logging:
         """
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
-            litellm_params=self.litellm_params
+            litellm_params=(
+                self.litellm_params if hasattr(self, "litellm_params") else None
+            )
         )
 
         if cache_hit is None:
@@ -585,6 +590,7 @@ class Logging:
                     or isinstance(result, TranscriptionResponse)
                     or isinstance(result, TextCompletionResponse)
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
+                    or isinstance(result, RerankResponse)
                 ):
                     ## RESPONSE COST ##
                     self.model_call_details["response_cost"] = (
@@ -611,6 +617,17 @@ class Logging:
                             ] = result._hidden_params
                     ## STANDARDIZED LOGGING PAYLOAD
 
+                    self.model_call_details["standard_logging_object"] = (
+                        get_standard_logging_object_payload(
+                            kwargs=self.model_call_details,
+                            init_response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            logging_obj=self,
+                        )
+                    )
+                elif isinstance(result, dict):  # pass-through endpoints
+                    ## STANDARDIZED LOGGING PAYLOAD
                     self.model_call_details["standard_logging_object"] = (
                         get_standard_logging_object_payload(
                             kwargs=self.model_call_details,
@@ -2271,6 +2288,8 @@ def get_standard_logging_object_payload(
         elif isinstance(init_response_obj, BaseModel):
             response_obj = init_response_obj.model_dump()
             hidden_params = getattr(init_response_obj, "_hidden_params", None)
+        elif isinstance(init_response_obj, dict):
+            response_obj = init_response_obj
         else:
             response_obj = {}
         # standardize this function to be used across, s3, dynamoDB, langfuse logging

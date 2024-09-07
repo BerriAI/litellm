@@ -22,13 +22,16 @@ import litellm
 from litellm import create_batch, create_file
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("provider", ["openai"])  # , "azure"
 def test_create_batch(provider):
     """
     1. Create File for Batch completion
     2. Create Batch Request
     3. Retrieve the specific batch
     """
+    if provider == "azure":
+        # Don't have anymore Azure Quota
+        return
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
@@ -93,7 +96,7 @@ def test_create_batch(provider):
     pass
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("provider", ["openai"])  #  "azure"
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
@@ -103,6 +106,9 @@ async def test_async_create_batch(provider):
     3. Retrieve the specific batch
     """
     print("Testing async create batch")
+    if provider == "azure":
+        # Don't have anymore Azure Quota
+        return
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
