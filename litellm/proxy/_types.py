@@ -268,9 +268,7 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes: List = [
-        "/global/spend/reset",
-    ]
+    master_key_only_routes: List = ["/global/spend/reset", "/key/list"]
 
     sso_only_routes: List = [
         "/key/generate",
