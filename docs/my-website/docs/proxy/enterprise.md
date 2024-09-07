@@ -2,8 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - SSO, Audit Logs, Guardrails
-
+# ✨ Enterprise Features
 :::tip
 
 To get a license, get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
