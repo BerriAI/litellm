@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] UI - Admin 
+# Quick Start
 
 Create keys, track spend, add models without worrying about the config / CRUD endpoints.
 

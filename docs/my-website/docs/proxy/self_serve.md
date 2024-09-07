@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🤗 UI - Self-Serve
+# Self-Serve
 
 ## Allow users to create their own keys on [Proxy UI](./ui.md).
 

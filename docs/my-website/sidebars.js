@@ -56,8 +56,12 @@ const sidebars = {
         },
         "proxy/cost_tracking",
         "proxy/custom_pricing",
-        "proxy/self_serve",
         "proxy/virtual_keys",
+        {
+          type: "category",
+          label: "Admin UI",
+          items: ["proxy/ui", "proxy/self_serve"],
+        },
         {
           type: "category",
           label: "🪢 Logging",
