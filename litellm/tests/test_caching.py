@@ -838,6 +838,7 @@ async def test_redis_cache_cluster_init_unit_test():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
 async def test_redis_cache_cluster_init_with_env_vars_unit_test():
     try:
         import json
@@ -861,6 +862,7 @@ async def test_redis_cache_cluster_init_with_env_vars_unit_test():
 
         # set startup nodes in environment variables
         os.environ["REDIS_CLUSTER_NODES"] = json.dumps(startup_nodes)
+        print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
 
         # unser REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
         os.environ.pop("REDIS_HOST", None)
