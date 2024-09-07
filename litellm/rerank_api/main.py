@@ -9,7 +9,7 @@ from litellm.llms.cohere.rerank import CohereRerank
 from litellm.llms.togetherai.rerank import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
 from litellm.types.router import *
-from litellm.utils import supports_httpx_timeout
+from litellm.utils import client, supports_httpx_timeout
 
 from .types import RerankRequest, RerankResponse
 
@@ -20,6 +20,7 @@ together_rerank = TogetherAIRerank()
 #################################################
 
 
+@client
 async def arerank(
     model: str,
     query: str,
@@ -64,6 +65,7 @@ async def arerank(
         raise e
 
 
+@client
 def rerank(
     model: str,
     query: str,
