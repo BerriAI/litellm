@@ -1688,53 +1688,56 @@ Model Info:
                 await asyncio.sleep(interval)
         return
 
-    async def send_weekly_spend_report(self):
-        """ """
+    async def send_weekly_spend_report(self, time_range: str = "7d"):
+        """
+        Send a spend report for a configurable time range.
+
+        :param time_range: A string specifying the time range, e.g., "1d", "7d", "30d"
+        """
         try:
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
                 _get_spend_report_for_time_range,
             )
 
-            todays_date = datetime.datetime.now().date()
-            week_before = todays_date - datetime.timedelta(days=7)
+            # Parse the time range
+            days = int(time_range[:-1])
+            if time_range[-1].lower() != "d":
+                raise ValueError("Time range must be specified in days, e.g., '7d'")
 
-            weekly_spend_per_team, weekly_spend_per_tag = (
-                await _get_spend_report_for_time_range(
-                    start_date=week_before.strftime("%Y-%m-%d"),
-                    end_date=todays_date.strftime("%Y-%m-%d"),
-                )
+            todays_date = datetime.datetime.now().date()
+            start_date = todays_date - datetime.timedelta(days=days)
+
+            spend_per_team, spend_per_tag = await _get_spend_report_for_time_range(
+                start_date=start_date.strftime("%Y-%m-%d"),
+                end_date=todays_date.strftime("%Y-%m-%d"),
             )
 
-            _weekly_spend_message = f"*💸 Weekly Spend Report for `{week_before.strftime('%m-%d-%Y')} - {todays_date.strftime('%m-%d-%Y')}` *\n"
+            _spend_message = f"*💸 Spend Report for `{start_date.strftime('%m-%d-%Y')} - {todays_date.strftime('%m-%d-%Y')}` ({days} days)*\n"
 
-            if weekly_spend_per_team is not None:
-                _weekly_spend_message += "\n*Team Spend Report:*\n"
-                for spend in weekly_spend_per_team:
-                    _team_spend = spend["total_spend"]
-                    _team_spend = float(_team_spend)
-                    # round to 4 decimal places
-                    _team_spend = round(_team_spend, 4)
-                    _weekly_spend_message += (
+            if spend_per_team is not None:
+                _spend_message += "\n*Team Spend Report:*\n"
+                for spend in spend_per_team:
+                    _team_spend = round(float(spend["total_spend"]), 4)
+                    _spend_message += (
                         f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
                     )
 
-            if weekly_spend_per_tag is not None:
-                _weekly_spend_message += "\n*Tag Spend Report:*\n"
-                for spend in weekly_spend_per_tag:
-                    _tag_spend = spend["total_spend"]
-                    _tag_spend = float(_tag_spend)
-                    # round to 4 decimal places
-                    _tag_spend = round(_tag_spend, 4)
-                    _weekly_spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
+            if spend_per_tag is not None:
+                _spend_message += "\n*Tag Spend Report:*\n"
+                for spend in spend_per_tag:
+                    _tag_spend = round(float(spend["total_spend"]), 4)
+                    _spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
 
             await self.send_alert(
-                message=_weekly_spend_message,
+                message=_spend_message,
                 level="Low",
                 alert_type="spend_reports",
                 alerting_metadata={},
             )
+        except ValueError as ve:
+            verbose_proxy_logger.error(f"Invalid time range format: {ve}")
         except Exception as e:
-            verbose_proxy_logger.error("Error sending weekly spend report %s", e)
+            verbose_proxy_logger.error(f"Error sending spend report: {e}")
 
     async def send_monthly_spend_report(self):
         """ """
