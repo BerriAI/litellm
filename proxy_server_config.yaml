@@ -148,6 +148,7 @@ router_settings:
   redis_password: os.environ/REDIS_PASSWORD
   redis_port: os.environ/REDIS_PORT
   enable_pre_call_checks: true
+  model_group_alias: {"my-special-fake-model-alias-name": "fake-openai-endpoint-3"} 
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
