@@ -562,34 +562,13 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 
 By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
 
-Use this dockerfile to build an image which pre-generates the prisma binaries.
+Use this docker image to deploy litellm with pre-generated prisma binaries.
 
-```Dockerfile
-# Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
-
-# Set the working directory to /app
-WORKDIR /app
-
-### [👇 KEY STEP] ###
-# Install Prisma CLI and generate Prisma client
-RUN pip install prisma 
-RUN prisma generate
-### FIN #### 
-
-
-# Expose the necessary port
-EXPOSE 4000
-
-# Override the CMD instruction with your desired command and arguments
-# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
-# CMD ["--port", "4000", "--config", "config.yaml"]
-
-# Define the command to run your app
-ENTRYPOINT ["litellm"]
-
-CMD ["--port", "4000"]
+```bash
+docker pull ghcr.io/berriai/litellm-non_root:main-stable
 ```
+
+[Published Docker Image link](https://github.com/BerriAI/litellm/pkgs/container/litellm-non_root)
 
 ## Advanced Deployment Settings
 
