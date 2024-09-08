@@ -1344,7 +1344,7 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "sambanova/llama3.1-8b": {
+    "sambanova/Meta-Llama-3.1-8B-Instruct": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -1354,12 +1354,22 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "sambanova/llama3.1-70b": {
+    "sambanova/Meta-Llama-3.1-70B-Instruct": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
         "input_cost_per_token": 0.0000003,
         "output_cost_per_token": 0.0000003,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "sambanova/Meta-Llama-3.1-405B-Instruct": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "sambanova",
         "mode": "chat",
         "supports_function_calling": true

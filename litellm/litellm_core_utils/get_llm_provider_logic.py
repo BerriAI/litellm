@@ -177,7 +177,7 @@ def get_llm_provider(
                 api_base = (
                     api_base
                     or get_secret("SAMBANOVA_API_BASE")
-                    or "https://fast-api.snova.ai/v1"
+                    or "https://api.sambanova.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("SAMBANOVA_API_KEY")
             elif (custom_llm_provider == "ai21_chat") or (
@@ -343,7 +343,7 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret("CEREBRAS_API_KEY")
-                    elif endpoint == "https://fast-api.snova.ai/v1":
+                    elif endpoint == "https://api.sambanova.ai/v1":
                         custom_llm_provider = "sambanova"
                         dynamic_api_key = get_secret("SAMBANOVA_API_KEY")
                     elif endpoint == "https://api.ai21.com/studio/v1":

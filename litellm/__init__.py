@@ -460,7 +460,7 @@ openai_compatible_endpoints: List = [
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
-    "fast-api.sambanova.ai/v1",
+    "api.sambanova.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
