@@ -4556,6 +4556,27 @@ class Router:
                     ids.append(id)
         return ids
 
+    def _get_all_deployments(
+        self, model_name: str, model_alias: Optional[str] = None
+    ) -> List[DeploymentTypedDict]:
+        """
+        Return all deployments of a model name
+
+        Used for accurate 'get_model_list'.
+        """
+
+        returned_models: List[DeploymentTypedDict] = []
+        for model in self.model_list:
+            if model["model_name"] == model_name:
+                if model_alias is not None:
+                    alias_model = copy.deepcopy(model)
+                    alias_model["model_name"] = model_name
+                    returned_models.append(alias_model)
+                else:
+                    returned_models.append(model)
+
+        return returned_models
+
     def get_model_names(self) -> List[str]:
         """
         Returns all possible model names for router.
@@ -4567,15 +4588,18 @@ class Router:
     def get_model_list(
         self, model_name: Optional[str] = None
     ) -> Optional[List[DeploymentTypedDict]]:
+        """
+        Includes router model_group_alias'es as well
+        """
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
             for model_alias, model_value in self.model_group_alias.items():
-                model_alias_item = DeploymentTypedDict(
-                    model_name=model_alias,
-                    litellm_params=LiteLLMParamsTypedDict(model=model_value),
+                returned_models.extend(
+                    self._get_all_deployments(
+                        model_name=model_value, model_alias=model_alias
+                    )
                 )
-                returned_models.append(model_alias_item)
 
             if model_name is None:
                 returned_models += self.model_list
@@ -4583,8 +4607,7 @@ class Router:
                 return returned_models
 
             for model in self.model_list:
-                if model["model_name"] == model_name:
-                    returned_models.append(model)
+                returned_models.extend(self._get_all_deployments(model_name=model_name))
 
             return returned_models
         return None
