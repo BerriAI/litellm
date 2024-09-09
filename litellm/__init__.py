@@ -863,7 +863,7 @@ from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic.chat import AnthropicConfig
 from .llms.anthropic.completion import AnthropicTextConfig
-from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig

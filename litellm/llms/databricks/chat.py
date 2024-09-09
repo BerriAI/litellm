@@ -29,8 +29,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
 
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ..base import BaseLLM
+from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class DatabricksError(Exception):
@@ -527,6 +527,8 @@ class DatabricksChatCompletion(BaseLLM):
                     raise DatabricksError(status_code=500, message=str(e))
 
         response = ModelResponse(**response_json)
+
+        response.model = custom_llm_provider + "/" + response.model
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
