@@ -2184,9 +2184,9 @@ def test_completion_openai():
 @pytest.mark.parametrize(
     "model, api_version",
     [
-        "gpt-4o-2024-08-06",
-        "azure/chatgpt-v-2",
-        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        ("gpt-4o-2024-08-06", None),
+        ("azure/chatgpt-v-2", None),
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
         ("azure/gpt-4o", "2024-08-01-preview"),
     ],
 )

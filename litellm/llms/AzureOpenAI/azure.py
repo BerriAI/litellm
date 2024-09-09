@@ -246,8 +246,9 @@ class AzureOpenAIConfig:
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
                 if json_schema is not None and (
-                    api_version_year <= "2024" and api_version_month < "08"
-                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema'
+                    (api_version_year <= "2024" and api_version_month < "08")
+                    or "gpt-4o" not in model
+                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema' only for gpt-4o
                     _tool_choice = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(
