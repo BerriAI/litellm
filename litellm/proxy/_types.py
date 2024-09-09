@@ -242,6 +242,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
         # token counter
         "/utils/token_counter",
+        # rerank
+        "/rerank",
     ]
 
     mapped_pass_through_routes: List = [
