@@ -120,11 +120,14 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
-    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        redis_kwargs.pop("host", None)
-        redis_kwargs.pop("port", None)
-        redis_kwargs.pop("db", None)
-        redis_kwargs.pop("password", None)
+    if "url" in redis_kwargs:
+        if redis_kwargs["url"] is not None:
+            redis_kwargs.pop("host", None)
+            redis_kwargs.pop("port", None)
+            redis_kwargs.pop("db", None)
+            redis_kwargs.pop("password", None)
+        else:
+            redis_kwargs.pop("url", None)
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
     # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
@@ -157,6 +160,7 @@ def get_redis_client(**env_overrides):
             new_startup_nodes.append(ClusterNode(**item))
         redis_kwargs.pop("startup_nodes")
         return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
+
     return redis.Redis(**redis_kwargs)
 
 

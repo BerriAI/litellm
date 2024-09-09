@@ -690,7 +690,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
+    response4 = completion(model="gpt-4", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -701,7 +701,7 @@ def test_redis_cache_completion():
     litellm._async_success_callback = []
 
     """
-    1 & 2 should be exactly the same 
+    1 & 2 should be exactly the same
     1 & 3 should be different, since input params are diff
     1 & 4 should be diff, since models are diff
     """
@@ -1723,7 +1723,7 @@ def test_caching_redis_simple(caplog, capsys):
     """
     litellm.set_verbose = True  ## REQUIRED FOR TEST.
     litellm.cache = Cache(
-        type="redis", url=os.getenv("REDIS_SSL_URL")
+        type="redis", redis_url=os.getenv("REDIS_SSL_URL")
     )  # passing `supported_call_types = ["completion"]` has no effect
 
     s = time.time()

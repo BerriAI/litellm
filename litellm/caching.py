@@ -207,6 +207,7 @@ class RedisCache(BaseCache):
         host=None,
         port=None,
         password=None,
+        redis_url=None,
         redis_flush_size=100,
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
@@ -219,6 +220,8 @@ class RedisCache(BaseCache):
         from ._redis import get_redis_client, get_redis_connection_pool
 
         redis_kwargs = {}
+        if redis_url is not None:
+            redis_kwargs["url"] = redis_url
         if host is not None:
             redis_kwargs["host"] = host
         if port is not None:
@@ -922,7 +925,6 @@ class RedisSemanticCache(BaseCache):
         password=None,
         redis_url=None,
         similarity_threshold=None,
-        use_async=False,
         embedding_model="text-embedding-ada-002",
         index_name=None,
         **kwargs,
@@ -1003,12 +1005,6 @@ class RedisSemanticCache(BaseCache):
     def set_cache(self, key, value, **kwargs):
         print_verbose(f"redis semantic-cache set_cache, kwargs: {kwargs}")
 
-        # parse TTL policy - workaround until you can configure TTL per write
-        ttl = kwargs.get("ttl")
-        _ttl = self.llmcache.ttl
-        if (ttl is not None) and (_ttl != ttl):
-            self.llmcache.set_ttl(ttl)
-
         # get the prompt and value
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
@@ -1016,12 +1012,10 @@ class RedisSemanticCache(BaseCache):
         assert isinstance(value, str)
 
         # store in redis semantic cache
-        self.llmcache.store(
-            prompt=prompt,
-            response=value
-        )
-
-        self.llmcache.set_ttl(_ttl)
+        if "ttl" in kwargs:
+            self.llmcache.store(prompt, value, ttl=int(kwargs["ttl"]))
+        else:
+            self.llmcache.store(prompt, value)
 
         return
 
@@ -1052,15 +1046,7 @@ class RedisSemanticCache(BaseCache):
 
 
     async def async_set_cache(self, key, value, **kwargs):
-        # TODO - patch async support in redisvl for SemanticCache
-
         from litellm.proxy.proxy_server import llm_model_list, llm_router
-
-        try:
-            await self.index.acreate(overwrite=False)  # don't overwrite existing index
-        except Exception as e:
-            print_verbose(f"Got exception creating semantic cache index: {str(e)}")
-
         print_verbose(f"async redis semantic-cache set_cache, kwargs: {kwargs}")
 
         # parse TTL policy - workaround until you can configure TTL per write
@@ -1105,20 +1091,23 @@ class RedisSemanticCache(BaseCache):
         embedding = embedding_response["data"][0]["embedding"]
 
         # store in redis semantic cache
-        self.llmcache.store(
-            prompt=prompt,
-            response=value,
-            vector=embedding # pass through custom embedding here
-        )
-
-        # reset TTL
-        self.llmcache.set_ttl(_ttl)
+        if "ttl" in kwargs:
+            await self.llmcache.astore(
+                prompt,
+                value,
+                vector=embedding, # pass through custom embedding
+                ttl=int(kwargs["ttl"])
+            )
+        else:
+            await self.llmcache.astore(
+                prompt,
+                value,
+                vector=embedding # pass through custom embedding
+            )
 
         return
 
     async def async_get_cache(self, key, **kwargs):
-        # TODO - patch async support in redisvl for SemanticCache
-
         print_verbose(f"async redis semantic-cache get_cache, kwargs: {kwargs}")
 
         from litellm.proxy.proxy_server import llm_model_list, llm_router
@@ -1157,8 +1146,9 @@ class RedisSemanticCache(BaseCache):
         embedding = embedding_response["data"][0]["embedding"]
 
         # check the cache
-        results = self.llmcache.check(
-            prompt=prompt, vector=embedding
+        results = await self.llmcache.acheck(
+            prompt=prompt,
+            vector=embedding
         )
 
         # handle results / cache hit
@@ -1180,10 +1170,9 @@ class RedisSemanticCache(BaseCache):
         )
         return self._get_cache_logic(cached_response=cached_response)
 
-
     async def _index_info(self):
-        # TODO - patch async support in redisvl for SemanticCache
-        return self.llmcache.index.info()
+        aindex = await self.llmcache._get_async_index()
+        return await aindex.info()
 
 
 class QdrantSemanticCache(BaseCache):
@@ -2089,8 +2078,8 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
-        redis_semantic_cache_use_async=False,
-        redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_url: Optional[str] = None,
+        redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size=None,
         redis_startup_nodes: Optional[List] = None,
@@ -2129,6 +2118,7 @@ class Cache:
                 host,
                 port,
                 password,
+                redis_url,
                 redis_flush_size,
                 startup_nodes=redis_startup_nodes,
                 **kwargs,
@@ -2138,8 +2128,8 @@ class Cache:
                 host,
                 port,
                 password,
+                redis_url,
                 similarity_threshold=similarity_threshold,
-                use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
                 index_name=redis_semantic_cache_index_name,
                 **kwargs,
