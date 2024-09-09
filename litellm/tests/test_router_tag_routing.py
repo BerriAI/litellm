@@ -114,6 +114,14 @@ async def test_default_tagged_deployments():
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+                "model_info": {"id": "default-model-2"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
                     "model": "gpt-4o-mini",
                     "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["teamA"],
