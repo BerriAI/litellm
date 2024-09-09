@@ -3690,7 +3690,7 @@ class Router:
             exception=original_exception,
         )
 
-        allowed_fails = _allowed_fails or self.allowed_fails
+        allowed_fails = _allowed_fails if _allowed_fails is not None else self.allowed_fails
 
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
