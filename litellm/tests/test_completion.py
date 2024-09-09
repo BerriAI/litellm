@@ -3477,14 +3477,14 @@ def response_format_tests(response: litellm.ModelResponse):
 @pytest.mark.parametrize(
     "model",
     [
-        # "bedrock/cohere.command-r-plus-v1:0",
+        "bedrock/mistral.mistral-large-2407-v1:0",
+        "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "anthropic.claude-instant-v1",
-        # "bedrock/ai21.j2-mid",
-        # "mistral.mistral-7b-instruct-v0:2",
+        "anthropic.claude-instant-v1",
+        "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
-        # "meta.llama3-8b-instruct-v1:0",
-        # "cohere.command-text-v14",
+        "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -3499,6 +3499,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3510,6 +3511,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
