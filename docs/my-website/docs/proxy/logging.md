@@ -744,6 +744,20 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ** 🎉 Expect to see this trace logged in your OTEL collector**
 
+### Redacting Messages, Response Content from OTEL Logging
+
+Set `message_logging=False` for `otel`, no messages / response will be logged
+
+```yaml
+litellm_settings:
+  callbacks: ["otel"]
+
+## 👇 Key Change
+callback_settings:
+  otel:
+    message_logging: False
+```
+
 ### Context propagation across Services `Traceparent HTTP Header`
 
 ❓ Use this when you want to **pass information about the incoming request in a distributed tracing system**
