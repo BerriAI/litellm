@@ -245,7 +245,9 @@ class AzureOpenAIConfig:
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                if json_schema is not None:
+                if json_schema is not None and (
+                    api_version_year <= "2024" and api_version_month < "08"
+                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema'
                     _tool_choice = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(

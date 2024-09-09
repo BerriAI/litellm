@@ -2182,15 +2182,16 @@ def test_completion_openai():
 
 
 @pytest.mark.parametrize(
-    "model",
+    "model, api_version",
     [
         "gpt-4o-2024-08-06",
         "azure/chatgpt-v-2",
         "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        ("azure/gpt-4o", "2024-08-01-preview"),
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
-def test_completion_openai_pydantic(model):
+def test_completion_openai_pydantic(model, api_version):
     try:
         litellm.set_verbose = True
         from pydantic import BaseModel
@@ -2215,6 +2216,7 @@ def test_completion_openai_pydantic(model):
                     messages=messages,
                     metadata={"hi": "bye"},
                     response_format=EventsList,
+                    api_version=api_version,
                 )
                 break
             except litellm.JSONSchemaValidationError:
