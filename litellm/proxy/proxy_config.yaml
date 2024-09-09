@@ -15,6 +15,9 @@ guardrails:
       mode: "pre_call"  # pre_call, during_call, post_call
       output_parse_pii: True
 
+litellm_settings:
+  callbacks: ["prometheus"]
+
 general_settings: 
  master_key: sk-1234 
  alerting: ["slack"]
