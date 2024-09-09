@@ -43,7 +43,9 @@ async def get_deployments_for_tag(
 
         new_healthy_deployments = []
         if request_tags:
-            verbose_logger.debug("parameter routing: router_keys: %s", request_tags)
+            verbose_logger.debug(
+                "get_deployments_for_tag routing: router_keys: %s", request_tags
+            )
             # example this can be router_keys=["free", "custom"]
             # get all deployments that have a superset of these router keys
             for deployment in healthy_deployments:
