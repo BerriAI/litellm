@@ -35,7 +35,7 @@ def initialize_callbacks_on_proxy(
                 from litellm.proxy import proxy_server
 
                 _otel_settings = {}
-                if "otel" in callback_settings:
+                if isinstance(callback_settings, dict) and "otel" in callback_settings:
                     _otel_settings = callback_settings["otel"]
 
                 open_telemetry_logger = OpenTelemetry(**_otel_settings)
