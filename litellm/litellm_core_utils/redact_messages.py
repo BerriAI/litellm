@@ -11,6 +11,7 @@ import copy
 from typing import TYPE_CHECKING, Any
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -20,6 +21,56 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+
+def redact_message_input_output_from_custom_logger(
+    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+):
+    if (
+        hasattr(custom_logger, "message_logging")
+        and custom_logger.message_logging is not True
+    ):
+        return perform_redaction(litellm_logging_obj, result)
+    return result
+
+
+def perform_redaction(litellm_logging_obj: LiteLLMLoggingObject, result):
+    """
+    Performs the actual redaction on the logging object and result.
+    """
+    # Redact model_call_details
+    litellm_logging_obj.model_call_details["messages"] = [
+        {"role": "user", "content": "redacted-by-litellm"}
+    ]
+    litellm_logging_obj.model_call_details["prompt"] = ""
+    litellm_logging_obj.model_call_details["input"] = ""
+
+    # Redact streaming response
+    if (
+        litellm_logging_obj.stream is True
+        and "complete_streaming_response" in litellm_logging_obj.model_call_details
+    ):
+        _streaming_response = litellm_logging_obj.model_call_details[
+            "complete_streaming_response"
+        ]
+        for choice in _streaming_response.choices:
+            if isinstance(choice, litellm.Choices):
+                choice.message.content = "redacted-by-litellm"
+            elif isinstance(choice, litellm.utils.StreamingChoices):
+                choice.delta.content = "redacted-by-litellm"
+
+    # Redact result
+    if result is not None and isinstance(result, litellm.ModelResponse):
+        _result = copy.deepcopy(result)
+        if hasattr(_result, "choices") and _result.choices is not None:
+            for choice in _result.choices:
+                if isinstance(choice, litellm.Choices):
+                    choice.message.content = "redacted-by-litellm"
+                elif isinstance(choice, litellm.utils.StreamingChoices):
+                    choice.delta.content = "redacted-by-litellm"
+        return _result
+
+    return result
 
 
 def redact_message_input_output_from_logging(
@@ -50,43 +101,7 @@ def redact_message_input_output_from_logging(
     ):
         return result
 
-    # remove messages, prompts, input, response from logging
-    litellm_logging_obj.model_call_details["messages"] = [
-        {"role": "user", "content": "redacted-by-litellm"}
-    ]
-    litellm_logging_obj.model_call_details["prompt"] = ""
-    litellm_logging_obj.model_call_details["input"] = ""
-
-    # response cleaning
-    # ChatCompletion Responses
-    if (
-        litellm_logging_obj.stream is True
-        and "complete_streaming_response" in litellm_logging_obj.model_call_details
-    ):
-        _streaming_response = litellm_logging_obj.model_call_details[
-            "complete_streaming_response"
-        ]
-        for choice in _streaming_response.choices:
-            if isinstance(choice, litellm.Choices):
-                choice.message.content = "redacted-by-litellm"
-            elif isinstance(choice, litellm.utils.StreamingChoices):
-                choice.delta.content = "redacted-by-litellm"
-    else:
-        if result is not None:
-            if isinstance(result, litellm.ModelResponse):
-                # only deep copy litellm.ModelResponse
-                _result = copy.deepcopy(result)
-                if hasattr(_result, "choices") and _result.choices is not None:
-                    for choice in _result.choices:
-                        if isinstance(choice, litellm.Choices):
-                            choice.message.content = "redacted-by-litellm"
-                        elif isinstance(choice, litellm.utils.StreamingChoices):
-                            choice.delta.content = "redacted-by-litellm"
-
-                return _result
-
-    # by default return result
-    return result
+    return perform_redaction(litellm_logging_obj, result)
 
 
 def redact_user_api_key_info(metadata: dict) -> dict:
