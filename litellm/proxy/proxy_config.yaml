@@ -16,7 +16,11 @@ guardrails:
       output_parse_pii: True
 
 litellm_settings:
-  callbacks: ["prometheus"]
+  callbacks: ["otel"]
+
+callback_settings:
+  otel:
+    message_logging: False
 
 general_settings: 
  master_key: sk-1234 
