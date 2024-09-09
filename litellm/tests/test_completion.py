@@ -889,18 +889,29 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test claude-3, this is just another way to pass images"
-)
-def test_completion_claude_3_base64():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "azure/gpt-4o",
+        "anthropic/claude-3-opus-20240229",
+    ],
+)  #
+def test_completion_base64(model):
     try:
+        import base64
+
+        import requests
+
         litellm.set_verbose = True
-        litellm.num_retries = 3
-        image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
-        base64_image = encode_image(image_path)
+        url = "https://dummyimage.com/100/100/fff&text=Test+image"
+        response = requests.get(url)
+        file_data = response.content
+
+        encoded_file = base64.b64encode(file_data).decode("utf-8")
+        base64_image = f"data:image/png;base64,{encoded_file}"
         resp = litellm.completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -908,9 +919,7 @@ def test_completion_claude_3_base64():
                         {"type": "text", "text": "Whats in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
+                            "image_url": {"url": base64_image},
                         },
                     ],
                 }
@@ -919,7 +928,6 @@ def test_completion_claude_3_base64():
         print(f"\nResponse: {resp}")
 
         prompt_tokens = resp.usage.prompt_tokens
-        raise Exception("it worked!")
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass

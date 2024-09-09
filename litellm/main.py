@@ -1013,7 +1013,10 @@ def completion(
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+                or litellm.AZURE_DEFAULT_API_VERSION
             )
 
             api_key = (
