@@ -25,14 +25,14 @@ async def get_deployments_for_tag(
 
     if request_kwargs is None:
         verbose_logger.debug(
-            "get_deployments_for_tier: request_kwargs is None returning healthy_deployments: %s",
+            "get_deployments_for_tag: request_kwargs is None returning healthy_deployments: %s",
             healthy_deployments,
         )
         return healthy_deployments
 
     if healthy_deployments is None:
         verbose_logger.debug(
-            "get_deployments_for_tier: healthy_deployments is None returning healthy_deployments"
+            "get_deployments_for_tag: healthy_deployments is None returning healthy_deployments"
         )
         return healthy_deployments
 
