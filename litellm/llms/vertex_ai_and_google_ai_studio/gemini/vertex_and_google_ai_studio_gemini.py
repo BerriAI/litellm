@@ -1293,7 +1293,10 @@ class VertexLLM(BaseLLM):
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
-        client = _get_async_httpx_client(params=_async_client_params)
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            client = _get_async_httpx_client(params=_async_client_params)
+        else:
+            client = client  # type: ignore
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
