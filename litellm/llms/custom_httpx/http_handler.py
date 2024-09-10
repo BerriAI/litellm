@@ -1,13 +1,18 @@
 import asyncio
 import os
 import traceback
-from typing import Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import httpx
 
 import litellm
 
 from .types import httpxSpecialProvider
+
+if TYPE_CHECKING:
+    from litellm import LlmProviders
+else:
+    LlmProviders = Any
 
 try:
     from litellm._version import version
@@ -381,7 +386,7 @@ class HTTPHandler:
 
 
 def get_async_httpx_client(
-    llm_provider: Union[litellm.LlmProviders, httpxSpecialProvider],
+    llm_provider: Union[LlmProviders, httpxSpecialProvider],
     params: Optional[dict] = None,
 ) -> AsyncHTTPHandler:
     """
