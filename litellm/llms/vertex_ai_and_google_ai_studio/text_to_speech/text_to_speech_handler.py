@@ -9,8 +9,8 @@ from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
@@ -178,7 +178,7 @@ class VertexTextToSpeechAPI(VertexLLM):
     ) -> HttpxBinaryResponseContent:
         import base64
 
-        async_handler = _get_async_httpx_client()
+        async_handler = get_async_httpx_client()
 
         response = await async_handler.post(
             url=url,

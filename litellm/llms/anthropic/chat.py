@@ -25,8 +25,8 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
@@ -918,7 +918,7 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        async_handler = _get_async_httpx_client()
+        async_handler = get_async_httpx_client()
 
         try:
             response = await async_handler.post(
