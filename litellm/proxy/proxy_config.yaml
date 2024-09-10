@@ -1,37 +1,16 @@
 model_list:
-  - model_name: openai/*
+  - model_name: gemini-vision
     litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      id: "good-openai"
-  - model_name: openai/*
+      model: vertex_ai/gemini-1.0-pro-vision-001
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/*
-      api_key: os.environ/non-exsitent-env-var
-      tags: ["bad-model"]
-    model_info:
-      id: "test-openai"
-
-
-
-litellm_settings:
-  callbacks: ["otel"]
-
-callback_settings:
-  otel:
-    message_logging: False
-
-router_settings:
- enable_tag_filtering: True # 👈 Key Chang
-
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings: 
  master_key: sk-1234 
- alerting: ["slack"]
- spend_report_frequency: "1d"
-
-
-litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
