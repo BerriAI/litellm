@@ -19,7 +19,11 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_async_httpx_client,
+)
 from litellm.llms.prompt_templates.factory import (
     convert_url_to_base64,
     response_schema_prompt,
@@ -1286,13 +1290,11 @@ class VertexLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
 
         request_body = await async_transform_request_body(**data)  # type: ignore
+        _async_client_params = {}
+        if timeout:
+            _async_client_params["timeout"] = timeout
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
+            client = _get_async_httpx_client(params=_async_client_params)
         else:
             client = client  # type: ignore
         ## LOGGING
