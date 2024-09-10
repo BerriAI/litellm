@@ -118,7 +118,7 @@ in_memory_llm_clients_cache: dict = {}
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION = "2024-07-01-preview"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
 ### GUARDRAILS ###
@@ -868,7 +868,7 @@ from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic.chat import AnthropicConfig
 from .llms.anthropic.completion import AnthropicTextConfig
-from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
