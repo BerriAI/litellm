@@ -42,6 +42,8 @@ async def test_otel_with_message_logging_off():
     )
     print("response", response)
 
+    await asyncio.sleep(4)
+
     assert otel_logger.kwargs["messages"] == [
         {"role": "user", "content": "redacted-by-litellm"}
     ]
