@@ -209,7 +209,9 @@ async def make_call(
 ):
     try:
         if client is None:
-            client = get_async_httpx_client()  # Create a new client if none provided
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.BEDROCK
+            )  # Create a new client if none provided
 
         response = await client.post(
             api_base,
@@ -1041,7 +1043,7 @@ class BedrockLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1498,7 +1500,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
         else:
             client = client  # type: ignore
 

@@ -34,6 +34,7 @@ from litellm.llms.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
+    httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
@@ -55,7 +56,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrailVersion: Optional[str] = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client()
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
 
