@@ -89,6 +89,7 @@ from litellm.caching import DualCache
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
+    RegenerateKeyRequest,
     KeyRequest,
     LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,

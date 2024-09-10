@@ -293,12 +293,12 @@ async def prepare_key_update_data(
             continue
         if v is not None and v not in ([], {}, 0):
             non_default_values[k] = v
-
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        duration_s = _duration_in_seconds(duration=duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["expires"] = expires
+        if duration and (isinstance(duration, str)) and len(duration) > 0:
+            duration_s = _duration_in_seconds(duration=duration)
+            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
         duration_s = _duration_in_seconds(
