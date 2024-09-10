@@ -14,8 +14,16 @@ model_list:
       id: "test-openai"
 
 
+
 router_settings:
  enable_tag_filtering: True # 👈 Key Chang
+
+
+general_settings: 
+ master_key: sk-1234 
+ alerting: ["slack"]
+ spend_report_frequency: "1d"
+
 
 litellm_settings:
   success_callback: ["prometheus"]
