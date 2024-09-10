@@ -1,0 +1,17 @@
+assistant_settings:
+  custom_llm_provider: openai
+  litellm_params:
+    api_key: os.environ/OPENAI_API_KEY
+litellm_settings:
+  telemetry: True
+  success_callback: ["s3"]
+  s3_callback_params:
+    s3_bucket_name: litellm.sandbox.sofatutor.org   # AWS Bucket Name for S3
+    s3_region_name: eu-central-1              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_path: logs/  # Path in S3 bucket where the files will be stored
+
+general_settings:
+  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  store_model_in_db: True
