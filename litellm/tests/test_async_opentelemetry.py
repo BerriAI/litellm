@@ -18,7 +18,7 @@ class TestOpenTelemetry(OpenTelemetry):
         self.kwargs = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print("in async_log_success_event for TestOpenTelemetry kwargs=", self.kwargs)
+        print("in async_log_success_event for TestOpenTelemetry kwargs=", kwargs)
         self.kwargs = kwargs
         await super().async_log_success_event(
             kwargs, response_obj, start_time, end_time
@@ -26,9 +26,8 @@ class TestOpenTelemetry(OpenTelemetry):
 
 
 @pytest.mark.asyncio
-async def test_otel_with_message_logging_off():
+async def test_awesome_otel_with_message_logging_off():
     litellm.set_verbose = True
-    from litellm.integrations.opentelemetry import OpenTelemetry
 
     otel_logger = TestOpenTelemetry(
         message_logging=False, config=OpenTelemetryConfig(exporter="console")
