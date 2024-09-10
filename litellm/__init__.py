@@ -24,6 +24,7 @@ from litellm.proxy._types import (
 )
 import httpx
 import dotenv
+from enum import Enum
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
@@ -678,62 +679,66 @@ model_list = (
     + gemini_models
 )
 
-provider_list: List = [
-    "openai",
-    "custom_openai",
-    "text-completion-openai",
-    "cohere",
-    "cohere_chat",
-    "clarifai",
-    "anthropic",
-    "replicate",
-    "huggingface",
-    "together_ai",
-    "openrouter",
-    "vertex_ai",
-    "vertex_ai_beta",
-    "palm",
-    "gemini",
-    "ai21",
-    "baseten",
-    "azure",
-    "azure_text",
-    "azure_ai",
-    "sagemaker",
-    "sagemaker_chat",
-    "bedrock",
-    "vllm",
-    "nlp_cloud",
-    "petals",
-    "oobabooga",
-    "ollama",
-    "ollama_chat",
-    "deepinfra",
-    "perplexity",
-    "anyscale",
-    "mistral",
-    "groq",
-    "nvidia_nim",
-    "cerebras",
-    "ai21_chat",
-    "volcengine",
-    "codestral",
-    "text-completion-codestral",
-    "deepseek",
-    "maritalk",
-    "voyage",
-    "cloudflare",
-    "xinference",
-    "fireworks_ai",
-    "friendliai",
-    "watsonx",
-    "triton",
-    "predibase",
-    "databricks",
-    "empower",
-    "github",
-    "custom",  # custom apis
-]
+
+class LlmProviders(str, Enum):
+    OPENAI = "openai"
+    CUSTOM_OPENAI = "custom_openai"
+    TEXT_COMPLETION_OPENAI = "text-completion-openai"
+    COHERE = "cohere"
+    COHERE_CHAT = "cohere_chat"
+    CLARIFAI = "clarifai"
+    ANTHROPIC = "anthropic"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
+    TOGETHER_AI = "together_ai"
+    OPENROUTER = "openrouter"
+    VERTEX_AI = "vertex_ai"
+    VERTEX_AI_BETA = "vertex_ai_beta"
+    PALM = "palm"
+    GEMINI = "gemini"
+    AI21 = "ai21"
+    BASETEN = "baseten"
+    AZURE = "azure"
+    AZURE_TEXT = "azure_text"
+    AZURE_AI = "azure_ai"
+    SAGEMAKER = "sagemaker"
+    SAGEMAKER_CHAT = "sagemaker_chat"
+    BEDROCK = "bedrock"
+    VLLM = "vllm"
+    NLP_CLOUD = "nlp_cloud"
+    PETALS = "petals"
+    OOBABOOGA = "oobabooga"
+    OLLAMA = "ollama"
+    OLLAMA_CHAT = "ollama_chat"
+    DEEPINFRA = "deepinfra"
+    PERPLEXITY = "perplexity"
+    ANYSCALE = "anyscale"
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    NVIDIA_NIM = "nvidia_nim"
+    CEREBRAS = "cerebras"
+    AI21_CHAT = "ai21_chat"
+    VOLCENGINE = "volcengine"
+    CODESTRAL = "codestral"
+    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DEEPSEEK = "deepseek"
+    MARITALK = "maritalk"
+    VOYAGE = "voyage"
+    CLOUDFLARE = "cloudflare"
+    XINFERENCE = "xinference"
+    FIREWORKS_AI = "fireworks_ai"
+    FRIENDLIAI = "friendliai"
+    WATSONX = "watsonx"
+    TRITON = "triton"
+    PREDIBASE = "predibase"
+    DATABRICKS = "databricks"
+    EMPOWER = "empower"
+    GITHUB = "github"
+    CUSTOM = "custom"
+
+
+provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
+
 
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,

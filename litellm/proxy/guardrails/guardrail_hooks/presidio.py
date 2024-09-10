@@ -22,7 +22,6 @@ import litellm  # noqa: E401
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.custom_httpx.http_handler import _get_async_httpx_client
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (
     EmbeddingResponse,
