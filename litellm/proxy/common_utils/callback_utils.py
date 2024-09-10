@@ -228,6 +228,16 @@ def initialize_callbacks_on_proxy(
             litellm.callbacks.extend(imported_list)
         else:
             litellm.callbacks = imported_list  # type: ignore
+
+        if "prometheus" in value:
+            from litellm.proxy.proxy_server import app
+
+            verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")
+            from prometheus_client import make_asgi_app
+
+            # Add prometheus asgi middleware to route /metrics requests
+            metrics_app = make_asgi_app()
+            app.mount("/metrics", metrics_app)
     else:
         litellm.callbacks = [
             get_instance_fn(
