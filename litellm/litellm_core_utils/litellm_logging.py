@@ -924,6 +924,7 @@ class Logging:
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
+                        temp_langfuse_logger = langFuseLogger
                         if langFuseLogger is None or (
                             (
                                 self.langfuse_public_key is not None
@@ -940,12 +941,12 @@ class Logging:
                                 and self.langfuse_host != langFuseLogger.langfuse_host
                             )
                         ):
-                            langFuseLogger = LangFuseLogger(
+                            temp_langfuse_logger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
                                 langfuse_host=self.langfuse_host,
                             )
-                        _response = langFuseLogger.log_event(
+                        _response = temp_langfuse_logger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
