@@ -15,6 +15,13 @@ model_list:
 
 
 
+litellm_settings:
+  callbacks: ["otel"]
+
+callback_settings:
+  otel:
+    message_logging: False
+
 router_settings:
  enable_tag_filtering: True # 👈 Key Chang
 

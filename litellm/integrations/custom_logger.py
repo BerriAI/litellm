@@ -15,7 +15,8 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self) -> None:
+    def __init__(self, message_logging: bool = True) -> None:
+        self.message_logging = message_logging
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):
