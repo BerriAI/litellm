@@ -483,7 +483,12 @@ openai_compatible_providers: List = [
     "azure_ai",
     "github",
 ]
-
+openai_text_completion_compatible_providers: List = (
+    [  # providers that support `/v1/completions`
+        "together_ai",
+        "fireworks_ai",
+    ]
+)
 
 # well supported replicate llms
 replicate_models: List = [

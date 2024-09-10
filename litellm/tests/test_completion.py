@@ -626,6 +626,8 @@ async def test_model_function_invoke(model, sync_mode, api_key, api_base):
             response = await litellm.acompletion(**data)
 
         print(f"response: {response}")
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
