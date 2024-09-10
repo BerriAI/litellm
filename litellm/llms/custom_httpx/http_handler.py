@@ -378,7 +378,7 @@ class HTTPHandler:
             pass
 
 
-def _get_async_httpx_client(params: Optional[dict] = None) -> AsyncHTTPHandler:
+def get_async_httpx_client(params: Optional[dict] = None) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
     If not present, creates a new client

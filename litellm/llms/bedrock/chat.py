@@ -35,8 +35,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -209,7 +209,7 @@ async def make_call(
 ):
     try:
         if client is None:
-            client = _get_async_httpx_client()  # Create a new client if none provided
+            client = get_async_httpx_client()  # Create a new client if none provided
 
         response = await client.post(
             api_base,
@@ -1041,7 +1041,7 @@ class BedrockLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(_params)  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1498,7 +1498,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(_params)  # type: ignore
         else:
             client = client  # type: ignore
 
