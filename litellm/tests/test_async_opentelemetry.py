@@ -27,6 +27,7 @@ class TestOpenTelemetry(OpenTelemetry):
 
 @pytest.mark.asyncio
 async def test_otel_with_message_logging_off():
+    litellm.set_verbose = True
     from litellm.integrations.opentelemetry import OpenTelemetry
 
     otel_logger = TestOpenTelemetry(
