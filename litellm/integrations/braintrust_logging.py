@@ -17,10 +17,17 @@ from pydantic import BaseModel
 import litellm
 from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.utils import get_formatted_prompt
 
-global_braintrust_http_handler = AsyncHTTPHandler()
+global_braintrust_http_handler = get_async_httpx_client(
+    llm_provider=httpxSpecialProvider.LoggingCallback
+)
 global_braintrust_sync_http_handler = HTTPHandler()
 API_BASE = "https://api.braintrustdata.com/v1"
 
