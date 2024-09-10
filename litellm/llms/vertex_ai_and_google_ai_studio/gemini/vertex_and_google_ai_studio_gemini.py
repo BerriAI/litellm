@@ -1158,7 +1158,7 @@ class VertexLLM(BaseLLM):
                 self.refresh_auth(self._credentials)
 
             if not self.project_id:
-                self.project_id = self._credentials.project_id
+                self.project_id = self._credentials.quota_project_id
 
         if not self.project_id:
             raise ValueError("Could not resolve project_id")
