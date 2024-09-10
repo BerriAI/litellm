@@ -16,7 +16,11 @@ from pydantic import BaseModel  # type: ignore
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 class LangsmithInputs(BaseModel):
@@ -61,8 +65,8 @@ class LangsmithLogger(CustomLogger):
         self.langsmith_base_url = os.getenv(
             "LANGSMITH_BASE_URL", "https://api.smith.langchain.com"
         )
-        self.async_httpx_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        self.async_httpx_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
