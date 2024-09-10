@@ -34,6 +34,8 @@ async def test_awesome_otel_with_message_logging_off():
     )
 
     litellm.callbacks = [otel_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
 
     response = await litellm.acompletion(
         model="gpt-3.5-turbo",
@@ -42,7 +44,7 @@ async def test_awesome_otel_with_message_logging_off():
     )
     print("response", response)
 
-    await asyncio.sleep(4)
+    await asyncio.sleep(5)
 
     assert otel_logger.kwargs["messages"] == [
         {"role": "user", "content": "redacted-by-litellm"}
