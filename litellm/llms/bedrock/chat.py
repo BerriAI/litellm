@@ -736,7 +736,9 @@ class BedrockLLM(BaseAWSLLM):
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            proxy_endpoint_url = (
+                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            )
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
@@ -1268,7 +1270,7 @@ class AmazonConverseConfig:
                     if len(value) == 0:  # converse raises error for empty strings
                         continue
                     value = [value]
-                optional_params["stop_sequences"] = value
+                optional_params["stopSequences"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":

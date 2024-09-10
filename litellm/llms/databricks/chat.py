@@ -29,8 +29,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
 
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ..base import BaseLLM
+from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class DatabricksError(Exception):
@@ -328,6 +328,7 @@ class DatabricksChatCompletion(BaseLLM):
         api_base: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
+        custom_llm_provider: str,
         print_verbose: Callable,
         encoding,
         api_key,
@@ -370,6 +371,8 @@ class DatabricksChatCompletion(BaseLLM):
             additional_args={"complete_input_dict": data},
         )
         response = ModelResponse(**response_json)
+
+        response.model = custom_llm_provider + "/" + response.model
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
@@ -472,6 +475,7 @@ class DatabricksChatCompletion(BaseLLM):
                     data=data,
                     api_base=api_base,
                     custom_prompt_dict=custom_prompt_dict,
+                    custom_llm_provider=custom_llm_provider,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -527,6 +531,8 @@ class DatabricksChatCompletion(BaseLLM):
                     raise DatabricksError(status_code=500, message=str(e))
 
         response = ModelResponse(**response_json)
+
+        response.model = custom_llm_provider + "/" + response.model
 
         if base_model is not None:
             response._hidden_params["model"] = base_model

@@ -1219,3 +1219,13 @@ def test_completion_cost_anthropic_prompt_caching():
     cost_2 = completion_cost(model=model, completion_response=response_2)
 
     assert cost_1 > cost_2
+
+
+def test_completion_cost_databricks():
+    model, messages = "databricks/databricks-dbrx-instruct", [
+        {"role": "user", "content": "What is 2+2?"}
+    ]
+
+    resp = litellm.completion(model=model, messages=messages)  # works fine
+
+    cost = completion_cost(completion_response=resp)
