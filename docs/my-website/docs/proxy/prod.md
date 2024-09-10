@@ -107,9 +107,9 @@ export LITELLM_SALT_KEY="sk-1234"
 |--------------|-------|
 | Avg latency | `50ms` |
 | Median latency | `51ms` |
-| `/chat/completions` Requests/second | `35` |
-| `/chat/completions` Requests/minute | `2100` |
-| `/chat/completions` Requests/hour | `126K` |
+| `/chat/completions` Requests/second | `100` |
+| `/chat/completions` Requests/minute | `6000` |
+| `/chat/completions` Requests/hour | `360K` |
 
 
 ### Verifying Debugging logs are off
