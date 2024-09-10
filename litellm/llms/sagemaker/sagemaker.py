@@ -273,7 +273,7 @@ class SagemakerLLM(BaseAWSLLM):
         model_id = optional_params.get("model_id", None)
 
         if use_messages_api is True:
-            from litellm.llms.databricks import DatabricksChatCompletion
+            from litellm.llms.databricks.chat import DatabricksChatCompletion
 
             openai_like_chat_completions = DatabricksChatCompletion()
             inference_params["stream"] = True if stream is True else False
