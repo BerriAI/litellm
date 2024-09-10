@@ -731,6 +731,7 @@ async def generate_key_helper_fn(
         str
     ] = None,  # dev-friendly alt param for 'token'. Exposed on `/key/generate` for setting key value yourself.
     user_id: Optional[str] = None,
+    user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
@@ -816,6 +817,7 @@ async def generate_key_helper_fn(
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "user_alias": user_alias,
             "team_id": team_id,
             "organization_id": organization_id,
             "user_role": user_role,

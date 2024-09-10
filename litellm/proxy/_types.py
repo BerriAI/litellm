@@ -680,6 +680,7 @@ class LiteLLM_ModelTable(LiteLLMBase):
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
+    user_alias: Optional[str] = None
     user_role: Optional[
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
@@ -713,6 +714,7 @@ class NewUserResponse(GenerateKeyResponse):
     ] = None
     teams: Optional[list] = None
     organization_id: Optional[str] = None
+    user_alias: Optional[str] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
