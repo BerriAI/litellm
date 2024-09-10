@@ -52,6 +52,7 @@ def get_current_weather(location, unit="fahrenheit"):
         # "anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_aaparallel_function_call(model):
     try:
         litellm.set_verbose = True

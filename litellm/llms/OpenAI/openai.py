@@ -1263,6 +1263,7 @@ class OpenAIChatCompletion(BaseLLM):
 
                 error_headers = getattr(e, "headers", None)
                 if response is not None and hasattr(response, "text"):
+                    error_headers = getattr(e, "headers", None)
                     raise OpenAIError(
                         status_code=500,
                         message=f"{str(e)}\n\nOriginal Response: {response.text}",
@@ -1800,12 +1801,11 @@ class OpenAITextCompletion(BaseLLM):
         headers: Optional[dict] = None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
-                raise OpenAIError(status_code=422, message=f"Missing model or messages")
+                raise OpenAIError(status_code=422, message="Missing model or messages")
 
             if (
                 len(messages) > 0
