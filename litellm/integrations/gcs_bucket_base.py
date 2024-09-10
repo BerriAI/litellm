@@ -34,10 +34,18 @@ class GCSBucketBase(CustomLogger):
     async def construct_request_headers(self) -> Dict[str, str]:
         from litellm import vertex_chat_completion
 
+        _auth_header, vertex_project = (
+            await vertex_chat_completion._ensure_access_token_async(
+                credentials=self.path_service_account_json,
+                project_id=None,
+            )
+        )
+
         auth_header, _ = vertex_chat_completion._get_token_and_url(
             model="gcs-bucket",
+            auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
-            vertex_project=None,
+            vertex_project=vertex_project,
             vertex_location=None,
             gemini_api_key=None,
             stream=None,
@@ -55,10 +63,16 @@ class GCSBucketBase(CustomLogger):
     def sync_construct_request_headers(self) -> Dict[str, str]:
         from litellm import vertex_chat_completion
 
+        _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
+            credentials=self.path_service_account_json,
+            project_id=None,
+        )
+
         auth_header, _ = vertex_chat_completion._get_token_and_url(
             model="gcs-bucket",
+            auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
-            vertex_project=None,
+            vertex_project=vertex_project,
             vertex_location=None,
             gemini_api_key=None,
             stream=None,
