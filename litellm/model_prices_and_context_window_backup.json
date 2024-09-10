@@ -2685,8 +2685,8 @@
         "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "cohere_chat",
         "mode": "chat"
     },
@@ -2714,8 +2714,8 @@
         "max_tokens": 4096, 
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000002,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
@@ -2723,26 +2723,8 @@
         "max_tokens": 4096, 
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
-        "litellm_provider": "cohere",
-        "mode": "completion"
-    },
-     "command-medium-beta": {
-        "max_tokens": 4096, 
-        "max_input_tokens": 4096,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
-        "litellm_provider": "cohere",
-        "mode": "completion"
-    },
-     "command-xlarge-beta": {
-        "max_tokens": 4096, 
-        "max_input_tokens": 4096,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000002,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
