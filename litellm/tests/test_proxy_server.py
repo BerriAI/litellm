@@ -1255,7 +1255,17 @@ async def test_add_callback_via_key(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
+@pytest.mark.parametrize(
+    "callback_type, expected_success_callbacks, expected_failure_callbacks",
+    [
+        ("success", ["langfuse"], []),
+        ("failure", [], ["langfuse"]),
+        ("success_and_failure", ["langfuse"], ["langfuse"]),
+    ],
+)
+async def test_add_callback_via_key_litellm_pre_call_utils(
+    prisma_client, callback_type, expected_success_callbacks, expected_failure_callbacks
+):
     import json
 
     from fastapi import HTTPException, Request, Response
@@ -1312,7 +1322,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
                 "logging": [
                     {
                         "callback_name": "langfuse",
-                        "callback_type": "success",
+                        "callback_type": callback_type,
                         "callback_vars": {
                             "langfuse_public_key": "my-mock-public-key",
                             "langfuse_secret_key": "my-mock-secret-key",
@@ -1359,13 +1369,20 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
     }
 
     new_data = await add_litellm_data_to_request(**data)
+    print("NEW DATA: {}".format(new_data))
 
-    assert "success_callback" in new_data
-    assert new_data["success_callback"] == ["langfuse"]
     assert "langfuse_public_key" in new_data
     assert new_data["langfuse_public_key"] == "my-mock-public-key"
     assert "langfuse_secret_key" in new_data
     assert new_data["langfuse_secret_key"] == "my-mock-secret-key"
+
+    if expected_success_callbacks:
+        assert "success_callback" in new_data
+        assert new_data["success_callback"] == expected_success_callbacks
+
+    if expected_failure_callbacks:
+        assert "failure_callback" in new_data
+        assert new_data["failure_callback"] == expected_failure_callbacks
 
 
 @pytest.mark.asyncio

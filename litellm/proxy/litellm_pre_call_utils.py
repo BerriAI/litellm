@@ -86,10 +86,11 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.success_callback = []
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
+
         if data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
 
-        if data.callback_name in team_callback_settings_obj.failure_callback:
+        if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
