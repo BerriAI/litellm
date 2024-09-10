@@ -1244,6 +1244,7 @@ class QdrantSemanticCache(BaseCache):
         from litellm.llms.custom_httpx.http_handler import (
             _get_httpx_client,
             get_async_httpx_client,
+            httpxSpecialProvider,
         )
 
         if collection_name is None:
@@ -1290,7 +1291,9 @@ class QdrantSemanticCache(BaseCache):
         self.headers = headers
 
         self.sync_client = _get_httpx_client()
-        self.async_client = get_async_httpx_client()
+        self.async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.Caching
+        )
 
         if quantization_config is None:
             print_verbose(

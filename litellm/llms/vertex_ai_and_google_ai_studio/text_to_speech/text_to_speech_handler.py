@@ -4,6 +4,7 @@ from typing import Any, Coroutine, Literal, Optional, TypedDict, Union
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -178,7 +179,9 @@ class VertexTextToSpeechAPI(VertexLLM):
     ) -> HttpxBinaryResponseContent:
         import base64
 
-        async_handler = get_async_httpx_client()
+        async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI
+        )
 
         response = await async_handler.post(
             url=url,
