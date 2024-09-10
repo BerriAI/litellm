@@ -7,6 +7,8 @@ import httpx
 
 import litellm
 
+from .types import httpxSpecialProvider
+
 try:
     from litellm._version import version
 except:
@@ -378,7 +380,10 @@ class HTTPHandler:
             pass
 
 
-def get_async_httpx_client(params: Optional[dict] = None) -> AsyncHTTPHandler:
+def get_async_httpx_client(
+    llm_provider: Union[litellm.LlmProviders, httpxSpecialProvider],
+    params: Optional[dict] = None,
+) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
     If not present, creates a new client
@@ -393,7 +398,7 @@ def get_async_httpx_client(params: Optional[dict] = None) -> AsyncHTTPHandler:
             except Exception:
                 pass
 
-    _cache_key_name = "async_httpx_client" + _params_key_name
+    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
     if _cache_key_name in litellm.in_memory_llm_clients_cache:
         return litellm.in_memory_llm_clients_cache[_cache_key_name]
 

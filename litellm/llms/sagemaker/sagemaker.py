@@ -565,8 +565,8 @@ class SagemakerLLM(BaseAWSLLM):
     ):
         try:
             if client is None:
-                client = (
-                    get_async_httpx_client()
+                client = get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.SAGEMAKER
                 )  # Create a new client if none provided
             response = await client.post(
                 api_base,
@@ -673,7 +673,9 @@ class SagemakerLLM(BaseAWSLLM):
         model_id: Optional[str],
     ):
         timeout = 300.0
-        async_handler = get_async_httpx_client()
+        async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.SAGEMAKER
+        )
 
         async_transform_prompt = asyncify(self._transform_prompt)
 

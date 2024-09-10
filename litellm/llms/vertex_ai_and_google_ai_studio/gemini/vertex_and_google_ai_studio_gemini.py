@@ -1293,7 +1293,9 @@ class VertexLLM(BaseLLM):
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
-        client = get_async_httpx_client(params=_async_client_params)
+        client = get_async_httpx_client(
+            params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI
+        )
         ## LOGGING
         logging_obj.pre_call(
             input=messages,
