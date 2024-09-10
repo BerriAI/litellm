@@ -92,7 +92,7 @@ from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks import DatabricksChatCompletion
+from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -1013,7 +1013,10 @@ def completion(
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+                or litellm.AZURE_DEFAULT_API_VERSION
             )
 
             api_key = (
@@ -1209,6 +1212,9 @@ def completion(
             custom_llm_provider == "text-completion-openai"
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
+            or custom_llm_provider
+            in litellm.openai_text_completion_compatible_providers
+            and kwargs.get("text_completion") is True
         ):
             openai.api_type = "openai"
 
@@ -4099,8 +4105,8 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if (
-        _model is not None and custom_llm_provider == "openai"
+    if _model is not None and (
+        custom_llm_provider == "openai"
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
         if _model not in litellm.open_ai_chat_completion_models:
             model = "text-completion-openai/" + _model
