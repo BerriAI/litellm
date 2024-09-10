@@ -162,7 +162,7 @@ def cost_per_token(
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
 
     model_without_prefix = model
-    model_parts = model.split("/")
+    model_parts = model.split("/", 1)
     if len(model_parts) > 1:
         model_without_prefix = model_parts[1]
     else:
