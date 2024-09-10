@@ -269,3 +269,56 @@ async def test_regenerate_api_key_with_new_alias_and_expiration(prisma_client):
     now = datetime.now(dt.timezone.utc)
     assert new_key.expires > now + dt.timedelta(days=29)
     assert new_key.expires < now + dt.timedelta(days=31)
+
+
+@pytest.mark.asyncio()
+async def test_regenerate_key_ui(prisma_client):
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    import uuid
+
+    # generate new key
+    key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
+    spend = 100
+    max_budget = 400
+    models = ["fake-openai-endpoint"]
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    print(generated_key)
+
+    # assert the new key works as expected
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body
+    result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
+    print(result)
+
+    # regenerate the key
+    new_key = await regenerate_key_fn(
+        key=generated_key,
+        data=RegenerateKeyRequest(duration=""),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print("response from regenerate_key_fn", new_key)
