@@ -1,0 +1,37 @@
+services:
+  litellm:
+    build:
+      context: .
+      args:
+        target: runtime
+    image: ghcr.io/sofatutor/litellm:sofatutor
+    #########################################
+    ## Uncomment these lines to start proxy with a config.yaml file ##
+    volumes:
+      - ./hosted_config.yaml:/app/config.yaml # Mount the local configuration file
+    ###############################################
+    ports:
+      - "4000:4000" # Map the container port to the host, change the host port if necessary
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+    env_file:
+      - .env # Load local .env file
+    command: ["--port", "4000", "--config", "sofatutor_config.yaml"]
+
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  prometheus_data:
+    driver: local
