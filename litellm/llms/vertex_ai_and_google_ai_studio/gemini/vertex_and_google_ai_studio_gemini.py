@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.llms.prompt_templates.factory import (
     convert_url_to_base64,
@@ -1294,7 +1294,9 @@ class VertexLLM(BaseLLM):
         if timeout:
             _async_client_params["timeout"] = timeout
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = _get_async_httpx_client(params=_async_client_params)
+            client = get_async_httpx_client(
+                params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI
+            )
         else:
             client = client  # type: ignore
         ## LOGGING
