@@ -2333,6 +2333,8 @@ def get_standard_logging_object_payload(
             completion_start_time_float = completion_start_time.timestamp()
         elif isinstance(completion_start_time, float):
             completion_start_time_float = completion_start_time
+        else:
+            completion_start_time_float = end_time_float
         # clean up litellm hidden params
         clean_hidden_params = StandardLoggingHiddenParams(
             model_id=None,

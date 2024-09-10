@@ -1,19 +1,19 @@
 model_list:
   - model_name: openai/*
     litellm_params:
-      model: gpt-3.5-turbo
+      model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-
-litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
-
-guardrails:
-  - guardrail_name: "presidio-pre-guard"
+    model_info:
+      id: "good-openai"
+  - model_name: openai/*
     litellm_params:
-      guardrail: presidio  # supported values: "aporia", "lakera", "presidio"
-      mode: "pre_call"  # pre_call, during_call, post_call
-      output_parse_pii: True
+      model: openai/*
+      api_key: os.environ/non-exsitent-env-var
+      tags: ["bad-model"]
+    model_info:
+      id: "test-openai"
+
+
 
 litellm_settings:
   callbacks: ["otel"]
@@ -22,8 +22,16 @@ callback_settings:
   otel:
     message_logging: False
 
+router_settings:
+ enable_tag_filtering: True # 👈 Key Chang
+
+
 general_settings: 
  master_key: sk-1234 
  alerting: ["slack"]
  spend_report_frequency: "1d"
 
+
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]

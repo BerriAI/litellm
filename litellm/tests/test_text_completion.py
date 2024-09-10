@@ -4239,3 +4239,14 @@ def test_completion_vllm():
         mock_call.assert_called_once()
 
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
+
+def test_completion_fireworks_ai_multiple_choices():
+    litellm.set_verbose = True
+    response = litellm.text_completion(
+        model="fireworks_ai/llama-v3p1-8b-instruct",
+        prompt=["halo", "hi", "halo", "hi"],
+    )
+    print(response.choices)
+
+    assert len(response.choices) == 4
