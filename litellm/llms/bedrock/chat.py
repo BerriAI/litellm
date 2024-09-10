@@ -1043,7 +1043,7 @@ class BedrockLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = get_async_httpx_client(_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
+            client = get_async_httpx_client(params=_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
         else:
             client = client  # type: ignore
 
