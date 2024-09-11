@@ -55,8 +55,7 @@ def is_serializable(value):
 
 
 class LangsmithLogger(CustomLogger):
-    # Class variables or attributes
-    def __init__(self):
+    def __init__(self, batch_size=1):
         self.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
         self.langsmith_project = os.getenv("LANGSMITH_PROJECT", "litellm-completion")
         self.langsmith_default_run_name = os.getenv(
@@ -68,6 +67,8 @@ class LangsmithLogger(CustomLogger):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
+        self.batch_size = batch_size
+        self.log_queue = []
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
         import datetime
@@ -102,7 +103,7 @@ class LangsmithLogger(CustomLogger):
 
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
-        run_id = metadata.get("id", None)
+        run_id = metadata.get("id", None) or str(random.randint(1000, 9999))
         parent_run_id = metadata.get("parent_run_id", None)
         trace_id = metadata.get("trace_id", None)
         session_id = metadata.get("session_id", None)
@@ -174,48 +175,31 @@ class LangsmithLogger(CustomLogger):
 
         return data
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            sampling_rate = (
-                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
-                if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
-                else 1.0
-            )
-            random_sample = random.random()
-            if random_sample > sampling_rate:
-                verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
-                        sampling_rate, random_sample
-                    )
-                )
-                return  # Skip logging
-            verbose_logger.debug(
-                "Langsmith Async Layer Logging - kwargs: %s, response_obj: %s",
-                kwargs,
-                response_obj,
-            )
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
-            url = f"{self.langsmith_base_url}/runs"
-            verbose_logger.debug(f"Langsmith Logging - About to send data to {url} ...")
+    def _send_batch(self):
+        if not self.log_queue:
+            return
 
-            headers = {"x-api-key": self.langsmith_api_key}
-            response = await self.async_httpx_client.post(
-                url=url, json=data, headers=headers
+        url = f"{self.langsmith_base_url}/runs/batch"
+        headers = {"x-api-key": self.langsmith_api_key}
+
+        try:
+            response = requests.post(
+                url=url,
+                json=self.log_queue,
+                headers=headers,
             )
 
             if response.status_code >= 300:
                 verbose_logger.error(
-                    f"Langmsith Error: {response.status_code} - {response.text}"
+                    f"Langsmith Error: {response.status_code} - {response.text}"
                 )
             else:
                 verbose_logger.debug(
-                    "Run successfully created, response=%s", response.text
+                    f"Batch of {len(self.log_queue)} runs successfully created"
                 )
-            verbose_logger.debug(
-                f"Langsmith Layer Logging - final response object: {response_obj}. Response text from langsmith={response.text}"
-            )
-        except:
+
+            self.log_queue.clear()
+        except Exception as e:
             verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -240,23 +224,73 @@ class LangsmithLogger(CustomLogger):
                 response_obj,
             )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
-            url = f"{self.langsmith_base_url}/runs"
-            verbose_logger.debug(f"Langsmith Logging - About to send data to {url} ...")
+            self.log_queue.append(data)
 
-            response = requests.post(
+            if len(self.log_queue) >= self.batch_size:
+                self._send_batch()
+
+        except:
+            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            sampling_rate = (
+                float(os.getenv("LANGSMITH_SAMPLING_RATE"))
+                if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
+                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
+                else 1.0
+            )
+            random_sample = random.random()
+            if random_sample > sampling_rate:
+                verbose_logger.info(
+                    "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
+                        sampling_rate, random_sample
+                    )
+                )
+                return  # Skip logging
+            verbose_logger.debug(
+                "Langsmith Async Layer Logging - kwargs: %s, response_obj: %s",
+                kwargs,
+                response_obj,
+            )
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            self.log_queue.append(data)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self._async_send_batch()
+
+        except:
+            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
+
+    async def _async_send_batch(self):
+        import json
+
+        if not self.log_queue:
+            return
+
+        url = f"{self.langsmith_base_url}/runs/batch"
+        headers = {"x-api-key": self.langsmith_api_key}
+
+        try:
+            response = await self.async_httpx_client.post(
                 url=url,
-                json=data,
-                headers={"x-api-key": self.langsmith_api_key},
+                json={
+                    "post": self.log_queue,
+                },
+                headers=headers,
             )
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Error: {response.status_code} - {response.text}")
+                verbose_logger.error(
+                    f"Langsmith Error: {response.status_code} - {response.text}"
+                )
             else:
-                verbose_logger.debug("Run successfully created")
-            verbose_logger.debug(
-                f"Langsmith Layer Logging - final response object: {response_obj}. Response text from langsmith={response.text}"
-            )
-        except:
+                verbose_logger.debug(
+                    f"Batch of {len(self.log_queue)} runs successfully created"
+                )
+
+            self.log_queue.clear()
+        except Exception as e:
             verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
     def get_run_by_id(self, run_id):
