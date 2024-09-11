@@ -14,12 +14,6 @@ import dotenv  # type: ignore
 import httpx
 import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -303,11 +297,6 @@ class LangsmithLogger(CustomLogger):
                 self.log_queue.clear()
                 self.last_flush_time = time.time()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((httpx.HTTPStatusError, Exception)),
-    )
     async def _async_send_batch(self):
         """
         sends runs to /batch endpoint
