@@ -170,7 +170,6 @@ jobs:
             pip install "boto3==1.34.34"
             pip install jinja2
             pip install tokenizers
-            pip install openai
             pip install jsonschema
       - run:
           name: Run tests
