@@ -2662,30 +2662,50 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "command-r": {
-        "max_tokens": 4096, 
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000050,
-        "output_cost_per_token": 0.0000015,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "cohere_chat",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "command-r-08-2024": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "cohere_chat",
         "mode": "chat",
         "supports_function_calling": true
     },
     "command-light": {
-        "max_tokens": 4096, 
+        "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "cohere_chat",
         "mode": "chat"
     },
     "command-r-plus": {
-        "max_tokens": 4096, 
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "cohere_chat",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "command-r-plus-08-2024": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.00001,
         "litellm_provider": "cohere_chat",
         "mode": "chat",
         "supports_function_calling": true
@@ -2694,8 +2714,8 @@
         "max_tokens": 4096, 
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000002,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
@@ -2703,26 +2723,8 @@
         "max_tokens": 4096, 
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
-        "litellm_provider": "cohere",
-        "mode": "completion"
-    },
-     "command-medium-beta": {
-        "max_tokens": 4096, 
-        "max_input_tokens": 4096,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
-        "litellm_provider": "cohere",
-        "mode": "completion"
-    },
-     "command-xlarge-beta": {
-        "max_tokens": 4096, 
-        "max_input_tokens": 4096,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000002,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
