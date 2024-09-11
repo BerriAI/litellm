@@ -1,3 +1,9 @@
+"""
+Base Vertex, Google AI Studio LLM Class
+
+Handles Authentication and generating request urls for Vertex AI and Google AI Studio
+"""
+
 import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
