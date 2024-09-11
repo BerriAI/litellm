@@ -161,10 +161,10 @@ class Router:
         enable_tag_filtering: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[
-            RetryPolicy
+            Union[RetryPolicy, dict]
         ] = None,  # set custom retries for different exceptions
-        model_group_retry_policy: Optional[
-            Dict[str, RetryPolicy]
+        model_group_retry_policy: Dict[
+            str, RetryPolicy
         ] = {},  # set custom retry policies based on model group
         allowed_fails: Optional[
             int
@@ -454,11 +454,35 @@ class Router:
         )
 
         self.routing_strategy_args = routing_strategy_args
-        self.retry_policy: Optional[RetryPolicy] = retry_policy
+        self.retry_policy: Optional[RetryPolicy] = None
+        if retry_policy is not None:
+            if isinstance(retry_policy, dict):
+                self.retry_policy = RetryPolicy(**retry_policy)
+            elif isinstance(retry_policy, RetryPolicy):
+                self.retry_policy = retry_policy
+            verbose_router_logger.info(
+                "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
+                    self.retry_policy.model_dump(exclude_none=True)
+                )
+            )
+
         self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
             model_group_retry_policy
         )
-        self.allowed_fails_policy: Optional[AllowedFailsPolicy] = allowed_fails_policy
+
+        self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
+        if allowed_fails_policy is not None:
+            if isinstance(allowed_fails_policy, dict):
+                self.allowed_fails_policy = AllowedFailsPolicy(**allowed_fails_policy)
+            elif isinstance(allowed_fails_policy, AllowedFailsPolicy):
+                self.allowed_fails_policy = allowed_fails_policy
+
+            verbose_router_logger.info(
+                "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
+                    self.allowed_fails_policy.model_dump(exclude_none=True)
+                )
+            )
+
         self.alerting_config: Optional[AlertingConfig] = alerting_config
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -5530,18 +5554,19 @@ class Router:
         ContentPolicyViolationErrorRetries: Optional[int] = None
         """
         # if we can find the exception then in the retry policy -> return the number of retries
-        retry_policy = self.retry_policy
+        retry_policy: Optional[RetryPolicy] = self.retry_policy
         if (
             self.model_group_retry_policy is not None
             and model_group is not None
             and model_group in self.model_group_retry_policy
         ):
-            retry_policy = self.model_group_retry_policy.get(model_group, None)
+            retry_policy = self.model_group_retry_policy.get(model_group, None)  # type: ignore
 
         if retry_policy is None:
             return None
         if isinstance(retry_policy, dict):
             retry_policy = RetryPolicy(**retry_policy)
+
         if (
             isinstance(exception, litellm.BadRequestError)
             and retry_policy.BadRequestErrorRetries is not None

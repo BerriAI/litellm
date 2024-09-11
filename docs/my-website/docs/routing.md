@@ -1038,6 +1038,12 @@ print(f"response: {response}")
 - Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
 - Use `AllowedFailsPolicy` to set a custom number of `allowed_fails`/minute before cooling down a deployment
 
+[**See All Exception Types**](https://github.com/BerriAI/litellm/blob/ccda616f2f881375d4e8586c76fe4662909a7d22/litellm/types/router.py#L436)
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 Example:
 
 ```python
@@ -1100,6 +1106,24 @@ response = await router.acompletion(
 	messages=messages,
 )
 ```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+router_settings: 
+  retry_policy: {
+    "BadRequestErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4
+  }
+  allowed_fails_policy: {
+	"ContentPolicyViolationErrorAllowedFails": 1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+	"RateLimitErrorAllowedFails": 100 # Allow 100 RateLimitErrors before cooling down a deployment
+  }
+```
+
+</TabItem>
+</Tabs>
 
 
 ### Fallbacks 
