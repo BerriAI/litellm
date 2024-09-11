@@ -2183,6 +2183,7 @@ def test_get_token_url():
     assert should_use_v1beta1_features is True
 
     _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
         vertex_credentials=vertex_credentials,
@@ -2203,6 +2204,7 @@ def test_get_token_url():
     )
 
     _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
         vertex_credentials=vertex_credentials,

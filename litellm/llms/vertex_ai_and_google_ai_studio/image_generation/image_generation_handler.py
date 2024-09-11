@@ -82,7 +82,9 @@ class VertexImageGeneration(VertexLLM):
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
         auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
         )
         optional_params = optional_params or {
             "sampleCount": 1
@@ -180,7 +182,9 @@ class VertexImageGeneration(VertexLLM):
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
         auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
         )
         optional_params = optional_params or {
             "sampleCount": 1
