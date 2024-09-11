@@ -3189,6 +3189,7 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         mock_testing_fallbacks = kwargs.pop("mock_testing_fallbacks", None)
+
         model_group = kwargs.get("model")
         fallbacks = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.get(
@@ -3197,6 +3198,7 @@ class Router:
         content_policy_fallbacks = kwargs.get(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
+
         try:
             if mock_testing_fallbacks is not None and mock_testing_fallbacks == True:
                 raise Exception(
@@ -3348,6 +3350,9 @@ class Router:
             f"Inside function with retries: args - {args}; kwargs - {kwargs}"
         )
         original_function = kwargs.pop("original_function")
+        mock_testing_rate_limit_error = kwargs.pop(
+            "mock_testing_rate_limit_error", None
+        )
         num_retries = kwargs.pop("num_retries")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.pop(
@@ -3356,9 +3361,22 @@ class Router:
         content_policy_fallbacks = kwargs.pop(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
+        model_group = kwargs.get("model")
 
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
+            if (
+                mock_testing_rate_limit_error is not None
+                and mock_testing_rate_limit_error is True
+            ):
+                verbose_router_logger.info(
+                    "litellm.router.py::async_function_with_retries() - mock_testing_rate_limit_error=True. Raising litellm.RateLimitError."
+                )
+                raise litellm.RateLimitError(
+                    model=model_group,
+                    llm_provider="",
+                    message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
+                )
             response = original_function(*args, **kwargs)
             return response
         except Exception as e:
@@ -3595,17 +3613,26 @@ class Router:
             )  # don't change existing ttl
 
     def _is_cooldown_required(
-        self, exception_status: Union[str, int], exception_str: Optional[str] = None
-    ):
+        self,
+        model_id: str,
+        exception_status: Union[str, int],
+        exception_str: Optional[str] = None,
+    ) -> bool:
         """
         A function to determine if a cooldown is required based on the exception status.
 
         Parameters:
+            model_id (str) The id of the model in the model list
             exception_status (Union[str, int]): The status of the exception.
 
         Returns:
             bool: True if a cooldown is required, False otherwise.
         """
+        ## BASE CASE - single deployment
+        model_group = self.get_model_group(id=model_id)
+        if model_group is not None and len(model_group) == 1:
+            return False
+
         try:
             ignored_strings = ["APIConnectionError"]
             if (
@@ -3701,7 +3728,9 @@ class Router:
 
         if (
             self._is_cooldown_required(
-                exception_status=exception_status, exception_str=str(original_exception)
+                model_id=deployment,
+                exception_status=exception_status,
+                exception_str=str(original_exception),
             )
             is False
         ):
@@ -4323,6 +4352,18 @@ class Router:
                 if id == model["model_info"]["id"]:
                     return model
         return None
+
+    def get_model_group(self, id: str) -> Optional[List]:
+        """
+        Return list of all models in the same model group as that model id
+        """
+
+        model_info = self.get_model_info(id=id)
+        if model_info is None:
+            return None
+
+        model_name = model_info["model_name"]
+        return self.get_model_list(model_name=model_name)
 
     def _set_model_group_info(
         self, model_group: str, user_facing_model_group_name: str
