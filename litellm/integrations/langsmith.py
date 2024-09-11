@@ -24,6 +24,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
+DEFAULT_BATCH_SIZE = 512
+DEFAULT_FLUSH_INTERVAL_SECONDS = 5
+
 
 class LangsmithInputs(BaseModel):
     model: Optional[str] = None
@@ -71,11 +74,12 @@ class LangsmithLogger(CustomLogger):
         )
 
         _batch_size = (
-            os.getenv("LANGSMITH_BATCH_SIZE", 100) or litellm.langsmith_batch_size
+            os.getenv("LANGSMITH_BATCH_SIZE", DEFAULT_BATCH_SIZE)
+            or litellm.langsmith_batch_size
         )
         self.batch_size = int(_batch_size)
         self.log_queue = []
-        self.flush_interval = 10  # 5 seconds
+        self.flush_interval = DEFAULT_FLUSH_INTERVAL_SECONDS  # 10 seconds
         self.last_flush_time = time.time()
         asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
