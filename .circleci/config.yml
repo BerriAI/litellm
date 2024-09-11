@@ -161,6 +161,7 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
             pip install python-dotenv
             pip install pytest
             pip install tiktoken
