@@ -9,9 +9,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Union
 
+import backoff
 import dotenv  # type: ignore
 import httpx
 import requests  # type: ignore
+from backoff import on_exception
+from backoff._typing import Details
 from pydantic import BaseModel  # type: ignore
 
 import litellm
@@ -53,6 +56,12 @@ def is_serializable(value):
         BaseModel,
     )
     return not isinstance(value, non_serializable_types)
+
+
+def on_backoff(details: Details) -> None:
+    verbose_logger.warning(
+        f"Langsmith batch send failed. Retrying in {details['wait']} seconds. Attempt {details['tries']}/3"
+    )
 
 
 class LangsmithLogger(CustomLogger):
@@ -277,11 +286,23 @@ class LangsmithLogger(CustomLogger):
             )
             if len(self.log_queue) >= self.batch_size:
                 await self._async_send_batch()
-
+                self.log_queue.clear()
         except:
             verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
+    @on_exception(
+        backoff.expo, (httpx.HTTPError, Exception), max_tries=3, on_backoff=on_backoff
+    )
     async def _async_send_batch(self):
+        """
+        sends runs to /batch endpoint
+
+        Sends runs from self.log_queue
+
+        Returns: None
+
+        Raises: Does not raise an exception, will only verbose_logger.exception()
+        """
         import json
 
         if not self.log_queue:
@@ -308,14 +329,14 @@ class LangsmithLogger(CustomLogger):
                 verbose_logger.debug(
                     f"Batch of {len(self.log_queue)} runs successfully created"
                 )
-
-            self.log_queue.clear()
         except httpx.HTTPStatusError as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
             )
         except Exception as e:
-            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
+            verbose_logger.exception(
+                f"Langsmith Layer Error - {traceback.format_exc()}"
+            )
 
     def get_run_by_id(self, run_id):
 
