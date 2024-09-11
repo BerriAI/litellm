@@ -600,7 +600,7 @@ class GenerateRequestBase(LiteLLMBase):
     soft_budget: Optional[float] = None
 
 
-class GenerateKeyRequest(GenerateRequestBase):
+class _GenerateKeyRequest(GenerateRequestBase):
     key_alias: Optional[str] = None
     key: Optional[str] = None
     duration: Optional[str] = None
@@ -618,7 +618,11 @@ class GenerateKeyRequest(GenerateRequestBase):
     guardrails: Optional[List[str]] = None
 
 
-class GenerateKeyResponse(GenerateKeyRequest):
+class GenerateKeyRequest(_GenerateKeyRequest):
+    tags: Optional[List[str]] = None
+
+
+class GenerateKeyResponse(_GenerateKeyRequest):
     key: str
     key_name: Optional[str] = None
     expires: Optional[datetime]

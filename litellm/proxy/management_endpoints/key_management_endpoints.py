@@ -202,6 +202,15 @@ async def generate_key_fn(
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+        # Set tags on the new key
+        if "tags" in data_json:
+            if data_json["metadata"] is None:
+                data_json["metadata"] = {"tags": data_json["tags"]}
+            else:
+                data_json["metadata"]["tags"] = data_json["tags"]
+
+            data_json.pop("tags")
+
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
         )
@@ -257,12 +266,11 @@ async def generate_key_fn(
 
         return GenerateKeyResponse(**response)
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
