@@ -191,6 +191,12 @@ def get_redis_client(**env_overrides):
     ):
         return init_redis_cluster(redis_kwargs)
 
+
+        for item in redis_kwargs["startup_nodes"]:
+            new_startup_nodes.append(ClusterNode(**item))
+        redis_kwargs.pop("startup_nodes")
+        return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
+
     return redis.Redis(**redis_kwargs)
 
 

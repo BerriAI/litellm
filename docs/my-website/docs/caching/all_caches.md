@@ -30,15 +30,21 @@ import litellm
 from litellm import completion
 from litellm.caching import Cache
 
-litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password>)
+litellm.cache = Cache(
+    type="redis",
+    host=os.environ["REDIS_HOST"],
+    port=os.environ["REDIS_PORT"],
+    password=os.environ["REDIS_PASSWORD"],
+    ttl=60
+)
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -72,11 +78,11 @@ litellm.cache = Cache(type="s3", s3_bucket_name="cache-bucket-litellm", s3_regio
 
 # Make completion calls
 response1 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
-    model="gpt-3.5-turbo", 
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -90,10 +96,10 @@ response2 = completion(
 
 Install redis
 ```shell
-pip install redisvl==0.0.7
+pip install redisvl==0.3.3
 ```
 
-For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
+For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
 
 ```python
 import litellm
@@ -110,6 +116,7 @@ litellm.cache = Cache(
     host=os.environ["REDIS_HOST"],
     port=os.environ["REDIS_PORT"],
     password=os.environ["REDIS_PASSWORD"],
+    ttl=60,
     similarity_threshold=0.8, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
     redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
 )

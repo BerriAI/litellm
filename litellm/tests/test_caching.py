@@ -690,7 +690,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
+    response4 = completion(model="gpt-4", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -701,7 +701,7 @@ def test_redis_cache_completion():
     litellm._async_success_callback = []
 
     """
-    1 & 2 should be exactly the same 
+    1 & 2 should be exactly the same
     1 & 3 should be different, since input params are diff
     1 & 4 should be diff, since models are diff
     """
@@ -1664,7 +1664,6 @@ def test_cache_context_managers():
 # test_cache_context_managers()
 
 
-@pytest.mark.skip(reason="beta test - new redis semantic cache")
 def test_redis_semantic_cache_completion():
     litellm.set_verbose = True
     import logging
@@ -1681,8 +1680,10 @@ def test_redis_semantic_cache_completion():
         host=os.environ["REDIS_HOST"],
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
-        similarity_threshold=0.8,
+        similarity_threshold=0.8, # converted to vector distance threshold 0.2
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_index_name="lite_llm_index",
+        ttl=30
     )
     response1 = completion(
         model="gpt-3.5-turbo",
@@ -1715,7 +1716,6 @@ def test_redis_semantic_cache_completion():
 # test_redis_cache_completion()
 
 
-@pytest.mark.skip(reason="beta test - new redis semantic cache")
 @pytest.mark.asyncio
 async def test_redis_semantic_cache_acompletion():
     litellm.set_verbose = True
@@ -1735,6 +1735,8 @@ async def test_redis_semantic_cache_acompletion():
         password=os.environ["REDIS_PASSWORD"],
         similarity_threshold=0.8,
         redis_semantic_cache_use_async=True,
+        redis_semantic_cache_index_name="lite_llm_async_index",
+        ttl=30
     )
     response1 = await litellm.acompletion(
         model="gpt-3.5-turbo",
@@ -1769,7 +1771,7 @@ def test_caching_redis_simple(caplog, capsys):
     """
     litellm.set_verbose = True  ## REQUIRED FOR TEST.
     litellm.cache = Cache(
-        type="redis", url=os.getenv("REDIS_SSL_URL")
+        type="redis", redis_url=os.getenv("REDIS_SSL_URL")
     )  # passing `supported_call_types = ["completion"]` has no effect
 
     s = time.time()
