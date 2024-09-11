@@ -23,8 +23,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import Request
 
+import litellm
 from litellm.caching import DualCache
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
@@ -816,8 +817,6 @@ async def test_allowed_routes_admin(prisma_client, audience):
             raise e
 
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 
@@ -844,3 +843,148 @@ async def test_team_cache_update_called():
 
         await asyncio.sleep(3)
         mock_call_cache.assert_awaited_once()
+
+
+@pytest.fixture
+def public_jwt_key():
+    import json
+
+    import jwt
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    # Generate a private / public key pair using RSA algorithm
+    key = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048, backend=default_backend()
+    )
+    # Get private key in PEM format
+    private_key = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    # Get public key in PEM format
+    public_key = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+    public_key_obj = serialization.load_pem_public_key(
+        public_key, backend=default_backend()
+    )
+
+    # Convert RSA public key object to JWK (JSON Web Key)
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
+
+    return {"private_key": private_key, "public_jwk": public_jwk}
+
+
+def mock_user_object(*args, **kwargs):
+    print("Args: {}".format(args))
+    print("kwargs: {}".format(kwargs))
+    assert kwargs["user_id_upsert"] is True
+
+
+@pytest.mark.parametrize(
+    "user_email, should_work", [("ishaan@berri.ai", True), ("krrish@tassle.xyz", False)]
+)
+@pytest.mark.asyncio
+async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
+    """
+    Allow anyone with an `@xyz.com` email make a request to the proxy.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/5605
+    """
+    import jwt
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import user_api_key_auth
+
+    public_jwk = public_jwt_key["public_jwk"]
+    private_key = public_jwt_key["private_key"]
+
+    # set cache
+    cache = DualCache()
+
+    await cache.async_set_cache(key="litellm_jwt_auth_keys", value=[public_jwk])
+
+    jwt_handler = JWTHandler()
+
+    jwt_handler.user_api_key_cache = cache
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_email_jwt_field="email",
+        user_allowed_email_domain="berri.ai",
+        user_id_upsert=True,
+    )
+
+    # VALID TOKEN
+    ## GENERATE A TOKEN
+    # Assuming the current time is in UTC
+    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+
+    team_id = f"team123_{uuid.uuid4()}"
+    payload = {
+        "sub": "user123",
+        "exp": expiration_time,  # set the token to expire in 10 minutes
+        "scope": "litellm_team",
+        "client_id": team_id,
+        "aud": "litellm-proxy",
+        "email": user_email,
+    }
+
+    # Generate the JWT token
+    # But before, you should convert bytes to string
+    private_key_str = private_key.decode("utf-8")
+
+    ## team token
+    token = jwt.encode(payload, private_key_str, algorithm="RS256")
+
+    ## VERIFY IT WORKS
+    # Expect the call to succeed
+    response = await jwt_handler.auth_jwt(token=token)
+    assert response is not None  # Adjust this based on your actual response check
+
+    ## RUN IT THROUGH USER API KEY AUTH
+    bearer_token = "Bearer " + token
+
+    request = Request(scope={"type": "http"})
+
+    request._url = URL(url="/chat/completions")
+
+    ## 1. INITIAL TEAM CALL - should fail
+    # use generated key to auth in
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {
+            "enable_jwt_auth": True,
+        },
+    )
+    setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+    setattr(litellm.proxy.proxy_server, "prisma_client", {})
+
+    # AsyncMock(
+    #     return_value=LiteLLM_UserTable(
+    #         spend=0, user_id=user_email, max_budget=None, user_email=user_email
+    #     )
+    # ),
+    with patch.object(
+        litellm.proxy.auth.user_api_key_auth,
+        "get_user_object",
+        side_effect=mock_user_object,
+    ) as mock_client:
+        if should_work:
+            # Expect the call to succeed
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            assert result is not None  # Adjust this based on your actual response check
+        else:
+            # Expect the call to fail
+            with pytest.raises(
+                Exception
+            ):  # Replace with the actual exception raised on failure
+                resp = await user_api_key_auth(request=request, api_key=bearer_token)
+                print(resp)

@@ -386,6 +386,8 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
     - team_allowed_routes: list of allowed routes for proxy team roles.
     - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - user_email_jwt_field: The field in the JWT token that stores the user email (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
 
@@ -417,6 +419,8 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     )
     org_id_jwt_field: Optional[str] = None
     user_id_jwt_field: Optional[str] = None
+    user_email_jwt_field: Optional[str] = None
+    user_allowed_email_domain: Optional[str] = None
     user_id_upsert: bool = Field(
         default=False, description="If user doesn't exist, upsert them into the db."
     )
