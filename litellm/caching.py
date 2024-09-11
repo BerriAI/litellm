@@ -606,12 +606,22 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
-    async def async_increment(self, key, value: float, **kwargs) -> float:
+    async def async_increment(
+        self, key, value: float, ttl: Optional[float] = None, **kwargs
+    ) -> float:
         _redis_client = self.init_async_client()
         start_time = time.time()
         try:
             async with _redis_client as redis_client:
                 result = await redis_client.incrbyfloat(name=key, amount=value)
+
+                if ttl is not None:
+                    # check if key already has ttl, if not -> set ttl
+                    current_ttl = await redis_client.ttl(key)
+                    if current_ttl == -1:
+                        # Key has no expiration
+                        await redis_client.expire(key, ttl)
+
                 ## LOGGING ##
                 end_time = time.time()
                 _duration = end_time - start_time

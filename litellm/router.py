@@ -263,7 +263,7 @@ class Router:
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
-        if self.set_verbose == True:
+        if self.set_verbose is True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
             elif debug_level == "DEBUG":
@@ -3690,7 +3690,9 @@ class Router:
             exception=original_exception,
         )
 
-        allowed_fails = _allowed_fails if _allowed_fails is not None else self.allowed_fails
+        allowed_fails = (
+            _allowed_fails if _allowed_fails is not None else self.allowed_fails
+        )
 
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
