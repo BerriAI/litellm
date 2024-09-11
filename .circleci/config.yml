@@ -161,11 +161,11 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
             pip install python-dotenv
             pip install pytest
             pip install tiktoken
             pip install aiohttp
+            pip install openai
             pip install click
             pip install "boto3==1.34.34"
             pip install jinja2
