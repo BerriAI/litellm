@@ -65,10 +65,10 @@ class VertexTextToSpeechAPI(VertexLLM):
         import base64
 
         ####### Authenticate with Vertex AI ########
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
+            custom_llm_provider="vertex_ai_beta",
         )
 
         auth_header, _ = self._get_token_and_url(
