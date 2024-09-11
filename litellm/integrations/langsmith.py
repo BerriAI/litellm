@@ -9,13 +9,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Union
 
-import backoff
 import dotenv  # type: ignore
 import httpx
 import requests  # type: ignore
-from backoff import on_exception
-from backoff._typing import Details
 from pydantic import BaseModel  # type: ignore
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -56,12 +59,6 @@ def is_serializable(value):
         BaseModel,
     )
     return not isinstance(value, non_serializable_types)
-
-
-def on_backoff(details: Details) -> None:
-    verbose_logger.warning(
-        f"Langsmith batch send failed. Retrying in {details['wait']} seconds. Attempt {details['tries']}/3"
-    )
 
 
 class LangsmithLogger(CustomLogger):
@@ -290,8 +287,10 @@ class LangsmithLogger(CustomLogger):
         except:
             verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
-    @on_exception(
-        backoff.expo, (httpx.HTTPError, Exception), max_tries=3, on_backoff=on_backoff
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, Exception)),
     )
     async def _async_send_batch(self):
         """
