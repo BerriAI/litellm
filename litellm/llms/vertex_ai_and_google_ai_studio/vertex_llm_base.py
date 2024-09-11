@@ -166,7 +166,7 @@ class VertexBase(BaseLLM):
     def _get_token_and_url(
         self,
         model: str,
-        auth_header: str,
+        auth_header: Optional[str],
         gemini_api_key: Optional[str],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
@@ -192,6 +192,7 @@ class VertexBase(BaseLLM):
                 stream=stream,
                 gemini_api_key=gemini_api_key,
             )
+            auth_header = None  # this field is not used for gemin
         else:
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
