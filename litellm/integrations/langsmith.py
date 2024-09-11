@@ -17,15 +17,12 @@ from pydantic import BaseModel  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-
-DEFAULT_BATCH_SIZE = 512
-DEFAULT_FLUSH_INTERVAL_SECONDS = 5
 
 
 class LangsmithInputs(BaseModel):
@@ -59,8 +56,8 @@ def is_serializable(value):
     return not isinstance(value, non_serializable_types)
 
 
-class LangsmithLogger(CustomLogger):
-    def __init__(self):
+class LangsmithLogger(CustomBatchLogger):
+    def __init__(self, **kwargs):
         self.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
         self.langsmith_project = os.getenv("LANGSMITH_PROJECT", "litellm-completion")
         self.langsmith_default_run_name = os.getenv(
@@ -72,17 +69,14 @@ class LangsmithLogger(CustomLogger):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-
         _batch_size = (
-            os.getenv("LANGSMITH_BATCH_SIZE", DEFAULT_BATCH_SIZE)
-            or litellm.langsmith_batch_size
+            os.getenv("LANGSMITH_BATCH_SIZE", None) or litellm.langsmith_batch_size
         )
-        self.batch_size = int(_batch_size)
-        self.log_queue = []
-        self.flush_interval = DEFAULT_FLUSH_INTERVAL_SECONDS  # 10 seconds
-        self.last_flush_time = time.time()
+        if _batch_size:
+            self.batch_size = int(_batch_size)
         asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
         import datetime
@@ -291,17 +285,7 @@ class LangsmithLogger(CustomLogger):
         except:
             verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
-    async def flush_queue(self):
-        async with self.flush_lock:
-            if self.log_queue:
-                verbose_logger.debug(
-                    "Langsmith: Flushing batch of %s events", self.batch_size
-                )
-                await self._async_send_batch()
-                self.log_queue.clear()
-                self.last_flush_time = time.time()
-
-    async def _async_send_batch(self):
+    async def async_send_batch(self):
         """
         sends runs to /batch endpoint
 
@@ -360,11 +344,3 @@ class LangsmithLogger(CustomLogger):
         st = datetime.now(timezone.utc)
         id_ = run_id
         return st.strftime("%Y%m%dT%H%M%S%fZ") + str(id_)
-
-    async def periodic_flush(self):
-        while True:
-            await asyncio.sleep(self.flush_interval)
-            verbose_logger.debug(
-                f"Langsmith periodic flush after {self.flush_interval} seconds"
-            )
-            await self.flush_queue()
