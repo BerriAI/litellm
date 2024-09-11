@@ -157,8 +157,7 @@ const CreateKeyPage = () => {
         <Navbar
           userID={userID}
           userRole={userRole}
-          userEmail={userEmail}
-          showSSOBanner={showSSOBanner}
+          userEmail={userEmail} 
           premiumUser={premiumUser}
           setProxySettings={setProxySettings}
           proxySettings={proxySettings}

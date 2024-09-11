@@ -12,6 +12,45 @@ from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfi
 verbose_logger.setLevel(logging.DEBUG)
 
 
+class TestOpenTelemetry(OpenTelemetry):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.kwargs = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print("in async_log_success_event for TestOpenTelemetry kwargs=", kwargs)
+        self.kwargs = kwargs
+        await super().async_log_success_event(
+            kwargs, response_obj, start_time, end_time
+        )
+
+
+@pytest.mark.asyncio
+async def test_awesome_otel_with_message_logging_off():
+    litellm.set_verbose = True
+
+    otel_logger = TestOpenTelemetry(
+        message_logging=False, config=OpenTelemetryConfig(exporter="console")
+    )
+
+    litellm.callbacks = [otel_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
+
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+    )
+    print("response", response)
+
+    await asyncio.sleep(5)
+
+    assert otel_logger.kwargs["messages"] == [
+        {"role": "user", "content": "redacted-by-litellm"}
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Local only test. WIP.")
 async def test_async_otel_callback():

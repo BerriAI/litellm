@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
+from openai.types.audio.transcription_create_params import FileTypes
 from openai.types.completion_usage import CompletionUsage
 from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
@@ -51,6 +52,8 @@ class ModelInfo(TypedDict, total=False):
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
+    cache_creation_input_token_cost: Optional[float]
+    cache_read_input_token_cost: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_character_above_128k_tokens: Optional[
@@ -115,6 +118,10 @@ class CallTypes(Enum):
     transcription = "transcription"
     aspeech = "aspeech"
     speech = "speech"
+
+
+class PassthroughCallTypes(Enum):
+    passthrough_image_generation = "passthrough-image-generation"
 
 
 class TopLogprob(OpenAIObject):
@@ -454,6 +461,13 @@ class Choices(OpenAIObject):
 
 
 class Usage(CompletionUsage):
+    _cache_creation_input_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _cache_read_input_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
@@ -461,13 +475,36 @@ class Usage(CompletionUsage):
         total_tokens: Optional[int] = None,
         **params,
     ):
+        ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
+        if (
+            "prompt_cache_miss_tokens" in params
+            and isinstance(params["prompt_cache_miss_tokens"], int)
+            and prompt_tokens is not None
+        ):
+            prompt_tokens = params["prompt_cache_miss_tokens"]
         data = {
             "prompt_tokens": prompt_tokens or 0,
             "completion_tokens": completion_tokens or 0,
             "total_tokens": total_tokens or 0,
         }
-
         super().__init__(**data)
+
+        ## ANTHROPIC MAPPING ##
+        if "cache_creation_input_tokens" in params and isinstance(
+            params["cache_creation_input_tokens"], int
+        ):
+            self._cache_creation_input_tokens = params["cache_creation_input_tokens"]
+
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            self._cache_read_input_tokens = params["cache_read_input_tokens"]
+
+        ## DEEPSEEK MAPPING ##
+        if "prompt_cache_hit_tokens" in params and isinstance(
+            params["prompt_cache_hit_tokens"], int
+        ):
+            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
         for k, v in params.items():
             setattr(self, k, v)
@@ -681,7 +718,7 @@ class ModelResponse(OpenAIObject):
 class Embedding(OpenAIObject):
     embedding: Union[list, str] = []
     index: int
-    object: str
+    object: Literal["embedding"]
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -703,7 +740,7 @@ class EmbeddingResponse(OpenAIObject):
     data: Optional[List] = None
     """The actual embedding value"""
 
-    object: str
+    object: Literal["list"]
     """The object type, which is always "embedding" """
 
     usage: Optional[Usage] = None
@@ -714,11 +751,10 @@ class EmbeddingResponse(OpenAIObject):
 
     def __init__(
         self,
-        model=None,
-        usage=None,
-        stream=False,
+        model: Optional[str] = None,
+        usage: Optional[Usage] = None,
         response_ms=None,
-        data=None,
+        data: Optional[List] = None,
         hidden_params=None,
         _response_headers=None,
         **params,
@@ -742,7 +778,7 @@ class EmbeddingResponse(OpenAIObject):
             self._response_headers = _response_headers
 
         model = model
-        super().__init__(model=model, object=object, data=data, usage=usage)
+        super().__init__(model=model, object=object, data=data, usage=usage)  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1261,3 +1297,7 @@ class CustomStreamingDecoder:
         self, iterator: Iterator[bytes]
     ) -> Iterator[Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]]:
         raise NotImplementedError
+
+
+class StandardPassThroughResponseObject(TypedDict):
+    response: str

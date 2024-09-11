@@ -177,6 +177,35 @@ async def view_spend_tags(
         )
 
 
+async def get_global_activity_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, start_date: datetime, end_date: datetime
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+    SELECT
+        date_trunc('day', "startTime") AS date,
+        COUNT(*) AS api_requests,
+        SUM(total_tokens) AS total_tokens
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+    AND "user" = $3
+    GROUP BY date_trunc('day', "startTime")
+    """
+    db_response = await prisma_client.db.query_raw(
+        sql_query, start_date, end_date, user_id
+    )
+
+    return db_response
+
+
 @router.get(
     "/global/activity",
     tags=["Budget & Spend Tracking"],
@@ -195,6 +224,7 @@ async def get_global_activity(
         default=None,
         description="Time till which to view spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get number of API Requests, total tokens through proxy
@@ -236,18 +266,27 @@ async def get_global_activity(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
-        SELECT
-            date_trunc('day', "startTime") AS date,
-            COUNT(*) AS api_requests,
-            SUM(total_tokens) AS total_tokens
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
-        GROUP BY date_trunc('day', "startTime")
-        """
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            db_response = await get_global_activity_internal_user(
+                user_api_key_dict, start_date_obj, end_date_obj
+            )
+        else:
+
+            sql_query = """
+            SELECT
+                date_trunc('day', "startTime") AS date,
+                COUNT(*) AS api_requests,
+                SUM(total_tokens) AS total_tokens
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+            GROUP BY date_trunc('day', "startTime")
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
 
         if db_response is None:
             return []
@@ -282,6 +321,36 @@ async def get_global_activity(
         )
 
 
+async def get_global_activity_model_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, start_date: datetime, end_date: datetime
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+    SELECT
+        model_group,
+        date_trunc('day', "startTime") AS date,
+        COUNT(*) AS api_requests,
+        SUM(total_tokens) AS total_tokens
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+    AND "user" = $3
+    GROUP BY model_group, date_trunc('day', "startTime")
+    """
+    db_response = await prisma_client.db.query_raw(
+        sql_query, start_date, end_date, user_id
+    )
+
+    return db_response
+
+
 @router.get(
     "/global/activity/model",
     tags=["Budget & Spend Tracking"],
@@ -300,6 +369,7 @@ async def get_global_activity_model(
         default=None,
         description="Time till which to view spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get number of API Requests, total tokens through proxy - Grouped by MODEL
@@ -364,19 +434,28 @@ async def get_global_activity_model(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
-        SELECT
-            model_group,
-            date_trunc('day', "startTime") AS date,
-            COUNT(*) AS api_requests,
-            SUM(total_tokens) AS total_tokens
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
-        GROUP BY model_group, date_trunc('day', "startTime")
-        """
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            db_response = await get_global_activity_model_internal_user(
+                user_api_key_dict, start_date_obj, end_date_obj
+            )
+        else:
+
+            sql_query = """
+            SELECT
+                model_group,
+                date_trunc('day', "startTime") AS date,
+                COUNT(*) AS api_requests,
+                SUM(total_tokens) AS total_tokens
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+            GROUP BY model_group, date_trunc('day', "startTime")
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
         if db_response is None:
             return []
 
@@ -711,6 +790,7 @@ async def get_global_spend_provider(
         default=None,
         description="Time till which to view spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get breakdown of spend per provider
@@ -748,19 +828,42 @@ async def get_global_spend_provider(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            user_id = user_api_key_dict.user_id
+            if user_id is None:
+                raise HTTPException(
+                    status_code=400, detail={"error": "No user_id found"}
+                )
 
-        SELECT
-        model_id,
-        SUM(spend) AS spend
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" BETWEEN $1::date AND $2::date AND length(model_id) > 0
-        GROUP BY model_id
-        """
+            sql_query = """
+            SELECT
+            model_id,
+            SUM(spend) AS spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date 
+            AND length(model_id) > 0
+            AND "user" = $3
+            GROUP BY model_id
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj, user_id
+            )
+        else:
+            sql_query = """
+            SELECT
+            model_id,
+            SUM(spend) AS spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" BETWEEN $1::date AND $2::date AND length(model_id) > 0
+            GROUP BY model_id
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
 
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
         if db_response is None:
             return []
 
@@ -1236,6 +1339,7 @@ async def global_view_spend_tags(
 -H "Authorization: Bearer sk-1234"
     ```
     """
+    import traceback
 
     from enterprise.utils import ui_get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
@@ -1262,9 +1366,11 @@ async def global_view_spend_tags(
 
         return response
     except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "detail", f"/spend/tags Error({str(e)})"),
+                message=getattr(e, "detail", f"/spend/tags Error({error_str})"),
                 type="internal_error",
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1272,7 +1378,7 @@ async def global_view_spend_tags(
         elif isinstance(e, ProxyException):
             raise e
         raise ProxyException(
-            message="/spend/tags Error" + str(e),
+            message="/spend/tags Error" + error_str,
             type="internal_error",
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1512,6 +1618,7 @@ async def view_spend_logs(
         default=None,
         description="Time till which to view key spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
@@ -1541,6 +1648,12 @@ async def view_spend_logs(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        user_id = user_api_key_dict.user_id
 
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
@@ -1730,6 +1843,45 @@ async def global_spend_reset():
     }
 
 
+async def global_spend_for_internal_user(
+    api_key: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    try:
+
+        user_id = user_api_key_dict.user_id
+        if user_id is None:
+            raise ValueError(f"/global/spend/logs Error: User ID is None")
+        if api_key is not None:
+            sql_query = """
+                SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"
+                WHERE "api_key" = $1 AND "user" = $2
+                ORDER BY "date";
+                """
+
+            response = await prisma_client.db.query_raw(sql_query, api_key, user_id)
+
+            return response
+
+        sql_query = """SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"  WHERE "user" = $1 ORDER BY "date";"""
+
+        response = await prisma_client.db.query_raw(sql_query, user_id)
+
+        return response
+    except Exception as e:
+        verbose_proxy_logger.error(f"/global/spend/logs Error: {str(e)}")
+        raise e
+
+
 @router.get(
     "/global/spend/logs",
     tags=["Budget & Spend Tracking"],
@@ -1740,7 +1892,8 @@ async def global_spend_logs(
     api_key: str = fastapi.Query(
         default=None,
         description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
-    )
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     [BETA] This is a beta endpoint. It will change.
@@ -1749,32 +1902,65 @@ async def global_spend_logs(
 
     More efficient implementation of /spend/logs, by creating a view over the spend logs table.
     """
+    import traceback
+
     from litellm.proxy.proxy_server import prisma_client
 
-    if prisma_client is None:
+    try:
+        if prisma_client is None:
+            raise ProxyException(
+                message="Prisma Client is not initialized",
+                type="internal_error",
+                param="None",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ):
+            response = await global_spend_for_internal_user(
+                api_key=api_key, user_api_key_dict=user_api_key_dict
+            )
+
+            return response
+
+        if api_key is None:
+            sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
+
+            response = await prisma_client.db.query_raw(query=sql_query)
+
+            return response
+        else:
+            sql_query = """
+                SELECT * FROM "MonthlyGlobalSpendPerKey"
+                WHERE "api_key" = $1
+                ORDER BY "date";
+                """
+
+            response = await prisma_client.db.query_raw(sql_query, api_key)
+
+            return response
+
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
+        verbose_proxy_logger.error(f"/global/spend/logs Error: {error_str}")
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
         raise ProxyException(
-            message="Prisma Client is not initialized",
+            message="/global/spend/logs Error" + error_str,
             type="internal_error",
-            param="None",
+            param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if api_key is None:
-        sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
-
-        response = await prisma_client.db.query_raw(query=sql_query)
-
-        return response
-    else:
-        sql_query = """
-            SELECT * FROM "MonthlyGlobalSpendPerKey"
-            WHERE "api_key" = $1
-            ORDER BY "date";
-            """
-
-        response = await prisma_client.db.query_raw(sql_query, api_key)
-
-        return response
-    return
 
 
 @router.get(
@@ -1789,20 +1975,88 @@ async def global_spend():
 
     View total spend across all proxy keys
     """
+    import traceback
+
     from litellm.proxy.proxy_server import prisma_client
 
-    total_spend = 0.0
-    total_proxy_budget = 0.0
+    try:
+
+        total_spend = 0.0
+        total_proxy_budget = 0.0
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
+        if response is not None:
+            if isinstance(response, list) and len(response) > 0:
+                total_spend = response[0].get("total_spend", 0.0)
+
+        return {"spend": total_spend, "max_budget": litellm.max_budget}
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        error_str = str(e) + "\n" + error_trace
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/global/spend Error({error_str})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/global/spend Error" + error_str,
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+async def global_spend_key_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, limit: int = 10
+):
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
-    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-    response = await prisma_client.db.query_raw(query=sql_query)
-    if response is not None:
-        if isinstance(response, list) and len(response) > 0:
-            total_spend = response[0].get("total_spend", 0.0)
 
-    return {"spend": total_spend, "max_budget": litellm.max_budget}
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+            WITH top_api_keys AS (
+            SELECT 
+                api_key,
+                SUM(spend) as total_spend
+            FROM 
+                "LiteLLM_SpendLogs"
+            WHERE 
+                "user" = $1
+            GROUP BY 
+                api_key
+            ORDER BY 
+                total_spend DESC
+            LIMIT $2  -- Adjust this number to get more or fewer top keys
+        )
+        SELECT 
+            t.api_key,
+            t.total_spend,
+            v.key_alias,
+            v.key_name
+        FROM 
+            top_api_keys t
+        LEFT JOIN 
+            "LiteLLM_VerificationToken" v ON t.api_key = v.token
+        ORDER BY 
+            t.total_spend DESC;
+    
+    """
+
+    response = await prisma_client.db.query_raw(sql_query, user_id, limit)
+
+    return response
 
 
 @router.get(
@@ -1815,7 +2069,8 @@ async def global_spend_keys(
     limit: int = fastapi.Query(
         default=None,
         description="Number of keys to get. Will return Top 'n' keys.",
-    )
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     [BETA] This is a beta endpoint. It will change.
@@ -1824,6 +2079,15 @@ async def global_spend_keys(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        response = await global_spend_key_internal_user(
+            user_api_key_dict=user_api_key_dict
+        )
+
+        return response
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
     sql_query = f"""SELECT * FROM "Last30dKeysBySpend" LIMIT {limit};"""
@@ -2011,6 +2275,39 @@ LIMIT 100
     return response
 
 
+async def global_spend_models_internal_user(
+    user_api_key_dict: UserAPIKeyAuth, limit: int = 10
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    user_id = user_api_key_dict.user_id
+    if user_id is None:
+        raise HTTPException(status_code=500, detail={"error": "No user_id found"})
+
+    sql_query = """
+        SELECT 
+            model,
+            SUM(spend) as total_spend,
+            SUM(total_tokens) as total_tokens
+        FROM 
+            "LiteLLM_SpendLogs"
+        WHERE 
+            "user" = $1
+        GROUP BY 
+            model
+        ORDER BY 
+            total_spend DESC
+        LIMIT $2;
+    """
+
+    response = await prisma_client.db.query_raw(sql_query, user_id, limit)
+
+    return response
+
+
 @router.get(
     "/global/spend/models",
     tags=["Budget & Spend Tracking"],
@@ -2019,16 +2316,26 @@ LIMIT 100
 )
 async def global_spend_models(
     limit: int = fastapi.Query(
-        default=None,
+        default=10,
         description="Number of models to get. Will return Top 'n' models.",
-    )
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     [BETA] This is a beta endpoint. It will change.
 
-    Use this to get the top 'n' keys with the highest spend, ordered by spend.
+    Use this to get the top 'n' models with the highest spend, ordered by spend.
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        response = await global_spend_models_internal_user(
+            user_api_key_dict=user_api_key_dict, limit=limit
+        )
+        return response
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})

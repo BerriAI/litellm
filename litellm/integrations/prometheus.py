@@ -138,6 +138,13 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["hashed_api_key", "api_key_alias", "model"],
             )
 
+            # New metric for tracking error codes and models
+            self.litellm_error_code_metric = Counter(
+                "litellm_error_code_metric",
+                "Total number of errors by error code and model",
+                labelnames=["error_code", "model"],
+            )
+
             # Litellm-Enterprise Metrics
             if premium_user is True:
 
@@ -349,18 +356,22 @@ class PrometheusLogger(CustomLogger):
         # latency metrics
         total_time: timedelta = kwargs.get("end_time") - kwargs.get("start_time")
         total_time_seconds = total_time.total_seconds()
-        api_call_total_time: timedelta = kwargs.get("end_time") - kwargs.get(
-            "api_call_start_time"
-        )
+        api_call_start_time = kwargs.get("api_call_start_time", None)
 
-        api_call_total_time_seconds = api_call_total_time.total_seconds()
+        if api_call_start_time is not None and isinstance(
+            api_call_start_time, datetime
+        ):
+            api_call_total_time: timedelta = (
+                kwargs.get("end_time") - api_call_start_time
+            )
+            api_call_total_time_seconds = api_call_total_time.total_seconds()
+            self.litellm_llm_api_latency_metric.labels(model).observe(
+                api_call_total_time_seconds
+            )
 
         # log metrics
         self.litellm_request_total_latency_metric.labels(model).observe(
             total_time_seconds
-        )
-        self.litellm_llm_api_latency_metric.labels(model).observe(
-            api_call_total_time_seconds
         )
 
         # set x-ratelimit headers
@@ -374,7 +385,7 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.proxy_server import premium_user
 
         verbose_logger.debug(
-            f"prometheus Logging - Enters success logging function for kwargs {kwargs}"
+            f"prometheus Logging - Enters failure logging function for kwargs {kwargs}"
         )
 
         # unpack kwargs
@@ -405,6 +416,16 @@ class PrometheusLogger(CustomLogger):
                 user_id,
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
+
+            _exception = kwargs.get("exception", None)
+            error_code = "unknown"
+            if _exception is not None and hasattr(_exception, "status_code"):
+                error_code = _exception.status_code
+
+            # Increment the new error code metric
+            self.litellm_error_code_metric.labels(
+                error_code=error_code, model=model
+            ).inc()
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))

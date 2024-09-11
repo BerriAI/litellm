@@ -70,7 +70,47 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
 def test_bedrock_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        user="John", encoding_format=None, custom_llm_provider="bedrock"
+        model="", user="John", encoding_format=None, custom_llm_provider="bedrock"
+    )
+    assert len(optional_params) == 0
+
+
+@pytest.mark.parametrize(
+    "model, expected_dimensions, dimensions_kwarg",
+    [
+        ("bedrock/amazon.titan-embed-text-v1", False, None),
+        ("bedrock/amazon.titan-embed-image-v1", True, "embeddingConfig"),
+        ("bedrock/amazon.titan-embed-text-v2:0", True, "dimensions"),
+        ("bedrock/cohere.embed-multilingual-v3", False, None),
+    ],
+)
+def test_bedrock_optional_params_embeddings_dimension(
+    model, expected_dimensions, dimensions_kwarg
+):
+    litellm.drop_params = True
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        user="John",
+        encoding_format=None,
+        dimensions=20,
+        custom_llm_provider="bedrock",
+    )
+    if expected_dimensions:
+        assert len(optional_params) == 1
+    else:
+        assert len(optional_params) == 0
+
+    if dimensions_kwarg is not None:
+        assert dimensions_kwarg in optional_params
+
+
+def test_google_ai_studio_optional_params_embeddings():
+    optional_params = get_optional_params_embeddings(
+        model="",
+        user="John",
+        encoding_format=None,
+        custom_llm_provider="gemini",
+        drop_params=True,
     )
     assert len(optional_params) == 0
 
@@ -78,7 +118,7 @@ def test_bedrock_optional_params_embeddings():
 def test_openai_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        user="John", encoding_format=None, custom_llm_provider="openai"
+        model="", user="John", encoding_format=None, custom_llm_provider="openai"
     )
     assert len(optional_params) == 1
     assert optional_params["user"] == "John"
@@ -87,7 +127,10 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        user="John", encoding_format=None, custom_llm_provider="azure"
+        model="chatgpt-v-2",
+        user="John",
+        encoding_format=None,
+        custom_llm_provider="azure",
     )
     assert len(optional_params) == 1
     assert optional_params["user"] == "John"
@@ -445,6 +488,7 @@ def test_get_optional_params_image_gen():
 
 def test_bedrock_optional_params_embeddings_provider_specific_params():
     optional_params = get_optional_params_embeddings(
+        model="my-custom-model",
         custom_llm_provider="huggingface",
         wait_for_model=True,
     )

@@ -24,6 +24,8 @@ from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_route
 def test_async_fallbacks(caplog):
     # THIS IS A PROD TEST - DO NOT DELETE THIS. Used for testing if litellm proxy verbose logs are human readable
     litellm.set_verbose = False
+    litellm.success_callback = []
+    litellm.failure_callback = []
     verbose_router_logger.setLevel(level=logging.INFO)
     verbose_logger.setLevel(logging.CRITICAL + 1)
     verbose_proxy_logger.setLevel(logging.CRITICAL + 1)
@@ -81,6 +83,7 @@ def test_async_fallbacks(caplog):
         for log in captured_logs
         if "Task exception was never retrieved" not in log
         and "get_available_deployment" not in log
+        and "in the Langfuse queue" not in log
     ]
 
     print("\n Captured caplog records - ", captured_logs)

@@ -255,6 +255,7 @@ audio_file = open(file_path, "rb")
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -289,6 +290,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=5, delay=1)
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output

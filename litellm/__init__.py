@@ -24,6 +24,7 @@ from litellm.proxy._types import (
 )
 import httpx
 import dotenv
+from enum import Enum
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
@@ -116,8 +117,11 @@ ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
 safe_memory_mode: bool = False
+enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION = "2024-07-01-preview"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
+### COHERE EMBEDDINGS DEFAULT TYPE ###
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -137,11 +141,15 @@ return_response_headers: bool = (
 enable_json_schema_validation: bool = False
 ##################
 logging: bool = True
+enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+)
+always_read_redis: bool = (
+    True  # always use redis for rate limiting logic on litellm proxy
 )
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
@@ -250,6 +258,7 @@ upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = 
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
+default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 internal_user_budget_duration: Optional[str] = None
 max_end_user_budget: Optional[float] = None
@@ -353,16 +362,20 @@ vertex_language_models: List = []
 vertex_vision_models: List = []
 vertex_chat_models: List = []
 vertex_code_chat_models: List = []
+vertex_ai_image_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
 vertex_embedding_models: List = []
 vertex_anthropic_models: List = []
 vertex_llama3_models: List = []
+vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
+ai21_chat_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
+fireworks_ai_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 watsonx_models: List = []
@@ -407,8 +420,17 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "vertex_ai-mistral_models":
         key = key.replace("vertex_ai/", "")
         vertex_mistral_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-ai21_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_ai_ai21_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-image-models":
+        key = key.replace("vertex_ai/", "")
+        vertex_ai_image_models.append(key)
     elif value.get("litellm_provider") == "ai21":
-        ai21_models.append(key)
+        if value.get("mode") == "chat":
+            ai21_chat_models.append(key)
+        else:
+            ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
         nlp_cloud_models.append(key)
     elif value.get("litellm_provider") == "aleph_alpha":
@@ -423,6 +445,8 @@ for key, value in model_cost.items():
         watsonx_models.append(key)
     elif value.get("litellm_provider") == "gemini":
         gemini_models.append(key)
+    elif value.get("litellm_provider") == "fireworks_ai":
+        fireworks_ai_models.append(key)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
@@ -445,6 +469,8 @@ openai_compatible_providers: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "cerebras",
+    "ai21_chat",
     "volcengine",
     "codestral",
     "deepseek",
@@ -458,7 +484,12 @@ openai_compatible_providers: List = [
     "azure_ai",
     "github",
 ]
-
+openai_text_completion_compatible_providers: List = (
+    [  # providers that support `/v1/completions`
+        "together_ai",
+        "fireworks_ai",
+    ]
+)
 
 # well supported replicate llms
 replicate_models: List = [
@@ -633,6 +664,7 @@ model_list = (
     + vertex_chat_models
     + vertex_text_models
     + ai21_models
+    + ai21_chat_models
     + together_ai_models
     + baseten_models
     + aleph_alpha_models
@@ -647,60 +679,66 @@ model_list = (
     + gemini_models
 )
 
-provider_list: List = [
-    "openai",
-    "custom_openai",
-    "text-completion-openai",
-    "cohere",
-    "cohere_chat",
-    "clarifai",
-    "anthropic",
-    "replicate",
-    "huggingface",
-    "together_ai",
-    "openrouter",
-    "vertex_ai",
-    "vertex_ai_beta",
-    "palm",
-    "gemini",
-    "ai21",
-    "baseten",
-    "azure",
-    "azure_text",
-    "azure_ai",
-    "sagemaker",
-    "sagemaker_chat",
-    "bedrock",
-    "vllm",
-    "nlp_cloud",
-    "petals",
-    "oobabooga",
-    "ollama",
-    "ollama_chat",
-    "deepinfra",
-    "perplexity",
-    "anyscale",
-    "mistral",
-    "groq",
-    "nvidia_nim",
-    "volcengine",
-    "codestral",
-    "text-completion-codestral",
-    "deepseek",
-    "maritalk",
-    "voyage",
-    "cloudflare",
-    "xinference",
-    "fireworks_ai",
-    "friendliai",
-    "watsonx",
-    "triton",
-    "predibase",
-    "databricks",
-    "empower",
-    "github",
-    "custom",  # custom apis
-]
+
+class LlmProviders(str, Enum):
+    OPENAI = "openai"
+    CUSTOM_OPENAI = "custom_openai"
+    TEXT_COMPLETION_OPENAI = "text-completion-openai"
+    COHERE = "cohere"
+    COHERE_CHAT = "cohere_chat"
+    CLARIFAI = "clarifai"
+    ANTHROPIC = "anthropic"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
+    TOGETHER_AI = "together_ai"
+    OPENROUTER = "openrouter"
+    VERTEX_AI = "vertex_ai"
+    VERTEX_AI_BETA = "vertex_ai_beta"
+    PALM = "palm"
+    GEMINI = "gemini"
+    AI21 = "ai21"
+    BASETEN = "baseten"
+    AZURE = "azure"
+    AZURE_TEXT = "azure_text"
+    AZURE_AI = "azure_ai"
+    SAGEMAKER = "sagemaker"
+    SAGEMAKER_CHAT = "sagemaker_chat"
+    BEDROCK = "bedrock"
+    VLLM = "vllm"
+    NLP_CLOUD = "nlp_cloud"
+    PETALS = "petals"
+    OOBABOOGA = "oobabooga"
+    OLLAMA = "ollama"
+    OLLAMA_CHAT = "ollama_chat"
+    DEEPINFRA = "deepinfra"
+    PERPLEXITY = "perplexity"
+    ANYSCALE = "anyscale"
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    NVIDIA_NIM = "nvidia_nim"
+    CEREBRAS = "cerebras"
+    AI21_CHAT = "ai21_chat"
+    VOLCENGINE = "volcengine"
+    CODESTRAL = "codestral"
+    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DEEPSEEK = "deepseek"
+    MARITALK = "maritalk"
+    VOYAGE = "voyage"
+    CLOUDFLARE = "cloudflare"
+    XINFERENCE = "xinference"
+    FIREWORKS_AI = "fireworks_ai"
+    FRIENDLIAI = "friendliai"
+    WATSONX = "watsonx"
+    TRITON = "triton"
+    PREDIBASE = "predibase"
+    DATABRICKS = "databricks"
+    EMPOWER = "empower"
+    GITHUB = "github"
+    CUSTOM = "custom"
+
+
+provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
+
 
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
@@ -726,6 +764,7 @@ models_by_provider: dict = {
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
     "gemini": gemini_models,
+    "fireworks_ai": fireworks_ai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -779,6 +818,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
@@ -803,13 +843,11 @@ from .utils import (
     register_prompt_template,
     validate_environment,
     check_valid_key,
-    get_llm_provider,
     register_model,
     encode,
     decode,
     _calculate_retry_after,
     _should_retry,
-    get_secret,
     get_supported_openai_params,
     get_api_base,
     get_first_chars_messages,
@@ -833,14 +871,15 @@ ALL_LITELLM_RESPONSE_TYPES = [
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic import AnthropicConfig
-from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.anthropic.chat import AnthropicConfig
+from .llms.anthropic.completion import AnthropicTextConfig
+from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
-from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
-from .llms.ai21 import AI21Config
+from .llms.AI21.completion import AI21Config
+from .llms.AI21.chat import AI21ChatConfig
 from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
@@ -848,12 +887,12 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
     VertexAITextEmbeddingConfig,
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
@@ -865,17 +904,18 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transf
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
+
 from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import (
+from .llms.bedrock.chat import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
     bedrock_tool_name_mappings,
 )
-from .llms.bedrock import (
+from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
@@ -886,7 +926,15 @@ from .llms.bedrock import (
     AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
-from .llms.openai import (
+from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
+from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+    AmazonTitanMultimodalEmbeddingG1Config,
+)
+from .llms.bedrock.embed.amazon_titan_v2_transformation import (
+    AmazonTitanV2Config,
+)
+from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
+from .llms.OpenAI.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
@@ -896,10 +944,12 @@ from .llms.openai import (
     AzureAIStudioConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
+from .llms.cerebras.chat import CerebrasConfig
+from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
-from .llms.azure import (
+from .llms.AzureOpenAI.azure import (
     AzureOpenAIConfig,
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,

@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 🐳 Docker, Deploying LiteLLM Proxy
+# 🐳 Docker, Deployment
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
@@ -562,34 +562,13 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 
 By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
 
-Use this dockerfile to build an image which pre-generates the prisma binaries.
+Use this docker image to deploy litellm with pre-generated prisma binaries.
 
-```Dockerfile
-# Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
-
-# Set the working directory to /app
-WORKDIR /app
-
-### [👇 KEY STEP] ###
-# Install Prisma CLI and generate Prisma client
-RUN pip install prisma 
-RUN prisma generate
-### FIN #### 
-
-
-# Expose the necessary port
-EXPOSE 4000
-
-# Override the CMD instruction with your desired command and arguments
-# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
-# CMD ["--port", "4000", "--config", "config.yaml"]
-
-# Define the command to run your app
-ENTRYPOINT ["litellm"]
-
-CMD ["--port", "4000"]
+```bash
+docker pull ghcr.io/berriai/litellm-non_root:main-stable
 ```
+
+[Published Docker Image link](https://github.com/BerriAI/litellm/pkgs/container/litellm-non_root)
 
 ## Advanced Deployment Settings
 
@@ -705,11 +684,37 @@ docker run ghcr.io/berriai/litellm:main-latest \
 
 Provide an ssl certificate when starting litellm proxy server 
 
-### 3. Providing LiteLLM config.yaml file as a s3 Object/url
+### 3. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
-LiteLLM Proxy will read your config.yaml from an s3 Bucket
+LiteLLM Proxy will read your config.yaml from an s3 Bucket or GCS Bucket 
+
+<Tabs>
+<TabItem value="gcs" label="GCS Bucket">
+
+Set the following .env vars 
+```shell
+LITELLM_CONFIG_BUCKET_TYPE = "gcs"                              # set this to "gcs"         
+LITELLM_CONFIG_BUCKET_NAME = "litellm-proxy"                    # your bucket name on GCS
+LITELLM_CONFIG_BUCKET_OBJECT_KEY = "proxy_config.yaml"         # object key on GCS
+```
+
+Start litellm proxy with these env vars - litellm will read your config from GCS 
+
+```shell
+docker run --name litellm-proxy \
+   -e DATABASE_URL=<database_url> \
+   -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
+   -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -e LITELLM_CONFIG_BUCKET_TYPE="gcs" \
+   -p 4000:4000 \
+   ghcr.io/berriai/litellm-database:main-latest --detailed_debug
+```
+
+</TabItem>
+
+<TabItem value="s3" label="s3">
 
 Set the following .env vars 
 ```shell
@@ -727,6 +732,8 @@ docker run --name litellm-proxy \
    -p 4000:4000 \
    ghcr.io/berriai/litellm-database:main-latest
 ```
+</TabItem>
+</Tabs>
 
 ## Platform-specific Guide
 

@@ -537,6 +537,7 @@ def test_call_with_user_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
+        print("got an errror=", e)
         error_detail = e.message
         assert "ExceededBudget:" in error_detail
         assert isinstance(e, ProxyException)
@@ -1492,7 +1493,10 @@ def test_call_with_key_over_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1607,7 +1611,10 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1727,7 +1734,10 @@ def test_call_with_key_over_model_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -2296,7 +2306,10 @@ async def test_proxy_load_test_db(prisma_client):
         await asyncio.sleep(120)
         try:
             # call spend logs
-            spend_logs = await view_spend_logs(api_key=generated_key)
+            spend_logs = await view_spend_logs(
+                api_key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print(f"len responses: {len(spend_logs)}")
             assert len(spend_logs) == n
@@ -2933,103 +2946,128 @@ async def test_team_access_groups(prisma_client):
             )
 
 
-################ Unit Tests for testing regeneration of keys ###########
 @pytest.mark.asyncio()
-async def test_regenerate_api_key(prisma_client):
+async def test_team_tags(prisma_client):
+    """
+    - Test setting tags on a team
+    - Assert this is returned when calling /team/info
+    - Team/update with tags should update the tags
+    - Assert new tags are returned when calling /team/info
+    """
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
-    import uuid
 
-    # generate new key
-    key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
-    spend = 100
-    max_budget = 400
-    models = ["fake-openai-endpoint"]
-    new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
-        ),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="1234",
-        ),
+    _new_team = NewTeamRequest(
+        team_alias="test-teamA",
+        tags=["teamA"],
     )
 
-    generated_key = new_key.key
-    print(generated_key)
-
-    # assert the new key works as expected
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-
-    async def return_body():
-        return_string = f'{{"model": "fake-openai-endpoint"}}'
-        # return string as bytes
-        return return_string.encode()
-
-    request.body = return_body
-    result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
-    print(result)
-
-    # regenerate the key
-    new_key = await regenerate_key_fn(
-        key=generated_key,
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="1234",
-        ),
+    new_team_response = await new_team(
+        data=_new_team,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
     )
-    print("response from regenerate_key_fn", new_key)
 
-    # assert the new key works as expected
+    print("new_team_response", new_team_response)
+
+    # call /team/info
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+    print("team_info_response", team_info_response)
+
+    assert team_info_response["team_info"].metadata["tags"] == ["teamA"]
+
+    # team update with tags
+    team_update_response = await update_team(
+        data=UpdateTeamRequest(
+            team_id=new_team_response["team_id"],
+            tags=["teamA", "teamB"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_update_response", team_update_response)
+
+    # call /team/info again
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_info_response", team_info_response)
+    assert team_info_response["team_info"].metadata["tags"] == ["teamA", "teamB"]
+
+
+@pytest.mark.asyncio
+async def test_admin_only_routes(prisma_client):
+    """
+    Tests if setting admin_only_routes works
+
+    only an admin should be able to access admin only routes
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    general_settings = {
+        "allowed_routes": ["/embeddings", "/key/generate"],
+        "admin_only_routes": ["/key/generate"],
+    }
+    from litellm.proxy import proxy_server
+
+    initial_general_settings = getattr(proxy_server, "general_settings")
+
+    setattr(proxy_server, "general_settings", general_settings)
+
+    admin_user = await new_user(
+        data=NewUserRequest(
+            user_name="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    non_admin_user = await new_user(
+        data=NewUserRequest(
+            user_name="non-admin",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    admin_user_key = admin_user.key
+    non_admin_user_key = non_admin_user.key
+
+    assert admin_user_key is not None
+    assert non_admin_user_key is not None
+
+    # assert non-admin can not access admin routes
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
+    request._url = URL(url="/key/generate")
+    await user_api_key_auth(
+        request=request,
+        api_key="Bearer " + admin_user_key,
+    )
 
-    async def return_body_2():
-        return_string = f'{{"model": "fake-openai-endpoint"}}'
-        # return string as bytes
-        return return_string.encode()
+    # this should pass
 
-    request.body = return_body_2
-    result = await user_api_key_auth(request=request, api_key=f"Bearer {new_key.key}")
-    print(result)
-
-    # assert the old key stops working
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-
-    async def return_body_3():
-        return_string = f'{{"model": "fake-openai-endpoint"}}'
-        # return string as bytes
-        return return_string.encode()
-
-    request.body = return_body_3
     try:
-        result = await user_api_key_auth(
-            request=request, api_key=f"Bearer {generated_key}"
+        await user_api_key_auth(
+            request=request,
+            api_key="Bearer " + non_admin_user_key,
         )
-        print(result)
-        pytest.fail(f"This should have failed!. the key has been regenerated")
+        pytest.fail("Expected this call to fail. User is over limit.")
     except Exception as e:
-        print("got expected exception", e)
-        assert "Invalid proxy server token passed" in e.message
+        print("error str=", str(e.message))
+        error_str = str(e.message)
+        assert "Route" in error_str and "admin only route" in error_str
+        pass
 
-    # Check that the regenerated key has the same spend, max_budget, models and key_alias
-    assert new_key.spend == spend, f"Expected spend {spend} but got {new_key.spend}"
-    assert (
-        new_key.max_budget == max_budget
-    ), f"Expected max_budget {max_budget} but got {new_key.max_budget}"
-    assert (
-        new_key.key_alias == key_alias
-    ), f"Expected key_alias {key_alias} but got {new_key.key_alias}"
-    assert (
-        new_key.models == models
-    ), f"Expected models {models} but got {new_key.models}"
-
-    assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
-
-    pass
+    setattr(proxy_server, "general_settings", initial_general_settings)

@@ -392,7 +392,6 @@ async def user_info(
             user_id=user_id,
             table_name="key",
             query_type="find_all",
-            expires=datetime.now(),
         )
 
         if user_info is None:
@@ -505,12 +504,37 @@ async def user_update(
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
 
+        is_internal_user = False
+        if data.user_role == LitellmUserRoles.INTERNAL_USER:
+            is_internal_user = True
+
         if "budget_duration" in non_default_values:
             duration_s = _duration_in_seconds(
                 duration=non_default_values["budget_duration"]
             )
             user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = user_reset_at
+
+        if "max_budget" not in non_default_values:
+            if (
+                is_internal_user and litellm.max_internal_user_budget is not None
+            ):  # applies internal user limits, if user role updated
+                non_default_values["max_budget"] = litellm.max_internal_user_budget
+
+        if (
+            "budget_duration" not in non_default_values
+        ):  # applies internal user limits, if user role updated
+            if is_internal_user and litellm.internal_user_budget_duration is not None:
+                non_default_values["budget_duration"] = (
+                    litellm.internal_user_budget_duration
+                )
+                duration_s = _duration_in_seconds(
+                    duration=non_default_values["budget_duration"]
+                )
+                user_reset_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=duration_s
+                )
+                non_default_values["budget_reset_at"] = user_reset_at
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)

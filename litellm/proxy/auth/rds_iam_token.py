@@ -14,7 +14,7 @@ def init_rds_client(
     aws_web_identity_token: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
-    from litellm import get_secret
+    from litellm.secret_managers.main import get_secret
 
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
@@ -149,7 +149,7 @@ def init_rds_client(
         # boto3 automatically reads env variables
 
         client = boto3.client(
-            service_name="bedrock-runtime",
+            service_name="rds",
             region_name=region_name,
             config=config,
         )
@@ -168,8 +168,10 @@ def generate_iam_auth_token(db_host, db_port, db_user) -> str:
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
         aws_session_name=os.getenv("AWS_SESSION_NAME"),
         aws_profile_name=os.getenv("AWS_PROFILE_NAME"),
-        aws_role_name=os.getenv("AWS_ROLE_NAME"),
-        aws_web_identity_token=os.getenv("AWS_WEB_IDENTITY_TOKEN"),
+        aws_role_name=os.getenv("AWS_ROLE_NAME", os.getenv("AWS_ROLE_ARN")),
+        aws_web_identity_token=os.getenv(
+            "AWS_WEB_IDENTITY_TOKEN", os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+        ),
     )
 
     token = boto_client.generate_db_auth_token(

@@ -1,5 +1,9 @@
 """
-Use this to route requests between free and paid tiers
+Use this to route requests between Teams
+
+- If tags in request is a subset of tags in deployment, return deployment
+- if deployments are set with default tags, return all default deployment
+- If no default_deployments are set, return all deployments
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
@@ -20,22 +24,19 @@ async def get_deployments_for_tag(
     request_kwargs: Optional[Dict[Any, Any]] = None,
     healthy_deployments: Optional[Union[List[Any], Dict[Any, Any]]] = None,
 ):
-    """
-    if request_kwargs contains {"metadata": {"tier": "free"}} or {"metadata": {"tier": "paid"}}, then routes the request to free/paid tier models
-    """
     if llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
     if request_kwargs is None:
         verbose_logger.debug(
-            "get_deployments_for_tier: request_kwargs is None returning healthy_deployments: %s",
+            "get_deployments_for_tag: request_kwargs is None returning healthy_deployments: %s",
             healthy_deployments,
         )
         return healthy_deployments
 
     if healthy_deployments is None:
         verbose_logger.debug(
-            "get_deployments_for_tier: healthy_deployments is None returning healthy_deployments"
+            "get_deployments_for_tag: healthy_deployments is None returning healthy_deployments"
         )
         return healthy_deployments
 
@@ -46,7 +47,9 @@ async def get_deployments_for_tag(
 
         new_healthy_deployments = []
         if request_tags:
-            verbose_logger.debug("parameter routing: router_keys: %s", request_tags)
+            verbose_logger.debug(
+                "get_deployments_for_tag routing: router_keys: %s", request_tags
+            )
             # example this can be router_keys=["free", "custom"]
             # get all deployments that have a superset of these router keys
             for deployment in healthy_deployments:
@@ -69,9 +72,26 @@ async def get_deployments_for_tag(
                         request_tags,
                     )
                     new_healthy_deployments.append(deployment)
+                elif "default" in deployment_tags:
+                    verbose_logger.debug(
+                        "adding default deployment with tags: %s, request tags: %s",
+                        deployment_tags,
+                        request_tags,
+                    )
+                    new_healthy_deployments.append(deployment)
 
-        return new_healthy_deployments
+            return new_healthy_deployments
 
+    # for Untagged requests use default deployments if set
+    _default_deployments_with_tags = []
+    for deployment in healthy_deployments:
+        if "default" in deployment.get("litellm_params", {}).get("tags", []):
+            _default_deployments_with_tags.append(deployment)
+
+    if len(_default_deployments_with_tags) > 0:
+        return _default_deployments_with_tags
+
+    # if no default deployment is found, return healthy_deployments
     verbose_logger.debug(
         "no tier found in metadata, returning healthy_deployments: %s",
         healthy_deployments,

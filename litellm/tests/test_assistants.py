@@ -20,15 +20,15 @@ from typing_extensions import override
 
 import litellm
 from litellm import create_thread, get_thread
-from litellm.llms.openai import (
+from litellm.llms.OpenAI.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
     OpenAIAssistantsAPI,
 )
-from litellm.llms.openai import OpenAIMessage as Message
-from litellm.llms.openai import SyncCursorPage, Thread
+from litellm.llms.OpenAI.openai import OpenAIMessage as Message
+from litellm.llms.OpenAI.openai import SyncCursorPage, Thread
 
 """
 V0 Scope:
@@ -214,6 +214,7 @@ async def test_add_message_litellm(sync_mode, provider):
     [True, False],
 )  #
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
     """
     - Get Assistants

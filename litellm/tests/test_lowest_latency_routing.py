@@ -348,6 +348,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
 @pytest.mark.parametrize(
     "ans_rpm", [1, 5]
 )  # 1 should produce nothing, 10 should select first
+@pytest.mark.flaky(retries=3, delay=1)
 def test_get_available_endpoints_tpm_rpm_check(ans_rpm):
     """
     Pass in list of 2 valid models

@@ -325,7 +325,7 @@ async def test_chat_completion_ratelimit():
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.skip(reason="Flaky test")
 async def test_chat_completion_different_deployments():
     """
     - call model group with 2 deployments

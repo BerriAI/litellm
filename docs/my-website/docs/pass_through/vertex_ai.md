@@ -8,7 +8,7 @@ Use VertexAI SDK to call endpoints on LiteLLM Gateway (native provider format)
 
 :::tip
 
-Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vertexAI with LiteLLM SDK or LiteLLM Proxy Server](../docs/providers/vertex.md)
+Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vertexAI with LiteLLM SDK or LiteLLM Proxy Server](../providers/vertex.md)
 
 :::
 
@@ -22,7 +22,50 @@ Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vert
 - Tuning API
 - CountTokens API
 
+## Authentication to Vertex AI
+
+LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
+
+1. Pass Vertex Credetials client side to proxy server
+
+2. Set Vertex AI credentials on proxy server
+
 ## Quick Start Usage 
+
+<Tabs>
+<TabItem value="without_default_config" label="Pass Vertex Credetials client side to proxy server">
+
+
+#### 1. Start litellm proxy
+
+```shell
+litellm --config /path/to/config.yaml
+```
+
+#### 2. Test it 
+
+```python
+import vertexai
+from vertexai.preview.generative_models import GenerativeModel
+
+LITE_LLM_ENDPOINT = "http://localhost:4000"
+
+vertexai.init(
+    project="<your-vertex-ai-project-id>", # enter your project id
+    location="<your-vertex-ai-location>", # enter your region
+    api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex-ai", # route on litellm
+    api_transport="rest",
+)
+
+model = GenerativeModel(model_name="gemini-1.0-pro")
+model.generate_content("hi")
+
+```
+
+</TabItem>
+<TabItem value="with_default_config" label="Set Vertex AI Credentials on Proxy Server">
+
+
 
 #### 1. Set `default_vertex_config` on your `config.yaml`
 
@@ -95,12 +138,43 @@ response = model.generate_content(
 print(response.text)
 ```
 
+</TabItem>
+</Tabs>
+
+
 ## Usage Examples
 
 ### Gemini API (Generate Content)
 
 <Tabs>
-<TabItem value="py" label="Vertex Python SDK">
+<TabItem value="client_side" label="Vertex Python SDK (client side vertex credentials)">
+
+```python
+import vertexai
+from vertexai.generative_models import GenerativeModel
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    api_transport="rest",
+   
+)
+
+model = GenerativeModel("gemini-1.5-flash-001")
+
+response = model.generate_content(
+    "What's a good name for a flower shop that specializes in selling bouquets of dried flowers?"
+)
+
+print(response.text)
+```
+
+</TabItem>
+<TabItem value="py" label="Vertex Python SDK (litellm virtual keys client side)">
 
 ```python
 import vertexai
@@ -171,7 +245,45 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-0
 ### Embeddings API
 
 <Tabs>
-<TabItem value="py" label="Vertex Python SDK">
+<TabItem value="client_side" label="Vertex Python SDK (client side vertex credentials)">
+
+
+```python
+from typing import List, Optional
+from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
+import vertexai
+from vertexai.generative_models import GenerativeModel
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+import datetime
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    api_transport="rest",
+)
+
+
+def embed_text(
+    texts: List[str] = ["banana muffins? ", "banana bread? banana muffins?"],
+    task: str = "RETRIEVAL_DOCUMENT",
+    model_name: str = "text-embedding-004",
+    dimensionality: Optional[int] = 256,
+) -> List[List[float]]:
+    """Embeds texts with a pre-trained, foundational model."""
+    model = TextEmbeddingModel.from_pretrained(model_name)
+    inputs = [TextEmbeddingInput(text, task) for text in texts]
+    kwargs = dict(output_dimensionality=dimensionality) if dimensionality else {}
+    embeddings = model.get_embeddings(inputs, **kwargs)
+    return [embedding.values for embedding in embeddings]
+```
+
+
+</TabItem>
+<TabItem value="py" label="Vertex Python SDK (litellm virtual keys client side)">
 
 ```python
 from typing import List, Optional
@@ -249,7 +361,54 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/textembedding-geck
 ### Imagen API
 
 <Tabs>
-<TabItem value="py" label="Vertex Python SDK">
+
+<TabItem value="client_side" label="Vertex Python SDK (client side vertex credentials)">
+
+
+```python
+from typing import List, Optional
+from vertexai.preview.vision_models import ImageGenerationModel
+import vertexai
+from google.auth.credentials import Credentials
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+import datetime
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    api_transport="rest",
+)
+
+model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+
+images = model.generate_images(
+    prompt=prompt,
+    # Optional parameters
+    number_of_images=1,
+    language="en",
+    # You can't use a seed value and watermark at the same time.
+    # add_watermark=False,
+    # seed=100,
+    aspect_ratio="1:1",
+    safety_filter_level="block_some",
+    person_generation="allow_adult",
+)
+
+images[0].save(location=output_file, include_generation_parameters=False)
+
+# Optional. View the generated image in a notebook.
+# images[0].show()
+
+print(f"Created output image using {len(images[0]._image_bytes)} bytes")
+
+```
+</TabItem>
+
+<TabItem value="py" label="Vertex Python SDK (litellm virtual keys client side)">
 
 ```python
 from typing import List, Optional
@@ -338,7 +497,50 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/imagen-3.0-generat
 
 <Tabs>
 
-<TabItem value="py" label="Vertex Python SDK">
+<TabItem value="client_side" label="Vertex Python SDK (client side vertex credentials)">
+
+
+```python
+from typing import List, Optional
+from vertexai.generative_models import GenerativeModel
+import vertexai
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+import datetime
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    api_transport="rest",
+)
+
+
+model = GenerativeModel("gemini-1.5-flash-001")
+
+prompt = "Why is the sky blue?"
+
+# Prompt tokens count
+response = model.count_tokens(prompt)
+print(f"Prompt Token Count: {response.total_tokens}")
+print(f"Prompt Character Count: {response.total_billable_characters}")
+
+# Send text to Gemini
+response = model.generate_content(prompt)
+
+# Response tokens count
+usage_metadata = response.usage_metadata
+print(f"Prompt Token Count: {usage_metadata.prompt_token_count}")
+print(f"Candidates Token Count: {usage_metadata.candidates_token_count}")
+print(f"Total Token Count: {usage_metadata.total_token_count}")
+```
+
+</TabItem>
+
+
+<TabItem value="py" label="Vertex Python SDK (litellm virtual keys client side)">
 
 ```python
 from typing import List, Optional
@@ -425,7 +627,47 @@ Create Fine Tuning Job
 
 <Tabs>
 
-<TabItem value="py" label="Vertex Python SDK">
+<TabItem value="client_side" label="Vertex Python SDK (client side vertex credentials)">
+
+```python
+from typing import List, Optional
+from vertexai.preview.tuning import sft
+import vertexai
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    api_transport="rest",
+)
+
+
+# TODO(developer): Update project
+vertexai.init(project=PROJECT_ID, location="us-central1")
+
+sft_tuning_job = sft.train(
+    source_model="gemini-1.0-pro-002",
+    train_dataset="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
+)
+
+# Polling for job completion
+while not sft_tuning_job.has_ended:
+    time.sleep(60)
+    sft_tuning_job.refresh()
+
+print(sft_tuning_job.tuned_model_name)
+print(sft_tuning_job.tuned_model_endpoint_name)
+print(sft_tuning_job.experiment)
+
+```
+
+</TabItem>
+
+<TabItem value="py" label="Vertex Python SDK (litellm virtual keys client side)">
 
 ```python
 from typing import List, Optional

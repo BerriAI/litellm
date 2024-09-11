@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities
 import os
-from typing import BinaryIO, List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 
@@ -86,20 +86,3 @@ def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
             return kwargs["litellm_parent_otel_span"]
     except:
         return None
-
-
-def get_file_check_sum(_file: BinaryIO):
-    """
-    Helper to safely get file checksum - used as a cache key
-    """
-    try:
-        file_descriptor = _file.fileno()
-        file_stat = os.fstat(file_descriptor)
-        file_size = str(file_stat.st_size)
-        file_checksum = _file.name + file_size
-        return file_checksum
-    except Exception as e:
-        verbose_logger.error(f"Error getting file_checksum: {(str(e))}")
-        file_checksum = _file.name
-        return file_checksum
-    return file_checksum

@@ -207,7 +207,7 @@ class ProxyLogging:
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.internal_usage_cache = DualCache(
-            default_in_memory_ttl=1
+            default_in_memory_ttl=1, always_read_redis=litellm.always_read_redis
         )  # ping redis cache every 1s
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(
             self.internal_usage_cache
@@ -969,11 +969,12 @@ class PrismaClient:
                         'Last30dKeysBySpend',
                         'Last30dModelsBySpend',
                         'MonthlyGlobalSpendPerKey',
+                        'MonthlyGlobalSpendPerUserPerKey',
                         'Last30dTopEndUsersSpend'
                     )
                     """
             )
-            if ret[0]["sum"] == 6:
+            if ret[0]["sum"] == 8:
                 print("All necessary views exist!")  # noqa
                 return
         except Exception:
@@ -1097,6 +1098,49 @@ class PrismaClient:
             await self.db.execute_raw(query=sql_query)
 
             print("MonthlyGlobalSpendPerKey Created!")  # noqa
+        try:
+            await self.db.query_raw(
+                """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
+            )
+            print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+                CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
+                SELECT
+                DATE("startTime") AS date, 
+                SUM("spend") AS spend,
+                api_key as api_key,
+                "user" as "user"
+                FROM 
+                "LiteLLM_SpendLogs" 
+                WHERE 
+                "startTime" >= (CURRENT_DATE - INTERVAL '20 days')
+                GROUP BY 
+                DATE("startTime"),
+                "user",
+                api_key;
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
+
+        try:
+            await self.db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
+            print("DailyTagSpend Exists!")  # noqa
+        except Exception as e:
+            sql_query = """
+            CREATE OR REPLACE VIEW DailyTagSpend AS
+            SELECT
+                jsonb_array_elements_text(request_tags) AS individual_request_tag,
+                DATE(s."startTime") AS spend_date,
+                COUNT(*) AS log_count,
+                SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs" s
+            GROUP BY individual_request_tag, DATE(s."startTime");
+            """
+            await self.db.execute_raw(query=sql_query)
+
+            print("DailyTagSpend Created!")  # noqa
 
         try:
             await self.db.query_raw(
@@ -1853,7 +1897,9 @@ class PrismaClient:
                 batcher = self.db.batch_()
                 for idx, user in enumerate(data_list):
                     try:
-                        data_json = self.jsonify_object(data=user.model_dump())
+                        data_json = self.jsonify_object(
+                            data=user.model_dump(exclude_none=True)
+                        )
                     except:
                         data_json = self.jsonify_object(data=user.dict())
                     batcher.litellm_usertable.upsert(

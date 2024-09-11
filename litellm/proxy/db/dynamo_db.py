@@ -1,16 +1,17 @@
-from litellm.proxy.db.base_client import CustomDB
-from litellm.proxy._types import (
-    DynamoDBArgs,
-    LiteLLM_VerificationToken,
-    LiteLLM_Config,
-    LiteLLM_UserTable,
-)
-from litellm.proxy.utils import hash_token
-from litellm import get_secret
-from typing import Any, List, Literal, Optional, Union
 import json
 from datetime import datetime
+from typing import Any, List, Literal, Optional, Union
+
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import (
+    DynamoDBArgs,
+    LiteLLM_Config,
+    LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
+)
+from litellm.proxy.db.base_client import CustomDB
+from litellm.proxy.utils import hash_token
+from litellm.secret_managers.main import get_secret
 
 
 class DynamoDBWrapper(CustomDB):
@@ -21,19 +22,19 @@ class DynamoDBWrapper(CustomDB):
     def __init__(self, database_arguments: DynamoDBArgs):
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
+        from aiodynamo.expressions import F, UpdateExpression, Value
+        from aiodynamo.http.aiohttp import AIOHTTP
         from aiodynamo.http.httpx import HTTPX
         from aiodynamo.models import (
-            Throughput,
             KeySchema,
             KeySpec,
             KeyType,
             PayPerRequest,
+            ReturnValues,
+            Throughput,
         )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
+        from yarl import URL
 
         self.throughput_type = None
         if database_arguments.billing_mode == "PAY_PER_REQUEST":
@@ -59,7 +60,9 @@ class DynamoDBWrapper(CustomDB):
         verbose_proxy_logger.debug(
             f"DynamoDB: setting env vars based on arn={self.database_arguments.aws_role_name}"
         )
-        import boto3, os
+        import os
+
+        import boto3
 
         sts_client = boto3.client("sts")
 
@@ -92,22 +95,22 @@ class DynamoDBWrapper(CustomDB):
         """
         Connect to DB, and creating / updating any tables
         """
+        import aiohttp
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
+        from aiodynamo.expressions import F, UpdateExpression, Value
+        from aiodynamo.http.aiohttp import AIOHTTP
         from aiodynamo.http.httpx import HTTPX
         from aiodynamo.models import (
-            Throughput,
             KeySchema,
             KeySpec,
             KeyType,
             PayPerRequest,
+            ReturnValues,
+            Throughput,
         )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
-        import aiohttp
+        from yarl import URL
 
         verbose_proxy_logger.debug("DynamoDB Wrapper - Attempting to connect")
         self.set_env_vars_based_on_arn()
@@ -192,22 +195,22 @@ class DynamoDBWrapper(CustomDB):
     async def insert_data(
         self, value: Any, table_name: Literal["user", "key", "config", "spend"]
     ):
+        import aiohttp
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
+        from aiodynamo.expressions import F, UpdateExpression, Value
+        from aiodynamo.http.aiohttp import AIOHTTP
         from aiodynamo.http.httpx import HTTPX
         from aiodynamo.models import (
-            Throughput,
             KeySchema,
             KeySpec,
             KeyType,
             PayPerRequest,
+            ReturnValues,
+            Throughput,
         )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
-        import aiohttp
+        from yarl import URL
 
         self.set_env_vars_based_on_arn()
 
@@ -237,22 +240,22 @@ class DynamoDBWrapper(CustomDB):
             return await table.put_item(item=value, return_values=ReturnValues.all_old)
 
     async def get_data(self, key: str, table_name: Literal["user", "key", "config"]):
+        import aiohttp
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
+        from aiodynamo.expressions import F, UpdateExpression, Value
+        from aiodynamo.http.aiohttp import AIOHTTP
         from aiodynamo.http.httpx import HTTPX
         from aiodynamo.models import (
-            Throughput,
             KeySchema,
             KeySpec,
             KeyType,
             PayPerRequest,
+            ReturnValues,
+            Throughput,
         )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
-        import aiohttp
+        from yarl import URL
 
         self.set_env_vars_based_on_arn()
 
@@ -311,22 +314,22 @@ class DynamoDBWrapper(CustomDB):
         self, key: str, value: dict, table_name: Literal["user", "key", "config"]
     ):
         self.set_env_vars_based_on_arn()
+        import aiohttp
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
+        from aiodynamo.expressions import F, UpdateExpression, Value
+        from aiodynamo.http.aiohttp import AIOHTTP
         from aiodynamo.http.httpx import HTTPX
         from aiodynamo.models import (
-            Throughput,
             KeySchema,
             KeySpec,
             KeyType,
             PayPerRequest,
+            ReturnValues,
+            Throughput,
         )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
-        import aiohttp
+        from yarl import URL
 
         if self.database_arguments.ssl_verify == False:
             client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))

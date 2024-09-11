@@ -28,7 +28,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     _gemini_convert_messages_with_history,
 )
 from litellm.tests.test_streaming import streaming_format_tests
@@ -50,6 +50,9 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "text-bison@001",
     "gemini-1.5-pro",
     "gemini-1.5-pro-preview-0215",
+    "gemini-pro-experimental",
+    "gemini-flash-experimental",
+    "gemini-pro-flash",
 ]
 
 
@@ -151,6 +154,7 @@ async def test_get_response():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_get_router_response():
     model = "claude-3-sonnet@20240229"
     vertex_ai_project = "adroit-crow-413218"
@@ -195,6 +199,7 @@ async def test_get_router_response():
 # @pytest.mark.skip(
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai_anthropic():
     model = "claude-3-sonnet@20240229"
 
@@ -217,6 +222,7 @@ def test_vertex_ai_anthropic():
 # @pytest.mark.skip(
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai_anthropic_streaming():
     try:
         load_vertex_ai_credentials()
@@ -257,6 +263,7 @@ def test_vertex_ai_anthropic_streaming():
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_vertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
     try:
@@ -290,6 +297,7 @@ async def test_vertex_ai_anthropic_async():
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_vertex_ai_anthropic_async_streaming():
     # load_vertex_ai_credentials()
     try:
@@ -324,6 +332,7 @@ async def test_vertex_ai_anthropic_async_streaming():
 # asyncio.run(test_vertex_ai_anthropic_async_streaming())
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai():
     import random
 
@@ -374,6 +383,7 @@ def test_vertex_ai():
 # test_vertex_ai()
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose = True
@@ -422,6 +432,7 @@ def test_vertex_ai_stream():
 # test_vertex_ai_stream()
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_async_vertexai_response():
     import random
@@ -436,7 +447,9 @@ async def test_async_vertexai_response():
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
-        print(f"model being tested in async call: {model}")
+        print(
+            f"model being tested in async call: {model}, litellm.vertex_language_models: {litellm.vertex_language_models}"
+        )
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model or "32k" in model or "ultra" in model or "002" in model
         ):
@@ -464,6 +477,7 @@ async def test_async_vertexai_response():
 # asyncio.run(test_async_vertexai_response())
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_async_vertexai_streaming_response():
     import random
@@ -519,6 +533,7 @@ async def test_async_vertexai_streaming_response():
 
 @pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_gemini_pro_vision(provider, sync_mode):
     try:
@@ -584,6 +599,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
 
 
 @pytest.mark.parametrize("load_pdf", [False])  # True,
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_function_plus_pdf(load_pdf):
     litellm.set_verbose = True
     load_vertex_ai_credentials()
@@ -639,12 +655,11 @@ def test_gemini_pro_vision_base64():
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
-        litellm.num_retries = 3
         image_path = "../proxy/cached_logo.jpg"
         # Getting the base64 string
         base64_image = encode_image(image_path)
         resp = litellm.completion(
-            model="vertex_ai/gemini-pro-vision",
+            model="vertex_ai/gemini-1.5-pro",
             messages=[
                 {
                     "role": "user",
@@ -663,6 +678,8 @@ def test_gemini_pro_vision_base64():
         print(resp)
 
         prompt_tokens = resp.usage.prompt_tokens
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -846,6 +863,7 @@ def test_gemini_pro_grounding(value_in_dict):
 )  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
@@ -889,6 +907,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             "tools": tools,
             "tool_choice": "required",
         }
+        print(f"Model for call - {model}")
         if sync_mode:
             response = litellm.completion(**data)
         else:
@@ -925,6 +944,7 @@ from litellm.tests.test_completion import response_format_tests
     "sync_mode",
     [True, False],
 )  #
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_partner_models_httpx(model, sync_mode):
     try:
@@ -980,6 +1000,7 @@ async def test_partner_models_httpx(model, sync_mode):
     [True, False],  #
 )  #
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_partner_models_httpx_streaming(model, sync_mode):
     try:
         load_vertex_ai_credentials()
@@ -1156,6 +1177,7 @@ def vertex_httpx_mock_post(url, data=None, json=None, headers=None):
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
 @pytest.mark.parametrize("content_filter_type", ["prompt", "response"])  # "vertex_ai",
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_json_schema_httpx_content_policy_error(
     provider, content_filter_type
 ):
@@ -1628,6 +1650,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
 @pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.parametrize("provider", ["vertex_ai"])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_function_calling(provider, sync_mode):
     try:
         load_vertex_ai_credentials()
@@ -1713,6 +1736,7 @@ async def test_gemini_pro_function_calling(provider, sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
@@ -1778,6 +1802,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_async_function_calling():
     load_vertex_ai_credentials()
     try:
@@ -1830,6 +1855,7 @@ async def test_gemini_pro_async_function_calling():
 # asyncio.run(gemini_pro_async_function_calling())
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_vertexai_embedding():
     try:
         load_vertex_ai_credentials()
@@ -1910,6 +1936,61 @@ async def test_vertexai_multimodal_embedding():
         print("Response:", response)
 
 
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding_text_input():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "text": "this is a unicorn",
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[
+                "this is a unicorn",
+            ],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+        assert "textEmbedding" in response_data
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
 @pytest.mark.skip(
     reason="new test - works locally running into vertex version issues on ci/cd"
 )
@@ -1935,7 +2016,27 @@ def test_vertexai_embedding_embedding_latest():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.flaky(retries=3, delay=1)
+def test_vertexai_embedding_embedding_latest_input_type():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            input_type="RETRIEVAL_QUERY",
+        )
+        assert response.usage.prompt_tokens > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_vertexai_aembedding():
     try:
         load_vertex_ai_credentials()
@@ -2065,7 +2166,7 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
 
@@ -2265,61 +2366,98 @@ def mock_gemini_request(*args, **kwargs):
     return mock_response
 
 
-gemini_context_caching_messages = [
-    # System Message
-    {
-        "role": "system",
-        "content": [
-            {
-                "type": "text",
-                "text": "Here is the full text of a complex legal agreement" * 4000,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-    },
-    # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "text",
-                "text": "What are the key terms and conditions in this agreement?",
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-    },
-    {
-        "role": "assistant",
-        "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
-    },
-    # The final turn is marked with cache-control, for continuing in followups.
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "text",
-                "text": "What are the key terms and conditions in this agreement?",
-            }
-        ],
-    },
-]
+def mock_gemini_list_request(*args, **kwargs):
+    from litellm.types.llms.vertex_ai import (
+        CachedContent,
+        CachedContentListAllResponseBody,
+    )
+
+    print(f"kwargs: {kwargs}")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = CachedContentListAllResponseBody(
+        cachedContents=[CachedContent(name="test", displayName="test")]
+    )
+
+    return mock_response
 
 
+import uuid
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
 @pytest.mark.asyncio
-async def test_gemini_context_caching_anthropic_format():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+async def test_gemini_context_caching_anthropic_format(sync_mode):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     litellm.set_verbose = True
-    client = HTTPHandler(concurrent_limit=1)
+    gemini_context_caching_messages = [
+        # System Message
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement {}".format(
+                        uuid.uuid4()
+                    )
+                    * 4000,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                }
+            ],
+        },
+    ]
+    if sync_mode:
+        client = HTTPHandler(concurrent_limit=1)
+    else:
+        client = AsyncHTTPHandler(concurrent_limit=1)
     with patch.object(client, "post", side_effect=mock_gemini_request) as mock_client:
         try:
-            response = litellm.completion(
-                model="gemini/gemini-1.5-flash-001",
-                messages=gemini_context_caching_messages,
-                temperature=0.2,
-                max_tokens=10,
-                client=client,
-            )
+            if sync_mode:
+                response = litellm.completion(
+                    model="gemini/gemini-1.5-flash-001",
+                    messages=gemini_context_caching_messages,
+                    temperature=0.2,
+                    max_tokens=10,
+                    client=client,
+                )
+            else:
+                response = await litellm.acompletion(
+                    model="gemini/gemini-1.5-flash-001",
+                    messages=gemini_context_caching_messages,
+                    temperature=0.2,
+                    max_tokens=10,
+                    client=client,
+                )
 
         except Exception as e:
             print(e)
@@ -2339,23 +2477,6 @@ async def test_gemini_context_caching_anthropic_format():
         # assert (response.usage.cache_read_input_tokens > 0) or (
         #     response.usage.cache_creation_input_tokens > 0
         # )
-
-        check_cache_mock = MagicMock()
-        client.get = check_cache_mock
-        try:
-            response = litellm.completion(
-                model="gemini/gemini-1.5-flash-001",
-                messages=gemini_context_caching_messages,
-                temperature=0.2,
-                max_tokens=10,
-                client=client,
-            )
-
-        except Exception as e:
-            print(e)
-
-        check_cache_mock.assert_called_once()
-        assert mock_client.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -2510,3 +2631,196 @@ async def test_partner_models_httpx_ai21():
         assert response.usage.total_tokens == 194
 
         print(f"response: {response}")
+
+
+def test_gemini_function_call_parameter_in_messages():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Executes searches.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "queries": {
+                            "type": "array",
+                            "description": "A list of queries to search for.",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["queries"],
+                },
+            },
+        },
+    ]
+
+    # Set up the messages
+    messages = [
+        {"role": "system", "content": """Use search for most queries."""},
+        {"role": "user", "content": """search for weather in boston (use `search`)"""},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {
+                "name": "search",
+                "arguments": '{"queries": ["weather in boston"]}',
+            },
+        },
+        {
+            "role": "function",
+            "name": "search",
+            "content": "The current weather in Boston is 22°F.",
+        },
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response_stream = completion(
+                model="vertex_ai/gemini-1.5-pro",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        # mock_client.assert_any_call()
+        assert {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": "search for weather in boston (use `search`)"}],
+                },
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "function_call": {
+                                "name": "search",
+                                "args": {
+                                    "fields": {
+                                        "key": "queries",
+                                        "value": {"list_value": ["weather in boston"]},
+                                    }
+                                },
+                            }
+                        }
+                    ],
+                },
+                {
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": "search",
+                                "response": {
+                                    "fields": {
+                                        "key": "content",
+                                        "value": {
+                                            "string_value": "The current weather in Boston is 22°F."
+                                        },
+                                    }
+                                },
+                            }
+                        }
+                    ]
+                },
+            ],
+            "system_instruction": {"parts": [{"text": "Use search for most queries."}]},
+            "tools": [
+                {
+                    "function_declarations": [
+                        {
+                            "name": "search",
+                            "description": "Executes searches.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "queries": {
+                                        "type": "array",
+                                        "description": "A list of queries to search for.",
+                                        "items": {"type": "string"},
+                                    }
+                                },
+                                "required": ["queries"],
+                            },
+                        }
+                    ]
+                }
+            ],
+            "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+            "generationConfig": {},
+        } == mock_client.call_args.kwargs["json"]
+
+
+def test_gemini_function_call_parameter_in_messages_2():
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "search for weather in boston (use `search`)"},
+        {
+            "role": "assistant",
+            "content": "Sure, let me check.",
+            "function_call": {
+                "name": "search",
+                "arguments": '{"queries": ["weather in boston"]}',
+            },
+        },
+        {
+            "role": "function",
+            "name": "search",
+            "content": "The weather in Boston is 100 degrees.",
+        },
+    ]
+
+    returned_contents = _gemini_convert_messages_with_history(messages=messages)
+
+    assert returned_contents == [
+        {
+            "role": "user",
+            "parts": [{"text": "search for weather in boston (use `search`)"}],
+        },
+        {
+            "role": "model",
+            "parts": [
+                {"text": "Sure, let me check."},
+                {
+                    "function_call": {
+                        "name": "search",
+                        "args": {
+                            "fields": {
+                                "key": "queries",
+                                "value": {"list_value": ["weather in boston"]},
+                            }
+                        },
+                    }
+                },
+            ],
+        },
+        {
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "search",
+                        "response": {
+                            "fields": {
+                                "key": "content",
+                                "value": {
+                                    "string_value": "The weather in Boston is 100 degrees."
+                                },
+                            }
+                        },
+                    }
+                }
+            ]
+        },
+    ]

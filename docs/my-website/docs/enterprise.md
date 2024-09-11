@@ -22,8 +22,8 @@ This covers:
         - ✅ [SSO for Admin UI](./proxy/ui#✨-enterprise-features)
         - ✅ [Audit Logs with retention policy](./proxy/enterprise#audit-logs)
         - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
-        - ✅ [Control available public, private routes](./proxy/enterprise#control-available-public-private-routes)
-        - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](./proxy/enterprise#beta-aws-key-manager---key-decryption)
+        - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](./proxy/enterprise#control-available-public-private-routes)
+        - ✅ [**Secret Managers** AWS Key Manager, Google Secret Manager, Azure Key](./secret)
         - ✅ IP address‑based access control lists
         - ✅ Track Request IP Address
         - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
@@ -65,3 +65,14 @@ Professional Support can assist with LLM/Provider integrations, deployment, upgr
 ### What’s the cost of the Self-Managed Enterprise edition?
 
 Self-Managed Enterprise deployments require our team to understand your exact needs. [Get in touch with us to learn more](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+
+### How does deployment with Enterprise License work? 
+
+You just deploy [our docker image](https://docs.litellm.ai/docs/proxy/deploy) and get an enterprise license key to add to your environment to unlock additional functionality (SSO, Prometheus metrics, etc.). 
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
+
+No data leaves your environment. 

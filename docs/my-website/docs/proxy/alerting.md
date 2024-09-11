@@ -45,6 +45,7 @@ export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/<>/<>/<>"
 general_settings: 
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
+    spend_report_frequency: "1d" # [Optional] set as 1d, 2d, 30d .... Specifiy how often you want a Spend Report to be sent
 ```
 
 Start proxy 
@@ -61,7 +62,9 @@ curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
 -H 'Authorization: Bearer sk-1234'
 ```
 
-## Advanced - Redacting Messages from Alerts
+## Advanced
+
+### Redacting Messages from Alerts
 
 By default alerts show the `messages/input` passed to the LLM. If you want to redact this from slack alerting set the following setting on your config
 
@@ -76,7 +79,7 @@ litellm_settings:
 ```
 
 
-## Advanced - Add Metadata to alerts 
+### Add Metadata to alerts 
 
 Add alerting metadata to proxy calls for debugging. 
 
@@ -105,7 +108,7 @@ response = client.chat.completions.create(
 
 <Image img={require('../../img/alerting_metadata.png')}/>
 
-## Advanced - Opting into specific alert types
+### Opting into specific alert types
 
 Set `alert_types` if you want to Opt into only specific alert types
 
@@ -134,7 +137,7 @@ AlertType = Literal[
 
 ```
 
-## Advanced - set specific slack channels per alert type
+### Set specific slack channels per alert type
 
 Use this if you want to set specific channels per alert type
 
@@ -190,7 +193,37 @@ curl -i http://localhost:4000/v1/chat/completions \
 ```
 
 
-## Advanced - Using MS Teams Webhooks
+### Provide multiple slack channels for a given alert type
+
+Just add it like this - `alert_type: [<hook_url_channel_1>, <hook_url_channel_2>]`. 
+
+1. Setup config.yaml
+
+```yaml
+general_settings: 
+  master_key: sk-1234
+  alerting: ["slack"]
+  alert_to_webhook_url: {
+    "spend_reports": ["https://webhook.site/7843a980-a494-4967-80fb-d502dbc16886", "https://webhook.site/28cfb179-f4fb-4408-8129-729ff55cf213"]
+  }
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
+-H 'Authorization: Bearer sk-1234'
+```
+
+In case of error, check server logs for the error message!
+
+### Using MS Teams Webhooks
 
 MS Teams provides a slack compatible webhook url that you can use for alerting
 
@@ -232,7 +265,7 @@ curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
 
 <Image img={require('../../img/ms_teams_alerting.png')}/>
 
-## Advanced - Using Discord Webhooks
+### Using Discord Webhooks
 
 Discord provides a slack compatible webhook url that you can use for alerting
 
@@ -264,7 +297,7 @@ environment_variables:
 ```
 
 
-## Advanced - [BETA] Webhooks for Budget Alerts
+##  [BETA] Webhooks for Budget Alerts
 
 **Note**: This is a beta feature, so the spec might change.
 
@@ -344,7 +377,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 
 - `event_message` *str*: A human-readable description of the event.
 
-## Advanced - Region-outage alerting (✨ Enterprise feature)
+## Region-outage alerting (✨ Enterprise feature)
 
 :::info
 [Get a free 2-week license](https://forms.gle/P518LXsAZ7PhXpDn8)
