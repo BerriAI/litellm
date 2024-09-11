@@ -109,11 +109,18 @@ class VertexBase(BaseLLM):
         credentials.refresh(Request())
 
     def _ensure_access_token(
-        self, credentials: Optional[str], project_id: Optional[str]
+        self,
+        credentials: Optional[str],
+        project_id: Optional[str],
+        custom_llm_provider: Literal[
+            "vertex_ai", "vertex_ai_beta", "gemini"
+        ],  # if it's vertex_ai or gemini (google ai studio)
     ) -> Tuple[str, str]:
         """
         Returns auth token and project id
         """
+        if custom_llm_provider == "gemini":
+            return "", ""
         if self.access_token is not None:
             if project_id is not None:
                 return self.access_token, project_id
@@ -222,11 +229,18 @@ class VertexBase(BaseLLM):
         return auth_header, url
 
     async def _ensure_access_token_async(
-        self, credentials: Optional[str], project_id: Optional[str]
+        self,
+        credentials: Optional[str],
+        project_id: Optional[str],
+        custom_llm_provider: Literal[
+            "vertex_ai", "vertex_ai_beta", "gemini"
+        ],  # if it's vertex_ai or gemini (google ai studio)
     ) -> Tuple[str, str]:
         """
         Async version of _ensure_access_token
         """
+        if custom_llm_provider == "gemini":
+            return "", ""
         if self.access_token is not None:
             if project_id is not None:
                 return self.access_token, project_id
