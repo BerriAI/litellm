@@ -152,7 +152,9 @@ async def vertex_proxy_route(
 
         _auth_header, vertex_project = (
             await vertex_fine_tuning_apis_instance._ensure_access_token_async(
-                credentials=vertex_credentials, project_id=vertex_project
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider="vertex_ai_beta",
             )
         )
 

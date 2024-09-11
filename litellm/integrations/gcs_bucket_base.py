@@ -38,6 +38,7 @@ class GCSBucketBase(CustomLogger):
             await vertex_chat_completion._ensure_access_token_async(
                 credentials=self.path_service_account_json,
                 project_id=None,
+                custom_llm_provider="vertex_ai",
             )
         )
 
@@ -66,6 +67,7 @@ class GCSBucketBase(CustomLogger):
         _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
             credentials=self.path_service_account_json,
             project_id=None,
+            custom_llm_provider="vertex_ai",
         )
 
         auth_header, _ = vertex_chat_completion._get_token_and_url(

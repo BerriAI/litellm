@@ -1079,7 +1079,9 @@ class VertexLLM(VertexBase):
         )
 
         _auth_header, vertex_project = await self._ensure_access_token_async(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
         )
 
         auth_header, api_base = self._get_token_and_url(
@@ -1157,7 +1159,9 @@ class VertexLLM(VertexBase):
         )
 
         _auth_header, vertex_project = await self._ensure_access_token_async(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
         )
 
         auth_header, api_base = self._get_token_and_url(
@@ -1310,7 +1314,9 @@ class VertexLLM(VertexBase):
         )
 
         _auth_header, vertex_project = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
         )
 
         auth_header, url = self._get_token_and_url(
