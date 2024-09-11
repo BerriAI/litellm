@@ -1070,6 +1070,7 @@ class VertexLLM(VertexBase):
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
         vertex_credentials: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
         request_body = await async_transform_request_body(**data)  # type: ignore
@@ -1086,7 +1087,7 @@ class VertexLLM(VertexBase):
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
-            gemini_api_key=None,
+            gemini_api_key=gemini_api_key,
             auth_header=_auth_header,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -1151,6 +1152,7 @@ class VertexLLM(VertexBase):
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
         vertex_credentials: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
 
@@ -1166,7 +1168,7 @@ class VertexLLM(VertexBase):
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
-            gemini_api_key=None,
+            gemini_api_key=gemini_api_key,
             auth_header=_auth_header,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -1283,6 +1285,7 @@ class VertexLLM(VertexBase):
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
+                    gemini_api_key=gemini_api_key,
                     custom_llm_provider=custom_llm_provider,
                     extra_headers=extra_headers,
                 )
@@ -1305,6 +1308,7 @@ class VertexLLM(VertexBase):
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
+                gemini_api_key=gemini_api_key,
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=extra_headers,
             )
