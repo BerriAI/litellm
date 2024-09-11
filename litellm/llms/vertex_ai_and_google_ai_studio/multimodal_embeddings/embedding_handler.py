@@ -43,8 +43,16 @@ class VertexMultimodalEmbedding(VertexLLM):
         timeout=300,
         client=None,
     ):
+
+        _auth_header, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
+        )
+
         auth_header, url = self._get_token_and_url(
             model=model,
+            auth_header=_auth_header,
             gemini_api_key=api_key,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
