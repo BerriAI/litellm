@@ -681,7 +681,7 @@ class LiteLLM_ModelTable(LiteLLMBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class NewUserRequest(GenerateKeyRequest):
+class NewUserRequest(_GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
     user_alias: Optional[str] = None
