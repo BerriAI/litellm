@@ -5310,7 +5310,7 @@ def stream_chunk_builder(
         ]
 
         if len(tool_call_chunks) > 0:
-            argument_list = []
+            argument_list: List = []
             delta = tool_call_chunks[0]["choices"][0]["delta"]
             message = response["choices"][0]["message"]
             message["tool_calls"] = []
@@ -5319,6 +5319,7 @@ def stream_chunk_builder(
             type = None
             tool_calls_list = []
             prev_index = None
+            prev_name = None
             prev_id = None
             curr_id = None
             curr_index = 0
@@ -5346,27 +5347,32 @@ def stream_chunk_builder(
                             type = tool_calls[0].type
                 if prev_index is None:
                     prev_index = curr_index
+                if prev_name is None:
+                    prev_name = name
                 if curr_index != prev_index:  # new tool call
                     combined_arguments = "".join(argument_list)
                     tool_calls_list.append(
                         {
                             "id": prev_id,
-                            "index": prev_index,
-                            "function": {"arguments": combined_arguments, "name": name},
+                            "function": {
+                                "arguments": combined_arguments,
+                                "name": prev_name,
+                            },
                             "type": type,
                         }
                     )
                     argument_list = []  # reset
                     prev_index = curr_index
                     prev_id = curr_id
+                    prev_name = name
 
             combined_arguments = (
                 "".join(argument_list) or "{}"
             )  # base case, return empty dict
+
             tool_calls_list.append(
                 {
                     "id": id,
-                    "index": curr_index,
                     "function": {"arguments": combined_arguments, "name": name},
                     "type": type,
                 }
@@ -5422,7 +5428,7 @@ def stream_chunk_builder(
                 for choice in choices:
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
-                    if content == None:
+                    if content is None:
                         continue  # openai v1.0.0 sets content = None for chunks
                     content_list.append(content)
 

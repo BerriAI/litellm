@@ -156,6 +156,7 @@ async def new_user(
         user_id=response["user_id"],
         user_role=response.get("user_role", None),
         user_email=response.get("user_email", None),
+        user_alias=response.get("user_alias", None),
         teams=response.get("teams", None),
         team_id=response.get("team_id", None),
         metadata=response.get("metadata", None),
