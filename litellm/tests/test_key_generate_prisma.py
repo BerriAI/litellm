@@ -2818,6 +2818,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     assert result["info"]["metadata"] == {
         "team": "litellm-team3",
         "guardrails": ["aporia-pre-call"],
+        "tags": None,
     }
 
     # Update model tpm_limit and rpm_limit
@@ -2836,6 +2837,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     assert result["info"]["metadata"] == {
         "team": "litellm-team3",
         "guardrails": ["aporia-pre-call", "aporia-post-call"],
+        "tags": None,
     }
 
 
