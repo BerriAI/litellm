@@ -5,7 +5,8 @@ import os
 import random
 import traceback
 import types
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import Any, List, Optional, Union
 
 import dotenv  # type: ignore
@@ -55,7 +56,7 @@ def is_serializable(value):
 
 
 class LangsmithLogger(CustomLogger):
-    def __init__(self, batch_size=1):
+    def __init__(self):
         self.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
         self.langsmith_project = os.getenv("LANGSMITH_PROJECT", "litellm-completion")
         self.langsmith_default_run_name = os.getenv(
@@ -67,7 +68,11 @@ class LangsmithLogger(CustomLogger):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-        self.batch_size = batch_size
+
+        _batch_size = (
+            os.getenv("LANGSMITH_BATCH_SIZE", 100) or litellm.langsmith_batch_size
+        )
+        self.batch_size = int(_batch_size)
         self.log_queue = []
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
@@ -103,7 +108,7 @@ class LangsmithLogger(CustomLogger):
 
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
-        run_id = metadata.get("id", None) or str(random.randint(1000, 9999))
+        run_id = metadata.get("id", None)
         parent_run_id = metadata.get("parent_run_id", None)
         trace_id = metadata.get("trace_id", None)
         session_id = metadata.get("session_id", None)
@@ -170,6 +175,15 @@ class LangsmithLogger(CustomLogger):
 
         if dotted_order:
             data["dotted_order"] = dotted_order
+
+        if data["id"] is None:
+            """
+            for /batch langsmith requires id, trace_id and dotted_order passed as params
+            """
+            run_id = uuid.uuid4()
+            data["id"] = str(run_id)
+            data["trace_id"] = str(run_id)
+            data["dotted_order"] = self.make_dot_order(run_id=run_id)
 
         verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
 
@@ -255,7 +269,12 @@ class LangsmithLogger(CustomLogger):
             )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
-
+            verbose_logger.debug(
+                "Langsmith logging: queue length",
+                len(self.log_queue),
+                "batch size",
+                self.batch_size,
+            )
             if len(self.log_queue) >= self.batch_size:
                 await self._async_send_batch()
 
@@ -279,6 +298,7 @@ class LangsmithLogger(CustomLogger):
                 },
                 headers=headers,
             )
+            response.raise_for_status()
 
             if response.status_code >= 300:
                 verbose_logger.error(
@@ -290,6 +310,10 @@ class LangsmithLogger(CustomLogger):
                 )
 
             self.log_queue.clear()
+        except httpx.HTTPStatusError as e:
+            verbose_logger.error(
+                f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
@@ -302,3 +326,8 @@ class LangsmithLogger(CustomLogger):
         )
 
         return response.json()
+
+    def make_dot_order(self, run_id: str):
+        st = datetime.now(timezone.utc)
+        id_ = run_id
+        return st.strftime("%Y%m%dT%H%M%S%fZ") + str(id_)
