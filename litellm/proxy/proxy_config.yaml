@@ -16,4 +16,6 @@ general_settings:
  master_key: sk-1234 
 
 litellm_settings:
-  success_callback: ["langsmith"]
+  success_callback: ["langsmith", "prometheus"]
+  service_callback: ["prometheus_system"]
+  callbacks: ["otel"]
