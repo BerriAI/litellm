@@ -20,9 +20,6 @@ def test_langsmith_logging_async():
         os.environ["LANGSMITH_PROJECT"] = "pr-b"
         os.environ["LANGSMITH_BASE_URL"] = "http://0.0.0.0:8090"
 
-        litellm.set_verbose = True
-        verbose_logger.setLevel(logging.DEBUG)
-
         # Make 5 calls with an empty success_callback
         litellm.success_callback = []
         litellm.callbacks = []
