@@ -182,13 +182,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
                 response
               )}; team values: ${Object.entries(response.teams)}`
             );
-            if (userRole == "Admin") {
-              const globalSpend = await getTotalSpendCall(accessToken);
-              setUserSpendData(globalSpend);
-              console.log("globalSpend:", globalSpend);
-            } else {
-              setUserSpendData(response["user_info"]);
-            }
+            // if (userRole == "Admin") {
+            //   const globalSpend = await getTotalSpendCall(accessToken);
+            //   setUserSpendData(globalSpend);
+            //   console.log("globalSpend:", globalSpend);
+            // } else {
+            //   );
+            // }
+            setUserSpendData(response["user_info"]);
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
             const teamsArray = [...response["teams"]];
