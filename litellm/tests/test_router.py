@@ -2272,7 +2272,13 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                 "litellm_params": {
                     "model": "openai/text-embedding-ada-002",
                 },
-            }
+            },
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            },
         ]
     )
 
