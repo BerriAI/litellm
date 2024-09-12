@@ -42,6 +42,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
     "logfire",
+    "literalai",
     "dynamic_rate_limiter",
     "langsmith",
     "prometheus",

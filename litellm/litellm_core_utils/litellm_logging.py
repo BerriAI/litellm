@@ -79,6 +79,7 @@ from ..integrations.lago import LagoLogger
 from ..integrations.langfuse import LangFuseLogger
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.litedebugger import LiteDebugger
+from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
@@ -106,6 +107,7 @@ promptLayerLogger = None
 logfireLogger = None
 weightsBiasesLogger = None
 customLogger = None
+literalAiLogger = None
 langFuseLogger = None
 openMeterLogger = None
 lagoLogger = None
@@ -389,6 +391,22 @@ class Logging:
                             category="litellm.llm_call",
                             message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
+                        )
+                    elif callback == "literalai":
+                        from literalai.context import active_root_run_var, active_steps_var, active_thread_var
+                        current_thread = active_thread_var.get()
+                        current_root_run = active_root_run_var.get()
+                        current_steps = active_steps_var.get()
+                        call_id_cache = {}
+                        call_id_cache["orig_messages"] = input
+                        call_id_cache["literalai_thread_id"] = current_thread.id if current_thread else None 
+                        call_id_cache["literalai_parent_id"] = current_steps[-1].id if current_steps else None 
+                        call_id_cache["literalai_root_run_id"] = current_root_run.id if current_root_run else None
+                        call_id_cache["literalai_root_run_id"] = current_root_run.id if current_root_run else None
+                        in_memory_trace_id_cache.set_cache(
+                            litellm_call_id=self.litellm_call_id,
+                            service_name="literalai",
+                            trace_id=call_id_cache,
                         )
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
@@ -818,6 +836,43 @@ class Logging:
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "literalai":
+                        global literalAiLogger
+                        print_verbose("reaches Literal AI for logging!")                      
+                        if literalAiLogger is None:
+                            literalAiLogger = LiteralAILogger()
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            verbose_logger.debug(
+                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
+                            if complete_streaming_response is None:
+                                continue
+                            else:
+                                print_verbose("reaches Literal AI for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+                        trace_cache = in_memory_trace_id_cache.get_cache(litellm_call_id=self.litellm_call_id, service_name="literalai")
+                        if trace_cache:
+                            litellm_params = kwargs.get("litellm_params", {})
+                            metadata = litellm_params.get("metadata", {})
+                            if metadata is None:
+                                litellm_params["metadata"] = trace_cache
+                            else:
+                                metadata.update(trace_cache)
+                        _response = literalAiLogger.create_step(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
                     if callback == "logfire":
@@ -1832,6 +1887,35 @@ class Logging:
                             level="ERROR",
                             kwargs=self.model_call_details,
                         )
+                    if callback == "literalai":
+                        global literalAiLogger
+                        print_verbose("reaches Literal AI for failure logging!")
+                        if literalAiLogger is None:
+                            literalAiLogger = LiteralAILogger()
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        trace_cache = in_memory_trace_id_cache.get_cache(litellm_call_id=self.litellm_call_id, service_name="literalai")
+                        if trace_cache:
+                            litellm_params = kwargs.get("litellm_params", {})
+                            metadata = litellm_params.get("metadata", {})
+                            if metadata is None:
+                                litellm_params["metadata"] = trace_cache
+                            else:
+                                metadata.update(trace_cache)
+                        _response = literalAiLogger.create_step(
+                            start_time=start_time,
+                            end_time=end_time,
+                            response_obj=None,
+                            user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                            status_message=str(exception),
+                            level="ERROR",
+                            kwargs=self.model_call_details,
+                        )
                     if callback == "logfire":
                         verbose_logger.debug("reaches logfire for failure logging!")
                         kwargs = {}
@@ -1930,7 +2014,7 @@ def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, literalAiLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2008,6 +2092,8 @@ def set_callbacks(callback_list, function_id=None):
                 s3Logger = S3Logger()
             elif callback == "wandb":
                 weightsBiasesLogger = WeightsBiasesLogger()
+            elif callback == "literalai":
+                literalAiLogger = LiteralAILogger()
             elif callback == "logfire":
                 logfireLogger = LogfireLogger()
             elif callback == "aispend":
