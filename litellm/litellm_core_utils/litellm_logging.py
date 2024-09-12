@@ -1608,14 +1608,23 @@ class Logging:
         """
         from litellm.types.router import RouterErrors
 
+        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") or {}
+
+        ## BASE CASE ## check if rate limit error for model group size 1
+        is_base_case = False
+        if metadata.get("model_group_size") is not None:
+            model_group_size = metadata.get("model_group_size")
+            if isinstance(model_group_size, int) and model_group_size == 1:
+                is_base_case = True
         ## check if special error ##
-        if RouterErrors.no_deployments_available.value not in str(exception):
+        if (
+            RouterErrors.no_deployments_available.value not in str(exception)
+            and is_base_case is False
+        ):
             return
 
         ## get original model group ##
-
-        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
 
         model_group = metadata.get("model_group") or None
         for callback in litellm._async_failure_callback:
