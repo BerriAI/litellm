@@ -473,6 +473,7 @@ class Usage(CompletionUsage):
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
+        reasoning_tokens: Optional[int] = None,
         **params,
     ):
         ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
@@ -482,12 +483,16 @@ class Usage(CompletionUsage):
             and prompt_tokens is not None
         ):
             prompt_tokens = params["prompt_cache_miss_tokens"]
-        data = {
-            "prompt_tokens": prompt_tokens or 0,
-            "completion_tokens": completion_tokens or 0,
-            "total_tokens": total_tokens or 0,
-        }
-        super().__init__(**data)
+
+        completion_tokens_details = CompletionTokensDetails(
+            reasoning_tokens=reasoning_tokens
+        )
+        super().__init__(
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
+            total_tokens=total_tokens or 0,
+            completion_tokens_details=completion_tokens_details or None,
+        )
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
