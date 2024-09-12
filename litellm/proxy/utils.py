@@ -983,13 +983,13 @@ class PrismaClient:
                 verbose_proxy_logger.info("All necessary views exist!")
                 return
             else:
-                verbose_proxy_logger.error(
-                    "Not all views exist. Got={}. Expected={}. Run 'create_views.py' in litellm/proxy/db/migration_scripts to create missing views.".format(
+                raise Exception(
+                    "Not all views exist in db. Got={}. Expected={}. Run 'create_views.py' in litellm/db_scripts to create missing views.".format(
                         ret[0]["sum"], expected_total_views
                     )
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            raise e
 
         # try:
         #     # Try to select one row from the view
