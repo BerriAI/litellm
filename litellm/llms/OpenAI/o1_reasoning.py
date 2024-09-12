@@ -15,6 +15,7 @@ import types
 from typing import Any, List, Optional, Union
 
 import litellm
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
 from .openai import OpenAIConfig
 
@@ -78,16 +79,19 @@ class OpenAIO1Config(OpenAIConfig):
             return True
         return False
 
-    def o1_prompt_factory(self, messages: List[Any]):
+    def o1_prompt_factory(self, messages: List[AllMessageValues]):
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
 
-        for message in messages:
+        for i, message in enumerate(messages):
             if message["role"] == "system":
-                message["role"] = "user"
+                new_message = ChatCompletionUserMessage(
+                    content=message["content"], role="user"
+                )
+                messages[i] = new_message  # Replace the old message with the new one
 
             if isinstance(message["content"], list):
                 new_content = []
