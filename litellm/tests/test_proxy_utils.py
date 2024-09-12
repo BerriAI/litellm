@@ -218,13 +218,16 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
             "langfuse_secret_key": "sk-lf-7cc8b620",
         },
         {
-            "langfuse_host": "os.environ/LANGFUSE_HOST",
-            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
-            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+            "langfuse_host": "os.environ/LANGFUSE_HOST_TEMP",
+            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY_TEMP",
+            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
         },
     ],
 )
 def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
+    os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
+    os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
+    os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
     user_api_key_dict = UserAPIKeyAuth(
         token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
         key_name="sk-...63Fg",
