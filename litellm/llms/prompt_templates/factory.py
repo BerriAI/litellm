@@ -37,6 +37,8 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import GenericImageParsingChunk
 
+from .image_handling import async_convert_url_to_base64, convert_url_to_base64
+
 
 def default_pt(messages):
     return " ".join(message["content"] for message in messages)
@@ -701,44 +703,6 @@ def construct_tool_use_system_prompt(
         "<tools>\n" + "\n".join([tool_str for tool_str in tool_str_list]) + "\n</tools>"
     )
     return tool_use_system_prompt
-
-
-def convert_url_to_base64(url):
-    import base64
-
-    client = HTTPHandler(concurrent_limit=1)
-    for _ in range(3):
-        try:
-
-            response = client.get(url)
-            break
-        except:
-            pass
-    if response.status_code == 200:
-        image_bytes = response.content
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
-
-        image_type = response.headers.get("Content-Type", None)
-        if image_type is not None:
-            img_type = image_type
-        else:
-            img_type = url.split(".")[-1].lower()
-            if img_type == "jpg" or img_type == "jpeg":
-                img_type = "image/jpeg"
-            elif img_type == "png":
-                img_type = "image/png"
-            elif img_type == "gif":
-                img_type = "image/gif"
-            elif img_type == "webp":
-                img_type = "image/webp"
-            else:
-                raise Exception(
-                    f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-                )
-
-        return f"data:{img_type};base64,{base64_image}"
-    else:
-        raise Exception(f"Error: Unable to fetch image from URL. url={url}")
 
 
 def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
