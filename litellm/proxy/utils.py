@@ -983,8 +983,8 @@ class PrismaClient:
                 verbose_proxy_logger.info("All necessary views exist!")
                 return
             else:
-                verbose_proxy_logger.info(
-                    "Not all views exist. Got={}. Expected={}".format(
+                verbose_proxy_logger.error(
+                    "Not all views exist. Got={}. Expected={}. Run 'create_views.py' in litellm/proxy/db/migration_scripts to create missing views.".format(
                         ret[0]["sum"], expected_total_views
                     )
                 )

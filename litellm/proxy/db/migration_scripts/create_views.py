@@ -1,7 +1,5 @@
 """
 python script to pre-create all views required by LiteLLM Proxy Server
-
-
 """
 
 import asyncio
@@ -27,30 +25,6 @@ async def check_view_exists():
 
     # connect to dB
     await db.connect()
-    # Check to see if all of the necessary views exist and if they do, simply return
-    # This is more efficient because it lets us check for all views in one
-    # query instead of multiple queries.
-    try:
-        ret = await db.query_raw(
-            """
-                SELECT SUM(1) FROM pg_views
-                WHERE schemaname = 'public' AND viewname IN (
-                    'LiteLLM_VerificationTokenView',
-                    'MonthlyGlobalSpend',
-                    'Last30dKeysBySpend',
-                    'Last30dModelsBySpend',
-                    'MonthlyGlobalSpendPerKey',
-                    'MonthlyGlobalSpendPerUserPerKey',
-                    'Last30dTopEndUsersSpend'
-                )
-                """
-        )
-        if ret[0]["sum"] == 8:
-            print("All necessary views exist!")  # noqa
-            return
-    except Exception:
-        pass
-
     try:
         # Try to select one row from the view
         await db.query_raw("""SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1""")
@@ -191,7 +165,7 @@ async def check_view_exists():
         print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
 
     try:
-        await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
+        await db.query_raw("""SELECT 1 FROM DailyTagSpend LIMIT 1""")
         print("DailyTagSpend Exists!")  # noqa
     except Exception as e:
         sql_query = """

@@ -1,3 +1,7 @@
+"""
+Deprecated. Only PostgresSQL is supported.
+"""
+
 import json
 from datetime import datetime
 from typing import Any, List, Literal, Optional, Union
