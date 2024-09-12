@@ -2121,7 +2121,7 @@ def test_router_cooldown_api_connection_error():
     except litellm.APIConnectionError as e:
         assert (
             Router()._is_cooldown_required(
-                exception_status=e.code, exception_str=str(e)
+                model_id="", exception_status=e.code, exception_str=str(e)
             )
             is False
         )
