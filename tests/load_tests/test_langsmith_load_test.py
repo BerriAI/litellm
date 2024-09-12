@@ -13,46 +13,56 @@ import pytest
 
 
 def test_langsmith_logging_async():
-    # this tests time added to make langsmith logging calls, vs just acompletion calls
     try:
-
         os.environ["LANGSMITH_API_KEY"] = "lsv2_anything"
         os.environ["LANGSMITH_PROJECT"] = "pr-b"
         os.environ["LANGSMITH_BASE_URL"] = "http://0.0.0.0:8090"
 
-        # Make 5 calls with an empty success_callback
-        litellm.success_callback = []
-        litellm.callbacks = []
-        litellm._async_success_callback = []
-        litellm._async_failure_callback = []
-        litellm._async_failure_callback = []
-        litellm.failure_callback = []
-        start_time_empty_callback = asyncio.run(make_async_calls())
-        print("done with no callback test")
+        percentage_diffs = []
 
-        print("starting langsmith test")
-        # Make 5 calls with success_callback set to "langsmith"
-        litellm.success_callback = ["langsmith"]
-        start_time_langsmith = asyncio.run(make_async_calls())
-        print("done with langsmith test")
+        for run in range(3):
+            print(f"\nRun {run + 1}:")
 
-        # Compare the time for both scenarios
-        print(f"Time taken with success_callback='langsmith': {start_time_langsmith}")
-        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
+            # Test with empty success_callback
+            litellm.success_callback = []
+            litellm.callbacks = []
+            litellm._async_success_callback = []
+            litellm._async_failure_callback = []
+            litellm.failure_callback = []
+            start_time_empty_callback = asyncio.run(make_async_calls())
+            print("Done with no callback test")
 
-        # Calculate the percentage difference
-        percentage_diff = (
-            abs(start_time_langsmith - start_time_empty_callback)
-            / start_time_empty_callback
-            * 100
-        )
+            # Test with langsmith callback
+            print("Starting langsmith test")
+            litellm.success_callback = ["langsmith"]
+            start_time_langsmith = asyncio.run(make_async_calls())
+            print("Done with langsmith test")
 
-        # Assert that the difference is not more than 10%
+            # Compare times and calculate percentage difference
+            print(f"Time with success_callback='langsmith': {start_time_langsmith}")
+            print(f"Time with empty success_callback: {start_time_empty_callback}")
+
+            percentage_diff = (
+                abs(start_time_langsmith - start_time_empty_callback)
+                / start_time_empty_callback
+                * 100
+            )
+            percentage_diffs.append(percentage_diff)
+            print(f"Performance difference: {percentage_diff:.2f}%")
+        print("percentage_diffs", percentage_diffs)
+        # Calculate average percentage difference
+        avg_percentage_diff = sum(percentage_diffs) / len(percentage_diffs)
+        print(f"\nAverage performance difference: {avg_percentage_diff:.2f}%")
+
+        # Assert that the average difference is not more than 10%
         assert (
-            percentage_diff < 10
-        ), f"Performance difference of {percentage_diff:.2f}% exceeds 10% threshold"
+            avg_percentage_diff < 10
+        ), f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 10% threshold"
 
-        print(f"Performance difference: {percentage_diff:.2f}%")
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
 
     except litellm.Timeout as e:
         pass
@@ -61,52 +71,23 @@ def test_langsmith_logging_async():
 
 
 async def make_async_calls(metadata=None, **completion_kwargs):
-    tasks = []
-    for _ in range(100):
-        tasks.append(create_async_task())
+    total_tasks = 300
+    batch_size = 100
+    total_time = 0
 
-    # Measure the start time before running the tasks
-    start_time = asyncio.get_event_loop().time()
+    for batch in range(3):
+        tasks = [create_async_task() for _ in range(batch_size)]
 
-    # Wait for all tasks to complete
-    responses = await asyncio.gather(*tasks)
+        start_time = asyncio.get_event_loop().time()
+        responses = await asyncio.gather(*tasks)
 
-    # Print the responses when tasks return
-    for idx, response in enumerate(responses):
-        print(f"Response from Task {idx + 1}: {response}")
+        for idx, response in enumerate(responses):
+            print(f"Response from Task {batch * batch_size + idx + 1}: {response}")
 
-    await asyncio.sleep(1)
+        await asyncio.sleep(1)
 
-    for _ in range(100):
-        tasks.append(create_async_task())
-
-    # Measure the start time before running the tasks
-    start_time = asyncio.get_event_loop().time()
-
-    # Wait for all tasks to complete
-    responses = await asyncio.gather(*tasks)
-
-    # Print the responses when tasks return
-    for idx, response in enumerate(responses):
-        print(f"Response from Task {idx + 1}: {response}")
-
-    await asyncio.sleep(1)
-
-    for _ in range(100):
-        tasks.append(create_async_task())
-
-    # Measure the start time before running the tasks
-    start_time = asyncio.get_event_loop().time()
-
-    # Wait for all tasks to complete
-    responses = await asyncio.gather(*tasks)
-
-    # Print the responses when tasks return
-    for idx, response in enumerate(responses):
-        print(f"Response from Task {idx + 1}: {response}")
-
-    # Calculate the total time taken
-    total_time = asyncio.get_event_loop().time() - start_time
+        batch_time = asyncio.get_event_loop().time() - start_time
+        total_time += batch_time
 
     return total_time
 
