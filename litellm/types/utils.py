@@ -484,9 +484,12 @@ class Usage(CompletionUsage):
         ):
             prompt_tokens = params["prompt_cache_miss_tokens"]
 
-        completion_tokens_details = CompletionTokensDetails(
-            reasoning_tokens=reasoning_tokens
-        )
+        # handle reasoning_tokens
+        completion_tokens_details = None
+        if reasoning_tokens:
+            completion_tokens_details = CompletionTokensDetails(
+                reasoning_tokens=reasoning_tokens
+            )
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
