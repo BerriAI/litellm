@@ -13,48 +13,37 @@ import pytest
 
 
 def test_otel_logging_async():
-    # this tests time added to make otel logging calls, vs just acompletion calls
     try:
-
         os.environ["OTEL_EXPORTER"] = "otlp_http"
         os.environ["OTEL_ENDPOINT"] = (
             "https://exampleopenaiendpoint-production.up.railway.app/traces"
         )
         os.environ["OTEL_HEADERS"] = "Authorization=K0BSwd"
 
-        # Make 5 calls with an empty success_callback
-        litellm.success_callback = []
-        litellm.callbacks = []
-        litellm._async_success_callback = []
-        litellm._async_failure_callback = []
-        litellm._async_failure_callback = []
-        litellm.failure_callback = []
-        start_time_empty_callback = asyncio.run(make_async_calls())
-        print("done with no callback test")
+        def single_run():
+            litellm.callbacks = []
+            start_time_empty = asyncio.run(make_async_calls())
+            print(f"Time with empty callback: {start_time_empty}")
 
-        print("starting otel test")
-        # Make 5 calls with success_callback set to "otel"
-        litellm.callbacks = ["otel"]
-        start_time_otel = asyncio.run(make_async_calls())
-        print("done with otel test")
+            litellm.callbacks = ["otel"]
+            start_time_otel = asyncio.run(make_async_calls())
+            print(f"Time with otel callback: {start_time_otel}")
 
-        # Compare the time for both scenarios
-        print(f"Time taken with success_callback='otel': {start_time_otel}")
-        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
+            percent_diff = (
+                abs(start_time_otel - start_time_empty) / start_time_empty * 100
+            )
+            print(f"Run performance difference: {percent_diff:.2f}%")
+            return percent_diff
 
-        # Calculate the percentage difference
-        percentage_diff = (
-            abs(start_time_otel - start_time_empty_callback)
-            / start_time_empty_callback
-            * 100
-        )
+        percent_diffs = [single_run() for _ in range(3)]
+        avg_percent_diff = sum(percent_diffs) / len(percent_diffs)
 
-        # Assert that the difference is not more than 10%
+        print(f"Percentage differences: {percent_diffs}")
+        print(f"Average performance difference: {avg_percent_diff:.2f}%")
+
         assert (
-            percentage_diff < 10
-        ), f"Performance difference of {percentage_diff:.2f}% exceeds 10% threshold"
-
-        print(f"Performance difference: {percentage_diff:.2f}%")
+            avg_percent_diff < 10
+        ), f"Average performance difference of {avg_percent_diff:.2f}% exceeds 10% threshold"
 
     except litellm.Timeout as e:
         pass
