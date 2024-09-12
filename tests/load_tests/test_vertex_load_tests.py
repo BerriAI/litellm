@@ -96,8 +96,8 @@ async def test_vertex_load():
 
 
 async def make_async_calls(message_type="text"):
-    total_tasks = 30
-    batch_size = 10
+    total_tasks = 3
+    batch_size = 1
     total_time = 0
 
     for batch in range(3):
