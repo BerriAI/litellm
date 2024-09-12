@@ -162,6 +162,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
       # Run pytest and generate JUnit XML report
