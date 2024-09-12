@@ -944,6 +944,9 @@ from .llms.OpenAI.openai import (
     GroqConfig,
     AzureAIStudioConfig,
 )
+from .llms.OpenAI.o1_reasoning import (
+    OpenAIO1Config,
+)
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.AI21.chat import AI21ChatConfig
