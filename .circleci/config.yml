@@ -170,7 +170,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/load_tests -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/load_tests -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
