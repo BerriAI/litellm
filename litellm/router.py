@@ -3690,7 +3690,9 @@ class Router:
             exception=original_exception,
         )
 
-        allowed_fails = _allowed_fails if _allowed_fails is not None else self.allowed_fails
+        allowed_fails = (
+            _allowed_fails if _allowed_fails is not None else self.allowed_fails
+        )
 
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
@@ -5607,7 +5609,7 @@ class Router:
             return allowed_fails_policy.ContentPolicyViolationErrorAllowedFails
 
     def _initialize_alerting(self):
-        from litellm.integrations.slack_alerting import SlackAlerting
+        from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 
         router_alerting_config: AlertingConfig = self.alerting_config
 

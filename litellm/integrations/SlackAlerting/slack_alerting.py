@@ -23,7 +23,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -39,7 +39,7 @@ from litellm.proxy._types import (
 )
 from litellm.types.router import LiteLLM_Params
 
-from .email_templates.templates import *
+from ..email_templates.templates import *
 
 
 class BaseOutageModel(TypedDict):
@@ -157,7 +157,7 @@ class SlackAlertingCacheKeys(Enum):
     report_sent_key = "daily_metrics_report_sent"
 
 
-class SlackAlerting(CustomLogger):
+class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
     """
@@ -186,6 +186,7 @@ class SlackAlerting(CustomLogger):
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: Optional[str] = None,
+        **kwargs,
     ):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
@@ -198,7 +199,8 @@ class SlackAlerting(CustomLogger):
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
-        self.llm_router: Optional[litellm.Router] = None
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
         self,
@@ -225,6 +227,8 @@ class SlackAlerting(CustomLogger):
                 self.alert_to_webhook_url.update(alert_to_webhook_url)
         if llm_router is not None:
             self.llm_router = llm_router
+
+        asyncio.create_task(self.periodic_flush())
 
     async def deployment_in_cooldown(self):
         pass
@@ -1533,38 +1537,84 @@ Model Info:
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
-        async def send_to_webhook(url: str):
-            return await self.async_http_handler.post(
-                url=url,
-                headers=headers,
-                data=json.dumps(payload),
-            )
-
         if isinstance(slack_webhook_url, list):
-            # Parallelize the calls if it's a list of URLs
-            responses = await asyncio.gather(
-                *[send_to_webhook(url) for url in slack_webhook_url]
+            for url in slack_webhook_url:
+                self.log_queue.append(
+                    {
+                        "url": url,
+                        "headers": headers,
+                        "payload": payload,
+                        "alert_type": alert_type,
+                    }
+                )
+        else:
+            self.log_queue.append(
+                {
+                    "url": slack_webhook_url,
+                    "headers": headers,
+                    "payload": payload,
+                    "alert_type": alert_type,
+                }
             )
 
-            for response, url in zip(responses, slack_webhook_url):
-                if response.status_code == 200:
-                    pass
-                else:
-                    verbose_proxy_logger.debug(
-                        "Error sending slack alert to url={}. Error={}".format(
-                            url, response.text
-                        )
-                    )
-        else:
-            # Single call if it's a single URL
-            response = await send_to_webhook(slack_webhook_url)
+        if len(self.log_queue) >= self.batch_size:
+            await self.flush_queue()
 
-            if response.status_code == 200:
-                pass
+    @staticmethod
+    def squash_payloads(queue):
+        import json
+
+        squashed = {}
+        if len(queue) == 0:
+            return squashed
+        if len(queue) == 1:
+            return {"key": {"item": queue[0], "count": 1}}
+
+        for item in queue:
+            url = item["url"]
+            alert_type = item["alert_type"]
+            _key = (url, alert_type)
+
+            if _key in squashed:
+                squashed[_key]["count"] += 1
+                # Merge the payloads
+
             else:
-                verbose_proxy_logger.debug(
-                    "Error sending slack alert. Error={}".format(response.text)
+                squashed[_key] = {"item": item, "count": 1}
+
+        return squashed
+
+    async def async_send_batch(self):
+        if not self.log_queue:
+            return
+
+        async def send_to_webhook(item, count):
+            import json
+
+            try:
+                payload = item["payload"]
+                if count > 1:
+                    payload["text"] = f"[Num Alerts: {count}]\n\n{payload['text']}"
+
+                response = await self.async_http_handler.post(
+                    url=item["url"],
+                    headers=item["headers"],
+                    data=json.dumps(payload),
                 )
+                if response.status_code != 200:
+                    verbose_proxy_logger.debug(
+                        f"Error sending slack alert to url={item['url']}. Error={response.text}"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error sending slack alert: {str(e)}")
+
+        squashed_queue = self.squash_payloads(self.log_queue)
+        tasks = [
+            send_to_webhook(item["item"], item["count"])
+            for item in squashed_queue.values()
+        ]
+        await asyncio.gather(*tasks)
+        self.log_queue.clear()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""

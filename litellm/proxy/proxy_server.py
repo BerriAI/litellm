@@ -115,7 +115,10 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.slack_alerting import SlackAlerting, SlackAlertingArgs
+from litellm.integrations.SlackAlerting.slack_alerting import (
+    SlackAlerting,
+    SlackAlertingArgs,
+)
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import *

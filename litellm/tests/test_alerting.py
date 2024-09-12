@@ -27,7 +27,10 @@ from openai import APIError
 
 import litellm
 from litellm.caching import DualCache, RedisCache
-from litellm.integrations.slack_alerting import DeploymentMetrics, SlackAlerting
+from litellm.integrations.SlackAlerting.slack_alerting import (
+    DeploymentMetrics,
+    SlackAlerting,
+)
 from litellm.proxy._types import CallInfo
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import AlertingConfig, Router
