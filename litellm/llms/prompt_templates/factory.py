@@ -583,33 +583,52 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
 ### IBM Granite
 
 
-def ibm_granite_pt(messages: list):
+def ibm_granite_pt(messages: list, is_code_instruct=False):
     """
     IBM's Granite models uses the template:
     <|system|> {system_message} <|user|> {user_message} <|assistant|> {assistant_message}
 
     See: https://www.ibm.com/docs/en/watsonx-as-a-service?topic=solutions-supported-foundation-models
     """
-    return custom_prompt(
-        messages=messages,
-        role_dict={
-            "system": {
-                "pre_message": "<|system|>\n",
-                "post_message": "\n",
+    if not is_code_instruct:
+        return custom_prompt(
+            messages=messages,
+            role_dict={
+                "system": {
+                    "pre_message": "<|system|>\n",
+                    "post_message": "\n",
+                },
+                "user": {
+                    "pre_message": "<|user|>\n",
+                    "post_message": "\n",
+                },
+                "assistant": {
+                    "pre_message": "<|assistant|>\n",
+                    "post_message": "\n",
+                },
             },
-            "user": {
-                "pre_message": "<|user|>\n",
-                # Assistant tag is needed in the prompt after the user message
-                # to avoid the model completing the users sentence before it answers
-                # https://www.ibm.com/docs/en/watsonx/w-and-w/2.0.x?topic=models-granite-13b-chat-v2-prompting-tips#chat
-                "post_message": "\n<|assistant|>\n",
+            final_prompt_value="<|assistant|>\n",
+        )
+    else:
+        return custom_prompt(
+            messages=messages,
+            role_dict={
+                "system": {
+                    "pre_message": "System:\n",
+                    "post_message": "\n\n",
+                },
+                "user": {
+                    "pre_message": "Question:\n",
+                    "post_message": "\n\n",
+                },
+                "assistant": {
+                    "pre_message": "Answer:\n",
+                    "post_message": "\n\n",
+                },
             },
-            "assistant": {
-                "pre_message": "",
-                "post_message": "\n",
-            },
-        },
-    ).strip()
+            final_prompt_value="Answer:\n",
+        )
+
 
 
 ### ANTHROPIC ###
@@ -2741,9 +2760,12 @@ def prompt_factory(
     elif custom_llm_provider == "azure_text":
         return azure_text_pt(messages=messages)
     elif custom_llm_provider == "watsonx":
-        if "granite" in model and ("chat" in model or "lab" in model or "multilingual" in model):
+        if "granite" in model and "code" in model:
+            # models like granite-20b-code-instruct use a specific prompt template
+            return ibm_granite_pt(messages=messages, is_code_instruct=True)
+        elif "granite" in model:
             # models like granite-13b-chat-v2, granite-20b-multilingual, and granite-7b-lab use a specific prompt template
-            return ibm_granite_pt(messages=messages)
+            return ibm_granite_pt(messages=messages, is_code_instruct=False)
         elif "ibm-mistral/" in model or 'mistralai/' in model:
             # models like ibm-mistral/mixtral-8x7b-instruct-v01 or mistralai/mistral-large use the mistral instruct prompt template
             return mistral_instruct_pt(messages=messages)
