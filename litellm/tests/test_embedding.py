@@ -689,36 +689,32 @@ def test_watsonx_embeddings():
 
 @pytest.mark.asyncio
 async def test_watsonx_aembeddings():
+    from litellm.main import watsonxai
 
-    def mock_async_client(*args, **kwargs):
+    # mock async handler post request
+    async def mock_post(*args, stream: bool = False, **kwags):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {
+            "model_id": "ibm/slate-30m-english-rtrvr",
+            "created_at": "2024-01-01T00:00:00.00Z",
+            "results": [{"embedding": [0.0] * 254}],
+            "input_token_count": 8,
+        }
+        mock_response.is_error = False
+        return mock_response
 
-        mocked_client = MagicMock()
-
-        async def mock_send(request, *args, stream: bool = False, **kwags):
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.headers = {"Content-Type": "application/json"}
-            mock_response.json.return_value = {
-                "model_id": "ibm/slate-30m-english-rtrvr",
-                "created_at": "2024-01-01T00:00:00.00Z",
-                "results": [{"embedding": [0.0] * 254}],
-                "input_token_count": 8,
-            }
-            mock_response.is_error = False
-            return mock_response
-
-        mocked_client.send = mock_send
-
-        return mocked_client
-
+    watsonxai.request_manager.async_handler = MagicMock(spec=watsonxai.request_manager.async_handler.__class__)()
+    watsonxai.request_manager.async_handler.post = mock_post
     try:
         litellm.set_verbose = True
-        with patch("httpx.AsyncClient", side_effect=mock_async_client):
-            response = await litellm.aembedding(
-                model="watsonx/ibm/slate-30m-english-rtrvr",
-                input=["good morning from litellm"],
-                token="secret-token",
-            )
+        # with patch("httpx.AsyncClient", side_effect=mock_async_client):
+        response = await litellm.aembedding(
+            model="watsonx/ibm/slate-30m-english-rtrvr",
+            input=["good morning from litellm"],
+            # token="secret-token",
+        )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
