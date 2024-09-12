@@ -650,8 +650,6 @@ class OpenTelemetry(CustomLogger):
                 OTLPSpanExporterHTTP(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 ),
-                max_queue_size=100,
-                max_export_batch_size=100,
             )
         elif self.OTEL_EXPORTER == "otlp_grpc":
             verbose_logger.debug(
@@ -662,8 +660,6 @@ class OpenTelemetry(CustomLogger):
                 OTLPSpanExporterGRPC(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 ),
-                max_queue_size=100,
-                max_export_batch_size=100,
             )
         else:
             verbose_logger.debug(

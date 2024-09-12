@@ -17,3 +17,6 @@ general_settings:
  alerting: ["slack"]
  alerting_threshold: 0.00001
 
+litellm_settings:
+  callbacks: ["otel"]
+

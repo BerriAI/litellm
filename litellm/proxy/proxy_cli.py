@@ -464,6 +464,7 @@ def run_server(
             db_port = os.getenv("DATABASE_PORT")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
+            db_schema = os.getenv("DATABASE_SCHEMA")
 
             token = generate_iam_auth_token(
                 db_host=db_host, db_port=db_port, db_user=db_user
@@ -471,6 +472,9 @@ def run_server(
 
             # print(f"token: {token}")
             _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+            if db_schema:
+                _db_url += f"?schema={db_schema}"
+
             os.environ["DATABASE_URL"] = _db_url
 
         ### DECRYPT ENV VAR ###
