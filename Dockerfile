@@ -41,7 +41,7 @@ RUN pip install redisvl==0.0.7 --no-deps
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
-RUN pip install PyJWT --no-cache-dir
+RUN pip install PyJWT==2.9.0 --no-cache-dir
 
 # Build Admin UI
 RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
@@ -50,6 +50,9 @@ RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Update dependencies and clean up - handles debian security issue
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
+
+# Update dependencies and clean up
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
 
 WORKDIR /app
