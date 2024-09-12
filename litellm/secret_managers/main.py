@@ -29,6 +29,27 @@ def _is_base64(s):
         return False
 
 
+def str_to_bool(value: str) -> Optional[bool]:
+    """
+    Converts a string to a boolean if it's a recognized boolean string.
+    Returns None if the string is not a recognized boolean value.
+
+    :param value: The string to be checked.
+    :return: True or False if the string is a recognized boolean, otherwise None.
+    """
+    true_values = {"true"}
+    false_values = {"false"}
+
+    value_lower = value.strip().lower()
+
+    if value_lower in true_values:
+        return True
+    elif value_lower in false_values:
+        return False
+    else:
+        return None
+
+
 def get_secret(
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
@@ -257,17 +278,12 @@ def get_secret(
                 return secret
         else:
             secret = os.environ.get(secret_name)
-            try:
-                secret_value_as_bool = (
-                    ast.literal_eval(secret) if secret is not None else None
-                )
-                if isinstance(secret_value_as_bool, bool):
-                    return secret_value_as_bool
-                else:
-                    return secret
-            except Exception:
-                if default_value is not None:
-                    return default_value
+            secret_value_as_bool = str_to_bool(secret) if secret is not None else None
+            if secret_value_as_bool is not None and isinstance(
+                secret_value_as_bool, bool
+            ):
+                return secret_value_as_bool
+            else:
                 return secret
     except Exception as e:
         if default_value is not None:
