@@ -53,6 +53,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-pro-experimental",
     "gemini-flash-experimental",
     "gemini-pro-flash",
+    "gemini-1.5-flash-exp-0827",
 ]
 
 
