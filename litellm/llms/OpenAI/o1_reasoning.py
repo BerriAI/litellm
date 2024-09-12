@@ -12,7 +12,7 @@ Translations handled by LiteLLM:
 """
 
 import types
-from typing import Optional, Union
+from typing import Any, List, Optional, Union
 
 import litellm
 
@@ -49,7 +49,7 @@ class OpenAIO1Config(OpenAIConfig):
 
         """
 
-        all_openai_params = litellm.OpenAIConfig.get_supported_openai_params(
+        all_openai_params = litellm.OpenAIConfig().get_supported_openai_params(
             model="gpt-4o"
         )
         non_supported_params = [
@@ -70,3 +70,34 @@ class OpenAIO1Config(OpenAIConfig):
             if param == "max_tokens":
                 optional_params["max_completion_tokens"] = value
         return optional_params
+
+    def is_model_o1_reasoning_model(self, model: str) -> bool:
+        if "o1" in model:
+            return True
+        return False
+
+    def o1_prompt_factory(self, messages: List[Any]):
+        """
+        Handles limitations of O-1 model family.
+        - modalities: image => drop param (if user opts in to dropping param)
+        - role: system ==> translate to role 'user'
+        """
+
+        for message in messages:
+            if message["role"] == "system":
+                message["role"] = "user"
+
+            if isinstance(message["content"], list):
+                new_content = []
+                for content_item in message["content"]:
+                    if content_item.get("type") == "image_url":
+                        if litellm.drop_params is not True:
+                            raise ValueError(
+                                "Image content is not supported for O-1 models. Set litellm.drop_param to True to drop image content."
+                            )
+                        # If drop_param is True, we simply don't add the image content to new_content
+                    else:
+                        new_content.append(content_item)
+                message["content"] = new_content
+
+        return messages

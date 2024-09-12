@@ -51,6 +51,3 @@ async def test_o1_handle_system_role(respx_mock: MockRouter):
     print(f"response: {response}")
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "Mocked response"
-
-
-# ... existing code ...
