@@ -30,17 +30,18 @@ def _process_image_response(response: Response, url: str) -> str:
     image_type = response.headers.get("Content-Type")
     if image_type is None:
         img_type = url.split(".")[-1].lower()
-        img_type = {
+        _img_type = {
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
             "png": "image/png",
             "gif": "image/gif",
             "webp": "image/webp",
         }.get(img_type)
-        if img_type is None:
+        if _img_type is None:
             raise Exception(
-                f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+                f"Error: Unsupported image format. Format={_img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
             )
+        img_type = _img_type
     else:
         img_type = image_type
 
