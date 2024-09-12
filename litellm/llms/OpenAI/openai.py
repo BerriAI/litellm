@@ -550,6 +550,8 @@ class OpenAIConfig:
         ]  # works across all models
 
         model_specific_params = []
+        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+            return litellm.OpenAIO1Config().get_supported_openai_params(model=model)
         if (
             model != "gpt-3.5-turbo-16k" and model != "gpt-4"
         ):  # gpt-4 does not support 'response_format'
@@ -566,6 +568,12 @@ class OpenAIConfig:
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
     ) -> dict:
+        """ """
+        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+            return litellm.OpenAIO1Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+            )
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
@@ -861,6 +869,13 @@ class OpenAIChatCompletion(BaseLLM):
                         messages=messages,
                         custom_llm_provider=custom_llm_provider,
                     )
+            if (
+                litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model)
+                and messages is not None
+            ):
+                messages = litellm.OpenAIO1Config().o1_prompt_factory(
+                    messages=messages,
+                )
 
             for _ in range(
                 2
