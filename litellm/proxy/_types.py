@@ -600,7 +600,7 @@ class GenerateRequestBase(LiteLLMBase):
     soft_budget: Optional[float] = None
 
 
-class GenerateKeyRequest(GenerateRequestBase):
+class _GenerateKeyRequest(GenerateRequestBase):
     key_alias: Optional[str] = None
     key: Optional[str] = None
     duration: Optional[str] = None
@@ -618,7 +618,11 @@ class GenerateKeyRequest(GenerateRequestBase):
     guardrails: Optional[List[str]] = None
 
 
-class GenerateKeyResponse(GenerateKeyRequest):
+class GenerateKeyRequest(_GenerateKeyRequest):
+    tags: Optional[List[str]] = None
+
+
+class GenerateKeyResponse(_GenerateKeyRequest):
     key: str
     key_name: Optional[str] = None
     expires: Optional[datetime]
@@ -677,9 +681,10 @@ class LiteLLM_ModelTable(LiteLLMBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class NewUserRequest(GenerateKeyRequest):
+class NewUserRequest(_GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
+    user_alias: Optional[str] = None
     user_role: Optional[
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
@@ -713,6 +718,7 @@ class NewUserResponse(GenerateKeyResponse):
     ] = None
     teams: Optional[list] = None
     organization_id: Optional[str] = None
+    user_alias: Optional[str] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
