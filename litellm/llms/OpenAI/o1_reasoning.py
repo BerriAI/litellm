@@ -65,7 +65,9 @@ class OpenAIO1Config(OpenAIConfig):
             param for param in all_openai_params if param not in non_supported_params
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ):
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_completion_tokens"] = value
