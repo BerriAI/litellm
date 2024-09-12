@@ -105,7 +105,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py"
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router"
           no_output_timeout: 120m
 
       # Store test results
@@ -149,7 +149,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  litellm_router_testing:
+  litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
         - image: cimg/python:3.11
     working_directory: ~/project
@@ -170,7 +170,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv -k "router and not openrouter" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
