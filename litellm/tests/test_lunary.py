@@ -1,15 +1,16 @@
-import sys
-import os
 import io
+import os
+import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.failure_callback = ["lunary"]
 litellm.success_callback = ["lunary"]
 litellm.set_verbose = True
+
 
 def test_lunary_logging():
     try:
@@ -24,6 +25,7 @@ def test_lunary_logging():
     except Exception as e:
         print(e)
 
+
 test_lunary_logging()
 
 
@@ -37,8 +39,6 @@ def test_lunary_template():
     except Exception as e:
         print(e)
 
-test_lunary_template()
-
 
 def test_lunary_logging_with_metadata():
     try:
@@ -50,19 +50,23 @@ def test_lunary_logging_with_metadata():
             metadata={
                 "run_name": "litellmRUN",
                 "project_name": "litellm-completion",
-                "tags": ["tag1", "tag2"]
+                "tags": ["tag1", "tag2"],
             },
         )
         print(response)
     except Exception as e:
         print(e)
 
-test_lunary_logging_with_metadata()
 
 def test_lunary_with_tools():
     import litellm
 
-    messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris?",
+        }
+    ]
     tools = [
         {
             "type": "function",
@@ -90,12 +94,10 @@ def test_lunary_with_tools():
         tools=tools,
         tool_choice="auto",  # auto is default, but we'll be explicit
     )
-    
+
     response_message = response.choices[0].message
     print("\nLLM Response:\n", response.choices[0].message)
 
-
-test_lunary_with_tools()
 
 def test_lunary_logging_with_streaming_and_metadata():
     try:
@@ -114,5 +116,3 @@ def test_lunary_logging_with_streaming_and_metadata():
             continue
     except Exception as e:
         print(e)
-
-test_lunary_logging_with_streaming_and_metadata()
