@@ -154,7 +154,7 @@ async def check_view_exists():
             FROM 
             "LiteLLM_SpendLogs" 
             WHERE 
-            "startTime" >= (CURRENT_DATE - INTERVAL '20 days')
+            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
             GROUP BY 
             DATE("startTime"),
             "user",
