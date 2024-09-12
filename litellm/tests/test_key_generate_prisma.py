@@ -2762,6 +2762,7 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
         "team": "litellm-team3",
         "model_tpm_limit": {"gpt-4": 100},
         "model_rpm_limit": {"gpt-4": 2},
+        "tags": None,
     }
 
     # Update model tpm_limit and rpm_limit
@@ -2782,6 +2783,7 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
         "team": "litellm-team3",
         "model_tpm_limit": {"gpt-4": 200},
         "model_rpm_limit": {"gpt-4": 3},
+        "tags": None,
     }
 
 
@@ -2818,6 +2820,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     assert result["info"]["metadata"] == {
         "team": "litellm-team3",
         "guardrails": ["aporia-pre-call"],
+        "tags": None,
     }
 
     # Update model tpm_limit and rpm_limit
@@ -2836,6 +2839,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     assert result["info"]["metadata"] == {
         "team": "litellm-team3",
         "guardrails": ["aporia-pre-call", "aporia-post-call"],
+        "tags": None,
     }
 
 

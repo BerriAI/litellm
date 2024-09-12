@@ -269,10 +269,11 @@ class SlackAlerting(CustomLogger):
                     break
                 await asyncio.sleep(3)  # wait 3s before retrying for trace id
 
-            if litellm.litellm_core_utils.litellm_logging.langFuseLogger is not None:
-                base_url = (
-                    litellm.litellm_core_utils.litellm_logging.langFuseLogger.Langfuse.base_url
-                )
+            _langfuse_object = litellm_logging_obj._get_callback_object(
+                service_name="langfuse"
+            )
+            if _langfuse_object is not None:
+                base_url = _langfuse_object.Langfuse.base_url
                 return f"{base_url}/trace/{trace_id}"
         return None
 
