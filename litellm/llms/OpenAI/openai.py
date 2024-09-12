@@ -573,6 +573,7 @@ class OpenAIConfig:
             return litellm.OpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                model=model,
             )
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
