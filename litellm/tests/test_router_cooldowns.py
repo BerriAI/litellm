@@ -21,6 +21,7 @@ import openai
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
 
 @pytest.mark.asyncio
@@ -112,3 +113,40 @@ async def test_dynamic_cooldowns():
 
     assert "cooldown_time" in tmp_mock.call_args[0][0]["litellm_params"]
     assert tmp_mock.call_args[0][0]["litellm_params"]["cooldown_time"] == 0
+
+
+@pytest.mark.parametrize("num_deployments", [1, 2])
+def test_single_deployment_no_cooldowns(num_deployments):
+    """
+    Do not cooldown on single deployment.
+
+    Cooldown on multiple deployments.
+    """
+    model_list = []
+    for i in range(num_deployments):
+        model = DeploymentTypedDict(
+            model_name="gpt-3.5-turbo",
+            litellm_params=LiteLLMParamsTypedDict(
+                model="gpt-3.5-turbo",
+            ),
+        )
+        model_list.append(model)
+
+    router = Router(model_list=model_list, allowed_fails=0, num_retries=0)
+
+    with patch.object(
+        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
+    ) as mock_client:
+        try:
+            router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        if num_deployments == 1:
+            mock_client.assert_not_called()
+        else:
+            mock_client.assert_called_once()
