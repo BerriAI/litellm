@@ -170,7 +170,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest litellm/tests/ -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
