@@ -2741,33 +2741,12 @@ def prompt_factory(
     elif custom_llm_provider == "azure_text":
         return azure_text_pt(messages=messages)
     elif custom_llm_provider == "watsonx":
-        if "granite" in model and "chat" in model:
-            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
+        if "granite" in model and ("chat" in model or "lab" in model or "multilingual" in model):
+            # models like granite-13b-chat-v2, granite-20b-multilingual, and granite-7b-lab use a specific prompt template
             return ibm_granite_pt(messages=messages)
-        elif "ibm-mistral" in model and "instruct" in model:
-            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
+        elif "ibm-mistral/" in model or 'mistralai/' in model:
+            # models like ibm-mistral/mixtral-8x7b-instruct-v01 or mistralai/mistral-large use the mistral instruct prompt template
             return mistral_instruct_pt(messages=messages)
-        elif "meta-llama/llama-3" in model and "instruct" in model:
-            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
-            return custom_prompt(
-                role_dict={
-                    "system": {
-                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "user": {
-                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "assistant": {
-                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                },
-                messages=messages,
-                initial_prompt_value="<|begin_of_text|>",
-                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
-            )
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
