@@ -11,6 +11,42 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
+    "o1-preview-2024-09-12": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.00006,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
+    "o1-preview": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.00006,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
+    "o1-mini": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000012,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
+    "o1-mini-2024-09-12": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000012,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "gpt-4": {
         "max_tokens": 4096, 
         "max_input_tokens": 8192,
