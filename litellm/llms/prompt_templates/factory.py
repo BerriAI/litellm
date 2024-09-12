@@ -2292,7 +2292,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
 
 def _convert_to_bedrock_tool_call_result(
-    message: dict,
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
 ) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
@@ -2334,11 +2334,18 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    content = message.get("content", "")
+    content_str: str = ""
+    if isinstance(message["content"], str):
+        content_str = message["content"]
+    elif isinstance(message["content"], List):
+        content_list = message["content"]
+        for content in content_list:
+            if content["type"] == "text":
+                content_str += content["text"]
     name = message.get("name", "")
-    id = message.get("tool_call_id", str(uuid.uuid4()))
+    id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
-    tool_result_content_block = BedrockToolResultContentBlock(text=content)
+    tool_result_content_block = BedrockToolResultContentBlock(text=content_str)
     tool_result = BedrockToolResultBlock(
         content=[tool_result_content_block],
         toolUseId=id,
