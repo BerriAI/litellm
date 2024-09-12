@@ -1688,6 +1688,9 @@ class SpendLogsMetadata(TypedDict):
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
     """
 
+    additional_usage_values: Optional[
+        dict
+    ]  # covers provider-specific usage information - e.g. prompt caching
     user_api_key: Optional[str]
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
