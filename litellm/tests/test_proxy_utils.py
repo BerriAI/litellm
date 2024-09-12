@@ -209,7 +209,22 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
     # )
 
 
-def test_dynamic_logging_metadata_key_and_team_metadata():
+@pytest.mark.parametrize(
+    "callback_vars",
+    [
+        {
+            "langfuse_host": "https://us.cloud.langfuse.com",
+            "langfuse_public_key": "pk-lf-9636b7a6-c066",
+            "langfuse_secret_key": "sk-lf-7cc8b620",
+        },
+        {
+            "langfuse_host": "os.environ/LANGFUSE_HOST",
+            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+        },
+    ],
+)
+def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
     user_api_key_dict = UserAPIKeyAuth(
         token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
         key_name="sk-...63Fg",
@@ -228,11 +243,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata():
                 {
                     "callback_name": "langfuse",
                     "callback_type": "success",
-                    "callback_vars": {
-                        "langfuse_host": "https://us.cloud.langfuse.com",
-                        "langfuse_public_key": "pk-lf-9636b7a6-c066",
-                        "langfuse_secret_key": "sk-lf-7cc8b620",
-                    },
+                    "callback_vars": callback_vars,
                 }
             ]
         },
@@ -274,3 +285,6 @@ def test_dynamic_logging_metadata_key_and_team_metadata():
     callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
 
     assert callbacks is not None
+
+    for var in callbacks.callback_vars.values():
+        assert "os.environ" not in var
