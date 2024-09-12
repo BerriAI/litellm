@@ -376,6 +376,7 @@ class ChatCompletionFunctionMessage(TypedDict):
     role: Literal["function"]
     content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
     name: str
+    tool_call_id: Optional[str]
 
 
 class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
