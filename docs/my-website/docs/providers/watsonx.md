@@ -247,6 +247,17 @@ response = completion(
 )
 ```
 
+### Pass a diferent auth url
+
+You can also pass a different auth url to the completion and embedding functions so that authentication is done against an endpoint other than the default one (iam.cloud.ibm.com).
+
+```python
+os.environ['WATSONX_IAM_TOKEN_URL'] = 'http://my-iam-url/token'
+response = completion(
+    model="watsonx/ibm/granite-13b-chat-v2",
+    messages=[{ "content": "What is your favorite color?","role": "user"}],
+)
+```
 
 ## Supported IBM watsonx.ai Models
 
