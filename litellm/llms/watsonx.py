@@ -1,28 +1,27 @@
-import asyncio
-import json  # noqa: E401
-import time
+import json
 import types
-from contextlib import asynccontextmanager, contextmanager
+import time
+import asyncio
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import (
     Any,
-    AsyncContextManager,
     AsyncGenerator,
     AsyncIterator,
     Callable,
-    ContextManager,
     Dict,
     Generator,
     Iterator,
-    List,
     Optional,
+    Tuple,
     Union,
+    List,
 )
+from contextlib import contextmanager, asynccontextmanager
 
-import httpx  # type: ignore
-import requests  # type: ignore
-
+import httpx
+import requests
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.utils import (
@@ -224,6 +223,17 @@ class WatsonXAIEndpoint(str, Enum):
     PROMPTS = "/ml/v1/prompts"
     AVAILABLE_MODELS = "/ml/v1/foundation_model_specs"
 
+@dataclass
+class IBMAuthToken:
+    """
+    IBM IAM token object.
+    """
+    access_token: str
+    expiration: int
+
+    @property
+    def is_expired(self):
+        return time.time() > self.expiration
 
 class IBMWatsonXAI(BaseLLM):
     """
@@ -236,6 +246,7 @@ class IBMWatsonXAI(BaseLLM):
 
     def __init__(self) -> None:
         super().__init__()
+        self.request_manager = RequestManager()
 
     def _prepare_text_generation_req(
         self,
@@ -243,20 +254,11 @@ class IBMWatsonXAI(BaseLLM):
         prompt: str,
         stream: bool,
         optional_params: dict,
-        print_verbose: Optional[Callable] = None,
-    ) -> dict:
+    ) -> Tuple[dict, dict]:
         """
         Get the request parameters for text generation.
         """
-        api_params = self._get_api_params(optional_params, print_verbose=print_verbose)
-        # build auth headers
-        api_token = api_params.get("token")
-
-        headers = {
-            "Authorization": f"Bearer {api_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        api_args = self._get_endpoint_args(optional_params)
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
         # init the payload to the text generation call
@@ -265,14 +267,13 @@ class IBMWatsonXAI(BaseLLM):
             "moderations": optional_params.pop("moderations", {}),
             "parameters": optional_params,
         }
-        request_params = dict(version=api_params["api_version"])
         # text generation endpoint deployment or model / stream or not
         if model_id.startswith("deployment/"):
             # deployment models are passed in as 'deployment/<deployment_id>'
-            if api_params.get("space_id") is None:
+            if api_args.get("space_id") is None:
                 raise WatsonXAIError(
                     status_code=401,
-                    url=api_params["url"],
+                    url=api_args["url"],
                     message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
                 )
             deployment_id = "/".join(model_id.split("/")[1:])
@@ -284,22 +285,21 @@ class IBMWatsonXAI(BaseLLM):
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
             payload["model_id"] = model_id
-            payload["project_id"] = api_params["project_id"]
+            payload["project_id"] = api_args["project_id"]
             endpoint = (
                 WatsonXAIEndpoint.TEXT_GENERATION_STREAM
                 if stream
                 else WatsonXAIEndpoint.TEXT_GENERATION
             )
-        url = api_params["url"].rstrip("/") + endpoint
-        return dict(
-            method="POST", url=url, headers=headers, json=payload, params=request_params
+        url = api_args["url"].rstrip("/") + endpoint
+        req_params = dict(
+            method="POST", url=url, json=payload, params=dict(version=api_args["api_version"])
         )
+        return req_params, api_args
 
-    def _get_api_params(
-        self,
+    def _get_endpoint_args(
+        self, 
         params: dict,
-        print_verbose: Optional[Callable] = None,
-        generate_token: Optional[bool] = True,
     ) -> dict:
         """
         Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
@@ -307,7 +307,7 @@ class IBMWatsonXAI(BaseLLM):
         # Load auth variables from params
         url = params.pop("url", params.pop("api_base", params.pop("base_url", None)))
         api_key = params.pop("apikey", None)
-        token = params.pop("token", None)
+        token = params.pop("token", params.pop("watsonx_token", None))
         project_id = params.pop(
             "project_id", params.pop("watsonx_project", None)
         )  # watsonx.ai project_id - allow 'watsonx_project' to be consistent with how vertex project implementation works -> reduce provider-specific params
@@ -372,31 +372,18 @@ class IBMWatsonXAI(BaseLLM):
                     "watsonx_token", token
                 ),  # follow format of {provider}_token, same as azure - e.g. 'azure_ad_token=..'
             )
-
         # verify that all required credentials are present
         if url is None:
             raise WatsonXAIError(
                 status_code=401,
-                message="Error: Watsonx URL not set. Set WX_URL in environment variables or pass in as a parameter.",
-            )
-        if token is None and api_key is not None and generate_token:
-            # generate the auth token
-            if print_verbose is not None:
-                print_verbose("Generating IAM token for Watsonx.ai")
-            token = self.generate_iam_token(api_key)
-        elif token is None and api_key is None:
-            raise WatsonXAIError(
-                status_code=401,
-                url=url,
-                message="Error: API key or token not found. Set WX_API_KEY or WX_TOKEN in environment variables or pass in as a parameter.",
+                message="Error: Watsonx URL not set. Set WATSONX_URL in environment variables or pass in as a parameter.",
             )
         if project_id is None:
             raise WatsonXAIError(
                 status_code=401,
                 url=url,
-                message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
+                message="Error: Watsonx project_id not set. Set WATSONX_PROJECT_ID in environment variables or pass in as a parameter.",
             )
-
         return {
             "url": url,
             "api_key": api_key,
@@ -458,20 +445,26 @@ class IBMWatsonXAI(BaseLLM):
         Reference: https://cloud.ibm.com/apidocs/watsonx-ai#text-generation
         """
         stream = optional_params.pop("stream", False)
-
+        if timeout is not None and timeout != self.request_manager.timeout:
+            self.request_manager.set_timeout(timeout)
         # Load default configs
         config = IBMWatsonXAIConfig.get_config()
         for k, v in config.items():
-            if k not in optional_params:
+            if k not in optional_params and k!="stream":
                 optional_params[k] = v
-
         # Make prompt to send to model
         provider = model.split("/")[0]
         # model_name = "/".join(model.split("/")[1:])
         prompt = convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
-        model_response.model = model
+        model_response.model = 'watsonx/'+model if not model.startswith("watsonx/") else model
+        request_params, api_args = self._prepare_text_generation_req(
+            model_id=model,
+            prompt=prompt,
+            stream=stream,
+            optional_params=optional_params,
+        )
 
         def process_stream_response(
             stream_resp: Union[Iterator[str], AsyncIterator],
@@ -484,75 +477,65 @@ class IBMWatsonXAI(BaseLLM):
             )
             return streamwrapper
 
-        # create the function to manage the request to watsonx.ai
-        self.request_manager = RequestManager(logging_obj)
-
-        def handle_text_request(request_params: dict) -> ModelResponse:
+        # create the function to handle the request to watsonx.ai
+        def handle_text_request() -> ModelResponse:
             with self.request_manager.request(
-                request_params,
+                request_params, api_args,
                 input=prompt,
-                timeout=timeout,
+                logging_obj=logging_obj
             ) as resp:
                 json_resp = resp.json()
 
             return self._process_text_gen_response(json_resp, model_response)
 
-        async def handle_text_request_async(request_params: dict) -> ModelResponse:
+        async def handle_text_request_async() -> ModelResponse:
             async with self.request_manager.async_request(
-                request_params,
+                request_params, api_args, 
                 input=prompt,
-                timeout=timeout,
+                logging_obj=logging_obj
             ) as resp:
                 json_resp = resp.json()
             return self._process_text_gen_response(json_resp, model_response)
 
-        def handle_stream_request(request_params: dict) -> litellm.CustomStreamWrapper:
+        def handle_stream_request() -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             with self.request_manager.request(
-                request_params,
+                request_params, api_args,
                 stream=True,
                 input=prompt,
-                timeout=timeout,
+                logging_obj=logging_obj
             ) as resp:
                 streamwrapper = process_stream_response(resp.iter_lines())
             return streamwrapper
 
-        async def handle_stream_request_async(
-            request_params: dict,
-        ) -> litellm.CustomStreamWrapper:
+        async def handle_stream_request_async() -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             async with self.request_manager.async_request(
                 request_params,
+                api_args,
                 stream=True,
                 input=prompt,
-                timeout=timeout,
+                logging_obj=logging_obj
             ) as resp:
                 streamwrapper = process_stream_response(resp.aiter_lines())
             return streamwrapper
 
         try:
             ## Get the response from the model
-            req_params = self._prepare_text_generation_req(
-                model_id=model,
-                prompt=prompt,
-                stream=stream,
-                optional_params=optional_params,
-                print_verbose=print_verbose,
-            )
             if stream and (acompletion is True):
                 # stream and async text generation
-                return handle_stream_request_async(req_params)
+                return handle_stream_request_async()
             elif stream:
                 # streaming text generation
-                return handle_stream_request(req_params)
+                return handle_stream_request()
             elif acompletion is True:
                 # async text generation
-                return handle_text_request_async(req_params)
+                return handle_text_request_async()
             else:
                 # regular text generation
-                return handle_text_request(req_params)
+                return handle_text_request()
         except WatsonXAIError as e:
             raise e
         except Exception as e:
@@ -562,7 +545,7 @@ class IBMWatsonXAI(BaseLLM):
         self, json_resp: dict, model_response: Optional[EmbeddingResponse] = None
     ) -> EmbeddingResponse:
         if model_response is None:
-            model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
+            model_response = EmbeddingResponse(model='watsonx/'+json_resp.get("model_id", ''))
         results = json_resp.get("results", [])
         embedding_response = []
         for idx, result in enumerate(results):
@@ -576,15 +559,12 @@ class IBMWatsonXAI(BaseLLM):
         model_response.object = "list"
         model_response.data = embedding_response
         input_tokens = json_resp.get("input_token_count", 0)
-        setattr(
-            model_response,
-            "usage",
-            Usage(
-                prompt_tokens=input_tokens,
-                completion_tokens=0,
-                total_tokens=input_tokens,
-            ),
+        usage = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=0,
+            total_tokens=input_tokens,
         )
+        setattr(model_response, "usage", usage)
         return model_response
 
     def embedding(
@@ -611,46 +591,46 @@ class IBMWatsonXAI(BaseLLM):
                 optional_params[k] = v
 
         model_response.model = model
-
-        # Load auth variables from environment variables
+        if not model_response.model.startswith("watsonx/"):
+            model_response.model = "watsonx/" + model_response.model
+        
+        # Load auth variables from env
         if isinstance(input, str):
             input = [input]
         if api_key is not None:
             optional_params["api_key"] = api_key
-        api_params = self._get_api_params(optional_params)
-        # build auth headers
-        api_token = api_params.get("token")
-        headers = {
-            "Authorization": f"Bearer {api_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        api_args = self._get_endpoint_args(optional_params)
         # init the payload to the text generation call
         payload = {
             "inputs": input,
             "model_id": model,
-            "project_id": api_params["project_id"],
+            "project_id": api_args["project_id"],
             "parameters": optional_params,
         }
-        request_params = dict(version=api_params["api_version"])
-        url = api_params["url"].rstrip("/") + WatsonXAIEndpoint.EMBEDDINGS
+        request_params = dict(version=api_args["api_version"])
+        url = api_args["url"].rstrip("/") + WatsonXAIEndpoint.EMBEDDINGS
         req_params = {
             "method": "POST",
             "url": url,
-            "headers": headers,
             "json": payload,
             "params": request_params,
         }
-        request_manager = RequestManager(logging_obj)
-
-        def handle_embedding(request_params: dict) -> EmbeddingResponse:
-            with request_manager.request(request_params, input=input) as resp:
+        def handle_embedding(request_params: dict) -> litellm.EmbeddingResponse:
+            with self.request_manager.request(
+                request_params,
+                api_args,
+                input=input,
+                logging_obj=logging_obj
+            ) as resp:
                 json_resp = resp.json()
             return self._process_embedding_response(json_resp, model_response)
 
-        async def handle_aembedding(request_params: dict) -> EmbeddingResponse:
-            async with request_manager.async_request(
-                request_params, input=input
+        async def handle_aembedding(request_params: dict) -> litellm.EmbeddingResponse:
+            async with self.request_manager.async_request(
+                request_params, 
+                api_args,
+                input=input,
+                logging_obj=logging_obj
             ) as resp:
                 json_resp = resp.json()
             return self._process_embedding_response(json_resp, model_response)
@@ -665,42 +645,40 @@ class IBMWatsonXAI(BaseLLM):
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
 
-    def generate_iam_token(self, api_key=None, **params):
-        headers = {}
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        if api_key is None:
-            api_key = get_secret("WX_API_KEY") or get_secret("WATSONX_API_KEY")
-        if api_key is None:
-            raise ValueError("API key is required")
-        headers["Accept"] = "application/json"
-        data = {
-            "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
-            "apikey": api_key,
-        }
-        response = httpx.post(
-            "https://iam.cloud.ibm.com/identity/token", data=data, headers=headers
-        )
-        response.raise_for_status()
-        json_data = response.json()
-        iam_access_token = json_data["access_token"]
-        self.token = iam_access_token
-        return iam_access_token
+    def generate_iam_token(self, api_key=None, async_:bool=False, **params):
+        iam_token = self.request_manager.get_auth_token(api_key, async_=async_, **params)
+        if async_:
+            async def get_token_async():
+                return (await iam_token).access_token
+            return get_token_async()
+        return iam_token.access_token
 
-    def get_available_models(self, *, ids_only: bool = True, **params):
-        api_params = self._get_api_params(params)
-        headers = {
-            "Authorization": f"Bearer {api_params['token']}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        request_params = dict(version=api_params["api_version"])
-        url = api_params["url"].rstrip("/") + WatsonXAIEndpoint.AVAILABLE_MODELS
-        req_params = dict(method="GET", url=url, headers=headers, params=request_params)
-        with RequestManager(logging_obj=None).request(req_params) as resp:
-            json_resp = resp.json()
-        if not ids_only:
-            return json_resp
-        return [res["model_id"] for res in json_resp["resources"]]
+    def get_available_models(self, *, ids_only: bool = True, async_:bool=False, **params):
+        api_args = self._get_endpoint_args(params)
+        url = api_args["url"].rstrip("/") + WatsonXAIEndpoint.AVAILABLE_MODELS
+        req_params = dict(
+            method="GET", 
+            url=url, 
+            params=dict(version=api_args["api_version"]),
+        )
+
+        def get_models():
+            with self.request_manager.request(req_params, api_args) as resp:
+                json_resp = resp.json()
+            if not ids_only:
+                return json_resp
+            return [res["model_id"] for res in json_resp["resources"]]
+        
+        async def get_models_async():
+            async with self.request_manager.async_request(req_params, api_args) as resp:
+                json_resp = resp.json()
+            if not ids_only:
+                return json_resp
+            return [res["model_id"] for res in json_resp["resources"]]
+        
+        if async_:
+            return get_models_async()
+        return get_models()
 
 
 class RequestManager:
@@ -719,65 +697,57 @@ class RequestManager:
     ```
     """
 
-    def __init__(self, logging_obj=None):
-        self.logging_obj = logging_obj
-
-    def pre_call(
-        self,
-        request_params: dict,
-        input: Optional[Any] = None,
-        is_async: Optional[bool] = False,
-    ):
-        if self.logging_obj is None:
-            return
-        request_str = (
-            f"response = {'await ' if is_async else ''}{request_params['method']}(\n"
-            f"\turl={request_params['url']},\n"
-            f"\tjson={request_params.get('json')},\n"
-            f")"
+    def __init__(self, timeout: Optional[float] = None) -> None:
+        self._auth_token = None
+        if timeout is None:
+            timeout = float(get_secret("WATSONX_TIMEOUT") or 600)
+        self.timeout = timeout
+        self.async_handler = AsyncHTTPHandler(
+            timeout=httpx.Timeout(
+                timeout=timeout,
+                connect=5.0
+            ),
         )
-        self.logging_obj.pre_call(
-            input=input,
-            api_key=request_params["headers"].get("Authorization"),
-            additional_args={
-                "complete_input_dict": request_params.get("json"),
-                "request_str": request_str,
-            },
-        )
-
-    def post_call(self, resp, request_params):
-        if self.logging_obj is None:
-            return
-        self.logging_obj.post_call(
-            input=input,
-            api_key=request_params["headers"].get("Authorization"),
-            original_response=json.dumps(resp.json()),
-            additional_args={
-                "status_code": resp.status_code,
-                "complete_input_dict": request_params.get(
-                    "data", request_params.get("json")
-                ),
-            },
+    
+    def set_timeout(self, timeout: float):
+        self.timeout = timeout
+        self.async_handler.timeout = httpx.Timeout(
+            timeout=timeout,
+            connect=5.0
         )
 
     @contextmanager
     def request(
         self,
         request_params: dict,
+        api_args: dict,
+        logging_obj=None,
         stream: bool = False,
-        input: Optional[Any] = None,
-        timeout=None,
+        input: Optional[Any] = None
     ) -> Generator[requests.Response, None, None]:
         """
         Returns a context manager that yields the response from the request.
         """
-        self.pre_call(request_params, input)
-        if timeout:
-            request_params["timeout"] = timeout
         if stream:
             request_params["stream"] = stream
+        request_params["timeout"] = self.timeout
+        request_params = self._pre_call(
+            request_params, api_args,
+            input=input,
+            logging_obj=logging_obj,
+            is_async=False,
+        )
         try:
-            resp = requests.request(**request_params)
+            retries = 0
+            while retries < 3:
+                resp = requests.request(**request_params)
+                if resp.status_code in [429, 503, 504, 520]:
+                    # to handle rate limiting and service unavailable errors
+                    # see: ibm_watsonx_ai.foundation_models.inference.base_model_inference.BaseModelInference._send_inference_payload
+                    time.sleep(2**retries)
+                    retries += 1
+                else:
+                    break
             if not resp.ok:
                 raise WatsonXAIError(
                     status_code=resp.status_code,
@@ -787,29 +757,26 @@ class RequestManager:
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
         if not stream:
-            self.post_call(resp, request_params)
+            self._post_call(resp, request_params, input=input, logging_obj=logging_obj)
 
     @asynccontextmanager
     async def async_request(
         self,
         request_params: dict,
+        api_args,
+        logging_obj=None,
         stream: bool = False,
-        input: Optional[Any] = None,
-        timeout=None,
+        input: Optional[Any] = None
     ) -> AsyncGenerator[httpx.Response, None]:
-        self.pre_call(request_params, input, is_async=True)
-        if timeout:
-            request_params["timeout"] = timeout
         if stream:
             request_params["stream"] = stream
+        request_params = self._pre_call(
+            request_params, api_args,
+            input=input, 
+            logging_obj=logging_obj,
+            is_async=True,
+        )
         try:
-            self.async_handler = AsyncHTTPHandler(
-                timeout=httpx.Timeout(
-                    timeout=request_params.pop("timeout", 600.0), connect=5.0
-                ),
-            )
-            if "json" in request_params:
-                request_params["data"] = json.dumps(request_params.pop("json", {}))
             method = request_params.pop("method")
             retries = 0
             while retries < 3:
@@ -833,6 +800,143 @@ class RequestManager:
             # await async_handler.close()
         except Exception as e:
             raise e
-            raise WatsonXAIError(status_code=500, message=str(e))
+            # raise WatsonXAIError(status_code=500, message=str(e))
         if not stream:
-            self.post_call(resp, request_params)
+            self._post_call(resp, request_params, input=input, logging_obj=logging_obj)
+
+    def get_auth_token(self, api_key=None, async_:bool=False, **params):
+        
+        try:
+            req_params = self._get_auth_token_request_params(api_key=api_key, **params)
+        except Exception as e:
+            raise WatsonXAIError(
+                status_code=500,
+                message=f"Error generating auth token: {str(e)}",
+            )
+
+        async def get_token_async():
+            if isinstance(self._auth_token, IBMAuthToken) and not self._auth_token.is_expired:
+                return self._auth_token
+            # renew the token
+            try:
+                resp = await self.async_handler.post(**req_params)
+                resp.raise_for_status()
+                json_data = resp.json()
+                self._auth_token = IBMAuthToken(
+                    access_token=json_data["access_token"],
+                    expiration=json_data["expiration"],
+                )
+            except Exception as e:
+                raise WatsonXAIError(
+                    status_code=500,
+                    message=f"Error generating auth token: {str(e)}",
+                )
+            return self._auth_token
+        
+        def get_token():
+            if isinstance(self._auth_token, IBMAuthToken) and not self._auth_token.is_expired:
+                return self._auth_token
+            # renew the token
+            try:
+                resp = requests.post(**req_params)
+                resp.raise_for_status()
+                json_data = resp.json()
+                self._auth_token = IBMAuthToken(
+                    access_token=json_data["access_token"],
+                    expiration=json_data["expiration"],
+                )
+            except Exception as e:
+                raise WatsonXAIError(
+                    status_code=500,
+                    message=f"Error generating auth token: {str(e)}",
+                )
+            return self._auth_token
+
+        if async_:
+            return get_token_async()
+        return get_token()
+    
+    def _get_auth_token_request_params(self, **kwargs):
+        auth_type = (get_secret("WATSONX_AUTH_TYPE") or "iam").lower()
+        if auth_type == "iam":
+            api_key = kwargs.pop("api_key", None)
+            if api_key is None:
+                api_key = get_secret("WATSONX_APIKEY") or get_secret("WATSONX_API_KEY") or get_secret("WX_API_KEY")
+            if api_key is None:
+                raise ValueError("API key is required for IAM Auth token generation")
+            headers = {}
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            data = {
+                "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
+                "apikey": api_key,
+            }
+            iam_token_url = get_secret("WATSONX_IAM_TOKEN_URL") or "https://iam.cloud.ibm.com/identity/token"
+            req_params = dict(url=iam_token_url, data=data, headers=headers, params=kwargs)
+            return req_params
+        elif auth_type == "cp4d":
+            raise NotImplementedError("CP4D authentication is not yet supported. Pass token=<your-bearer-token> instead.")
+            # cp4d_username = kwargs.pop("username", get_secret("WATSONX_USERNAME"))
+            # cp4d_password = kwargs.pop("password", get_secret("WATSONX_PASSWORD"))
+            # cp4d_url = kwargs.pop("url", get_secret("WATSONX_CP4D_URL")) or get_secret("WATSONX_URL")
+            # if cp4d_username is None or cp4d_password is None or cp4d_url is None:
+            #     raise ValueError(
+            #         "CP4D authentication requires passing username, password and url "
+            #         "(env: WATSONX_USERNAME, WATSONX_PASSWORD, WATSONX_CP4D_URL)"
+            #     )
+
+    def _pre_call(
+        self,
+        request_params: dict,
+        api_args: dict,
+        input: Optional[Any] = None,
+        logging_obj = None,
+        is_async: Optional[bool] = False
+    ):
+        """
+        Set the Authorization header for the request and log the pre-call details.
+        """
+
+        if request_params.get("headers", {}).get("Authorization") is None:
+            if request_params.get('headers') is None:
+                request_params['headers'] = {}
+            if api_args.get("token") is not None:
+                access_token = str(api_args.get("token"))
+            else:
+                # iam token is generated sync to avoid issues with multiple async calls generating multiple tokens
+                access_token = self.get_auth_token(api_args.get('api_key')).access_token
+            request_params["headers"]["Authorization"] = f"Bearer {access_token}"
+        
+        if logging_obj is not None:
+            request_str = (
+                f"response = {'await ' if is_async else ''}{request_params['method']}(\n"
+                f"\turl={request_params['url']},\n"
+                f"\tjson={request_params.get('json')},\n"
+                f")"
+            )
+            logging_obj.pre_call(
+                input=input,
+                api_key=request_params["headers"].get("Authorization"),
+                additional_args={
+                    "complete_input_dict": request_params.get("json"),
+                    "request_str": request_str,
+                },
+            )  
+        return request_params
+
+    def _post_call(self, resp, request_params, input, logging_obj=None):
+        """
+        Log the post-call details.
+        """
+        if logging_obj is None:
+            return
+        logging_obj.post_call(
+            input=input,
+            api_key=request_params["headers"].get("Authorization"),
+            original_response=json.dumps(resp.json()),
+            additional_args={
+                "status_code": resp.status_code,
+                "complete_input_dict": request_params.get(
+                    "data", request_params.get("json")
+                ),
+            },
+        )
