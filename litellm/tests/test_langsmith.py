@@ -22,6 +22,61 @@ litellm.set_verbose = True
 import time
 
 
+@pytest.mark.asyncio
+async def test_langsmith_queue_logging():
+    try:
+        # Initialize LangsmithLogger
+        test_langsmith_logger = LangsmithLogger()
+
+        litellm.callbacks = [test_langsmith_logger]
+        test_langsmith_logger.batch_size = 6
+        litellm.set_verbose = True
+
+        # Make multiple calls to ensure we don't hit the batch size
+        for _ in range(5):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
+
+        await asyncio.sleep(3)
+
+        # Check that logs are in the queue
+        assert len(test_langsmith_logger.log_queue) == 5
+
+        # Now make calls to exceed the batch size
+        for _ in range(3):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
+
+        # Wait a short time for any asynchronous operations to complete
+        await asyncio.sleep(1)
+
+        print(
+            "Length of langsmith log queue: {}".format(
+                len(test_langsmith_logger.log_queue)
+            )
+        )
+        # Check that the queue was flushed after exceeding batch size
+        assert len(test_langsmith_logger.log_queue) < 5
+
+        # Clean up
+        for cb in litellm.callbacks:
+            if isinstance(cb, LangsmithLogger):
+                await cb.async_httpx_client.client.aclose()
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 @pytest.mark.asyncio()
 async def test_async_langsmith_logging():
