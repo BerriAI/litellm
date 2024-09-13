@@ -5682,7 +5682,7 @@ class Router:
             return allowed_fails_policy.ContentPolicyViolationErrorAllowedFails
 
     def _initialize_alerting(self):
-        from litellm.integrations.slack_alerting import SlackAlerting
+        from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 
         router_alerting_config: AlertingConfig = self.alerting_config
 
