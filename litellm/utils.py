@@ -2208,42 +2208,34 @@ def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bo
         if model_info.get("supports_vision", False) is True:
             return True
         return False
-    except Exception:
+    except Exception as e:
         verbose_logger.error(
-            f"Model not supports response_schema. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+            f"Model not found or error in checking vision support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
         return False
 
 
-def supports_parallel_function_calling(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+def supports_parallel_function_calling(model: str):
     """
     Check if the given model supports parallel function calling and return True if it does, False otherwise.
 
     Parameters:
         model (str): The model to check for support of parallel function calling.
-        custom_llm_provider (Optional[str]): The provider to be checked.
 
     Returns:
         bool: True if the model supports parallel function calling, False otherwise.
 
     Raises:
-        Exception: If the model is not found or there's an error in retrieval.
+        Exception: If the model is not found in the model_cost dictionary.
     """
-    try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
+    if model in litellm.model_cost:
+        model_info = litellm.model_cost[model]
         if model_info.get("supports_parallel_function_calling", False) is True:
             return True
         return False
-    except Exception as e:
+    else:
         raise Exception(
-            f"Model not found or error in checking parallel function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+            f"Model not supports parallel function calling. You passed model={model}."
         )
 
 ####### HELPER FUNCTIONS ################
