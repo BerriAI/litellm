@@ -14,9 +14,5 @@ model_list:
 
 general_settings: 
  master_key: sk-1234 
- alerting: ["slack"]
- alerting_threshold: 0.00001
 
-litellm_settings:
-  callbacks: ["otel"]
 

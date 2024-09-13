@@ -13,6 +13,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 
 
 def make_json_serializable(payload):
@@ -30,7 +31,7 @@ def make_json_serializable(payload):
     return payload
 
 
-class DataDogLogger:
+class DataDogLogger(CustomBatchLogger):
     # Class variables or attributes
     def __init__(
         self,
@@ -53,14 +54,10 @@ class DataDogLogger:
             print_verbose(f"Got exception on init s3 client {str(e)}")
             raise e
 
-    async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, user_id
-    ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.log_success_event(self, kwargs, response_obj, start_time, end_time)
 
-    def log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
-    ):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             # Define DataDog client
             from datadog_api_client.v2 import ApiClient
