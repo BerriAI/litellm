@@ -1315,11 +1315,12 @@ import openai
 
 
 def test_completion_gpt4_turbo():
+    litellm.set_verbose = True
     try:
         response = completion(
             model="gpt-4-1106-preview",
             messages=messages,
-            max_tokens=10,
+            max_completion_tokens=10,
         )
         print(response)
     except openai.RateLimitError:
