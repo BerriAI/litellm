@@ -3021,7 +3021,7 @@ async def startup_event():
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
-def model_list(
+async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """

@@ -496,7 +496,7 @@ async def get_team_object(
 
     if check_cache_only:
         raise Exception(
-            f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}. Create team via `/team/new` call."
+            f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
         )
 
     # else, check db

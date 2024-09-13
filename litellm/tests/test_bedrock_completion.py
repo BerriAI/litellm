@@ -5,6 +5,8 @@ import traceback
 
 from dotenv import load_dotenv
 
+import litellm.types
+
 load_dotenv()
 import io
 import os
@@ -1232,3 +1234,56 @@ def test_bedrock_cross_region_inference():
         max_tokens=10,
         temperature=0.1,
     )
+
+
+from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+
+
+def test_bedrock_converse_translation_tool_message():
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+    litellm.set_verbose = True
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        {
+            "tool_call_id": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": [
+                {
+                    "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+                    "type": "text",
+                }
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    print(translated_msg)
+    assert translated_msg == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
+                },
+                {
+                    "toolResult": {
+                        "content": [
+                            {
+                                "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
+                            }
+                        ],
+                        "toolUseId": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
+                    }
+                },
+            ],
+        }
+    ]
