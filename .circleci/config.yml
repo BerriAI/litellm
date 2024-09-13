@@ -49,7 +49,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.40.0
+            pip install openai==1.45.0
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
@@ -105,7 +105,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py"
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
           no_output_timeout: 120m
 
       # Store test results
@@ -146,6 +146,60 @@ jobs:
             python -m pytest -vv tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
+      # Store test results
+      - store_test_results:
+          path: test-results
+  litellm_router_testing: # Runs all tests with the "router" keyword
+    docker:
+        - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest litellm/tests/ -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      # Store test results
+      - store_test_results:
+          path: test-results
+  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
+    docker:
+        - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest litellm/tests/ -vv -k "assistants" -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
       # Store test results
       - store_test_results:
           path: test-results
@@ -259,7 +313,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.40.0"
+            pip install "openai==1.45.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -352,7 +406,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.40.0"
+            pip install "openai==1.45.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -459,7 +513,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
-            pip install "openai==1.40.0"
+            pip install "openai==1.45.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -604,6 +658,18 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_assistants_api_testing:
+          filters:
+              branches:
+                only:
+                  - main
+                  - /litellm_.*/
+      - litellm_router_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - ui_endpoint_testing:
           filters:
             branches:
@@ -645,6 +711,10 @@ workflows:
             - local_testing
             - build_and_test
             - load_testing
+            - litellm_router_testing
+            - litellm_assistants_api_testing
+            - ui_endpoint_testing
+            - installing_litellm_on_python
             - proxy_log_to_otel_tests
             - proxy_pass_through_endpoint_tests
           filters:

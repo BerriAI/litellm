@@ -708,6 +708,131 @@ response = await client.chat.completions.create(
 </TabItem>
 </Tabs>
 
+## Usage - PDF / Videos / etc. Files
+
+### Inline Data (e.g. audio stream)
+
+LiteLLM follows the OpenAI format and accepts sending inline data as an encoded base64 string. 
+
+The format to follow is 
+
+```python
+data:<mime_type>;base64,<encoded_data>
+```
+
+** LITELLM CALL **
+
+```python
+import litellm
+from pathlib import Path
+import base64
+import os
+
+os.environ["GEMINI_API_KEY"] = "" 
+
+litellm.set_verbose = True # 👈 See Raw call 
+
+audio_bytes = Path("speech_vertex.mp3").read_bytes()
+encoded_data = base64.b64encode(audio_bytes).decode("utf-8")
+print("Audio Bytes = {}".format(audio_bytes))
+model = "gemini/gemini-1.5-flash"
+response = litellm.completion(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please summarize the audio."},
+                {
+                    "type": "image_url",
+                    "image_url": "data:audio/mp3;base64,{}".format(encoded_data), # 👈 SET MIME_TYPE + DATA
+                },
+            ],
+        }
+    ],
+)
+```
+
+** Equivalent GOOGLE API CALL ** 
+
+```python
+# Initialize a Gemini model appropriate for your use case.
+model = genai.GenerativeModel('models/gemini-1.5-flash')
+
+# Create the prompt.
+prompt = "Please summarize the audio."
+
+# Load the samplesmall.mp3 file into a Python Blob object containing the audio
+# file's bytes and then pass the prompt and the audio to Gemini.
+response = model.generate_content([
+    prompt,
+    {
+        "mime_type": "audio/mp3",
+        "data": pathlib.Path('samplesmall.mp3').read_bytes()
+    }
+])
+
+# Output Gemini's response to the prompt and the inline audio.
+print(response.text)
+```
+
+### https:// file 
+
+```python
+import litellm
+import os
+
+os.environ["GEMINI_API_KEY"] = "" 
+
+litellm.set_verbose = True # 👈 See Raw call 
+
+model = "gemini/gemini-1.5-flash"
+response = litellm.completion(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please summarize the file."},
+                {
+                    "type": "image_url",
+                    "image_url": "https://storage..." # 👈 SET THE IMG URL
+                },
+            ],
+        }
+    ],
+)
+```
+
+### gs:// file 
+
+```python
+import litellm
+import os
+
+os.environ["GEMINI_API_KEY"] = "" 
+
+litellm.set_verbose = True # 👈 See Raw call 
+
+model = "gemini/gemini-1.5-flash"
+response = litellm.completion(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please summarize the file."},
+                {
+                    "type": "image_url",
+                    "image_url": "gs://..." # 👈 SET THE cloud storage bucket url
+                },
+            ],
+        }
+    ],
+)
+```
+
+
 ## Chat Models
 :::tip
 

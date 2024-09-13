@@ -6,19 +6,17 @@ model_list:
       vertex_project: "adroit-crow-413218"
       vertex_location: "us-central1"
       vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
-  - model_name: fake-openai-endpoint
+  - model_name: fake-azure-endpoint
     litellm_params:
-      model: openai/fake
+      model: openai/429
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app
 
 general_settings: 
  master_key: sk-1234 
+ alerting: ["slack"]
+ alerting_threshold: 0.00001
 
 litellm_settings:
-
   callbacks: ["otel"]
-
-  success_callback: ["langsmith", "prometheus"]
-  service_callback: ["prometheus_system"]
 
