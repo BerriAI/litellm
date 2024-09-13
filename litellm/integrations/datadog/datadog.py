@@ -1,18 +1,25 @@
 """
-DataDog Integreation - sends logs to /api/v2/log
+DataDog Integration - sends logs to /api/v2/log
 
 DD Reference API: https://docs.datadoghq.com/api/latest/logs
 
 `async_log_success_event` - used by litellm proxy to send logs to datadog
 `log_success_event` - sync version of logging to DataDog, only used on litellm Python SDK, if user opts in to using sync functions
+
+async_log_success_event will store batch of DD_MAX_BATCH_SIZE in memory and flush to Datadog once it reaches DD_MAX_BATCH_SIZE or every 5 seconds
+
+For batching specific details see CustomBatchLogger class
 """
 
 import asyncio
 import datetime
 import os
+import sys
 import traceback
 import uuid
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
+
+from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,8 +30,10 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-from .types import DatadogPayload
+from .types import DD_ERRORS, DatadogPayload
 from .utils import make_json_serializable
+
+DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
 
 
 class DataDogLogger(CustomBatchLogger):
@@ -57,7 +66,9 @@ class DataDogLogger(CustomBatchLogger):
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
-            super().__init__(**kwargs, flush_lock=self.flush_lock)
+            super().__init__(
+                **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE
+            )
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog: Got exception on init Datadog client {str(e)}"
@@ -117,14 +128,16 @@ class DataDogLogger(CustomBatchLogger):
                 verbose_logger.exception("Datadog: log_queue does not exist")
                 return
 
-            verbose_logger.debug("Datadog - about to log events on %s", self.intake_url)
-            response = await self.async_client.post(
-                url=self.intake_url,
-                json=self.log_queue,
-                headers={
-                    "DD-API-KEY": self.DD_API_KEY,
-                },
+            verbose_logger.debug(
+                "Datadog - about to flush %s events on %s",
+                len(self.log_queue),
+                self.intake_url,
             )
+
+            response = await self.async_send_compressed_data(self.log_queue)
+            if response.status_code == 413:
+                verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
+                return
 
             response.raise_for_status()
             if response.status_code != 202:
@@ -275,5 +288,28 @@ class DataDogLogger(CustomBatchLogger):
             message=payload,
             service="litellm-server",
         )
-
         return dd_payload
+
+    async def async_send_compressed_data(self, data: List) -> Response:
+        """
+        Async helper to send compressed data to datadog self.intake_url
+
+        Datadog recommends using gzip to compress data
+        https://docs.datadoghq.com/api/latest/logs/
+
+        "Datadog recommends sending your logs compressed. Add the Content-Encoding: gzip header to the request when sending"
+        """
+        import gzip
+        import json
+
+        compressed_data = gzip.compress(json.dumps(data).encode("utf-8"))
+        response = await self.async_client.post(
+            url=self.intake_url,
+            data=compressed_data,
+            headers={
+                "DD-API-KEY": self.DD_API_KEY,
+                "Content-Encoding": "gzip",
+                "Content-Type": "application/json",
+            },
+        )
+        return response
