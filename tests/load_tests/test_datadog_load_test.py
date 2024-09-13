@@ -9,15 +9,19 @@ import pytest
 import logging
 from litellm._logging import verbose_logger
 
-verbose_logger.setLevel(logging.DEBUG)
-
 
 def test_datadog_logging_async():
     try:
-        os.environ["DATADOG_API_KEY"] = "anything"
+        # litellm.set_verbose = True
+        os.environ["DD_API_KEY"] = "anything"
         os.environ["_DATADOG_BASE_URL"] = (
             "http://localhost:8090"  # Adjust if using a different site
         )
+
+        os.environ["DD_SITE"] = "us5.datadoghq.com"
+        os.environ["DD_API_KEY"] = "xxxxxx"
+
+        litellm.success_callback = ["datadog"]
 
         percentage_diffs = []
 
