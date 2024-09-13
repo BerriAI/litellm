@@ -2830,34 +2830,34 @@ def test_gemini_function_call_parameter_in_messages_2():
     ]
 
 
-import base64
-from pathlib import Path
-
-
-@pytest.mark.asyncio
-async def test_gemini_mp3_call():
-    load_vertex_ai_credentials()
+def test_gemini_finetuned_endpoint():
     litellm.set_verbose = True
-    # speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-    audio_bytes = Path("speech_vertex.mp3").read_bytes()
-    encoded_data = base64.b64encode(audio_bytes).decode("utf-8")
-    model = "vertex_ai/gemini-1.5-flash"
-    response = await litellm.acompletion(
-        model=model,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Please summarize the audio."},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "data:audio/mp3;base64,{}".format(encoded_data)
-                        },
-                    },
-                ],
-            }
-        ],
-    )
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    print(response)
+    # Set up the messages
+    messages = [
+        {"role": "system", "content": """Use search for most queries."""},
+        {"role": "user", "content": """search for weather in boston (use `search`)"""},
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response = completion(
+                model="vertex_ai/4965075652664360960",
+                messages=messages,
+                tool_choice="auto",
+                client=client,
+                metadata={"model_info": {"base_model": "vertex_ai/gemini-1.5-pro"}},
+            )
+        except Exception as e:
+            print(e)
+
+        print(mock_client.call_args.kwargs)
+
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].endswith(
+            "endpoints/4965075652664360960:generateContent"
+        )

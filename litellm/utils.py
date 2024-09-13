@@ -76,6 +76,7 @@ from litellm.types.llms.openai import (
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
     CallTypes,
     ChatCompletionDeltaToolCall,
@@ -84,7 +85,6 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
-    FileTypes,
     ImageResponse,
     Message,
     ModelInfo,
@@ -2365,6 +2365,7 @@ def get_litellm_params(
         "text_completion": text_completion,
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
+        "base_model": _get_base_model_from_litellm_call_metadata(metadata=metadata),
     }
 
     return litellm_params
@@ -10962,6 +10963,21 @@ def get_logging_id(start_time, response_obj):
         return None
 
 
+def _get_base_model_from_litellm_call_metadata(
+    metadata: Optional[dict],
+) -> Optional[str]:
+    if metadata is None:
+        return None
+
+    if metadata is not None:
+        model_info = metadata.get("model_info", {})
+
+        if model_info is not None:
+            base_model = model_info.get("base_model", None)
+            if base_model is not None:
+                return base_model
+
+
 def _get_base_model_from_metadata(model_call_details=None):
     if model_call_details is None:
         return None
@@ -10970,13 +10986,7 @@ def _get_base_model_from_metadata(model_call_details=None):
     if litellm_params is not None:
         metadata = litellm_params.get("metadata", {})
 
-        if metadata is not None:
-            model_info = metadata.get("model_info", {})
-
-            if model_info is not None:
-                base_model = model_info.get("base_model", None)
-                if base_model is not None:
-                    return base_model
+        return _get_base_model_from_litellm_call_metadata(metadata=metadata)
     return None
 
 

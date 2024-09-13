@@ -2123,7 +2123,10 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif "gemini" in model:
+            elif "gemini" in model or (
+                litellm_params.get("base_model") is not None
+                and "gemini" in litellm_params["base_model"]
+            ):
                 model_response = vertex_chat_completion.completion(  # type: ignore
                     model=model,
                     messages=messages,
