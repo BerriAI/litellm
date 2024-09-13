@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamAddMemberResponse,
+    TeamBase,
     TeamInfoResponseObject,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
@@ -36,6 +37,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -240,7 +242,7 @@ async def new_team(
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
         complete_team_data.budget_reset_at = reset_at
 
-    team_row = await prisma_client.insert_data(
+    team_row: LiteLLM_TeamTable = await prisma_client.insert_data(  # type: ignore
         data=complete_team_data.json(exclude_none=True), table_name="team"
     )
 
@@ -462,9 +464,6 @@ async def team_member_add(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
-        create_audit_log_for_update,
-        get_team_object,
         litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
@@ -932,9 +931,12 @@ async def delete_team(
     if litellm.store_audit_logs is True:
         # make an audit log for each team deleted
         for team_id in data.team_ids:
-            team_row = await prisma_client.get_data(  # type: ignore
+            team_row: Optional[LiteLLM_TeamTable] = await prisma_client.get_data(  # type: ignore
                 team_id=team_id, table_name="team", query_type="find_unique"
             )
+
+            if team_row is None:
+                continue
 
             _team_row = team_row.json(exclude_none=True)
 
@@ -1044,6 +1046,9 @@ async def team_info(
             expires=datetime.now(),
         )
 
+        if keys is None:
+            keys = []
+
         if team_info is None:
             ## make sure we still return a total spend ##
             spend = 0
@@ -1055,7 +1060,7 @@ async def team_info(
         for key in keys:
             try:
                 key = key.model_dump()  # noqa
-            except:
+            except Exception:
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
@@ -1072,7 +1077,7 @@ async def team_info(
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=team_info,
+            team_info=TeamBase(**team_info),  # type: ignore
             keys=keys,
             team_memberships=returned_tm,
         )

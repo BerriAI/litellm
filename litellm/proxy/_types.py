@@ -99,15 +99,15 @@ class LitellmUserRoles(str, enum.Enum):
         return ui_labels.get(self.value, "")
 
 
-class LitellmTableNames(str, enum.Enum):
+class LitellmTableNames(enum.Enum):
     """
     Enum for Table Names used by LiteLLM
     """
 
-    TEAM_TABLE_NAME: str = "LiteLLM_TeamTable"
-    USER_TABLE_NAME: str = "LiteLLM_UserTable"
-    KEY_TABLE_NAME: str = "LiteLLM_VerificationToken"
-    PROXY_MODEL_TABLE_NAME: str = "LiteLLM_ModelTable"
+    TEAM_TABLE_NAME = "LiteLLM_TeamTable"
+    USER_TABLE_NAME = "LiteLLM_UserTable"
+    KEY_TABLE_NAME = "LiteLLM_VerificationToken"
+    PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
 
 
 AlertType = Literal[
@@ -140,7 +140,7 @@ class LiteLLMBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump(**kwargs)  # noqa
         except Exception as e:
@@ -170,7 +170,7 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
 
 
 class LiteLLMRoutes(enum.Enum):
-    openai_route_names: List = [
+    openai_route_names = [
         "chat_completion",
         "completion",
         "embeddings",
@@ -179,7 +179,7 @@ class LiteLLMRoutes(enum.Enum):
         "moderations",
         "model_list",  # OpenAI /v1/models route
     ]
-    openai_routes: List = [
+    openai_routes = [
         # chat completions
         "/engines/{model}/chat/completions",
         "/openai/deployments/{model}/chat/completions",
@@ -247,18 +247,18 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rerank",
     ]
 
-    mapped_pass_through_routes: List = [
+    mapped_pass_through_routes = [
         "/bedrock",
         "/vertex-ai",
         "/gemini",
         "/langfuse",
     ]
 
-    anthropic_routes: List = [
+    anthropic_routes = [
         "/v1/messages",
     ]
 
-    info_routes: List = [
+    info_routes = [
         "/key/info",
         "/team/info",
         "/team/list",
@@ -271,9 +271,9 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes: List = ["/global/spend/reset", "/key/list"]
+    master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
-    sso_only_routes: List = [
+    sso_only_routes = [
         "/key/generate",
         "/key/update",
         "/key/delete",
@@ -282,7 +282,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/logout_url",
     ]
 
-    management_routes: List = [  # key
+    management_routes = [  # key
         "/key/generate",
         "/key/update",
         "/key/delete",
@@ -307,7 +307,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
     ]
 
-    spend_tracking_routes: List = [
+    spend_tracking_routes = [
         # spend
         "/spend/keys",
         "/spend/users",
@@ -316,7 +316,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
     ]
 
-    global_spend_tracking_routes: List = [
+    global_spend_tracking_routes = [
         # global spend
         "/global/spend/logs",
         "/global/spend",
@@ -328,7 +328,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/report",
     ]
 
-    public_routes: List = [
+    public_routes = [
         "/routes",
         "/",
         "/health/liveliness",
@@ -339,7 +339,7 @@ class LiteLLMRoutes(enum.Enum):
         "/metrics",
     ]
 
-    internal_user_routes: List = (
+    internal_user_routes = (
         [
             "/key/generate",
             "/key/update",
@@ -357,7 +357,7 @@ class LiteLLMRoutes(enum.Enum):
         + sso_only_routes
     )
 
-    self_managed_routes: List = [
+    self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
     ]  # routes that manage their own allowed/disallowed logic
@@ -581,7 +581,9 @@ class ModelParams(LiteLLMBase):
     @classmethod
     def set_model_info(cls, values):
         if values.get("model_info") is None:
-            values.update({"model_info": ModelInfo()})
+            values.update(
+                {"model_info": ModelInfo(id=None, mode="chat", base_model=None)}
+            )
         return values
 
 
@@ -627,7 +629,7 @@ class GenerateKeyRequest(_GenerateKeyRequest):
 
 
 class GenerateKeyResponse(_GenerateKeyRequest):
-    key: str
+    key: str  # type: ignore
     key_name: Optional[str] = None
     expires: Optional[datetime]
     user_id: Optional[str] = None
@@ -659,7 +661,7 @@ class GenerateKeyResponse(_GenerateKeyRequest):
 class UpdateKeyRequest(GenerateKeyRequest):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
-    key: str
+    key: str  # type: ignore
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -976,6 +978,7 @@ class TeamCallbackMetadata(LiteLLMBase):
 
 
 class LiteLLM_TeamTable(TeamBase):
+    team_id: str  # type: ignore
     spend: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     budget_duration: Optional[str] = None
@@ -1061,7 +1064,7 @@ class LiteLLM_OrganizationTable(LiteLLMBase):
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str
+    organization_id: str  # type: ignore
     created_at: datetime
     updated_at: datetime
 
@@ -1388,16 +1391,7 @@ class UserAPIKeyAuth(
     """
 
     api_key: Optional[str] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
-        ]
-    ] = None
+    user_role: Optional[LitellmUserRoles] = None
     allowed_model_region: Optional[Literal["eu"]] = None
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
@@ -1716,9 +1710,9 @@ class SpendLogsPayload(TypedDict):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    startTime: datetime
-    endTime: datetime
-    completionStartTime: Optional[datetime]
+    startTime: Union[datetime, str]
+    endTime: Union[datetime, str]
+    completionStartTime: Optional[Union[datetime, str]]
     model: str
     model_id: Optional[str]
     model_group: Optional[str]

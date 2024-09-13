@@ -99,6 +99,7 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
+            asyncio.create_task(self.periodic_flush())
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
@@ -113,8 +114,6 @@ class SlackAlerting(CustomBatchLogger):
                 self.alert_to_webhook_url.update(alert_to_webhook_url)
         if llm_router is not None:
             self.llm_router = llm_router
-
-        asyncio.create_task(self.periodic_flush())
 
     async def deployment_in_cooldown(self):
         pass
@@ -208,15 +207,20 @@ class SlackAlerting(CustomBatchLogger):
             _deployment_latencies = metadata["_latency_per_deployment"]
             if len(_deployment_latencies) == 0:
                 return None
+            _deployment_latency_map: Optional[dict] = None
             try:
                 # try sorting deployments by latency
                 _deployment_latencies = sorted(
                     _deployment_latencies.items(), key=lambda x: x[1]
                 )
-                _deployment_latencies = dict(_deployment_latencies)
-            except:
+                _deployment_latency_map = dict(_deployment_latencies)
+            except Exception:
                 pass
-            for api_base, latency in _deployment_latencies.items():
+
+            if _deployment_latency_map is None:
+                return
+
+            for api_base, latency in _deployment_latency_map.items():
                 _message_to_send += f"\n{api_base}: {round(latency,2)}s"
             _message_to_send = "```" + _message_to_send + "```"
             return _message_to_send
@@ -475,6 +479,7 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if self.alerting is None or self.alert_types is None:
             return
+        model: str = ""
         if request_data is not None:
             model = request_data.get("model", "")
             messages = request_data.get("messages", None)
@@ -619,6 +624,7 @@ class SlackAlerting(CustomBatchLogger):
             return
         _id: Optional[str] = "default_id"  # used for caching
         user_info_json = user_info.model_dump(exclude_none=True)
+        user_info_str = ""
         for k, v in user_info_json.items():
             user_info_str = "\n{}: {}\n".format(k, v)
 
@@ -1475,10 +1481,10 @@ Model Info:
 
                 if isinstance(response_obj, litellm.ModelResponse) and (
                     hasattr(response_obj, "usage")
-                    and response_obj.usage is not None
-                    and hasattr(response_obj.usage, "completion_tokens")
+                    and response_obj.usage is not None  # type: ignore
+                    and hasattr(response_obj.usage, "completion_tokens")  # type: ignore
                 ):
-                    completion_tokens = response_obj.usage.completion_tokens
+                    completion_tokens = response_obj.usage.completion_tokens  # type: ignore
                     if completion_tokens is not None and completion_tokens > 0:
                         final_value = float(
                             response_s.total_seconds() / completion_tokens
@@ -1608,10 +1614,14 @@ Model Info:
             todays_date = datetime.datetime.now().date()
             start_date = todays_date - datetime.timedelta(days=days)
 
-            spend_per_team, spend_per_tag = await _get_spend_report_for_time_range(
+            _resp = await _get_spend_report_for_time_range(
                 start_date=start_date.strftime("%Y-%m-%d"),
                 end_date=todays_date.strftime("%Y-%m-%d"),
             )
+            if _resp is None:
+                return
+
+            spend_per_team, spend_per_tag = _resp
 
             _spend_message = f"*💸 Spend Report for `{start_date.strftime('%m-%d-%Y')} - {todays_date.strftime('%m-%d-%Y')}` ({days} days)*\n"
 
@@ -1656,12 +1666,15 @@ Model Info:
                 days=last_day_of_month - 1
             )
 
-            monthly_spend_per_team, monthly_spend_per_tag = (
-                await _get_spend_report_for_time_range(
-                    start_date=first_day_of_month.strftime("%Y-%m-%d"),
-                    end_date=last_day_of_month.strftime("%Y-%m-%d"),
-                )
+            _resp = await _get_spend_report_for_time_range(
+                start_date=first_day_of_month.strftime("%Y-%m-%d"),
+                end_date=last_day_of_month.strftime("%Y-%m-%d"),
             )
+
+            if _resp is None:
+                return
+
+            monthly_spend_per_team, monthly_spend_per_tag = _resp
 
             _spend_message = f"*💸 Monthly Spend Report for `{first_day_of_month.strftime('%m-%d-%Y')} - {last_day_of_month.strftime('%m-%d-%Y')}` *\n"
 

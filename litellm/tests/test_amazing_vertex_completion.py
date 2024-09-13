@@ -2828,3 +2828,36 @@ def test_gemini_function_call_parameter_in_messages_2():
             ]
         },
     ]
+
+
+import base64
+from pathlib import Path
+
+
+@pytest.mark.asyncio
+async def test_gemini_mp3_call():
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+    # speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+    audio_bytes = Path("speech_vertex.mp3").read_bytes()
+    encoded_data = base64.b64encode(audio_bytes).decode("utf-8")
+    model = "vertex_ai/gemini-1.5-flash"
+    response = await litellm.acompletion(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please summarize the audio."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:audio/mp3;base64,{}".format(encoded_data)
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+
+    print(response)
