@@ -2820,7 +2820,7 @@ def completion_with_retries(*args, **kwargs):
         )
 
     num_retries = kwargs.pop("num_retries", 3)
-    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop("retry_strategy", "constant_retry")  # type: ignore
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "constant_retry":
         retryer = tenacity.Retrying(
@@ -4997,7 +4997,9 @@ def speech(
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
-        Literal["completion", "embedding", "image_generation", "chat", "batch"]
+        Literal[
+            "completion", "embedding", "image_generation", "chat", "batch", "rerank"
+        ]
     ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
@@ -5112,6 +5114,12 @@ async def ahealth_check(
                 model_params.pop("messages", None)
                 model_params["prompt"] = prompt
                 await litellm.aimage_generation(**model_params)
+                response = {}
+            elif mode == "rerank":
+                model_params.pop("messages", None)
+                model_params["query"] = prompt
+                model_params["documents"] = ["my sample text"]
+                await litellm.arerank(**model_params)
                 response = {}
             elif "*" in model:
                 from litellm.litellm_core_utils.llm_request_utils import (
