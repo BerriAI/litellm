@@ -4648,13 +4648,12 @@ class Router:
 
         Used for accurate 'get_model_list'.
         """
-
         returned_models: List[DeploymentTypedDict] = []
         for model in self.model_list:
             if model["model_name"] == model_name:
                 if model_alias is not None:
                     alias_model = copy.deepcopy(model)
-                    alias_model["model_name"] = model_name
+                    alias_model["model_name"] = model_alias
                     returned_models.append(alias_model)
                 else:
                     returned_models.append(model)
