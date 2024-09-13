@@ -198,3 +198,52 @@ async def test_single_deployment_no_cooldowns_test_prod():
         await asyncio.sleep(2)
 
         mock_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_single_deployment_no_cooldowns_test_prod_mock_completion_calls():
+    """
+    Do not cooldown on single deployment.
+
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                },
+            },
+            {
+                "model_name": "gpt-12",
+                "litellm_params": {
+                    "model": "openai/gpt-12",
+                },
+            },
+        ],
+    )
+
+    for _ in range(20):
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+    cooldown_list = await router._async_get_cooldown_deployments()
+    assert len(cooldown_list) == 0
+
+    healthy_deployments, _ = await router._async_get_healthy_deployments(
+        model="gpt-3.5-turbo"
+    )
+
+    print("healthy_deployments: ", healthy_deployments)
