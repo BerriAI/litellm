@@ -29,7 +29,7 @@ class CustomBatchLogger(CustomLogger):
         """
         self.log_queue: List = []
         self.flush_interval = DEFAULT_FLUSH_INTERVAL_SECONDS  # 10 seconds
-        self.batch_size = batch_size
+        self.batch_size: int = batch_size or DEFAULT_BATCH_SIZE
         self.last_flush_time = time.time()
         self.flush_lock = flush_lock
 

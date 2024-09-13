@@ -219,6 +219,8 @@ class DataDogLogger(CustomBatchLogger):
         Returns:
             DatadogPayload: defined in types.py
         """
+        import json
+
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
             litellm_params.get("metadata", {}) or {}
@@ -275,17 +277,15 @@ class DataDogLogger(CustomBatchLogger):
         }
 
         make_json_serializable(payload)
-        import json
+        json_payload = json.dumps(payload)
 
-        payload = json.dumps(payload)
-
-        verbose_logger.debug("Datadog: Logger - Logging payload = %s", payload)
+        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
         dd_payload = DatadogPayload(
             ddsource=os.getenv("DD_SOURCE", "litellm"),
             ddtags="",
             hostname="",
-            message=payload,
+            message=json_payload,
             service="litellm-server",
         )
         return dd_payload
