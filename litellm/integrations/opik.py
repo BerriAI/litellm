@@ -137,7 +137,7 @@ class OpikLogger():
         current_span_id = get_current_span_id(litellm_opik_metadata)
         current_trace_id = get_current_trace_id(litellm_opik_metadata)
         opik_metadata = litellm_opik_metadata.get("metadata", None)
-        opik_tags = litellm_opik_metadata.get("tags", None)
+        opik_tags = litellm_opik_metadata.get("tags", [])
 
         client = self.opik.Opik(
             workspace=workspace,
