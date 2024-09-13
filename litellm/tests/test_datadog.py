@@ -34,6 +34,7 @@ async def test_datadog_logging_http_request():
         from litellm.integrations.datadog.datadog import DataDogLogger
 
         os.environ["DD_SITE"] = "https://fake.datadoghq.com"
+        os.environ["DD_API_KEY"] = "anything"
         dd_logger = DataDogLogger()
 
         litellm.callbacks = [dd_logger]
