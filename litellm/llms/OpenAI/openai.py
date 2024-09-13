@@ -449,6 +449,15 @@ class OpenAIConfig:
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
 
+    def _map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
+
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
     ) -> dict:
@@ -459,11 +468,12 @@ class OpenAIConfig:
                 optional_params=optional_params,
                 model=model,
             )
-        supported_openai_params = self.get_supported_openai_params(model)
-        for param, value in non_default_params.items():
-            if param in supported_openai_params:
-                optional_params[param] = value
-        return optional_params
+
+        return self._map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
 
 
 class OpenAITextCompletionConfig:
