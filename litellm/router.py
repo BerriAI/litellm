@@ -4679,10 +4679,7 @@ class Router:
                 returned_models += self.model_list
 
                 return returned_models
-
-            for model in self.model_list:
-                returned_models.extend(self._get_all_deployments(model_name=model_name))
-
+            returned_models.extend(self._get_all_deployments(model_name=model_name))
             return returned_models
         return None
 
