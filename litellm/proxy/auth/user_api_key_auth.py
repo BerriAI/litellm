@@ -568,7 +568,9 @@ async def user_api_key_auth(
                         if field_name in valid_token.__fields__:
                             setattr(valid_token, field_name, v)
             except Exception as e:
-                verbose_logger.warning(e)
+                verbose_logger.debug(
+                    e
+                )  # moving from .warning to .debug as it spams logs when team missing from cache.
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
