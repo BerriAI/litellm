@@ -343,6 +343,7 @@ async def acompletion(
         "stream_options": stream_options,
         "stop": stop,
         "max_tokens": max_tokens,
+        "max_completion_tokens": max_completion_tokens,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
         "logit_bias": logit_bias,
