@@ -1,5 +1,8 @@
-#### What this does ####
-#    On success + failure, log events to Datadog
+"""
+DataDog Integreation - sends logs to /api/v2/log
+
+DD Reference API: https://docs.datadoghq.com/api/latest/logs
+"""
 
 import asyncio
 import datetime
@@ -27,6 +30,13 @@ class DataDogLogger(CustomBatchLogger):
         self,
         **kwargs,
     ):
+        """
+        Initializes the datadog logger, checks if the correct env variables are set
+
+        Required environment variables:
+        `DD_API_KEY` - your datadog api key
+        `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
+        """
         try:
             verbose_logger.debug(f"Datadog: in init datadog logger")
             # check if the correct env variables are set
@@ -52,6 +62,17 @@ class DataDogLogger(CustomBatchLogger):
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Async Log success events to Datadog
+
+        - Creates a Datadog payload
+        - Adds the Payload to the in memory logs queue
+        - Payload is flushed every 10 seconds or when batch size is greater than 100
+
+
+        Raises:
+            Raises a NON Blocking verbose_logger.exception if an error occurs
+        """
         try:
             verbose_logger.debug(
                 "Datadog: Logging - Enters logging function for model %s", kwargs
@@ -78,31 +99,52 @@ class DataDogLogger(CustomBatchLogger):
             pass
 
     async def async_send_batch(self):
-        if not self.log_queue:
-            verbose_logger.exception("Datadog: log_queue does not exist")
-            return
+        """
+        Sends the in memory logs queue to datadog api
 
-        response = await self.async_client.post(
-            url=self.intake_url,
-            json=self.log_queue,
-            headers={
-                "DD-API-KEY": self.DD_API_KEY,
-            },
-        )
+        Logs sent to /api/v2/logs
 
-        response.raise_for_status()
-        if response.status_code != 202:
-            raise Exception(
-                f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
+        DD Ref: https://docs.datadoghq.com/api/latest/logs/
+
+        Raises:
+            Raises a NON Blocking verbose_logger.exception if an error occurs
+        """
+        try:
+            if not self.log_queue:
+                verbose_logger.exception("Datadog: log_queue does not exist")
+                return
+
+            response = await self.async_client.post(
+                url=self.intake_url,
+                json=self.log_queue,
+                headers={
+                    "DD-API-KEY": self.DD_API_KEY,
+                },
             )
 
-        verbose_logger.debug(
-            "Datadog: Response from datadog API status_code: %s, text: %s",
-            response.status_code,
-            response.text,
-        )
+            response.raise_for_status()
+            if response.status_code != 202:
+                raise Exception(
+                    f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
+                )
+
+            verbose_logger.debug(
+                "Datadog: Response from datadog API status_code: %s, text: %s",
+                response.status_code,
+                response.text,
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
+            )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Sync Log success events to Datadog
+
+        - Creates a Datadog payload
+        - instantly logs it on DD API
+        """
         try:
             verbose_logger.debug(
                 "Datadog: Logging - Enters logging function for model %s", kwargs
@@ -148,6 +190,18 @@ class DataDogLogger(CustomBatchLogger):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> DatadogPayload:
+        """
+        Helper function to create a datadog payload for logging
+
+        Args:
+            kwargs (Union[dict, Any]): request kwargs
+            response_obj (Any): llm api response
+            start_time (datetime.datetime): start time of request
+            end_time (datetime.datetime): end time of request
+
+        Returns:
+            DatadogPayload: defined in types.py
+        """
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
             litellm_params.get("metadata", {}) or {}
