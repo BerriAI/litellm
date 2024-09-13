@@ -55,6 +55,7 @@ _known_custom_logger_compatible_callbacks: List = list(
 )
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 langfuse_default_tags: Optional[List[str]] = None
+langsmith_batch_size: Optional[int] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -942,6 +943,9 @@ from .llms.OpenAI.openai import (
     DeepInfraConfig,
     GroqConfig,
     AzureAIStudioConfig,
+)
+from .llms.OpenAI.o1_reasoning import (
+    OpenAIO1Config,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig

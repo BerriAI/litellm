@@ -115,7 +115,10 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.slack_alerting import SlackAlerting, SlackAlertingArgs
+from litellm.integrations.SlackAlerting.slack_alerting import (
+    SlackAlerting,
+    SlackAlertingArgs,
+)
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import *
@@ -2122,6 +2125,8 @@ class ProxyConfig:
                     if isinstance(v, str):
                         # decrypt value
                         _value = decrypt_value_helper(value=v)
+                        if _value is None:
+                            raise Exception("Unable to decrypt value={}".format(v))
                         # sanity check if string > size 0
                         if len(_value) > 0:
                             _litellm_params[k] = _value
@@ -3016,7 +3021,7 @@ async def startup_event():
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
-def model_list(
+async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """

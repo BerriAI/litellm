@@ -4,7 +4,6 @@ import time
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from traceloop.sdk import Traceloop
 
 import litellm
 
@@ -13,6 +12,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 @pytest.fixture()
 def exporter():
+    from traceloop.sdk import Traceloop
+
     exporter = InMemorySpanExporter()
     Traceloop.init(
         app_name="test_litellm",

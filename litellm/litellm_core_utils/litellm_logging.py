@@ -924,6 +924,7 @@ class Logging:
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
+                        temp_langfuse_logger = langFuseLogger
                         if langFuseLogger is None or (
                             (
                                 self.langfuse_public_key is not None
@@ -940,12 +941,12 @@ class Logging:
                                 and self.langfuse_host != langFuseLogger.langfuse_host
                             )
                         ):
-                            langFuseLogger = LangFuseLogger(
+                            temp_langfuse_logger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
                                 langfuse_host=self.langfuse_host,
                             )
-                        _response = langFuseLogger.log_event(
+                        _response = temp_langfuse_logger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
@@ -1608,14 +1609,23 @@ class Logging:
         """
         from litellm.types.router import RouterErrors
 
+        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") or {}
+
+        ## BASE CASE ## check if rate limit error for model group size 1
+        is_base_case = False
+        if metadata.get("model_group_size") is not None:
+            model_group_size = metadata.get("model_group_size")
+            if isinstance(model_group_size, int) and model_group_size == 1:
+                is_base_case = True
         ## check if special error ##
-        if RouterErrors.no_deployments_available.value not in str(exception):
+        if (
+            RouterErrors.no_deployments_available.value not in str(exception)
+            and is_base_case is False
+        ):
             return
 
         ## get original model group ##
-
-        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
 
         model_group = metadata.get("model_group") or None
         for callback in litellm._async_failure_callback:
@@ -1924,6 +1934,38 @@ class Logging:
             )
 
         return trace_id
+
+    def _get_callback_object(self, service_name: Literal["langfuse"]) -> Optional[Any]:
+        """
+        Return dynamic callback object.
+
+        Meant to solve issue when doing key-based/team-based logging
+        """
+        global langFuseLogger
+
+        if service_name == "langfuse":
+            if langFuseLogger is None or (
+                (
+                    self.langfuse_public_key is not None
+                    and self.langfuse_public_key != langFuseLogger.public_key
+                )
+                or (
+                    self.langfuse_public_key is not None
+                    and self.langfuse_public_key != langFuseLogger.public_key
+                )
+                or (
+                    self.langfuse_host is not None
+                    and self.langfuse_host != langFuseLogger.langfuse_host
+                )
+            ):
+                return LangFuseLogger(
+                    langfuse_public_key=self.langfuse_public_key,
+                    langfuse_secret=self.langfuse_secret,
+                    langfuse_host=self.langfuse_host,
+                )
+            return langFuseLogger
+
+        return None
 
 
 def set_callbacks(callback_list, function_id=None):
