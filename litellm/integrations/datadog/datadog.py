@@ -3,7 +3,7 @@ DataDog Integreation - sends logs to /api/v2/log
 
 DD Reference API: https://docs.datadoghq.com/api/latest/logs
 
-`async_log_success_event` - used by litellm proxy (gateway) to send logs to datadog
+`async_log_success_event` - used by litellm proxy to send logs to datadog
 `log_success_event` - sync version of logging to DataDog, only used on litellm Python SDK, if user opts in to using sync functions
 """
 
