@@ -278,6 +278,7 @@ const sidebars = {
         "observability/greenscale_integration",
         "observability/supabase_integration",
         `observability/telemetry`,
+        "observability/opik_integration",
       ],
     },
     {
