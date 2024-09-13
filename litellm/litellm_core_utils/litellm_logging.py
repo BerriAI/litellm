@@ -69,7 +69,7 @@ from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
-from ..integrations.datadog import DataDogLogger
+from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket import GCSBucketLogger

@@ -13,7 +13,7 @@ import dotenv
 import requests  # type: ignore
 
 import litellm
-from litellm._logging import print_verbose, verbose_logger
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -21,28 +21,8 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-
-class DatadogPayload(TypedDict, total=False):
-    ddsource: str
-    ddtags: str
-    hostname: str
-    message: str
-    service: str
-
-
-def make_json_serializable(payload):
-    for key, value in payload.items():
-        try:
-            if isinstance(value, dict):
-                # recursively sanitize dicts
-                payload[key] = make_json_serializable(value.copy())
-            elif not isinstance(value, (str, int, float, bool, type(None))):
-                # everything else becomes a string
-                payload[key] = str(value)
-        except:
-            # non blocking if it can't cast to a str
-            pass
-    return payload
+from .types import DatadogPayload
+from .utils import make_json_serializable
 
 
 class DataDogLogger(CustomBatchLogger):
@@ -51,33 +31,31 @@ class DataDogLogger(CustomBatchLogger):
         self,
         **kwargs,
     ):
-
-        # check if the correct env variables are set
-        if os.getenv("DD_API_KEY", None) is None:
-            raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
-        if os.getenv("DD_SITE", None) is None:
-            raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
-        self.async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
-
-        self.DD_API_KEY = os.getenv("DD_API_KEY")
-
-        self.intake_url = f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
-
-        self.sync_client = _get_httpx_client()
         try:
-            verbose_logger.debug(f"in init datadog logger")
-            pass
-
+            verbose_logger.debug(f"Datadog: in init datadog logger")
+            # check if the correct env variables are set
+            if os.getenv("DD_API_KEY", None) is None:
+                raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
+            if os.getenv("DD_SITE", None) is None:
+                raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+            self.async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.LoggingCallback
+            )
+            self.DD_API_KEY = os.getenv("DD_API_KEY")
+            self.intake_url = (
+                f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
+            )
+            self.sync_client = _get_httpx_client()
         except Exception as e:
-            print_verbose(f"Got exception on init s3 client {str(e)}")
+            verbose_logger.exception(
+                f"Datadog: Got exception on init Datadog client {str(e)}"
+            )
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
-                f"datadog Logging - Enters logging function for model {kwargs}"
+                "Datadog: Logging - Enters logging function for model %s", kwargs
             )
             litellm_params = kwargs.get("litellm_params", {})
             metadata = (
@@ -139,7 +117,7 @@ class DataDogLogger(CustomBatchLogger):
 
             payload = json.dumps(payload)
 
-            print_verbose(f"\ndd Logger - Logging payload = {payload}")
+            verbose_logger.debug("Datadog: Logger - Logging payload = %s", payload)
 
             dd_payload = DatadogPayload(
                 ddsource=os.getenv("DD_SOURCE", "litellm"),
@@ -157,12 +135,18 @@ class DataDogLogger(CustomBatchLogger):
                 },
             )
 
-            print_verbose("response = ", response)
-            print_verbose("status_code = ", response.status_code)
-            print_verbose("text = ", response.text)
-            print_verbose(
-                f"Datadog Layer Logging - final response object: {response_obj}"
+            response.raise_for_status()
+            if response.status_code != 202:
+                raise Exception(
+                    f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
+                )
+
+            verbose_logger.debug(
+                "Datadog: Response from datadog API status_code: %s, text: %s",
+                response.status_code,
+                response.text,
             )
+
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
