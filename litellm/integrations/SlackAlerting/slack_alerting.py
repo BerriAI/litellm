@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Literal, Optional, Set, TypedDict, Union
 import aiohttp
 import dotenv
 from openai import APIError
-from pydantic import BaseModel, Field
 
 import litellm
 import litellm.litellm_core_utils
@@ -23,7 +22,7 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -39,125 +38,12 @@ from litellm.proxy._types import (
 )
 from litellm.types.router import LiteLLM_Params
 
-from .email_templates.templates import *
+from ..email_templates.templates import *
+from .batching_handler import send_to_webhook, squash_payloads
+from .types import *
 
 
-class BaseOutageModel(TypedDict):
-    alerts: List[int]
-    minor_alert_sent: bool
-    major_alert_sent: bool
-    last_updated_at: float
-
-
-class OutageModel(BaseOutageModel):
-    model_id: str
-
-
-class ProviderRegionOutageModel(BaseOutageModel):
-    provider_region_id: str
-    deployment_ids: Set[str]
-
-
-# we use this for the email header, please send a test email if you change this. verify it looks good on email
-LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-LITELLM_SUPPORT_CONTACT = "support@berri.ai"
-
-
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):
-        try:
-            return self.model_dump()  # noqa
-        except:
-            # if using pydantic v1
-            return self.dict()
-
-
-class SlackAlertingArgsEnum(Enum):
-    daily_report_frequency: int = 12 * 60 * 60
-    report_check_interval: int = 5 * 60
-    budget_alert_ttl: int = 24 * 60 * 60
-    outage_alert_ttl: int = 1 * 60
-    region_outage_alert_ttl: int = 1 * 60
-    minor_outage_alert_threshold: int = 1 * 5
-    major_outage_alert_threshold: int = 1 * 10
-    max_outage_alert_list_size: int = 1 * 10
-
-
-class SlackAlertingArgs(LiteLLMBase):
-    daily_report_frequency: int = Field(
-        default=int(
-            os.getenv(
-                "SLACK_DAILY_REPORT_FREQUENCY",
-                SlackAlertingArgsEnum.daily_report_frequency.value,
-            )
-        ),
-        description="Frequency of receiving deployment latency/failure reports. Default is 12hours. Value is in seconds.",
-    )
-    report_check_interval: int = Field(
-        default=SlackAlertingArgsEnum.report_check_interval.value,
-        description="Frequency of checking cache if report should be sent. Background process. Default is once per hour. Value is in seconds.",
-    )  # 5 minutes
-    budget_alert_ttl: int = Field(
-        default=SlackAlertingArgsEnum.budget_alert_ttl.value,
-        description="Cache ttl for budgets alerts. Prevents spamming same alert, each time budget is crossed. Value is in seconds.",
-    )  # 24 hours
-    outage_alert_ttl: int = Field(
-        default=SlackAlertingArgsEnum.outage_alert_ttl.value,
-        description="Cache ttl for model outage alerts. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
-    )  # 1 minute ttl
-    region_outage_alert_ttl: int = Field(
-        default=SlackAlertingArgsEnum.region_outage_alert_ttl.value,
-        description="Cache ttl for provider-region based outage alerts. Alert sent if 2+ models in same region report errors. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
-    )  # 1 minute ttl
-    minor_outage_alert_threshold: int = Field(
-        default=SlackAlertingArgsEnum.minor_outage_alert_threshold.value,
-        description="The number of errors that count as a model/region minor outage. ('400' error code is not counted).",
-    )
-    major_outage_alert_threshold: int = Field(
-        default=SlackAlertingArgsEnum.major_outage_alert_threshold.value,
-        description="The number of errors that countas a model/region major outage. ('400' error code is not counted).",
-    )
-    max_outage_alert_list_size: int = Field(
-        default=SlackAlertingArgsEnum.max_outage_alert_list_size.value,
-        description="Maximum number of errors to store in cache. For a given model/region. Prevents memory leaks.",
-    )  # prevent memory leak
-
-
-class DeploymentMetrics(LiteLLMBase):
-    """
-    Metrics per deployment, stored in cache
-
-    Used for daily reporting
-    """
-
-    id: str
-    """id of deployment in router model list"""
-
-    failed_request: bool
-    """did it fail the request?"""
-
-    latency_per_output_token: Optional[float]
-    """latency/output token of deployment"""
-
-    updated_at: dt
-    """Current time of deployment being updated"""
-
-
-class SlackAlertingCacheKeys(Enum):
-    """
-    Enum for deployment daily metrics keys - {deployment_id}:{enum}
-    """
-
-    failed_requests_key = "failed_requests_daily_metrics"
-    latency_key = "latency_daily_metrics"
-    report_sent_key = "daily_metrics_report_sent"
-
-
-class SlackAlerting(CustomLogger):
+class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
     """
@@ -186,6 +72,7 @@ class SlackAlerting(CustomLogger):
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: Optional[str] = None,
+        **kwargs,
     ):
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
@@ -198,7 +85,8 @@ class SlackAlerting(CustomLogger):
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
-        self.llm_router: Optional[litellm.Router] = None
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
         self,
@@ -225,6 +113,8 @@ class SlackAlerting(CustomLogger):
                 self.alert_to_webhook_url.update(alert_to_webhook_url)
         if llm_router is not None:
             self.llm_router = llm_router
+
+        asyncio.create_task(self.periodic_flush())
 
     async def deployment_in_cooldown(self):
         pass
@@ -1534,38 +1424,42 @@ Model Info:
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
-        async def send_to_webhook(url: str):
-            return await self.async_http_handler.post(
-                url=url,
-                headers=headers,
-                data=json.dumps(payload),
-            )
-
         if isinstance(slack_webhook_url, list):
-            # Parallelize the calls if it's a list of URLs
-            responses = await asyncio.gather(
-                *[send_to_webhook(url) for url in slack_webhook_url]
+            for url in slack_webhook_url:
+                self.log_queue.append(
+                    {
+                        "url": url,
+                        "headers": headers,
+                        "payload": payload,
+                        "alert_type": alert_type,
+                    }
+                )
+        else:
+            self.log_queue.append(
+                {
+                    "url": slack_webhook_url,
+                    "headers": headers,
+                    "payload": payload,
+                    "alert_type": alert_type,
+                }
             )
 
-            for response, url in zip(responses, slack_webhook_url):
-                if response.status_code == 200:
-                    pass
-                else:
-                    verbose_proxy_logger.debug(
-                        "Error sending slack alert to url={}. Error={}".format(
-                            url, response.text
-                        )
-                    )
-        else:
-            # Single call if it's a single URL
-            response = await send_to_webhook(slack_webhook_url)
+        if len(self.log_queue) >= self.batch_size:
+            await self.flush_queue()
 
-            if response.status_code == 200:
-                pass
-            else:
-                verbose_proxy_logger.debug(
-                    "Error sending slack alert. Error={}".format(response.text)
-                )
+    async def async_send_batch(self):
+        if not self.log_queue:
+            return
+
+        squashed_queue = squash_payloads(self.log_queue)
+        tasks = [
+            send_to_webhook(
+                slackAlertingInstance=self, item=item["item"], count=item["count"]
+            )
+            for item in squashed_queue.values()
+        ]
+        await asyncio.gather(*tasks)
+        self.log_queue.clear()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
