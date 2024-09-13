@@ -15,7 +15,7 @@ def test_datadog_logging_async():
         # litellm.set_verbose = True
         os.environ["DD_API_KEY"] = "anything"
         os.environ["_DATADOG_BASE_URL"] = (
-            "http://localhost:8090"  # Adjust if using a different site
+            "https://exampleopenaiendpoint-production.up.railway.app"
         )
 
         os.environ["DD_SITE"] = "us5.datadoghq.com"
