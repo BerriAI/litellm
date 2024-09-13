@@ -1130,7 +1130,7 @@ class Router:
         make_request = False
 
         while curr_time < end_time:
-            _healthy_deployments = await self._async_get_healthy_deployments(
+            _healthy_deployments, _ = await self._async_get_healthy_deployments(
                 model=model
             )
             make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
@@ -3060,14 +3060,17 @@ class Router:
             Retry Logic
              
             """
-            _healthy_deployments = await self._async_get_healthy_deployments(
-                model=kwargs.get("model") or "",
+            _healthy_deployments, _all_deployments = (
+                await self._async_get_healthy_deployments(
+                    model=kwargs.get("model") or "",
+                )
             )
 
             # raises an exception if this error should not be retries
             self.should_retry_this_error(
                 error=e,
                 healthy_deployments=_healthy_deployments,
+                all_deployments=_all_deployments,
                 context_window_fallbacks=context_window_fallbacks,
                 regular_fallbacks=fallbacks,
                 content_policy_fallbacks=content_policy_fallbacks,
@@ -3114,7 +3117,7 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
-                    _healthy_deployments = await self._async_get_healthy_deployments(
+                    _healthy_deployments, _ = await self._async_get_healthy_deployments(
                         model=kwargs.get("model"),
                     )
                     _timeout = self._time_to_sleep_before_retry(
@@ -3135,6 +3138,7 @@ class Router:
         self,
         error: Exception,
         healthy_deployments: Optional[List] = None,
+        all_deployments: Optional[List] = None,
         context_window_fallbacks: Optional[List] = None,
         content_policy_fallbacks: Optional[List] = None,
         regular_fallbacks: Optional[List] = None,
@@ -3150,6 +3154,9 @@ class Router:
         _num_healthy_deployments = 0
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
             _num_healthy_deployments = len(healthy_deployments)
+        _num_all_deployments = 0
+        if all_deployments is not None and isinstance(all_deployments, list):
+            _num_all_deployments = len(all_deployments)
 
         ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR / CONTENT POLICY VIOLATION ERROR w/ fallbacks available / Bad Request Error
         if (
@@ -3180,7 +3187,9 @@ class Router:
             - if other deployments available -> retry
             - else -> raise error
             """
-            if _num_healthy_deployments <= 1:  # if no healthy deployments
+            if (
+                _num_all_deployments <= 1
+            ):  # if there is only 1 deployment for this model group then don't retry
                 raise error  # then raise error
 
         # Do not retry if there are no healthy deployments
@@ -3390,7 +3399,7 @@ class Router:
             current_attempt = None
             original_exception = e
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
-            _healthy_deployments = self._get_healthy_deployments(
+            _healthy_deployments, _all_deployments = self._get_healthy_deployments(
                 model=kwargs.get("model"),
             )
 
@@ -3398,6 +3407,7 @@ class Router:
             self.should_retry_this_error(
                 error=e,
                 healthy_deployments=_healthy_deployments,
+                all_deployments=_all_deployments,
                 context_window_fallbacks=context_window_fallbacks,
                 regular_fallbacks=fallbacks,
                 content_policy_fallbacks=content_policy_fallbacks,
@@ -3428,7 +3438,7 @@ class Router:
                 except Exception as e:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
-                    _healthy_deployments = self._get_healthy_deployments(
+                    _healthy_deployments, _ = self._get_healthy_deployments(
                         model=kwargs.get("model"),
                     )
                     remaining_retries = num_retries - current_attempt
@@ -3881,7 +3891,7 @@ class Router:
             else:
                 healthy_deployments.append(deployment)
 
-        return healthy_deployments
+        return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(self, model: str):
         _all_deployments: list = []
@@ -3901,7 +3911,7 @@ class Router:
                 continue
             else:
                 healthy_deployments.append(deployment)
-        return healthy_deployments
+        return healthy_deployments, _all_deployments
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
         """
