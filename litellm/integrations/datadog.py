@@ -7,6 +7,7 @@ import subprocess
 import sys
 import traceback
 import uuid
+from typing import TypedDict
 
 import dotenv
 import requests  # type: ignore
@@ -14,6 +15,19 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.llms.custom_httpx.http_handler import (
+    _get_httpx_client,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
+
+
+class DatadogPayload(TypedDict, total=False):
+    ddsource: str
+    ddtags: str
+    hostname: str
+    message: str
+    service: str
 
 
 def make_json_serializable(payload):
@@ -37,15 +51,21 @@ class DataDogLogger(CustomBatchLogger):
         self,
         **kwargs,
     ):
-        from datadog_api_client import ApiClient, Configuration
 
         # check if the correct env variables are set
         if os.getenv("DD_API_KEY", None) is None:
             raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
         if os.getenv("DD_SITE", None) is None:
             raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
-        self.configuration = Configuration()
+        self.async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
 
+        self.DD_API_KEY = os.getenv("DD_API_KEY")
+
+        self.intake_url = f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
+
+        self.sync_client = _get_httpx_client()
         try:
             verbose_logger.debug(f"in init datadog logger")
             pass
@@ -55,15 +75,7 @@ class DataDogLogger(CustomBatchLogger):
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.log_success_event(self, kwargs, response_obj, start_time, end_time)
-
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            # Define DataDog client
-            from datadog_api_client.v2 import ApiClient
-            from datadog_api_client.v2.api.logs_api import LogsApi
-            from datadog_api_client.v2.models import HTTPLog, HTTPLogItem
-
             verbose_logger.debug(
                 f"datadog Logging - Enters logging function for model {kwargs}"
             )
@@ -129,19 +141,25 @@ class DataDogLogger(CustomBatchLogger):
 
             print_verbose(f"\ndd Logger - Logging payload = {payload}")
 
-            with ApiClient(self.configuration) as api_client:
-                api_instance = LogsApi(api_client)
-                body = HTTPLog(
-                    [
-                        HTTPLogItem(
-                            ddsource=os.getenv("DD_SOURCE", "litellm"),
-                            message=payload,
-                            service="litellm-server",
-                        ),
-                    ]
-                )
-                response = api_instance.submit_log(body)
+            dd_payload = DatadogPayload(
+                ddsource=os.getenv("DD_SOURCE", "litellm"),
+                ddtags="",
+                hostname="",
+                message=payload,
+                service="litellm-server",
+            )
 
+            response = await self.async_client.post(
+                url=self.intake_url,
+                json=dd_payload,
+                headers={
+                    "DD-API-KEY": self.DD_API_KEY,
+                },
+            )
+
+            print_verbose("response = ", response)
+            print_verbose("status_code = ", response.status_code)
+            print_verbose("text = ", response.text)
             print_verbose(
                 f"Datadog Layer Logging - final response object: {response_obj}"
             )
@@ -150,3 +168,6 @@ class DataDogLogger(CustomBatchLogger):
                 f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
             )
             pass
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        pass
