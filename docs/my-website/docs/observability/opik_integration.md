@@ -56,11 +56,11 @@ response = litellm.completion(
 ```
 
 If you are using a streaming response, you need to surround the
-call with Opik's `@track` and provide `current_span` and `current_trace`:
+call with Opik's `@track` and provide `current_span_data` and `current_trace_data`:
 
 ```python
 from opik import track
-from opik.opik_context import get_current_trace, get_current_span
+from opik.opik_context import get_current_trace_data, get_current_span_data
 
 litellm.success_callback = ["opik"]
 
@@ -72,8 +72,8 @@ def streaming_function(input):
         messages=messages,
         metadata = {
             "opik": {
-                "current_span": get_current_span(),
-                "current_trace": get_current_trace(),
+                "current_span_data": get_current_span_data(),
+                "current_trace_data": get_current_trace_data(),
                 "tags": ["streaming-test"],
             },
         },
