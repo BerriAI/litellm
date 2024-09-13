@@ -2125,6 +2125,8 @@ class ProxyConfig:
                     if isinstance(v, str):
                         # decrypt value
                         _value = decrypt_value_helper(value=v)
+                        if _value is None:
+                            raise Exception("Unable to decrypt value={}".format(v))
                         # sanity check if string > size 0
                         if len(_value) > 0:
                             _litellm_params[k] = _value
