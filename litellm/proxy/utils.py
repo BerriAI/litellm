@@ -969,52 +969,73 @@ class PrismaClient:
                 "MonthlyGlobalSpendPerUserPerKey",
                 "Last30dTopEndUsersSpend",
             ]
+            required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             ret = await self.db.query_raw(
                 f"""
-                    SELECT SUM(1) FROM pg_views
+                WITH existing_views AS (
+                    SELECT viewname
+                    FROM pg_views
                     WHERE schemaname = 'public' AND viewname IN (
                         {expected_views_str}
                     )
-                    """
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM existing_views) AS view_count,
+                    ARRAY_AGG(viewname) AS view_names
+                FROM existing_views
+                """
             )
             expected_total_views = len(expected_views)
-            if ret[0]["sum"] == expected_total_views:
+            if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
                 return
             else:
-                raise Exception(
-                    "Not all views exist in db. Got={}. Expected={}. Run 'create_views.py' in litellm/db_scripts to create missing views.".format(
-                        ret[0]["sum"], expected_total_views
+                ## check if required view exists ##
+                if required_view not in ret[0]["view_names"]:
+                    await self.health_check()  # make sure we can connect to db
+                    await self.db.execute_raw(
+                        """
+                            CREATE VIEW "LiteLLM_VerificationTokenView" AS
+                            SELECT
+                            v.*,
+                            t.spend AS team_spend,
+                            t.max_budget AS team_max_budget,
+                            t.tpm_limit AS team_tpm_limit,
+                            t.rpm_limit AS team_rpm_limit
+                            FROM "LiteLLM_VerificationToken" v
+                            LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
+                        """
                     )
-                )
+
+                    verbose_proxy_logger.info(
+                        "LiteLLM_VerificationTokenView Created in DB!"
+                    )
+                else:
+                    # don't block execution if these views are missing
+                    # Convert lists to sets for efficient difference calculation
+                    ret_view_names_set = set(ret[0]["view_names"])
+                    expected_views_set = set(expected_views)
+                    # Find missing views
+                    missing_views = expected_views_set - ret_view_names_set
+
+                    verbose_proxy_logger.warning(
+                        "\n\n\033[93mNot all views exist in db, needed for UI 'Usage' tab. Missing={}.\nRun 'create_views.py' from https://github.com/BerriAI/litellm/tree/main/db_scripts to create missing views.\033[0m\n".format(
+                            missing_views
+                        )
+                    )
+
         except Exception as e:
-            raise e
+            raise
 
-        # try:
-        #     # Try to select one row from the view
-        #     await self.db.query_raw(
-        #         """SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1"""
-        #     )
-        #     print("LiteLLM_VerificationTokenView Exists!")  # noqa
-        # except Exception as e:
-        #     # If an error occurs, the view does not exist, so create it
-        #     value = await self.health_check()
-        #     await self.db.execute_raw(
-        #         """
-        #             CREATE VIEW "LiteLLM_VerificationTokenView" AS
-        #             SELECT
-        #             v.*,
-        #             t.spend AS team_spend,
-        #             t.max_budget AS team_max_budget,
-        #             t.tpm_limit AS team_tpm_limit,
-        #             t.rpm_limit AS team_rpm_limit
-        #             FROM "LiteLLM_VerificationToken" v
-        #             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-        #         """
-        #     )
-
-        #     print("LiteLLM_VerificationTokenView Created!")  # noqa
+            # try:
+            #     # Try to select one row from the view
+            #     await self.db.query_raw(
+            #         """SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1"""
+            #     )
+            #     print("LiteLLM_VerificationTokenView Exists!")  # noqa
+            # except Exception as e:
+            # If an error occurs, the view does not exist, so create it
 
         # try:
         #     await self.db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
