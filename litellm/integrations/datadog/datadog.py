@@ -117,6 +117,7 @@ class DataDogLogger(CustomBatchLogger):
                 verbose_logger.exception("Datadog: log_queue does not exist")
                 return
 
+            verbose_logger.debug("Datadog - about to log events on %s", self.intake_url)
             response = await self.async_client.post(
                 url=self.intake_url,
                 json=self.log_queue,
