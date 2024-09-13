@@ -150,3 +150,51 @@ def test_single_deployment_no_cooldowns(num_deployments):
             mock_client.assert_not_called()
         else:
             mock_client.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_single_deployment_no_cooldowns_test_prod():
+    """
+    Do not cooldown on single deployment.
+
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                },
+            },
+            {
+                "model_name": "gpt-12",
+                "litellm_params": {
+                    "model": "openai/gpt-12",
+                },
+            },
+        ],
+        allowed_fails=0,
+        num_retries=0,
+    )
+
+    with patch.object(
+        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
+    ) as mock_client:
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        await asyncio.sleep(2)
+
+        mock_client.assert_not_called()
