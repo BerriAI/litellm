@@ -3180,7 +3180,7 @@ class Router:
             - if other deployments available -> retry
             - else -> raise error
             """
-            if _num_healthy_deployments <= 0:  # if no healthy deployments
+            if _num_healthy_deployments <= 1:  # if no healthy deployments
                 raise error  # then raise error
 
         # Do not retry if there are no healthy deployments

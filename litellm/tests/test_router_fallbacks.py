@@ -264,9 +264,6 @@ def test_sync_fallbacks_embeddings():
         model_list=model_list,
         fallbacks=[{"bad-azure-embedding-model": ["good-azure-embedding-model"]}],
         set_verbose=False,
-        retry_policy=litellm.router.RetryPolicy(
-            AuthenticationErrorRetries=0,
-        ),
     )
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -319,9 +316,6 @@ async def test_async_fallbacks_embeddings():
         model_list=model_list,
         fallbacks=[{"bad-azure-embedding-model": ["good-azure-embedding-model"]}],
         set_verbose=False,
-        retry_policy=litellm.router.RetryPolicy(
-            AuthenticationErrorRetries=0,
-        ),
     )
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
