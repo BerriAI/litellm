@@ -75,7 +75,7 @@ class OpenAIO1Config(OpenAIConfig):
         return optional_params
 
     def is_model_o1_reasoning_model(self, model: str) -> bool:
-        if "o1" in model:
+        if model in litellm.open_ai_chat_completion_models and "o1" in model:
             return True
         return False
 
@@ -93,7 +93,7 @@ class OpenAIO1Config(OpenAIConfig):
                 )
                 messages[i] = new_message  # Replace the old message with the new one
 
-            if isinstance(message["content"], list):
+            if "content" in message and isinstance(message["content"], list):
                 new_content = []
                 for content_item in message["content"]:
                     if content_item.get("type") == "image_url":
