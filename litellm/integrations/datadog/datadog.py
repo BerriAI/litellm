@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success + failure, log events to Datadog
 
+import asyncio
 import datetime
 import os
 import traceback
@@ -41,6 +42,9 @@ class DataDogLogger(CustomBatchLogger):
                 f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
             )
             self.sync_client = _get_httpx_client()
+            asyncio.create_task(self.periodic_flush())
+            self.flush_lock = asyncio.Lock()
+            super().__init__(**kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog: Got exception on init Datadog client {str(e)}"
@@ -59,31 +63,44 @@ class DataDogLogger(CustomBatchLogger):
                 end_time=end_time,
             )
 
-            response = await self.async_client.post(
-                url=self.intake_url,
-                json=dd_payload,
-                headers={
-                    "DD-API-KEY": self.DD_API_KEY,
-                },
-            )
-
-            response.raise_for_status()
-            if response.status_code != 202:
-                raise Exception(
-                    f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
-                )
-
+            self.log_queue.append(dd_payload)
             verbose_logger.debug(
-                "Datadog: Response from datadog API status_code: %s, text: %s",
-                response.status_code,
-                response.text,
+                f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
             )
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
 
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
             )
             pass
+
+    async def async_send_batch(self):
+        if not self.log_queue:
+            verbose_logger.exception("Datadog: log_queue does not exist")
+            return
+
+        response = await self.async_client.post(
+            url=self.intake_url,
+            json=self.log_queue,
+            headers={
+                "DD-API-KEY": self.DD_API_KEY,
+            },
+        )
+
+        response.raise_for_status()
+        if response.status_code != 202:
+            raise Exception(
+                f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
+            )
+
+        verbose_logger.debug(
+            "Datadog: Response from datadog API status_code: %s, text: %s",
+            response.status_code,
+            response.text,
+        )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:

@@ -5,12 +5,16 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
+import logging
 import time
 
 import pytest
 
 import litellm
 from litellm import completion
+from litellm._logging import verbose_logger
+
+verbose_logger.setLevel(logging.DEBUG)
 
 
 # @pytest.mark.skip(reason="beta test - this is a new feature")
