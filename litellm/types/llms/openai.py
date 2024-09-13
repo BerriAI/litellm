@@ -340,7 +340,7 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
 
 class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
-    image_url: ChatCompletionImageUrlObject
+    image_url: Union[str, ChatCompletionImageUrlObject]
 
 
 class OpenAIChatCompletionUserMessage(TypedDict):
