@@ -63,6 +63,13 @@ class DataDogLogger(CustomBatchLogger):
             self.intake_url = (
                 f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
             )
+
+            ###################################
+            # OPTIONAL -only used for testing
+            if os.getenv("_DATADOG_BASE_URL", None) is not None:
+                _dd_base_url = os.getenv("_DATADOG_BASE_URL")
+                self.intake_url = f"{_dd_base_url}/api/v2/logs"
+            ###################################
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
