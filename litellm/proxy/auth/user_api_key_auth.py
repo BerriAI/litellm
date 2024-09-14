@@ -932,16 +932,19 @@ async def user_api_key_auth(
                     )
 
             # Check 8: Additional Common Checks across jwt + key auth
-            _team_obj = LiteLLM_TeamTable(
-                team_id=valid_token.team_id or "",
-                max_budget=valid_token.team_max_budget,
-                spend=valid_token.team_spend,
-                tpm_limit=valid_token.team_tpm_limit,
-                rpm_limit=valid_token.team_rpm_limit,
-                blocked=valid_token.team_blocked,
-                models=valid_token.team_models,
-                metadata=valid_token.team_metadata,
-            )
+            if valid_token.team_id is not None:
+                _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
+                    team_id=valid_token.team_id,
+                    max_budget=valid_token.team_max_budget,
+                    spend=valid_token.team_spend,
+                    tpm_limit=valid_token.team_tpm_limit,
+                    rpm_limit=valid_token.team_rpm_limit,
+                    blocked=valid_token.team_blocked,
+                    models=valid_token.team_models,
+                    metadata=valid_token.team_metadata,
+                )
+            else:
+                _team_obj = None
 
             user_api_key_cache.set_cache(
                 key=valid_token.team_id, value=_team_obj
