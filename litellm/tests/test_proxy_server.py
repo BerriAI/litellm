@@ -762,7 +762,7 @@ async def test_team_update_redis():
     ) as mock_client:
         await _cache_team_object(
             team_id="1234",
-            team_table=LiteLLM_TeamTableCachedObj(),
+            team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
             user_api_key_cache=DualCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -917,7 +917,9 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         )
         litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
 
-        team_mock_client.update = AsyncMock(return_value=LiteLLM_TeamTableCachedObj())
+        team_mock_client.update = AsyncMock(
+            return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
+        )
 
         await team_member_add(
             data=team_member_add_request,
@@ -1095,7 +1097,9 @@ async def test_create_team_member_add_team_admin(
         )
         litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
 
-        team_mock_client.update = AsyncMock(return_value=LiteLLM_TeamTableCachedObj())
+        team_mock_client.update = AsyncMock(
+            return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
+        )
 
         try:
             await team_member_add(
