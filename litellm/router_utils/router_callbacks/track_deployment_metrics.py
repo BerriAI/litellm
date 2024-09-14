@@ -80,6 +80,40 @@ def set_deployment_successes_for_current_minute(
     )
 
 
+def increment_deployment_successes_for_current_minute(
+    litellm_router_instance: LitellmRouter,
+    deployment_id: str,
+):
+    """
+    In-Memory: Increments the number of successes for the current minute for a deployment_id
+    """
+    dt = get_utc_datetime()
+    current_minute = dt.strftime("%H-%M")
+    key = f"{current_minute}:{deployment_id}:successes"
+    litellm_router_instance.cache.increment_cache(
+        local_only=True,
+        key=key,
+        value=1,
+    )
+
+
+def increment_deployment_failures_for_current_minute(
+    litellm_router_instance: LitellmRouter,
+    deployment_id: str,
+):
+    """
+    In-Memory: Increments the number of failures for the current minute for a deployment_id
+    """
+    dt = get_utc_datetime()
+    current_minute = dt.strftime("%H-%M")
+    key = f"{current_minute}:{deployment_id}:fails"
+    litellm_router_instance.cache.increment_cache(
+        local_only=True,
+        key=key,
+        value=1,
+    )
+
+
 def get_deployment_successes_for_current_minute(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,

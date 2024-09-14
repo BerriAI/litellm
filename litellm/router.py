@@ -67,6 +67,10 @@ from litellm.router_utils.fallback_event_handlers import (
     run_sync_fallback,
 )
 from litellm.router_utils.handle_error import send_llm_exception_alert
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    increment_deployment_failures_for_current_minute,
+    increment_deployment_successes_for_current_minute,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     Assistant,
@@ -3514,6 +3518,11 @@ class Router:
                     key=tpm_key, value=total_tokens, ttl=RoutingArgs.ttl.value
                 )
 
+                increment_deployment_successes_for_current_minute(
+                    litellm_router_instance=self,
+                    deployment_id=id,
+                )
+
         except Exception as e:
             verbose_router_logger.exception(
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
@@ -3573,6 +3582,10 @@ class Router:
 
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
+                increment_deployment_failures_for_current_minute(
+                    litellm_router_instance=self,
+                    deployment_id=deployment_id,
+                )
                 _set_cooldown_deployments(
                     litellm_router_instance=self,
                     exception_status=exception_status,
