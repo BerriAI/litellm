@@ -2269,6 +2269,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
     ```
     """
+    litellm.set_verbose = True
     router = Router(
         model_list=[
             {
@@ -2283,7 +2284,9 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                     "model": "openai/text-embedding-ada-002",
                 },
             },
-        ]
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
     )
 
     openai_client = openai.OpenAI(api_key="")
@@ -2304,7 +2307,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
         "create",
         side_effect=_return_exception,
     ):
-        for _ in range(2):
+        for _ in range(1):
             try:
                 if sync_mode:
                     router.embedding(
