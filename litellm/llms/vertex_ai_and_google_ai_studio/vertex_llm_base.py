@@ -255,9 +255,17 @@ class VertexBase(BaseLLM):
                 return self.access_token, self.project_id
 
         if not self._credentials:
-            self._credentials, cred_project_id = await asyncify(self.load_auth)(
-                credentials=credentials, project_id=project_id
-            )
+            try:
+                self._credentials, cred_project_id = await asyncify(self.load_auth)(
+                    credentials=credentials, project_id=project_id
+                )
+            except Exception:
+                verbose_logger.exception(
+                    "Failed to load vertex credentials - received credentials={}".format(
+                        credentials
+                    )
+                )
+                raise
             if not self.project_id:
                 self.project_id = project_id or cred_project_id
         else:
