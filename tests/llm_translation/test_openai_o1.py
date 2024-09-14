@@ -4,16 +4,17 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
+
 import httpx
 import pytest
 from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 @pytest.mark.asyncio
