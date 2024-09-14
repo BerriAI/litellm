@@ -10978,6 +10978,7 @@ def _get_base_model_from_litellm_call_metadata(
             base_model = model_info.get("base_model", None)
             if base_model is not None:
                 return base_model
+    return None
 
 
 def _get_base_model_from_metadata(model_call_details=None):

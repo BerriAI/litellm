@@ -76,14 +76,14 @@ class BaseLLM:
     def validate_environment(
         self, *args, **kwargs
     ) -> Optional[Any]:  # set up the environment required to run the model
-        raise NotImplementedError
+        return None
 
     def completion(
         self, *args, **kwargs
-    ):  # logic for parsing in - calling - parsing out model completion calls
-        raise NotImplementedError
+    ) -> Any:  # logic for parsing in - calling - parsing out model completion calls
+        return None
 
     def embedding(
         self, *args, **kwargs
-    ):  # logic for parsing in - calling - parsing out model embedding calls
-        raise NotImplementedError
+    ) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
+        return None
