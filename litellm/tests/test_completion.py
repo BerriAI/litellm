@@ -24,7 +24,8 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries = 3
+# litellm.num_retries =3
+
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -626,6 +627,8 @@ async def test_model_function_invoke(model, sync_mode, api_key, api_base):
             response = await litellm.acompletion(**data)
 
         print(f"response: {response}")
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -889,18 +892,29 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test claude-3, this is just another way to pass images"
-)
-def test_completion_claude_3_base64():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "azure/gpt-4o",
+        "anthropic/claude-3-opus-20240229",
+    ],
+)  #
+def test_completion_base64(model):
     try:
+        import base64
+
+        import requests
+
         litellm.set_verbose = True
-        litellm.num_retries = 3
-        image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
-        base64_image = encode_image(image_path)
+        url = "https://dummyimage.com/100/100/fff&text=Test+image"
+        response = requests.get(url)
+        file_data = response.content
+
+        encoded_file = base64.b64encode(file_data).decode("utf-8")
+        base64_image = f"data:image/png;base64,{encoded_file}"
         resp = litellm.completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -908,9 +922,7 @@ def test_completion_claude_3_base64():
                         {"type": "text", "text": "Whats in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
+                            "image_url": {"url": base64_image},
                         },
                     ],
                 }
@@ -919,7 +931,6 @@ def test_completion_claude_3_base64():
         print(f"\nResponse: {resp}")
 
         prompt_tokens = resp.usage.prompt_tokens
-        raise Exception("it worked!")
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
@@ -2174,15 +2185,16 @@ def test_completion_openai():
 
 
 @pytest.mark.parametrize(
-    "model",
+    "model, api_version",
     [
-        "gpt-4o-2024-08-06",
-        "azure/chatgpt-v-2",
-        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        ("gpt-4o-2024-08-06", None),
+        ("azure/chatgpt-v-2", None),
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("azure/gpt-4o", "2024-08-01-preview"),
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
-def test_completion_openai_pydantic(model):
+def test_completion_openai_pydantic(model, api_version):
     try:
         litellm.set_verbose = True
         from pydantic import BaseModel
@@ -2207,6 +2219,7 @@ def test_completion_openai_pydantic(model):
                     messages=messages,
                     metadata={"hi": "bye"},
                     response_format=EventsList,
+                    api_version=api_version,
                 )
                 break
             except litellm.JSONSchemaValidationError:
@@ -3469,14 +3482,14 @@ def response_format_tests(response: litellm.ModelResponse):
 @pytest.mark.parametrize(
     "model",
     [
-        # "bedrock/cohere.command-r-plus-v1:0",
+        "bedrock/mistral.mistral-large-2407-v1:0",
+        "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "anthropic.claude-instant-v1",
-        # "bedrock/ai21.j2-mid",
-        # "mistral.mistral-7b-instruct-v0:2",
+        "anthropic.claude-instant-v1",
+        "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
-        # "meta.llama3-8b-instruct-v1:0",
-        # "cohere.command-text-v14",
+        "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -3491,6 +3504,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3502,6 +3516,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)

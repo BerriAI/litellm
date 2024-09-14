@@ -71,7 +71,10 @@ class OpenTelemetryConfig:
 
 class OpenTelemetry(CustomLogger):
     def __init__(
-        self, config=OpenTelemetryConfig.from_env(), callback_name: Optional[str] = None
+        self,
+        config=OpenTelemetryConfig.from_env(),
+        callback_name: Optional[str] = None,
+        **kwargs,
     ):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
@@ -100,6 +103,9 @@ class OpenTelemetry(CustomLogger):
             # Enable OpenTelemetry logging
             otel_exporter_logger = logging.getLogger("opentelemetry.sdk.trace.export")
             otel_exporter_logger.setLevel(logging.DEBUG)
+
+        # init CustomLogger params
+        super().__init__(**kwargs)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_sucess(kwargs, response_obj, start_time, end_time)
@@ -260,6 +266,8 @@ class OpenTelemetry(CustomLogger):
         self.set_attributes(span, kwargs, response_obj)
 
         if litellm.turn_off_message_logging is True:
+            pass
+        elif self.message_logging is not True:
             pass
         else:
             # Span 2: Raw Request / Response to LLM
@@ -641,7 +649,7 @@ class OpenTelemetry(CustomLogger):
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
-                )
+                ),
             )
         elif self.OTEL_EXPORTER == "otlp_grpc":
             verbose_logger.debug(
@@ -651,7 +659,7 @@ class OpenTelemetry(CustomLogger):
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
-                )
+                ),
             )
         else:
             verbose_logger.debug(

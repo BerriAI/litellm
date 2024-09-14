@@ -150,8 +150,17 @@ async def vertex_proxy_route(
 
         base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
 
+        _auth_header, vertex_project = (
+            await vertex_fine_tuning_apis_instance._ensure_access_token_async(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider="vertex_ai_beta",
+            )
+        )
+
         auth_header, _ = vertex_fine_tuning_apis_instance._get_token_and_url(
             model="",
+            auth_header=_auth_header,
             gemini_api_key=None,
             vertex_credentials=vertex_credentials,
             vertex_project=vertex_project,

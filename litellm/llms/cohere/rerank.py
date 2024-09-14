@@ -9,10 +9,11 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 from pydantic import BaseModel
 
+import litellm
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.rerank_api.types import RerankRequest, RerankResponse
 
@@ -65,7 +66,7 @@ class CohereRerank(BaseLLM):
         api_key: str,
         api_base: str,
     ) -> RerankResponse:
-        client = _get_async_httpx_client()
+        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.COHERE)
 
         response = await client.post(
             api_base,

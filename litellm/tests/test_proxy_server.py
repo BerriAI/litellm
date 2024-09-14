@@ -1255,7 +1255,17 @@ async def test_add_callback_via_key(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
+@pytest.mark.parametrize(
+    "callback_type, expected_success_callbacks, expected_failure_callbacks",
+    [
+        ("success", ["langfuse"], []),
+        ("failure", [], ["langfuse"]),
+        ("success_and_failure", ["langfuse"], ["langfuse"]),
+    ],
+)
+async def test_add_callback_via_key_litellm_pre_call_utils(
+    prisma_client, callback_type, expected_success_callbacks, expected_failure_callbacks
+):
     import json
 
     from fastapi import HTTPException, Request, Response
@@ -1312,7 +1322,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
                 "logging": [
                     {
                         "callback_name": "langfuse",
-                        "callback_type": "success",
+                        "callback_type": callback_type,
                         "callback_vars": {
                             "langfuse_public_key": "my-mock-public-key",
                             "langfuse_secret_key": "my-mock-secret-key",
@@ -1359,13 +1369,20 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
     }
 
     new_data = await add_litellm_data_to_request(**data)
+    print("NEW DATA: {}".format(new_data))
 
-    assert "success_callback" in new_data
-    assert new_data["success_callback"] == ["langfuse"]
     assert "langfuse_public_key" in new_data
     assert new_data["langfuse_public_key"] == "my-mock-public-key"
     assert "langfuse_secret_key" in new_data
     assert new_data["langfuse_secret_key"] == "my-mock-secret-key"
+
+    if expected_success_callbacks:
+        assert "success_callback" in new_data
+        assert new_data["success_callback"] == expected_success_callbacks
+
+    if expected_failure_callbacks:
+        assert "failure_callback" in new_data
+        assert new_data["failure_callback"] == expected_failure_callbacks
 
 
 @pytest.mark.asyncio
@@ -1415,3 +1432,72 @@ async def test_gemini_pass_through_endpoint():
     )
 
     print(resp.body)
+
+
+@pytest.mark.asyncio
+async def test_proxy_model_group_alias_checks(prisma_client):
+    """
+    Check if model group alias is returned on
+
+    `/v1/models`
+    `/v1/model/info`
+    `/v1/model_group/info`
+    """
+    import json
+
+    from fastapi import HTTPException, Request, Response
+    from starlette.datastructures import URL
+
+    from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+
+    _model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        }
+    ]
+    model_alias = "gpt-4"
+    router = litellm.Router(
+        model_list=_model_list,
+        model_group_alias={model_alias: "gpt-3.5-turbo"},
+    )
+    setattr(litellm.proxy.proxy_server, "llm_router", router)
+    setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
+
+    request = Request(scope={"type": "http", "method": "POST", "headers": {}})
+    request._url = URL(url="/v1/models")
+
+    resp = await model_list(
+        user_api_key_dict=UserAPIKeyAuth(models=[]),
+    )
+
+    assert len(resp) == 2
+    print(resp)
+
+    resp = await model_info_v1(
+        user_api_key_dict=UserAPIKeyAuth(models=[]),
+    )
+    models = resp["data"]
+    is_model_alias_in_list = False
+    for item in models:
+        if model_alias == item["model_name"]:
+            is_model_alias_in_list = True
+
+    assert is_model_alias_in_list
+
+    resp = await model_group_info(
+        user_api_key_dict=UserAPIKeyAuth(models=[]),
+    )
+    models = resp["data"]
+    is_model_alias_in_list = False
+    for item in models:
+        if model_alias == item.model_group:
+            is_model_alias_in_list = True
+
+    assert is_model_alias_in_list

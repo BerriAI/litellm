@@ -86,10 +86,11 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.success_callback = []
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
+
         if data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
 
-        if data.callback_name in team_callback_settings_obj.failure_callback:
+        if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
@@ -106,7 +107,16 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if user_api_key_dict.team_metadata is not None:
+    if (
+        user_api_key_dict.metadata is not None
+        and "logging" in user_api_key_dict.metadata
+    ):
+        for item in user_api_key_dict.metadata["logging"]:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+    elif user_api_key_dict.team_metadata is not None:
         team_metadata = user_api_key_dict.team_metadata
         if "callback_settings" in team_metadata:
             callback_settings = team_metadata.get("callback_settings", None) or {}
@@ -123,15 +133,7 @@ def _get_dynamic_logging_metadata(
             }
             }
             """
-    elif (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
-            callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
-                team_callback_settings_obj=callback_settings_obj,
-            )
+
     return callback_settings_obj
 
 

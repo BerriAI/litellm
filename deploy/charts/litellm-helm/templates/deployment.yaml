@@ -104,7 +104,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: HOST
-              value: "::"
+              value: "{{ .Values.listen | default "0.0.0.0" }}"
             - name: PORT
               value: {{ .Values.service.port | quote}}
             {{- if .Values.db.deployStandalone }}
@@ -137,9 +137,9 @@ spec:
               value: {{ .Values.db.endpoint }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
-            {{- end }}
             - name: DATABASE_URL
-              value: "postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)"
+              value: {{ .Values.db.url | quote }}
+            {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:

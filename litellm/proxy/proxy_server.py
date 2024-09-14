@@ -115,7 +115,10 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.slack_alerting import SlackAlerting, SlackAlertingArgs
+from litellm.integrations.SlackAlerting.slack_alerting import (
+    SlackAlerting,
+    SlackAlertingArgs,
+)
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import *
@@ -478,6 +481,7 @@ experimental = False
 llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
+callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key = None
@@ -1491,7 +1495,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         # Load existing config
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
@@ -1532,6 +1536,9 @@ class ProxyConfig:
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
+
+        ## Callback settings
+        callback_settings = config.get("callback_settings", None)
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
@@ -2118,6 +2125,8 @@ class ProxyConfig:
                     if isinstance(v, str):
                         # decrypt value
                         _value = decrypt_value_helper(value=v)
+                        if _value is None:
+                            raise Exception("Unable to decrypt value={}".format(v))
                         # sanity check if string > size 0
                         if len(_value) > 0:
                             _litellm_params[k] = _value
@@ -3012,7 +3021,7 @@ async def startup_event():
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
-def model_list(
+async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """

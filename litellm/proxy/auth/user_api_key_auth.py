@@ -250,6 +250,7 @@ async def user_api_key_auth(
                         raise Exception(
                             f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
                         )
+
                 # get team id
                 team_id = jwt_handler.get_team_id(
                     token=jwt_valid_token, default_value=None
@@ -296,10 +297,30 @@ async def user_api_key_auth(
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+                # [OPTIONAL] allowed user email domains
+                valid_user_email: Optional[bool] = None
+                user_email: Optional[str] = None
+                if jwt_handler.is_enforced_email_domain():
+                    """
+                    if 'allowed_email_subdomains' is set,
+
+                    - checks if token contains 'email' field
+                    - checks if 'email' is from an allowed domain
+                    """
+                    user_email = jwt_handler.get_user_email(
+                        token=jwt_valid_token, default_value=None
+                    )
+                    if user_email is None:
+                        valid_user_email = False
+                    else:
+                        valid_user_email = jwt_handler.is_allowed_domain(
+                            user_email=user_email
+                        )
+
                 # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
                 user_object = None
                 user_id = jwt_handler.get_user_id(
-                    token=jwt_valid_token, default_value=None
+                    token=jwt_valid_token, default_value=user_email
                 )
                 if user_id is not None:
                     # get the user object
@@ -307,11 +328,12 @@ async def user_api_key_auth(
                         user_id=user_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
-                        user_id_upsert=jwt_handler.is_upsert_user_id(),
+                        user_id_upsert=jwt_handler.is_upsert_user_id(
+                            valid_user_email=valid_user_email
+                        ),
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
                     )
-
                 # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
                 end_user_object = None
                 end_user_id = jwt_handler.get_end_user_id(
@@ -546,7 +568,9 @@ async def user_api_key_auth(
                         if field_name in valid_token.__fields__:
                             setattr(valid_token, field_name, v)
             except Exception as e:
-                verbose_logger.warning(e)
+                verbose_logger.debug(
+                    e
+                )  # moving from .warning to .debug as it spams logs when team missing from cache.
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -802,7 +826,7 @@ async def user_api_key_auth(
                 # collect information for alerting #
                 ####################################
 
-                user_email: Optional[str] = None
+                user_email = None
                 # Check if the token has any user id information
                 if user_obj is not None:
                     user_email = user_obj.user_email

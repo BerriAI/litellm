@@ -202,6 +202,15 @@ async def generate_key_fn(
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+        # Set tags on the new key
+        if "tags" in data_json:
+            if data_json["metadata"] is None:
+                data_json["metadata"] = {"tags": data_json["tags"]}
+            else:
+                data_json["metadata"]["tags"] = data_json["tags"]
+
+            data_json.pop("tags")
+
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
         )
@@ -257,12 +266,11 @@ async def generate_key_fn(
 
         return GenerateKeyResponse(**response)
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -293,12 +301,12 @@ async def prepare_key_update_data(
             continue
         if v is not None and v not in ([], {}, 0):
             non_default_values[k] = v
-
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        duration_s = _duration_in_seconds(duration=duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["expires"] = expires
+        if duration and (isinstance(duration, str)) and len(duration) > 0:
+            duration_s = _duration_in_seconds(duration=duration)
+            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
         duration_s = _duration_in_seconds(
@@ -731,6 +739,7 @@ async def generate_key_helper_fn(
         str
     ] = None,  # dev-friendly alt param for 'token'. Exposed on `/key/generate` for setting key value yourself.
     user_id: Optional[str] = None,
+    user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
@@ -816,6 +825,7 @@ async def generate_key_helper_fn(
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "user_alias": user_alias,
             "team_id": team_id,
             "organization_id": organization_id,
             "user_role": user_role,

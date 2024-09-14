@@ -292,7 +292,9 @@ def completion(
         vertex_httpx_logic = VertexLLM()
 
         access_token, project_id = vertex_httpx_logic._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
         )
 
         anthropic_chat_completions = AnthropicChatCompletion()

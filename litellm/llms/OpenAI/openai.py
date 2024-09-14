@@ -550,6 +550,8 @@ class OpenAIConfig:
         ]  # works across all models
 
         model_specific_params = []
+        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+            return litellm.OpenAIO1Config().get_supported_openai_params(model=model)
         if (
             model != "gpt-3.5-turbo-16k" and model != "gpt-4"
         ):  # gpt-4 does not support 'response_format'
@@ -566,6 +568,13 @@ class OpenAIConfig:
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
     ) -> dict:
+        """ """
+        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+            return litellm.OpenAIO1Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+            )
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
@@ -861,6 +870,13 @@ class OpenAIChatCompletion(BaseLLM):
                         messages=messages,
                         custom_llm_provider=custom_llm_provider,
                     )
+            if (
+                litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model)
+                and messages is not None
+            ):
+                messages = litellm.OpenAIO1Config().o1_prompt_factory(
+                    messages=messages,
+                )
 
             for _ in range(
                 2
@@ -1263,6 +1279,7 @@ class OpenAIChatCompletion(BaseLLM):
 
                 error_headers = getattr(e, "headers", None)
                 if response is not None and hasattr(response, "text"):
+                    error_headers = getattr(e, "headers", None)
                     raise OpenAIError(
                         status_code=500,
                         message=f"{str(e)}\n\nOriginal Response: {response.text}",
@@ -1800,12 +1817,11 @@ class OpenAITextCompletion(BaseLLM):
         headers: Optional[dict] = None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
-                raise OpenAIError(status_code=422, message=f"Missing model or messages")
+                raise OpenAIError(status_code=422, message="Missing model or messages")
 
             if (
                 len(messages) > 0

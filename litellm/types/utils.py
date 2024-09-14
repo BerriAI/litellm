@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes
-from openai.types.completion_usage import CompletionUsage
+from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
 from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
@@ -325,7 +325,7 @@ class Message(OpenAIObject):
     ):
         init_values = {
             "content": content,
-            "role": "assistant",
+            "role": role or "assistant",  # handle null input
             "function_call": (
                 FunctionCall(**function_call) if function_call is not None else None
             ),
@@ -473,6 +473,7 @@ class Usage(CompletionUsage):
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
+        reasoning_tokens: Optional[int] = None,
         **params,
     ):
         ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
@@ -482,12 +483,19 @@ class Usage(CompletionUsage):
             and prompt_tokens is not None
         ):
             prompt_tokens = params["prompt_cache_miss_tokens"]
-        data = {
-            "prompt_tokens": prompt_tokens or 0,
-            "completion_tokens": completion_tokens or 0,
-            "total_tokens": total_tokens or 0,
-        }
-        super().__init__(**data)
+
+        # handle reasoning_tokens
+        completion_tokens_details = None
+        if reasoning_tokens:
+            completion_tokens_details = CompletionTokensDetails(
+                reasoning_tokens=reasoning_tokens
+            )
+        super().__init__(
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
+            total_tokens=total_tokens or 0,
+            completion_tokens_details=completion_tokens_details or None,
+        )
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(

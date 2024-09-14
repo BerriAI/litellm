@@ -17,7 +17,7 @@ def initialize_callbacks_on_proxy(
     litellm_settings: dict,
     callback_specific_params: dict = {},
 ):
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import callback_settings, prisma_client
 
     verbose_proxy_logger.debug(
         f"{blue_color_code}initializing callbacks={value} on proxy{reset_color_code}"
@@ -34,7 +34,11 @@ def initialize_callbacks_on_proxy(
                 from litellm.integrations.opentelemetry import OpenTelemetry
                 from litellm.proxy import proxy_server
 
-                open_telemetry_logger = OpenTelemetry()
+                _otel_settings = {}
+                if isinstance(callback_settings, dict) and "otel" in callback_settings:
+                    _otel_settings = callback_settings["otel"]
+
+                open_telemetry_logger = OpenTelemetry(**_otel_settings)
 
                 # Add Otel as a service callback
                 if "otel" not in litellm.service_callback:
@@ -228,6 +232,16 @@ def initialize_callbacks_on_proxy(
             litellm.callbacks.extend(imported_list)
         else:
             litellm.callbacks = imported_list  # type: ignore
+
+        if "prometheus" in value:
+            from litellm.proxy.proxy_server import app
+
+            verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")
+            from prometheus_client import make_asgi_app
+
+            # Add prometheus asgi middleware to route /metrics requests
+            metrics_app = make_asgi_app()
+            app.mount("/metrics", metrics_app)
     else:
         litellm.callbacks = [
             get_instance_fn(

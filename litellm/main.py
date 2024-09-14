@@ -92,7 +92,7 @@ from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks import DatabricksChatCompletion
+from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -1013,7 +1013,10 @@ def completion(
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+                or litellm.AZURE_DEFAULT_API_VERSION
             )
 
             api_key = (
@@ -1209,6 +1212,9 @@ def completion(
             custom_llm_provider == "text-completion-openai"
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
+            or custom_llm_provider
+            in litellm.openai_text_completion_compatible_providers
+            and kwargs.get("text_completion") is True
         ):
             openai.api_type = "openai"
 
@@ -4099,8 +4105,8 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if (
-        _model is not None and custom_llm_provider == "openai"
+    if _model is not None and (
+        custom_llm_provider == "openai"
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
         if _model not in litellm.open_ai_chat_completion_models:
             model = "text-completion-openai/" + _model
@@ -5304,7 +5310,7 @@ def stream_chunk_builder(
         ]
 
         if len(tool_call_chunks) > 0:
-            argument_list = []
+            argument_list: List = []
             delta = tool_call_chunks[0]["choices"][0]["delta"]
             message = response["choices"][0]["message"]
             message["tool_calls"] = []
@@ -5313,6 +5319,7 @@ def stream_chunk_builder(
             type = None
             tool_calls_list = []
             prev_index = None
+            prev_name = None
             prev_id = None
             curr_id = None
             curr_index = 0
@@ -5340,27 +5347,32 @@ def stream_chunk_builder(
                             type = tool_calls[0].type
                 if prev_index is None:
                     prev_index = curr_index
+                if prev_name is None:
+                    prev_name = name
                 if curr_index != prev_index:  # new tool call
                     combined_arguments = "".join(argument_list)
                     tool_calls_list.append(
                         {
                             "id": prev_id,
-                            "index": prev_index,
-                            "function": {"arguments": combined_arguments, "name": name},
+                            "function": {
+                                "arguments": combined_arguments,
+                                "name": prev_name,
+                            },
                             "type": type,
                         }
                     )
                     argument_list = []  # reset
                     prev_index = curr_index
                     prev_id = curr_id
+                    prev_name = name
 
             combined_arguments = (
                 "".join(argument_list) or "{}"
             )  # base case, return empty dict
+
             tool_calls_list.append(
                 {
                     "id": id,
-                    "index": curr_index,
                     "function": {"arguments": combined_arguments, "name": name},
                     "type": type,
                 }
@@ -5416,7 +5428,7 @@ def stream_chunk_builder(
                 for choice in choices:
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
-                    if content == None:
+                    if content is None:
                         continue  # openai v1.0.0 sets content = None for chunks
                     content_list.append(content)
 

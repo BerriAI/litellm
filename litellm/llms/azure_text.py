@@ -162,11 +162,10 @@ class AzureTextCompletion(BaseLLM):
         client=None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(
-                    status_code=422, message=f"Missing model or messages"
+                    status_code=422, message="Missing model or messages"
                 )
 
             max_retries = optional_params.pop("max_retries", 2)
@@ -293,7 +292,10 @@ class AzureTextCompletion(BaseLLM):
                             "api-version", api_version
                         )
 
-                response = azure_client.completions.create(**data, timeout=timeout)  # type: ignore
+                raw_response = azure_client.completions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
+                response = raw_response.parse()
                 stringified_response = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
@@ -380,13 +382,15 @@ class AzureTextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.completions.create(**data, timeout=timeout)
+            raw_response = await azure_client.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
+            response = raw_response.parse()
             return openai_text_completion_config.convert_to_chat_model_response_object(
                 response_object=response.model_dump(),
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
             status_code = getattr(e, "status_code", 500)
