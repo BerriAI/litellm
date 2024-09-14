@@ -299,20 +299,3 @@ def cast_exception_status_to_int(exception_status: Union[str, int]) -> int:
             )
             exception_status = 500
     return exception_status
-
-
-"""
-
-    # if isinstance(exception_status, str):
-    #     try:
-    #         exception_status = int(exception_status)
-    #     except Exception as e:
-    #         verbose_router_logger.debug(
-    #             f"Unable to cast exception status to int {exception_status}. Defaulting to status=500."
-    #         )
-    #         exception_status = 500
-    
-    # _should_retry = litellm._should_retry(status_code=exception_status)
-    
-    # return updated_fails > allowed_fails or _should_retry is False
-"""
