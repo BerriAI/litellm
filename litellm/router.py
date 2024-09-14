@@ -55,6 +55,7 @@ from litellm.router_utils.client_initalization_utils import (
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
 from litellm.router_utils.cooldown_handlers import (
+    DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
     _async_get_cooldown_deployments_with_debug_info,
     _get_cooldown_deployments,
@@ -356,7 +357,7 @@ class Router:
             self.allowed_fails = allowed_fails
         else:
             self.allowed_fails = litellm.allowed_fails
-        self.cooldown_time = cooldown_time or 60
+        self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(
             cache=self.cache, default_cooldown_time=self.cooldown_time
         )

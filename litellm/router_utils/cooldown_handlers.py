@@ -29,7 +29,7 @@ else:
 DEFAULT_FAILURE_THRESHOLD_PERCENT = (
     0.5  # default cooldown a deployment if 50% of requests fail in a given minute
 )
-DEFAULT_COOLDOWN_TIME_SECONDS = 1
+DEFAULT_COOLDOWN_TIME_SECONDS = 5
 
 
 def _should_run_cooldown_logic(
