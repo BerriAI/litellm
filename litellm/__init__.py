@@ -944,8 +944,11 @@ from .llms.OpenAI.openai import (
     AzureAIStudioConfig,
 )
 from .llms.mistral.mistral_chat_transformation import MistralConfig
-from .llms.OpenAI.o1_model_transformation import (
+from .llms.OpenAI.o1_transformation import (
     OpenAIO1Config,
+)
+from .llms.OpenAI.gpt_transformation import (
+    OpenAIGPTConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig

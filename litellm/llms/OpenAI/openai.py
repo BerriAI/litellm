@@ -410,44 +410,10 @@ class OpenAIConfig:
         }
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = [
-            "frequency_penalty",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "max_tokens",
-            "n",
-            "presence_penalty",
-            "seed",
-            "stop",
-            "stream",
-            "stream_options",
-            "temperature",
-            "top_p",
-            "tools",
-            "tool_choice",
-            "function_call",
-            "functions",
-            "max_retries",
-            "extra_headers",
-            "parallel_tool_calls",
-        ]  # works across all models
-
-        model_specific_params = []
         if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
             return litellm.OpenAIO1Config().get_supported_openai_params(model=model)
-        if (
-            model != "gpt-3.5-turbo-16k" and model != "gpt-4"
-        ):  # gpt-4 does not support 'response_format'
-            model_specific_params.append("response_format")
-
-        if (
-            model in litellm.open_ai_chat_completion_models
-        ) or model in litellm.open_ai_text_completion_models:
-            model_specific_params.append(
-                "user"
-            )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
-        return base_params + model_specific_params
+        else:
+            return litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
 
     def _map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
@@ -468,8 +434,7 @@ class OpenAIConfig:
                 optional_params=optional_params,
                 model=model,
             )
-
-        return self._map_openai_params(
+        return litellm.OpenAIGPTConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
