@@ -129,7 +129,7 @@ async def test_anthropic_api_max_completion_tokens(model: str, respx_mock: MockR
     assert isinstance(response, ModelResponse)
 
 
-def test_all_vertex_configs():
+def test_all_model_configs():
     from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
     )
@@ -148,3 +148,104 @@ def test_all_vertex_configs():
     assert VertexAIAi21Config().map_openai_params(
         {"max_completion_tokens": 10}, {}, "llama3"
     ) == {"max_tokens": 10}
+
+    from litellm.llms.fireworks_ai import FireworksAIConfig
+
+    assert "max_completion_tokens" in FireworksAIConfig().get_supported_openai_params()
+    assert FireworksAIConfig().map_openai_params(
+        {"max_completion_tokens": 10}, {}, "llama3"
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.huggingface_restapi import HuggingfaceConfig
+
+    assert "max_completion_tokens" in HuggingfaceConfig().get_supported_openai_params()
+    assert HuggingfaceConfig().map_openai_params({"max_completion_tokens": 10}, {}) == {
+        "max_new_tokens": 10
+    }
+
+    from litellm.llms.nvidia_nim import NvidiaNimConfig
+
+    assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(
+        model="llama3"
+    )
+    assert NvidiaNimConfig().map_openai_params(
+        model="llama3",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.ollama_chat import OllamaChatConfig
+
+    assert "max_completion_tokens" in OllamaChatConfig().get_supported_openai_params()
+    assert OllamaChatConfig().map_openai_params(
+        model="llama3",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"num_predict": 10}
+
+    from litellm.llms.predibase import PredibaseConfig
+
+    assert "max_completion_tokens" in PredibaseConfig().get_supported_openai_params()
+    assert PredibaseConfig().map_openai_params(
+        {"max_completion_tokens": 10},
+        {},
+    ) == {"max_new_tokens": 10}
+
+    from litellm.llms.text_completion_codestral import MistralTextCompletionConfig
+
+    assert (
+        "max_completion_tokens"
+        in MistralTextCompletionConfig().get_supported_openai_params()
+    )
+    assert MistralTextCompletionConfig().map_openai_params(
+        {"max_completion_tokens": 10},
+        {},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.volcengine import VolcEngineConfig
+
+    assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(
+        model="llama3"
+    )
+    assert VolcEngineConfig().map_openai_params(
+        model="llama3",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.AI21.chat import AI21ChatConfig
+
+    assert "max_completion_tokens" in AI21ChatConfig().get_supported_openai_params(
+        "jamba-1.5-mini@001"
+    )
+    assert AI21ChatConfig().map_openai_params(
+        model="jamba-1.5-mini@001",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.AzureOpenAI.azure import AzureOpenAIConfig
+
+    assert "max_completion_tokens" in AzureOpenAIConfig().get_supported_openai_params()
+    assert AzureOpenAIConfig().map_openai_params(
+        model="gpt-3.5-turbo",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        api_version="2022-12-01",
+        drop_params=False,
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.bedrock.chat import AmazonConverseConfig
+
+    assert (
+        "max_completion_tokens"
+        in AmazonConverseConfig().get_supported_openai_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+    )
+    assert AmazonConverseConfig().map_openai_params(
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        drop_params=False,
+    ) == {"maxTokens": 10}
