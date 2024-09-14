@@ -84,9 +84,9 @@ def _should_cooldown_deployment(
     Deployment is put in cooldown when:
     - v2 logic (Current):
     cooldown if:
+        - got a 429 error from LLM API
         - if %fails/%(successes + fails) > ALLOWED_FAILURE_RATE_PER_MINUTE
         - got 401 Auth error, 404 NotFounder - checked by litellm._should_retry()
-        - got a 429 error
 
 
 
