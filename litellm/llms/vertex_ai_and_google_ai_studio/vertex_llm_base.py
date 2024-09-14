@@ -261,9 +261,7 @@ class VertexBase(BaseLLM):
                 )
             except Exception:
                 verbose_logger.exception(
-                    "Failed to load vertex credentials - received credentials={}".format(
-                        credentials
-                    )
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
                 )
                 raise
             if not self.project_id:
