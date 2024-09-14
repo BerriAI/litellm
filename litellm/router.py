@@ -455,6 +455,10 @@ class Router:
             litellm._async_success_callback.append(self.deployment_callback_on_success)
         else:
             litellm._async_success_callback.append(self.deployment_callback_on_success)
+        if isinstance(litellm.success_callback, list):
+            litellm.success_callback.append(self.sync_deployment_callback_on_success)
+        else:
+            litellm.success_callback = [self.sync_deployment_callback_on_success]
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
             litellm.failure_callback.append(self.deployment_callback_on_failure)
@@ -3561,6 +3565,31 @@ class Router:
                 )
             )
             pass
+
+    def sync_deployment_callback_on_success(
+        self,
+        kwargs,  # kwargs to completion
+        completion_response,  # response from completion
+        start_time,
+        end_time,  # start/end time
+    ):
+        id = None
+        if kwargs["litellm_params"].get("metadata") is None:
+            pass
+        else:
+            model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+            model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+            id = model_info.get("id", None)
+            if model_group is None or id is None:
+                return
+            elif isinstance(id, int):
+                id = str(id)
+
+        if id is not None:
+            increment_deployment_successes_for_current_minute(
+                litellm_router_instance=self,
+                deployment_id=id,
+            )
 
     def deployment_callback_on_failure(
         self,
