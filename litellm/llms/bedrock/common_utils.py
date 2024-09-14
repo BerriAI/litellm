@@ -5,7 +5,7 @@ Common utilities used across bedrock chat/embedding/image generation
 import os
 import types
 from enum import Enum
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Tuple, Union
 
 import httpx
 
@@ -158,6 +158,7 @@ class AmazonAnthropicClaude3Config:
     def get_supported_openai_params(self):
         return [
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "stream",
@@ -169,7 +170,7 @@ class AmazonAnthropicClaude3Config:
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
@@ -240,11 +241,18 @@ class AmazonAnthropicConfig:
     def get_supported_openai_params(
         self,
     ):
-        return ["max_tokens", "temperature", "stop", "top_p", "stream"]
+        return [
+            "max_tokens",
+            "max_completion_tokens",
+            "temperature",
+            "stop",
+            "top_p",
+            "stream",
+        ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens_to_sample"] = value
             if param == "temperature":
                 optional_params["temperature"] = value

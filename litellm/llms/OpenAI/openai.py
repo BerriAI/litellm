@@ -190,6 +190,7 @@ class DeepInfraConfig:
             "functions",
             "logit_bias",
             "max_tokens",
+            "max_completion_tokens",
             "n",
             "presence_penalty",
             "stop",
@@ -229,7 +230,9 @@ class DeepInfraConfig:
                             ),
                             status_code=400,
                         )
-            if param in supported_openai_params:
+            elif param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
         return optional_params
@@ -347,7 +350,9 @@ class OpenAIConfig:
 
     - `logit_bias` (map): This optional parameter modifies the likelihood of specified tokens appearing in the completion.
 
-    - `max_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion.
+    - `max_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion. OpenAI has now deprecated in favor of max_completion_tokens, and is not compatible with o1 series models.
+
+    - `max_completion_tokens` (integer or null): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
 
     - `n` (integer or null): This optional parameter helps to set how many chat completion choices to generate for each input message.
 
@@ -364,6 +369,7 @@ class OpenAIConfig:
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
     logit_bias: Optional[dict] = None
+    max_completion_tokens: Optional[int] = None
     max_tokens: Optional[int] = None
     n: Optional[int] = None
     presence_penalty: Optional[int] = None
@@ -378,6 +384,7 @@ class OpenAIConfig:
         function_call: Optional[Union[str, dict]] = None,
         functions: Optional[list] = None,
         logit_bias: Optional[dict] = None,
+        max_completion_tokens: Optional[int] = None,
         max_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[int] = None,
