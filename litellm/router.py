@@ -5303,7 +5303,7 @@ class Router:
                         input=input,
                     )
                 )
-            if (
+            elif (
                 self.routing_strategy == "cost-based-routing"
                 and self.lowestcost_logger is not None
             ):
