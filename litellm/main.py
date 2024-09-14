@@ -737,6 +737,7 @@ def completion(
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
+    base_model = kwargs.get("base_model", None)
     ### TEXT COMPLETION CALLS ###
     text_completion = kwargs.get("text_completion", False)
     atext_completion = kwargs.get("atext_completion", False)
@@ -782,11 +783,9 @@ def completion(
         "top_logprobs",
         "extra_headers",
     ]
-    litellm_params = (
-        all_litellm_params  # use the external var., used in creating cache key as well.
-    )
 
-    default_params = openai_params + litellm_params
+    default_params = openai_params + all_litellm_params
+    litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
@@ -973,6 +972,7 @@ def completion(
             text_completion=kwargs.get("text_completion"),
             azure_ad_token_provider=kwargs.get("azure_ad_token_provider"),
             user_continue_message=kwargs.get("user_continue_message"),
+            base_model=base_model,
         )
         logging.update_environment_variables(
             model=model,
@@ -2123,7 +2123,10 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif "gemini" in model:
+            elif "gemini" in model or (
+                litellm_params.get("base_model") is not None
+                and "gemini" in litellm_params["base_model"]
+            ):
                 model_response = vertex_chat_completion.completion(  # type: ignore
                     model=model,
                     messages=messages,
@@ -2820,7 +2823,7 @@ def completion_with_retries(*args, **kwargs):
         )
 
     num_retries = kwargs.pop("num_retries", 3)
-    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop("retry_strategy", "constant_retry")  # type: ignore
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "constant_retry":
         retryer = tenacity.Retrying(
@@ -4997,7 +5000,9 @@ def speech(
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
-        Literal["completion", "embedding", "image_generation", "chat", "batch"]
+        Literal[
+            "completion", "embedding", "image_generation", "chat", "batch", "rerank"
+        ]
     ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
@@ -5112,6 +5117,12 @@ async def ahealth_check(
                 model_params.pop("messages", None)
                 model_params["prompt"] = prompt
                 await litellm.aimage_generation(**model_params)
+                response = {}
+            elif mode == "rerank":
+                model_params.pop("messages", None)
+                model_params["query"] = prompt
+                model_params["documents"] = ["my sample text"]
+                await litellm.arerank(**model_params)
                 response = {}
             elif "*" in model:
                 from litellm.litellm_core_utils.llm_request_utils import (

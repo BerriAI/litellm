@@ -2492,3 +2492,31 @@ async def test_router_batch_endpoints(provider):
         model="my-custom-name", custom_llm_provider=provider, limit=2
     )
     print("list_batches=", list_batches)
+
+
+@pytest.mark.parametrize("hidden", [True, False])
+def test_model_group_alias(hidden):
+    _model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        },
+        {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}},
+    ]
+    router = Router(
+        model_list=_model_list,
+        model_group_alias={
+            "gpt-4.5-turbo": {"model": "gpt-3.5-turbo", "hidden": hidden}
+        },
+    )
+
+    models = router.get_model_list()
+
+    model_names = router.get_model_names()
+
+    if hidden:
+        assert len(models) == len(_model_list)
+        assert len(model_names) == len(_model_list)
+    else:
+        assert len(models) == len(_model_list) + 1
+        assert len(model_names) == len(_model_list) + 1

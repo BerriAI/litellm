@@ -589,3 +589,14 @@ def test_parse_additional_properties_json_schema(model, provider, expectedAddPro
     elif provider == "openai":
         schema = optional_params["response_format"]["json_schema"]["schema"]
     assert ("additionalProperties" in schema) == expectedAddProp
+
+
+def test_o1_model_params():
+    optional_params = get_optional_params(
+        model="o1-preview-2024-09-12",
+        custom_llm_provider="openai",
+        seed=10,
+        user="John",
+    )
+    assert optional_params["seed"] == 10
+    assert optional_params["user"] == "John"

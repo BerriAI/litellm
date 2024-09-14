@@ -60,122 +60,6 @@ class OpenAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class MistralConfig:
-    """
-    Reference: https://docs.mistral.ai/api/
-
-    The class `MistralConfig` provides configuration for the Mistral's Chat API interface. Below are the parameters:
-
-    - `temperature` (number or null): Defines the sampling temperature to use, varying between 0 and 2. API Default - 0.7.
-
-    - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling. API Default - 1.
-
-    - `max_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion. API Default - null.
-
-    - `tools` (list or null): A list of available tools for the model. Use this to specify functions for which the model can generate JSON inputs.
-
-    - `tool_choice` (string - 'auto'/'any'/'none' or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
-
-    - `stop` (string or array of strings): Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
-
-    - `random_seed` (integer or null): The seed to use for random sampling. If set, different calls will generate deterministic results.
-
-    - `safe_prompt` (boolean): Whether to inject a safety prompt before all conversations. API Default - 'false'.
-
-    - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
-    """
-
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    max_tokens: Optional[int] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Literal["auto", "any", "none"]] = None
-    random_seed: Optional[int] = None
-    safe_prompt: Optional[bool] = None
-    response_format: Optional[dict] = None
-    stop: Optional[Union[str, list]] = None
-
-    def __init__(
-        self,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Literal["auto", "any", "none"]] = None,
-        random_seed: Optional[int] = None,
-        safe_prompt: Optional[bool] = None,
-        response_format: Optional[dict] = None,
-        stop: Optional[Union[str, list]] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "stream",
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "tools",
-            "tool_choice",
-            "seed",
-            "stop",
-            "response_format",
-        ]
-
-    def _map_tool_choice(self, tool_choice: str) -> str:
-        if tool_choice == "auto" or tool_choice == "none":
-            return tool_choice
-        elif tool_choice == "required":
-            return "any"
-        else:  # openai 'tool_choice' object param not supported by Mistral API
-            return "any"
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            if param == "max_tokens":
-                optional_params["max_tokens"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "stream" and value is True:
-                optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "stop":
-                optional_params["stop"] = value
-            if param == "tool_choice" and isinstance(value, str):
-                optional_params["tool_choice"] = self._map_tool_choice(
-                    tool_choice=value
-                )
-            if param == "seed":
-                optional_params["extra_body"] = {"random_seed": value}
-            if param == "response_format":
-                optional_params["response_format"] = value
-        return optional_params
-
-
 class MistralEmbeddingConfig:
     """
     Reference: https://docs.mistral.ai/api/#operation/createEmbedding
@@ -526,44 +410,19 @@ class OpenAIConfig:
         }
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = [
-            "frequency_penalty",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "max_tokens",
-            "n",
-            "presence_penalty",
-            "seed",
-            "stop",
-            "stream",
-            "stream_options",
-            "temperature",
-            "top_p",
-            "tools",
-            "tool_choice",
-            "function_call",
-            "functions",
-            "max_retries",
-            "extra_headers",
-            "parallel_tool_calls",
-        ]  # works across all models
-
-        model_specific_params = []
         if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
             return litellm.OpenAIO1Config().get_supported_openai_params(model=model)
-        if (
-            model != "gpt-3.5-turbo-16k" and model != "gpt-4"
-        ):  # gpt-4 does not support 'response_format'
-            model_specific_params.append("response_format")
+        else:
+            return litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
 
-        if (
-            model in litellm.open_ai_chat_completion_models
-        ) or model in litellm.open_ai_text_completion_models:
-            model_specific_params.append(
-                "user"
-            )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
-        return base_params + model_specific_params
+    def _map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
 
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
@@ -575,11 +434,11 @@ class OpenAIConfig:
                 optional_params=optional_params,
                 model=model,
             )
-        supported_openai_params = self.get_supported_openai_params(model)
-        for param, value in non_default_params.items():
-            if param in supported_openai_params:
-                optional_params[param] = value
-        return optional_params
+        return litellm.OpenAIGPTConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
 
 
 class OpenAITextCompletionConfig:
@@ -816,18 +675,18 @@ class OpenAIChatCompletion(BaseLLM):
         except Exception as e:
             raise e
 
-    def completion(
+    def completion(  # type: ignore
         self,
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],
         optional_params: dict,
+        logging_obj: Any,
         model: Optional[str] = None,
         messages: Optional[list] = None,
         print_verbose: Optional[Callable] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         acompletion: bool = False,
-        logging_obj=None,
         litellm_params=None,
         logger_fn=None,
         headers: Optional[dict] = None,
@@ -858,14 +717,14 @@ class OpenAIChatCompletion(BaseLLM):
                 # process all OpenAI compatible provider logic here
                 if custom_llm_provider == "mistral":
                     # check if message content passed in as list, and not string
-                    messages = prompt_factory(
+                    messages = prompt_factory(  # type: ignore
                         model=model,
                         messages=messages,
                         custom_llm_provider=custom_llm_provider,
                     )
                 if custom_llm_provider == "perplexity" and messages is not None:
                     # check if messages.name is passed + supported, if not supported remove
-                    messages = prompt_factory(
+                    messages = prompt_factory(  # type: ignore
                         model=model,
                         messages=messages,
                         custom_llm_provider=custom_llm_provider,
@@ -933,7 +792,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 status_code=422, message="max retries must be an int"
                             )
 
-                        openai_client = self._get_openai_client(
+                        openai_client: OpenAI = self._get_openai_client(  # type: ignore
                             is_async=False,
                             api_key=api_key,
                             api_base=api_base,
@@ -1068,7 +927,7 @@ class OpenAIChatCompletion(BaseLLM):
             2
         ):  # if call fails due to alternating messages, retry with reformatted message
             try:
-                openai_aclient = self._get_openai_client(
+                openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                     is_async=True,
                     api_key=api_key,
                     api_base=api_base,
@@ -1156,7 +1015,7 @@ class OpenAIChatCompletion(BaseLLM):
         max_retries=None,
         headers=None,
     ):
-        openai_client = self._get_openai_client(
+        openai_client: OpenAI = self._get_openai_client(  # type: ignore
             is_async=False,
             api_key=api_key,
             api_base=api_base,
@@ -1210,7 +1069,7 @@ class OpenAIChatCompletion(BaseLLM):
         response = None
         for _ in range(2):
             try:
-                openai_aclient = self._get_openai_client(
+                openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                     is_async=True,
                     api_key=api_key,
                     api_base=api_base,
@@ -1282,7 +1141,7 @@ class OpenAIChatCompletion(BaseLLM):
                     error_headers = getattr(e, "headers", None)
                     raise OpenAIError(
                         status_code=500,
-                        message=f"{str(e)}\n\nOriginal Response: {response.text}",
+                        message=f"{str(e)}\n\nOriginal Response: {response.text}",  # type: ignore
                         headers=error_headers,
                     )
                 else:
@@ -1294,7 +1153,7 @@ class OpenAIChatCompletion(BaseLLM):
                         )
                     elif hasattr(e, "status_code"):
                         raise OpenAIError(
-                            status_code=e.status_code,
+                            status_code=getattr(e, "status_code", 500),
                             message=str(e),
                             headers=error_headers,
                         )
@@ -1361,7 +1220,7 @@ class OpenAIChatCompletion(BaseLLM):
     ):
         response = None
         try:
-            openai_aclient = self._get_openai_client(
+            openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                 is_async=True,
                 api_key=api_key,
                 api_base=api_base,
@@ -1410,16 +1269,16 @@ class OpenAIChatCompletion(BaseLLM):
                 status_code=status_code, message=str(e), headers=error_headers
             )
 
-    def embedding(
+    def embedding(  # type: ignore
         self,
         model: str,
         input: list,
         timeout: float,
         logging_obj,
         model_response: litellm.utils.EmbeddingResponse,
+        optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        optional_params=None,
         client=None,
         aembedding=None,
     ):
@@ -1452,7 +1311,7 @@ class OpenAIChatCompletion(BaseLLM):
                 )
                 return response
 
-            openai_client = self._get_openai_client(
+            openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
                 api_key=api_key,
                 api_base=api_base,
@@ -1496,11 +1355,11 @@ class OpenAIChatCompletion(BaseLLM):
         data: dict,
         model_response: ModelResponse,
         timeout: float,
+        logging_obj: Any,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
         max_retries=None,
-        logging_obj=None,
     ):
         response = None
         try:
@@ -1538,15 +1397,16 @@ class OpenAIChatCompletion(BaseLLM):
         model: Optional[str],
         prompt: str,
         timeout: float,
+        optional_params: dict,
+        logging_obj: Any,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         model_response: Optional[litellm.utils.ImageResponse] = None,
-        logging_obj=None,
-        optional_params=None,
         client=None,
         aimg_generation=None,
     ):
         exception_mapping_worked = False
+        data = {}
         try:
             model = model
             data = {"model": model, "prompt": prompt, **optional_params}
@@ -1611,7 +1471,9 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=e.status_code, message=str(e))
+                raise OpenAIError(
+                    status_code=getattr(e, "status_code", 500), message=str(e)
+                )
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 
@@ -1661,7 +1523,7 @@ class OpenAIChatCompletion(BaseLLM):
             input=input,
             **optional_params,
         )
-        return response
+        return response  # type: ignore
 
     async def async_audio_speech(
         self,
@@ -1784,11 +1646,8 @@ class OpenAIChatCompletion(BaseLLM):
 
 
 class OpenAITextCompletion(BaseLLM):
-    _client_session: httpx.Client
-
     def __init__(self) -> None:
         super().__init__()
-        self._client_session = self.create_client_session()
 
     def validate_environment(self, api_key):
         headers = {
@@ -1806,10 +1665,10 @@ class OpenAITextCompletion(BaseLLM):
         messages: list,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
         print_verbose: Optional[Callable] = None,
         api_base: Optional[str] = None,
         acompletion: bool = False,
-        optional_params=None,
         litellm_params=None,
         logger_fn=None,
         client=None,
@@ -1921,7 +1780,7 @@ class OpenAITextCompletion(BaseLLM):
         api_key: str,
         model: str,
         timeout: float,
-        max_retries=None,
+        max_retries: int,
         organization: Optional[str] = None,
         client=None,
     ):
@@ -2017,9 +1876,9 @@ class OpenAITextCompletion(BaseLLM):
         model_response: ModelResponse,
         model: str,
         timeout: float,
+        max_retries: int,
         api_base: Optional[str] = None,
         client=None,
-        max_retries=None,
         organization=None,
     ):
         if client is None:
