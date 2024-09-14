@@ -92,6 +92,7 @@ class OpenAIGPTConfig:
             "logprobs",
             "top_logprobs",
             "max_tokens",
+            "max_completion_tokens",
             "n",
             "presence_penalty",
             "seed",
