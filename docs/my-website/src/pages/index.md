@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 https://github.com/BerriAI/litellm
 
-## **Call 100+ LLMs using the same Input/Output Format**
+## **Call 100+ LLMs using the OpenAI Input/Output Format**
 
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
