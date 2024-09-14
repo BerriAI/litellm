@@ -73,9 +73,7 @@ class OpenAIO1Config(OpenAIConfig):
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_completion_tokens"] = value
-            if param in supported_openai_params:
-                optional_params[param] = value
-        return optional_params
+        return super()._map_openai_params(non_default_params, optional_params, model)
 
     def is_model_o1_reasoning_model(self, model: str) -> bool:
         if "o1" in model:
