@@ -17,13 +17,12 @@ from typing import Any, List, Optional, Union
 import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
-from .openai import OpenAIConfig
+from .gpt_transformation import OpenAIGPTConfig
 
 
-class OpenAIO1Config(OpenAIConfig):
+class OpenAIO1Config(OpenAIGPTConfig):
     """
     Reference: https://platform.openai.com/docs/guides/reasoning
-
     """
 
     @classmethod
@@ -50,9 +49,7 @@ class OpenAIO1Config(OpenAIConfig):
 
         """
 
-        all_openai_params = litellm.OpenAIConfig().get_supported_openai_params(
-            model="gpt-4o"
-        )
+        all_openai_params = super().get_supported_openai_params(model=model)
         non_supported_params = [
             "logprobs",
             "tools",
@@ -69,13 +66,14 @@ class OpenAIO1Config(OpenAIConfig):
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
     ):
-        for param, value in non_default_params.items():
-            if param == "max_tokens":
-                optional_params["max_completion_tokens"] = value
-        return optional_params
+        if "max_tokens" in non_default_params:
+            optional_params["max_completion_tokens"] = non_default_params.pop(
+                "max_tokens"
+            )
+        return super()._map_openai_params(non_default_params, optional_params, model)
 
     def is_model_o1_reasoning_model(self, model: str) -> bool:
-        if "o1" in model:
+        if model in litellm.open_ai_chat_completion_models and "o1" in model:
             return True
         return False
 
@@ -93,7 +91,7 @@ class OpenAIO1Config(OpenAIConfig):
                 )
                 messages[i] = new_message  # Replace the old message with the new one
 
-            if isinstance(message["content"], list):
+            if "content" in message and isinstance(message["content"], list):
                 new_content = []
                 for content_item in message["content"]:
                     if content_item.get("type") == "image_url":

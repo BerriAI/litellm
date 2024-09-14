@@ -582,3 +582,8 @@ class RouterRateLimitError(ValueError):
         self.cooldown_list = cooldown_list
         _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
         super().__init__(_message)
+
+
+class RouterModelGroupAliasItem(TypedDict):
+    model: str
+    hidden: bool  # if 'True', don't return on `.get_model_list`
