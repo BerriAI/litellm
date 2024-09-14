@@ -21,6 +21,7 @@ import openai
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
 
@@ -239,7 +240,9 @@ async def test_single_deployment_no_cooldowns_test_prod_mock_completion_calls():
         except litellm.RateLimitError:
             pass
 
-    cooldown_list = await router._async_get_cooldown_deployments()
+    cooldown_list = await _async_get_cooldown_deployments(
+        litellm_router_instance=router
+    )
     assert len(cooldown_list) == 0
 
     healthy_deployments, _ = await router._async_get_healthy_deployments(
