@@ -1267,7 +1267,7 @@ class AmazonConverseConfig:
             if param == "max_tokens":
                 optional_params["maxTokens"] = value
             if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
+                optional_params["maxTokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
