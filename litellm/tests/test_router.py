@@ -28,6 +28,10 @@ from pydantic import BaseModel
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments,
+    _get_cooldown_deployments,
+)
 from litellm.types.router import DeploymentTypedDict
 
 load_dotenv()
@@ -2318,9 +2322,13 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                 pass
 
         if sync_mode:
-            cooldown_deployments = router._get_cooldown_deployments()
+            cooldown_deployments = _get_cooldown_deployments(
+                litellm_router_instance=router
+            )
         else:
-            cooldown_deployments = await router._async_get_cooldown_deployments()
+            cooldown_deployments = await _async_get_cooldown_deployments(
+                litellm_router_instance=router
+            )
         print(
             "Cooldown deployments - {}\n{}".format(
                 cooldown_deployments, len(cooldown_deployments)

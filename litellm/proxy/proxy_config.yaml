@@ -25,4 +25,3 @@ general_settings:
 
 litellm_settings:
   callbacks: ["prometheus"]
-  allowed_fails: 10000
