@@ -93,6 +93,10 @@ def _should_cooldown_deployment(
         num_fails_this_minute = get_deployment_failures_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )
+
+        if num_successes_this_minute + num_fails_this_minute == 0:
+            return False
+
         percent_fails = num_fails_this_minute / (
             num_successes_this_minute + num_fails_this_minute
         )
@@ -103,6 +107,16 @@ def _should_cooldown_deployment(
         )
         if percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT:
             return True
+
+        if (
+            litellm._should_retry(
+                status_code=cast_exception_status_to_int(exception_status)
+            )
+            is False
+        ):
+            return True
+
+        return False
     else:
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
