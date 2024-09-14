@@ -1885,6 +1885,6 @@ class TeamAddMemberResponse(LiteLLM_TeamTable):
 
 class TeamInfoResponseObject(TypedDict):
     team_id: str
-    team_info: TeamBase
+    team_info: LiteLLM_TeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]

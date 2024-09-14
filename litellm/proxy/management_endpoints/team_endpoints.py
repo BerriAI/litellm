@@ -4,10 +4,11 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1029,8 +1030,10 @@ async def team_info(
                 ),
             )
 
-        team_info = await prisma_client.get_data(
-            team_id=team_id, table_name="team", query_type="find_unique"
+        team_info: Optional[Union[LiteLLM_TeamTable, dict]] = (
+            await prisma_client.get_data(
+                team_id=team_id, table_name="team", query_type="find_unique"
+            )
         )
         if team_info is None:
             raise HTTPException(
@@ -1075,9 +1078,16 @@ async def team_info(
         for tm in team_memberships:
             returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
+        if isinstance(team_info, dict):
+            _team_info = LiteLLM_TeamTable(**team_info)
+        elif isinstance(team_info, BaseModel):
+            _team_info = LiteLLM_TeamTable(**team_info.model_dump())
+        else:
+            _team_info = LiteLLM_TeamTable()
+
         response_object = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=TeamBase(**team_info),  # type: ignore
+            team_info=_team_info,
             keys=keys,
             team_memberships=returned_tm,
         )
