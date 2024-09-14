@@ -54,6 +54,12 @@ from litellm.router_utils.client_initalization_utils import (
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
+from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments,
+    _async_get_cooldown_deployments_with_debug_info,
+    _get_cooldown_deployments,
+    _set_cooldown_deployments,
+)
 from litellm.router_utils.fallback_event_handlers import (
     log_failure_fallback_event,
     log_success_fallback_event,
@@ -2989,7 +2995,9 @@ class Router:
                     "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
                         str(new_exception),
                         traceback.format_exc(),
-                        await self._async_get_cooldown_deployments_with_debug_info(),
+                        await _async_get_cooldown_deployments_with_debug_info(
+                            litellm_router_instance=self
+                        ),
                     )
                 )
                 fallback_failure_exception_str = str(new_exception)
@@ -3565,7 +3573,8 @@ class Router:
 
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
-                self._set_cooldown_deployments(
+                _set_cooldown_deployments(
+                    litellm_router_instance=self,
                     exception_status=exception_status,
                     original_exception=exception,
                     deployment=deployment_id,
@@ -3723,155 +3732,6 @@ class Router:
         )
         return False
 
-    def _set_cooldown_deployments(
-        self,
-        original_exception: Any,
-        exception_status: Union[str, int],
-        deployment: Optional[str] = None,
-        time_to_cooldown: Optional[float] = None,
-    ):
-        """
-        Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
-
-        or
-
-        the exception is not one that should be immediately retried (e.g. 401)
-        """
-        if self.disable_cooldowns is True:
-            return
-
-        if deployment is None:
-            return
-
-        if (
-            self._is_cooldown_required(
-                model_id=deployment,
-                exception_status=exception_status,
-                exception_str=str(original_exception),
-            )
-            is False
-        ):
-            return
-
-        if deployment in self.provider_default_deployment_ids:
-            return
-
-        _allowed_fails = self.get_allowed_fails_from_policy(
-            exception=original_exception,
-        )
-
-        allowed_fails = (
-            _allowed_fails if _allowed_fails is not None else self.allowed_fails
-        )
-
-        dt = get_utc_datetime()
-        current_minute = dt.strftime("%H-%M")
-        # get current fails for deployment
-        # update the number of failed calls
-        # if it's > allowed fails
-        # cooldown deployment
-        current_fails = self.failed_calls.get_cache(key=deployment) or 0
-        updated_fails = current_fails + 1
-        verbose_router_logger.debug(
-            f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {allowed_fails}"
-        )
-        cooldown_time = self.cooldown_time or 1
-        if time_to_cooldown is not None:
-            cooldown_time = time_to_cooldown
-
-        if isinstance(exception_status, str):
-            try:
-                exception_status = int(exception_status)
-            except Exception as e:
-                verbose_router_logger.debug(
-                    "Unable to cast exception status to int {}. Defaulting to status=500.".format(
-                        exception_status
-                    )
-                )
-                exception_status = 500
-        _should_retry = litellm._should_retry(status_code=exception_status)
-
-        if updated_fails > allowed_fails or _should_retry is False:
-            # get the current cooldown list for that minute
-            verbose_router_logger.debug(f"adding {deployment} to cooldown models")
-            # update value
-            self.cooldown_cache.add_deployment_to_cooldown(
-                model_id=deployment,
-                original_exception=original_exception,
-                exception_status=exception_status,
-                cooldown_time=cooldown_time,
-            )
-
-            # Trigger cooldown handler
-            asyncio.create_task(
-                router_cooldown_handler(
-                    litellm_router_instance=self,
-                    deployment_id=deployment,
-                    exception_status=exception_status,
-                    cooldown_time=cooldown_time,
-                )
-            )
-        else:
-            self.failed_calls.set_cache(
-                key=deployment, value=updated_fails, ttl=cooldown_time
-            )
-
-    async def _async_get_cooldown_deployments(self) -> List[str]:
-        """
-        Async implementation of '_get_cooldown_deployments'
-        """
-        model_ids = self.get_model_ids()
-        cooldown_models = await self.cooldown_cache.async_get_active_cooldowns(
-            model_ids=model_ids
-        )
-
-        cached_value_deployment_ids = []
-        if (
-            cooldown_models is not None
-            and isinstance(cooldown_models, list)
-            and len(cooldown_models) > 0
-            and isinstance(cooldown_models[0], tuple)
-        ):
-            cached_value_deployment_ids = [cv[0] for cv in cooldown_models]
-
-        verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
-        return cached_value_deployment_ids
-
-    async def _async_get_cooldown_deployments_with_debug_info(self) -> List[tuple]:
-        """
-        Async implementation of '_get_cooldown_deployments'
-        """
-        model_ids = self.get_model_ids()
-        cooldown_models = await self.cooldown_cache.async_get_active_cooldowns(
-            model_ids=model_ids
-        )
-
-        verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
-        return cooldown_models
-
-    def _get_cooldown_deployments(self) -> List[str]:
-        """
-        Get the list of models being cooled down for this minute
-        """
-        # get the current cooldown list for that minute
-
-        # ----------------------
-        # Return cooldown models
-        # ----------------------
-        model_ids = self.get_model_ids()
-        cooldown_models = self.cooldown_cache.get_active_cooldowns(model_ids=model_ids)
-
-        cached_value_deployment_ids = []
-        if (
-            cooldown_models is not None
-            and isinstance(cooldown_models, list)
-            and len(cooldown_models) > 0
-            and isinstance(cooldown_models[0], tuple)
-        ):
-            cached_value_deployment_ids = [cv[0] for cv in cooldown_models]
-
-        return cached_value_deployment_ids
-
     def _get_healthy_deployments(self, model: str):
         _all_deployments: list = []
         try:
@@ -3883,7 +3743,7 @@ class Router:
         except:
             pass
 
-        unhealthy_deployments = self._get_cooldown_deployments()
+        unhealthy_deployments = _get_cooldown_deployments(litellm_router_instance=self)
         healthy_deployments: list = []
         for deployment in _all_deployments:
             if deployment["model_info"]["id"] in unhealthy_deployments:
@@ -3904,7 +3764,9 @@ class Router:
         except:
             pass
 
-        unhealthy_deployments = await self._async_get_cooldown_deployments()
+        unhealthy_deployments = await _async_get_cooldown_deployments(
+            litellm_router_instance=self
+        )
         healthy_deployments: list = []
         for deployment in _all_deployments:
             if deployment["model_info"]["id"] in unhealthy_deployments:
@@ -3962,7 +3824,8 @@ class Router:
                             target=logging_obj.failure_handler,
                             args=(e, traceback.format_exc()),
                         ).start()  # log response
-                    self._set_cooldown_deployments(
+                    _set_cooldown_deployments(
+                        litellm_router_instance=self,
                         exception_status=e.status_code,
                         original_exception=e,
                         deployment=deployment["model_info"]["id"],
@@ -5179,7 +5042,9 @@ class Router:
             # filter out the deployments currently cooling down
             deployments_to_remove = []
             # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
-            cooldown_deployments = await self._async_get_cooldown_deployments()
+            cooldown_deployments = await _async_get_cooldown_deployments(
+                litellm_router_instance=self
+            )
             verbose_router_logger.debug(
                 f"async cooldown deployments: {cooldown_deployments}"
             )
@@ -5221,7 +5086,7 @@ class Router:
                 _cooldown_time = self.cooldown_cache.get_min_cooldown(
                     model_ids=model_ids
                 )
-                _cooldown_list = self._get_cooldown_deployments()
+                _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
                 raise RouterRateLimitError(
                     model=model,
                     cooldown_time=_cooldown_time,
@@ -5334,7 +5199,7 @@ class Router:
                 _cooldown_time = self.cooldown_cache.get_min_cooldown(
                     model_ids=model_ids
                 )
-                _cooldown_list = self._get_cooldown_deployments()
+                _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
                 raise RouterRateLimitError(
                     model=model,
                     cooldown_time=_cooldown_time,
@@ -5392,7 +5257,7 @@ class Router:
         # filter out the deployments currently cooling down
         deployments_to_remove = []
         # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
-        cooldown_deployments = self._get_cooldown_deployments()
+        cooldown_deployments = _get_cooldown_deployments(litellm_router_instance=self)
         verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
         # Find deployments in model_list whose model_id is cooling down
         for deployment in healthy_deployments:
@@ -5415,7 +5280,7 @@ class Router:
         if len(healthy_deployments) == 0:
             model_ids = self.get_model_ids(model_name=model)
             _cooldown_time = self.cooldown_cache.get_min_cooldown(model_ids=model_ids)
-            _cooldown_list = self._get_cooldown_deployments()
+            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -5521,7 +5386,7 @@ class Router:
             )
             model_ids = self.get_model_ids(model_name=model)
             _cooldown_time = self.cooldown_cache.get_min_cooldown(model_ids=model_ids)
-            _cooldown_list = self._get_cooldown_deployments()
+            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
