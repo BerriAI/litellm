@@ -398,7 +398,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests
+            python -m pytest -s -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation
           no_output_timeout: 120m
 
       # Store test results

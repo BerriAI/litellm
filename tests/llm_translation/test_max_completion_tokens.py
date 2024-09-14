@@ -77,3 +77,53 @@ async def test_bedrock_max_completion_tokens(model: str, respx_mock: MockRouter)
     }
     print(f"response: {response}")
     assert isinstance(response, ModelResponse)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229,"],
+)
+@pytest.mark.respx
+@pytest.mark.asyncio()
+async def test_anthropic_api_max_completion_tokens(model: str, respx_mock: MockRouter):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to anthropic models
+    """
+    litellm.set_verbose = True
+
+    mock_response = {
+        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        "model": "claude-3-5-sonnet-20240620",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "type": "message",
+        "usage": {"input_tokens": 2095, "output_tokens": 503},
+    }
+
+    print("\n\nmock_response: ", mock_response)
+    url = f"https://api.anthropic.com/v1/messages"
+    mock_request = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
+
+    response = await litellm.acompletion(
+        model=model,
+        max_completion_tokens=10,
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+
+    assert mock_request.called
+    request_body = json.loads(mock_request.calls[0].request.content)
+
+    print("request_body: ", request_body)
+
+    assert request_body == {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
+        "max_tokens": 10,
+        "model": model.split("/")[-1],
+    }
+    print(f"response: {response}")
+    assert isinstance(response, ModelResponse)
