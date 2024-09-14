@@ -127,3 +127,24 @@ async def test_anthropic_api_max_completion_tokens(model: str, respx_mock: MockR
     }
     print(f"response: {response}")
     assert isinstance(response, ModelResponse)
+
+
+def test_all_vertex_configs():
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
+        VertexAIAi21Config,
+    )
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (
+        VertexAILlama3Config,
+    )
+
+    assert (
+        "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
+    )
+    assert VertexAILlama3Config().map_openai_params(
+        {"max_completion_tokens": 10}, {}, "llama3"
+    ) == {"max_tokens": 10}
+
+    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params()
+    assert VertexAIAi21Config().map_openai_params(
+        {"max_completion_tokens": 10}, {}, "llama3"
+    ) == {"max_tokens": 10}
