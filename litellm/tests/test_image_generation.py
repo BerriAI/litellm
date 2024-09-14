@@ -50,6 +50,7 @@ def test_image_generation_openai():
     ],  # False
 )  #
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_image_generation_azure(sync_mode):
     try:
         if sync_mode:
