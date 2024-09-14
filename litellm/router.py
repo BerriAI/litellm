@@ -3803,7 +3803,7 @@ class Router:
                 model=model,
             )
             if type(_all_deployments) == dict:
-                return []
+                return [], _all_deployments
         except:
             pass
 
