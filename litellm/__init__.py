@@ -939,14 +939,17 @@ from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConf
 from .llms.OpenAI.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
-    MistralConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
     GroqConfig,
     AzureAIStudioConfig,
 )
-from .llms.OpenAI.o1_reasoning import (
+from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.OpenAI.o1_transformation import (
     OpenAIO1Config,
+)
+from .llms.OpenAI.gpt_transformation import (
+    OpenAIGPTConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
