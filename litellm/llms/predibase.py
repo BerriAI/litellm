@@ -154,6 +154,7 @@ class PredibaseConfig:
         return [
             "stream",
             "temperature",
+            "max_completion_tokens",
             "max_tokens",
             "top_p",
             "stop",
@@ -181,7 +182,7 @@ class PredibaseConfig:
                 optional_params["stream"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 # HF TGI raises the following exception when max_new_tokens==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
                 if value == 0:

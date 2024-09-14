@@ -73,6 +73,7 @@ class FireworksAIConfig:
             "stream",
             "tools",
             "tool_choice",
+            "max_completion_tokens",
             "max_tokens",
             "temperature",
             "top_p",
@@ -102,6 +103,8 @@ class FireworksAIConfig:
                 else:
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
+            elif param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
