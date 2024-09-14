@@ -103,7 +103,7 @@ class FireworksAIConfig:
                 else:
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
-            if param == "max_completion_tokens":
+            elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 if value is not None:
