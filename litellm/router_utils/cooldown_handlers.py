@@ -82,7 +82,13 @@ def _should_cooldown_deployment(
 
 
     Deployment is put in cooldown when:
-    - v2 logic (Current): if %fails/%(successes + fails) > ALLOWED_FAILURE_RATE_PER_MINUTE
+    - v2 logic (Current):
+    cooldown if:
+        - if %fails/%(successes + fails) > ALLOWED_FAILURE_RATE_PER_MINUTE
+        - got 401 Auth error, 404 NotFounder - checked by litellm._should_retry()
+        - got a 429 error
+
+
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
@@ -95,11 +101,6 @@ def _should_cooldown_deployment(
         )
 
         total_requests_this_minute = num_successes_this_minute + num_fails_this_minute
-
-        if (
-            total_requests_this_minute == 1
-        ):  # if the 1st request fails it's not guaranteed that the deployment should be cooled down
-            return False
         percent_fails = 0.0
         if total_requests_this_minute > 0:
             percent_fails = num_fails_this_minute / (
@@ -112,10 +113,17 @@ def _should_cooldown_deployment(
             num_successes_this_minute,
             num_fails_this_minute,
         )
-        if percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT:
+        exception_status_int = cast_exception_status_to_int(exception_status)
+        if exception_status_int == 429:
+            return True
+        elif (
+            total_requests_this_minute == 1
+        ):  # if the 1st request fails it's not guaranteed that the deployment should be cooled down
+            return False
+        elif percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT:
             return True
 
-        if (
+        elif (
             litellm._should_retry(
                 status_code=cast_exception_status_to_int(exception_status)
             )
