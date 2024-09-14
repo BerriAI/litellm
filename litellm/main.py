@@ -737,6 +737,7 @@ def completion(
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
+    base_model = kwargs.get("base_model", None)
     ### TEXT COMPLETION CALLS ###
     text_completion = kwargs.get("text_completion", False)
     atext_completion = kwargs.get("atext_completion", False)
@@ -973,6 +974,7 @@ def completion(
             text_completion=kwargs.get("text_completion"),
             azure_ad_token_provider=kwargs.get("azure_ad_token_provider"),
             user_continue_message=kwargs.get("user_continue_message"),
+            base_model=base_model,
         )
         logging.update_environment_variables(
             model=model,

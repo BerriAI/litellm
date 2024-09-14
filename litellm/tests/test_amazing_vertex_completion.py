@@ -2830,7 +2830,14 @@ def test_gemini_function_call_parameter_in_messages_2():
     ]
 
 
-def test_gemini_finetuned_endpoint():
+@pytest.mark.parametrize(
+    "base_model, metadata",
+    [
+        (None, {"model_info": {"base_model": "vertex_ai/gemini-1.5-pro"}}),
+        ("vertex_ai/gemini-1.5-pro", None),
+    ],
+)
+def test_gemini_finetuned_endpoint(base_model, metadata):
     litellm.set_verbose = True
     load_vertex_ai_credentials()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -2850,7 +2857,8 @@ def test_gemini_finetuned_endpoint():
                 messages=messages,
                 tool_choice="auto",
                 client=client,
-                metadata={"model_info": {"base_model": "vertex_ai/gemini-1.5-pro"}},
+                metadata=metadata,
+                base_model=base_model,
             )
         except Exception as e:
             print(e)
