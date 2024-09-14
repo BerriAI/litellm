@@ -23,6 +23,8 @@ class MyCustomLLM(CustomLLM):
             mock_response="Hi!",
         )  # type: ignore
 
+my_custom_llm = MyCustomLLM()
+
 litellm.custom_provider_map = [ # 👈 KEY STEP - REGISTER HANDLER
         {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
     ]

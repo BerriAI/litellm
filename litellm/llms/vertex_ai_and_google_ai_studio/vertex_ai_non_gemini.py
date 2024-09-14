@@ -160,7 +160,11 @@ def _gemini_convert_messages_with_history(
                                 _part = PartType(text=element["text"])  # type: ignore
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
-                                image_url = element["image_url"]["url"]  # type: ignore
+                                img_element: ChatCompletionImageObject = element  # type: ignore
+                                if isinstance(img_element["image_url"], dict):
+                                    image_url = img_element["image_url"]["url"]
+                                else:
+                                    image_url = img_element["image_url"]
                                 _part = _process_gemini_image(image_url=image_url)
                                 _parts.append(_part)  # type: ignore
                     user_content.extend(_parts)

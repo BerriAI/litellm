@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -202,6 +202,15 @@ async def generate_key_fn(
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+        # Set tags on the new key
+        if "tags" in data_json:
+            if data_json["metadata"] is None:
+                data_json["metadata"] = {"tags": data_json["tags"]}
+            else:
+                data_json["metadata"]["tags"] = data_json["tags"]
+
+            data_json.pop("tags")
+
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
         )
@@ -257,12 +266,11 @@ async def generate_key_fn(
 
         return GenerateKeyResponse(**response)
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -293,12 +301,12 @@ async def prepare_key_update_data(
             continue
         if v is not None and v not in ([], {}, 0):
             non_default_values[k] = v
-
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        duration_s = _duration_in_seconds(duration=duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["expires"] = expires
+        if duration and (isinstance(duration, str)) and len(duration) > 0:
+            duration_s = _duration_in_seconds(duration=duration)
+            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
         duration_s = _duration_in_seconds(
@@ -731,6 +739,7 @@ async def generate_key_helper_fn(
         str
     ] = None,  # dev-friendly alt param for 'token'. Exposed on `/key/generate` for setting key value yourself.
     user_id: Optional[str] = None,
+    user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
@@ -816,6 +825,7 @@ async def generate_key_helper_fn(
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "user_alias": user_alias,
             "team_id": team_id,
             "organization_id": organization_id,
             "user_role": user_role,
@@ -1077,3 +1087,94 @@ async def regenerate_key_fn(
     return GenerateKeyResponse(
         **updated_token_dict,
     )
+
+
+@router.get(
+    "/key/list",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def list_keys(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    page: int = Query(1, description="Page number", ge=1),
+    size: int = Query(10, description="Page size", ge=1, le=100),
+    user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
+    team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
+    key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+):
+    try:
+        import logging
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        logging.debug("Entering list_keys function")
+
+        if prisma_client is None:
+            logging.error("Database not connected")
+            raise Exception("Database not connected")
+
+        # Prepare filter conditions
+        where = {}
+        if user_id:
+            where["user_id"] = user_id
+        if team_id:
+            where["team_id"] = team_id
+        if key_alias:
+            where["key_alias"] = key_alias
+
+        logging.debug(f"Filter conditions: {where}")
+
+        # Calculate skip for pagination
+        skip = (page - 1) * size
+
+        logging.debug(f"Pagination: skip={skip}, take={size}")
+
+        # Fetch keys with pagination
+        keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where=where,  # type: ignore
+            skip=skip,  # type: ignore
+            take=size,  # type: ignore
+        )
+
+        logging.debug(f"Fetched {len(keys)} keys")
+
+        # Get total count of keys
+        total_count = await prisma_client.db.litellm_verificationtoken.count(
+            where=where  # type: ignore
+        )
+
+        logging.debug(f"Total count of keys: {total_count}")
+
+        # Calculate total pages
+        total_pages = -(-total_count // size)  # Ceiling division
+
+        # Prepare response
+        key_list = []
+        for key in keys:
+            key_dict = key.dict()
+            _token = key_dict.get("token")
+            key_list.append(_token)
+
+        response = {
+            "keys": key_list,
+            "total_count": total_count,
+            "current_page": page,
+            "total_pages": total_pages,
+        }
+
+        logging.debug("Successfully prepared response")
+
+        return response
+
+    except Exception as e:
+        logging.error(f"Error in list_keys: {str(e)}")
+        logging.error(f"Error type: {type(e)}")
+        logging.error(f"Error traceback: {traceback.format_exc()}")
+
+        raise ProxyException(
+            message=f"Error listing keys: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,  # Use the enum value
+            param=None,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

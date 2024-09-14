@@ -15,8 +15,8 @@ from litellm.llms.cohere.embed import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
@@ -130,7 +130,9 @@ class BedrockEmbedding(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(
+                params=_params, llm_provider=litellm.LlmProviders.BEDROCK
+            )
         else:
             client = client
 

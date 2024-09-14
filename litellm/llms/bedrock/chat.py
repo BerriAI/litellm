@@ -35,8 +35,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -209,7 +209,9 @@ async def make_call(
 ):
     try:
         if client is None:
-            client = _get_async_httpx_client()  # Create a new client if none provided
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.BEDROCK
+            )  # Create a new client if none provided
 
         response = await client.post(
             api_base,
@@ -736,7 +738,9 @@ class BedrockLLM(BaseAWSLLM):
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            proxy_endpoint_url = (
+                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            )
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
@@ -1039,7 +1043,7 @@ class BedrockLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(params=_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1268,7 +1272,7 @@ class AmazonConverseConfig:
                     if len(value) == 0:  # converse raises error for empty strings
                         continue
                     value = [value]
-                optional_params["stop_sequences"] = value
+                optional_params["stopSequences"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
@@ -1496,7 +1500,9 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_async_httpx_client(_params)  # type: ignore
+            client = get_async_httpx_client(
+                params=_params, llm_provider=litellm.LlmProviders.BEDROCK
+            )
         else:
             client = client  # type: ignore
 

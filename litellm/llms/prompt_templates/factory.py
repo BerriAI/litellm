@@ -37,6 +37,8 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import GenericImageParsingChunk
 
+from .image_handling import async_convert_url_to_base64, convert_url_to_base64
+
 
 def default_pt(messages):
     return " ".join(message["content"] for message in messages)
@@ -703,44 +705,6 @@ def construct_tool_use_system_prompt(
     return tool_use_system_prompt
 
 
-def convert_url_to_base64(url):
-    import base64
-
-    client = HTTPHandler(concurrent_limit=1)
-    for _ in range(3):
-        try:
-
-            response = client.get(url)
-            break
-        except:
-            pass
-    if response.status_code == 200:
-        image_bytes = response.content
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
-
-        image_type = response.headers.get("Content-Type", None)
-        if image_type is not None:
-            img_type = image_type
-        else:
-            img_type = url.split(".")[-1].lower()
-            if img_type == "jpg" or img_type == "jpeg":
-                img_type = "image/jpeg"
-            elif img_type == "png":
-                img_type = "image/png"
-            elif img_type == "gif":
-                img_type = "image/gif"
-            elif img_type == "webp":
-                img_type = "image/webp"
-            else:
-                raise Exception(
-                    f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-                )
-
-        return f"data:{img_type};base64,{base64_image}"
-    else:
-        raise Exception(f"Error: Unable to fetch image from URL. url={url}")
-
-
 def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
     """
     Input:
@@ -1131,7 +1095,14 @@ def convert_to_gemini_tool_call_result(
         "content": "function result goes here",
     }
     """
-    content = message.get("content", "")
+    content_str: str = ""
+    if isinstance(message["content"], str):
+        content_str = message["content"]
+    elif isinstance(message["content"], List):
+        content_list = message["content"]
+        for content in content_list:
+            if content["type"] == "text":
+                content_str += content["text"]
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1156,10 +1127,10 @@ def convert_to_gemini_tool_call_result(
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
-    inferred_content_value = infer_protocol_value(value=content)
+    inferred_content_value = infer_protocol_value(value=content_str)
 
     _field = litellm.types.llms.vertex_ai.Field(
-        key="content", value={inferred_content_value: content}
+        key="content", value={inferred_content_value: content_str}
     )
 
     _function_call_args = litellm.types.llms.vertex_ai.FunctionCallArgs(fields=_field)
@@ -1174,7 +1145,7 @@ def convert_to_gemini_tool_call_result(
 
 
 def convert_to_anthropic_tool_result(
-    message: Union[dict, ChatCompletionToolMessage, ChatCompletionFunctionMessage]
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1207,21 +1178,29 @@ def convert_to_anthropic_tool_result(
         ]
     }
     """
+    content_str: str = ""
+    if isinstance(message["content"], str):
+        content_str = message["content"]
+    elif isinstance(message["content"], List):
+        content_list = message["content"]
+        for content in content_list:
+            if content["type"] == "text":
+                content_str += content["text"]
     if message["role"] == "tool":
-        tool_call_id: str = message.get("tool_call_id")  # type: ignore
-        content: str = message.get("content")  # type: ignore
+        tool_message: ChatCompletionToolMessage = message
+        tool_call_id: str = tool_message["tool_call_id"]
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content
+            type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
         return anthropic_tool_result
     if message["role"] == "function":
-        content = message.get("content")  # type: ignore
-        tool_call_id = message.get("tool_call_id") or str(uuid.uuid4())  # type: ignore
+        function_message: ChatCompletionFunctionMessage = message
+        tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content
+            type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
 
         return anthropic_tool_result
@@ -1624,7 +1603,8 @@ from litellm.types.llms.cohere import (
 
 
 def convert_openai_message_to_cohere_tool_result(
-    message, tool_calls: List
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
+    tool_calls: List,
 ) -> ToolResultObject:
     """
     OpenAI message with a tool result looks like:
@@ -1660,7 +1640,15 @@ def convert_openai_message_to_cohere_tool_result(
        ]
    },
     """
-    content_str: str = message.get("content", "")
+
+    content_str: str = ""
+    if isinstance(message["content"], str):
+        content_str = message["content"]
+    elif isinstance(message["content"], List):
+        content_list = message["content"]
+        for content in content_list:
+            if content["type"] == "text":
+                content_str += content["text"]
     if len(content_str) > 0:
         try:
             content = json.loads(content_str)
@@ -1687,7 +1675,8 @@ def convert_openai_message_to_cohere_tool_result(
                     arguments = json.loads(arguments_str)
 
     if message["role"] == "function":
-        name = message.get("name")
+        function_message: ChatCompletionFunctionMessage = message
+        name = function_message["name"]
         cohere_tool_result: ToolResultObject = {
             "call": CallObject(name=name, parameters=arguments),
             "outputs": [content],
@@ -2292,7 +2281,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
 
 def _convert_to_bedrock_tool_call_result(
-    message: dict,
+    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
 ) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
@@ -2334,11 +2323,18 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    content = message.get("content", "")
+    content_str: str = ""
+    if isinstance(message["content"], str):
+        content_str = message["content"]
+    elif isinstance(message["content"], List):
+        content_list = message["content"]
+        for content in content_list:
+            if content["type"] == "text":
+                content_str += content["text"]
     name = message.get("name", "")
-    id = message.get("tool_call_id", str(uuid.uuid4()))
+    id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
-    tool_result_content_block = BedrockToolResultContentBlock(text=content)
+    tool_result_content_block = BedrockToolResultContentBlock(text=content_str)
     tool_result = BedrockToolResultBlock(
         content=[tool_result_content_block],
         toolUseId=id,

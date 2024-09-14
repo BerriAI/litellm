@@ -4,13 +4,14 @@ from typing import Any, Coroutine, Literal, Optional, TypedDict, Union
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_async_httpx_client,
     _get_httpx_client,
+    get_async_httpx_client,
 )
 from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
@@ -65,8 +66,15 @@ class VertexTextToSpeechAPI(VertexLLM):
         import base64
 
         ####### Authenticate with Vertex AI ########
+        _auth_header, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
+
         auth_header, _ = self._get_token_and_url(
             model="",
+            auth_header=_auth_header,
             gemini_api_key=None,
             vertex_credentials=vertex_credentials,
             vertex_project=vertex_project,
@@ -178,7 +186,9 @@ class VertexTextToSpeechAPI(VertexLLM):
     ) -> HttpxBinaryResponseContent:
         import base64
 
-        async_handler = _get_async_httpx_client()
+        async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI
+        )
 
         response = await async_handler.post(
             url=url,

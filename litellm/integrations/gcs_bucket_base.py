@@ -13,15 +13,18 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_dict,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 class GCSBucketBase(CustomLogger):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
         from litellm.proxy.proxy_server import premium_user
 
-        self.async_httpx_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        self.async_httpx_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
         self.path_service_account_json = os.getenv("GCS_PATH_SERVICE_ACCOUNT", None)
         self.BUCKET_NAME = bucket_name or os.getenv("GCS_BUCKET_NAME", None)
@@ -34,10 +37,19 @@ class GCSBucketBase(CustomLogger):
     async def construct_request_headers(self) -> Dict[str, str]:
         from litellm import vertex_chat_completion
 
+        _auth_header, vertex_project = (
+            await vertex_chat_completion._ensure_access_token_async(
+                credentials=self.path_service_account_json,
+                project_id=None,
+                custom_llm_provider="vertex_ai",
+            )
+        )
+
         auth_header, _ = vertex_chat_completion._get_token_and_url(
             model="gcs-bucket",
+            auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
-            vertex_project=None,
+            vertex_project=vertex_project,
             vertex_location=None,
             gemini_api_key=None,
             stream=None,
@@ -55,10 +67,17 @@ class GCSBucketBase(CustomLogger):
     def sync_construct_request_headers(self) -> Dict[str, str]:
         from litellm import vertex_chat_completion
 
+        _auth_header, vertex_project = vertex_chat_completion._ensure_access_token(
+            credentials=self.path_service_account_json,
+            project_id=None,
+            custom_llm_provider="vertex_ai",
+        )
+
         auth_header, _ = vertex_chat_completion._get_token_and_url(
             model="gcs-bucket",
+            auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
-            vertex_project=None,
+            vertex_project=vertex_project,
             vertex_location=None,
             gemini_api_key=None,
             stream=None,

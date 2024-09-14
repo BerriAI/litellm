@@ -80,7 +80,7 @@ class VertexAIPartnerModels(BaseLLM):
             import vertexai
             from google.cloud import aiplatform
 
-            from litellm.llms.databricks import DatabricksChatCompletion
+            from litellm.llms.databricks.chat import DatabricksChatCompletion
             from litellm.llms.OpenAI.openai import OpenAIChatCompletion
             from litellm.llms.text_completion_codestral import CodestralTextCompletion
             from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
@@ -105,7 +105,9 @@ class VertexAIPartnerModels(BaseLLM):
             vertex_httpx_logic = VertexLLM()
 
             access_token, project_id = vertex_httpx_logic._ensure_access_token(
-                credentials=vertex_credentials, project_id=vertex_project
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider="vertex_ai",
             )
 
             openai_like_chat_completions = DatabricksChatCompletion()

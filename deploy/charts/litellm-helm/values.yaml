@@ -137,6 +137,7 @@ db:
   # How to connect to the existing postgres server/cluster
   endpoint: localhost
   database: litellm
+  url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
   secret:
     name: postgres
     usernameKey: username

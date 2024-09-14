@@ -92,7 +92,7 @@ from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks import DatabricksChatCompletion
+from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -738,6 +738,7 @@ def completion(
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
+    base_model = kwargs.get("base_model", None)
     ### TEXT COMPLETION CALLS ###
     text_completion = kwargs.get("text_completion", False)
     atext_completion = kwargs.get("atext_completion", False)
@@ -783,11 +784,9 @@ def completion(
         "top_logprobs",
         "extra_headers",
     ]
-    litellm_params = (
-        all_litellm_params  # use the external var., used in creating cache key as well.
-    )
 
-    default_params = openai_params + litellm_params
+    default_params = openai_params + all_litellm_params
+    litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
@@ -974,6 +973,7 @@ def completion(
             text_completion=kwargs.get("text_completion"),
             azure_ad_token_provider=kwargs.get("azure_ad_token_provider"),
             user_continue_message=kwargs.get("user_continue_message"),
+            base_model=base_model,
         )
         logging.update_environment_variables(
             model=model,
@@ -1014,7 +1014,10 @@ def completion(
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+                or litellm.AZURE_DEFAULT_API_VERSION
             )
 
             api_key = (
@@ -1210,6 +1213,9 @@ def completion(
             custom_llm_provider == "text-completion-openai"
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
+            or custom_llm_provider
+            in litellm.openai_text_completion_compatible_providers
+            and kwargs.get("text_completion") is True
         ):
             openai.api_type = "openai"
 
@@ -2119,7 +2125,10 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif "gemini" in model:
+            elif "gemini" in model or (
+                litellm_params.get("base_model") is not None
+                and "gemini" in litellm_params["base_model"]
+            ):
                 model_response = vertex_chat_completion.completion(  # type: ignore
                     model=model,
                     messages=messages,
@@ -2816,7 +2825,7 @@ def completion_with_retries(*args, **kwargs):
         )
 
     num_retries = kwargs.pop("num_retries", 3)
-    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop("retry_strategy", "constant_retry")  # type: ignore
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "constant_retry":
         retryer = tenacity.Retrying(
@@ -4103,8 +4112,8 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if (
-        _model is not None and custom_llm_provider == "openai"
+    if _model is not None and (
+        custom_llm_provider == "openai"
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
         if _model not in litellm.open_ai_chat_completion_models:
             model = "text-completion-openai/" + _model
@@ -4995,7 +5004,9 @@ def speech(
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
-        Literal["completion", "embedding", "image_generation", "chat", "batch"]
+        Literal[
+            "completion", "embedding", "image_generation", "chat", "batch", "rerank"
+        ]
     ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
@@ -5110,6 +5121,12 @@ async def ahealth_check(
                 model_params.pop("messages", None)
                 model_params["prompt"] = prompt
                 await litellm.aimage_generation(**model_params)
+                response = {}
+            elif mode == "rerank":
+                model_params.pop("messages", None)
+                model_params["query"] = prompt
+                model_params["documents"] = ["my sample text"]
+                await litellm.arerank(**model_params)
                 response = {}
             elif "*" in model:
                 from litellm.litellm_core_utils.llm_request_utils import (
@@ -5308,7 +5325,7 @@ def stream_chunk_builder(
         ]
 
         if len(tool_call_chunks) > 0:
-            argument_list = []
+            argument_list: List = []
             delta = tool_call_chunks[0]["choices"][0]["delta"]
             message = response["choices"][0]["message"]
             message["tool_calls"] = []
@@ -5317,6 +5334,7 @@ def stream_chunk_builder(
             type = None
             tool_calls_list = []
             prev_index = None
+            prev_name = None
             prev_id = None
             curr_id = None
             curr_index = 0
@@ -5344,27 +5362,32 @@ def stream_chunk_builder(
                             type = tool_calls[0].type
                 if prev_index is None:
                     prev_index = curr_index
+                if prev_name is None:
+                    prev_name = name
                 if curr_index != prev_index:  # new tool call
                     combined_arguments = "".join(argument_list)
                     tool_calls_list.append(
                         {
                             "id": prev_id,
-                            "index": prev_index,
-                            "function": {"arguments": combined_arguments, "name": name},
+                            "function": {
+                                "arguments": combined_arguments,
+                                "name": prev_name,
+                            },
                             "type": type,
                         }
                     )
                     argument_list = []  # reset
                     prev_index = curr_index
                     prev_id = curr_id
+                    prev_name = name
 
             combined_arguments = (
                 "".join(argument_list) or "{}"
             )  # base case, return empty dict
+
             tool_calls_list.append(
                 {
                     "id": id,
-                    "index": curr_index,
                     "function": {"arguments": combined_arguments, "name": name},
                     "type": type,
                 }
@@ -5420,7 +5443,7 @@ def stream_chunk_builder(
                 for choice in choices:
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
-                    if content == None:
+                    if content is None:
                         continue  # openai v1.0.0 sets content = None for chunks
                     content_list.append(content)
 
