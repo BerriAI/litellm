@@ -174,6 +174,7 @@ const sidebars = {
         "providers/baseten", 
         "providers/openrouter", 
         "providers/palm", 
+        "providers/sambanova", 
         // "providers/custom_openai_proxy",
         "providers/custom_llm_server",
         "providers/petals",
