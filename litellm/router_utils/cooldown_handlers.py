@@ -94,16 +94,23 @@ def _should_cooldown_deployment(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )
 
-        if num_successes_this_minute + num_fails_this_minute == 0:
-            return False
+        total_requests_this_minute = num_successes_this_minute + num_fails_this_minute
 
-        percent_fails = num_fails_this_minute / (
-            num_successes_this_minute + num_fails_this_minute
-        )
+        if (
+            total_requests_this_minute == 1
+        ):  # if the 1st request fails it's not guaranteed that the deployment should be cooled down
+            return False
+        percent_fails = 0.0
+        if total_requests_this_minute > 0:
+            percent_fails = num_fails_this_minute / (
+                num_successes_this_minute + num_fails_this_minute
+            )
         verbose_router_logger.debug(
-            "percent fails for deployment = %s, percent fails = %s",
+            "percent fails for deployment = %s, percent fails = %s, num successes = %s, num fails = %s",
             deployment,
             percent_fails,
+            num_successes_this_minute,
+            num_fails_this_minute,
         )
         if percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT:
             return True
@@ -259,8 +266,11 @@ def should_cooldown_based_on_allowed_fails_policy(
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
-    allowed_fails = litellm_router_instance.get_allowed_fails_from_policy(
-        exception=original_exception,
+    allowed_fails = (
+        litellm_router_instance.get_allowed_fails_from_policy(
+            exception=original_exception,
+        )
+        or litellm_router_instance.allowed_fails
     )
     cooldown_time = (
         litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
