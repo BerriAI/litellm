@@ -136,6 +136,7 @@ class MistralConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "seed",
@@ -153,7 +154,7 @@ class MistralConfig:
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
@@ -306,6 +307,7 @@ class DeepInfraConfig:
             "functions",
             "logit_bias",
             "max_tokens",
+            "max_completion_tokens",
             "n",
             "presence_penalty",
             "stop",
@@ -345,7 +347,9 @@ class DeepInfraConfig:
                             ),
                             status_code=400,
                         )
-            if param in supported_openai_params:
+            elif param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
         return optional_params

@@ -249,3 +249,94 @@ def test_all_model_configs():
         optional_params={},
         drop_params=False,
     ) == {"maxTokens": 10}
+
+    from litellm.llms.text_completion_codestral import MistralTextCompletionConfig
+
+    assert (
+        "max_completion_tokens"
+        in MistralTextCompletionConfig().get_supported_openai_params()
+    )
+    assert MistralTextCompletionConfig().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.bedrock.common_utils import (
+        AmazonAnthropicClaude3Config,
+        AmazonAnthropicConfig,
+    )
+
+    assert (
+        "max_completion_tokens"
+        in AmazonAnthropicClaude3Config().get_supported_openai_params()
+    )
+
+    assert AmazonAnthropicClaude3Config().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    assert (
+        "max_completion_tokens" in AmazonAnthropicConfig().get_supported_openai_params()
+    )
+
+    assert AmazonAnthropicConfig().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens_to_sample": 10}
+
+    from litellm.llms.databricks.chat import DatabricksConfig
+
+    assert "max_completion_tokens" in DatabricksConfig().get_supported_openai_params()
+
+    assert DatabricksConfig().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+        VertexAIAnthropicConfig,
+    )
+
+    assert (
+        "max_completion_tokens"
+        in VertexAIAnthropicConfig().get_supported_openai_params()
+    )
+
+    assert VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_tokens": 10}
+
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexAIConfig,
+        GoogleAIStudioGeminiConfig,
+        VertexGeminiConfig,
+    )
+
+    assert "max_completion_tokens" in VertexAIConfig().get_supported_openai_params()
+
+    assert VertexAIConfig().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_output_tokens": 10}
+
+    assert (
+        "max_completion_tokens"
+        in GoogleAIStudioGeminiConfig().get_supported_openai_params()
+    )
+
+    assert GoogleAIStudioGeminiConfig().map_openai_params(
+        model="gemini-1.0-pro",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+    ) == {"max_output_tokens": 10}
+
+    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()
+
+    assert VertexGeminiConfig().map_openai_params(
+        model="gemini-1.0-pro",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        drop_params=False,
+    ) == {"max_output_tokens": 10}

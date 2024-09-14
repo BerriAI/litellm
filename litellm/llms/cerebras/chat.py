@@ -70,6 +70,7 @@ class CerebrasConfig:
 
         return [
             "max_tokens",
+            "max_completion_tokens",
             "response_format",
             "seed",
             "stop",
@@ -86,6 +87,8 @@ class CerebrasConfig:
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param in supported_openai_params:
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
