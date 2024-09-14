@@ -1434,8 +1434,9 @@ async def test_gemini_pass_through_endpoint():
     print(resp.body)
 
 
+@pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
-async def test_proxy_model_group_alias_checks(prisma_client):
+async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     """
     Check if model group alias is returned on
 
@@ -1465,7 +1466,7 @@ async def test_proxy_model_group_alias_checks(prisma_client):
     model_alias = "gpt-4"
     router = litellm.Router(
         model_list=_model_list,
-        model_group_alias={model_alias: "gpt-3.5-turbo"},
+        model_group_alias={model_alias: {"model": "gpt-3.5-turbo", "hidden": hidden}},
     )
     setattr(litellm.proxy.proxy_server, "llm_router", router)
     setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
@@ -1477,7 +1478,10 @@ async def test_proxy_model_group_alias_checks(prisma_client):
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
 
-    assert len(resp) == 2
+    if hidden:
+        assert len(resp["data"]) == 1
+    else:
+        assert len(resp["data"]) == 2
     print(resp)
 
     resp = await model_info_v1(
@@ -1489,7 +1493,10 @@ async def test_proxy_model_group_alias_checks(prisma_client):
         if model_alias == item["model_name"]:
             is_model_alias_in_list = True
 
-    assert is_model_alias_in_list
+    if hidden:
+        assert is_model_alias_in_list is False
+    else:
+        assert is_model_alias_in_list
 
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
@@ -1500,4 +1507,7 @@ async def test_proxy_model_group_alias_checks(prisma_client):
         if model_alias == item.model_group:
             is_model_alias_in_list = True
 
-    assert is_model_alias_in_list
+    if hidden:
+        assert is_model_alias_in_list is False
+    else:
+        assert is_model_alias_in_list, f"models: {models}"

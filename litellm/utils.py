@@ -6066,11 +6066,11 @@ def _calculate_retry_after(
     max_retries: int,
     response_headers: Optional[httpx.Headers] = None,
     min_timeout: int = 0,
-):
+) -> Union[float, int]:
     retry_after = _get_retry_after_from_exception_header(response_headers)
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
-    if 0 < retry_after <= 60:
+    if retry_after is not None and 0 < retry_after <= 60:
         return retry_after
 
     initial_retry_delay = 0.5

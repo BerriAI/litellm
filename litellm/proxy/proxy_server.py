@@ -7627,6 +7627,7 @@ async def model_group_info(
     )
 
     model_groups: List[ModelGroupInfo] = []
+
     for model in all_models_str:
 
         _model_group_info = llm_router.get_model_group_info(model_group=model)

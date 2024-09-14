@@ -21,8 +21,8 @@ else:
 
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
+    healthy_deployments: Union[List[Any], Dict[Any, Any]],
     request_kwargs: Optional[Dict[Any, Any]] = None,
-    healthy_deployments: Optional[Union[List[Any], Dict[Any, Any]]] = None,
 ):
     if llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments

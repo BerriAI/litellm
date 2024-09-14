@@ -52,7 +52,9 @@ class SlackAlerting(CustomBatchLogger):
     def __init__(
         self,
         internal_usage_cache: Optional[DualCache] = None,
-        alerting_threshold: float = 300,  # threshold for slow / hanging llm responses (in seconds)
+        alerting_threshold: Optional[
+            float
+        ] = None,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
         alert_types: List[AlertType] = [
             "llm_exceptions",
@@ -74,6 +76,8 @@ class SlackAlerting(CustomBatchLogger):
         default_webhook_url: Optional[str] = None,
         **kwargs,
     ):
+        if alerting_threshold is None:
+            alerting_threshold = 300
         self.alerting_threshold = alerting_threshold
         self.alerting = alerting
         self.alert_types = alert_types
