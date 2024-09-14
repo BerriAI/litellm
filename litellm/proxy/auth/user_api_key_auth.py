@@ -889,8 +889,8 @@ async def user_api_key_auth(
                     and max_budget_per_model.get(current_model, None) is not None
                 ):
                     if (
-                        model is not None
-                        and model_spend[0].get(model, "") == current_model
+                        "model" in model_spend[0]
+                        and model_spend[0].get("model") == current_model
                         and "_sum" in model_spend[0]
                         and "spend" in model_spend[0]["_sum"]
                         and model_spend[0]["_sum"]["spend"]
