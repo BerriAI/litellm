@@ -53,7 +53,7 @@ from litellm.router_utils.client_initalization_utils import (
     should_initialize_sync_client,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
+from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.fallback_event_handlers import (
     log_failure_fallback_event,
     log_success_fallback_event,
@@ -3834,7 +3834,7 @@ class Router:
 
             # Trigger cooldown handler
             asyncio.create_task(
-                router_cooldown_handler(
+                router_cooldown_event_callback(
                     litellm_router_instance=self,
                     deployment_id=deployment,
                     exception_status=exception_status,

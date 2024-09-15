@@ -191,8 +191,8 @@ class PrometheusLogger(CustomLogger):
 
                 self.litellm_deployment_cooled_down = Counter(
                     "litellm_deployment_cooled_down",
-                    "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic",
-                    labelnames=_logged_llm_labels,
+                    "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down",
+                    labelnames=_logged_llm_labels + ["exception_status"],
                 )
 
                 self.litellm_deployment_success_responses = Counter(
@@ -666,12 +666,13 @@ class PrometheusLogger(CustomLogger):
         model_id: str,
         api_base: str,
         api_provider: str,
+        exception_status: str,
     ):
         """
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
         self.litellm_deployment_cooled_down.labels(
-            litellm_model_name, model_id, api_base, api_provider
+            litellm_model_name, model_id, api_base, api_provider, exception_status
         ).inc()
 
 
