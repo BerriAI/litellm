@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from typing import Dict, List, Optional, Tuple
 
 import httpx
@@ -52,14 +53,22 @@ class BaseAWSLLM(BaseLLM):
         """
         Return a boto3.Credentials object
         """
-        args = locals()
-        args.pop("self")
-        cache_key = self.get_cache_key(args)
 
         import boto3
         from botocore.credentials import Credentials
 
         ## CHECK IS  'os.environ/' passed in
+        param_names = [
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "aws_region_name",
+            "aws_session_name",
+            "aws_profile_name",
+            "aws_role_name",
+            "aws_web_identity_token",
+            "aws_sts_endpoint",
+        ]
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
             aws_secret_access_key,
@@ -78,6 +87,11 @@ class BaseAWSLLM(BaseLLM):
                 _v = get_secret(param)
                 if _v is not None and isinstance(_v, str):
                     params_to_check[i] = _v
+            elif param is None:  # check if uppercase value in env
+                key = param_names[i]
+                if key.upper() in os.environ:
+                    params_to_check[i] = os.getenv(key)
+
         # Assign updated values back to parameters
         (
             aws_access_key_id,
@@ -90,6 +104,10 @@ class BaseAWSLLM(BaseLLM):
             aws_web_identity_token,
             aws_sts_endpoint,
         ) = params_to_check
+
+        # create cache key for non-expiring auth flows
+        args = {k: v for k, v in locals().items() if k.startswith("aws_")}
+        cache_key = self.get_cache_key(args)
 
         verbose_logger.debug(
             "in get credentials\n"
@@ -226,8 +244,11 @@ class BaseAWSLLM(BaseLLM):
             )
 
             return credentials
-        else:
-
+        elif (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_region_name is not None
+        ):
             # Check if credentials are already in cache. These credentials have no expiry time.
             cached_credentials: Optional[Credentials] = self.iam_cache.get_cache(
                 cache_key
@@ -247,6 +268,13 @@ class BaseAWSLLM(BaseLLM):
                 credentials.token is None
             ):  # don't cache if session token exists. The expiry time for that is not known.
                 self.iam_cache.set_cache(cache_key, credentials, ttl=3600 - 60)
+
+            return credentials
+        else:
+            # check env var. Do not cache the response from this.
+            session = boto3.Session()
+
+            credentials = session.get_credentials()
 
             return credentials
 
