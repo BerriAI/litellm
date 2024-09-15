@@ -528,6 +528,15 @@ def mock_completion(
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,
             )
+        elif (
+            isinstance(mock_response, str)
+            and mock_response == "litellm.InternalServerError"
+        ):
+            raise litellm.InternalServerError(
+                message="this is a mock internal server error",
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
+            )
         elif isinstance(mock_response, str) and mock_response.startswith(
             "Exception: content_filter_policy"
         ):
