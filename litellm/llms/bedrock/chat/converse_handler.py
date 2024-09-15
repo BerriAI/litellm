@@ -42,8 +42,9 @@ def make_sync_call(
         raise BedrockError(status_code=response.status_code, message=response.read())
 
     if "ai21" in api_base:
-        aws_bedrock_process_response = BedrockConverseLLM()
-        model_response: ModelResponse = aws_bedrock_process_response.process_response(
+        model_response: (
+            ModelResponse
+        ) = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=litellm.ModelResponse(),
