@@ -53,7 +53,7 @@ from litellm.router_utils.client_initalization_utils import (
     should_initialize_sync_client,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
+from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
