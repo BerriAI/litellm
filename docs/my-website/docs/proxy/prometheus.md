@@ -58,16 +58,6 @@ http://localhost:4000/metrics
 
 ## 📈 Metrics Tracked 
 
-### Error Metrics
-
-| Metric Name          | Description                          |
-|----------------------|--------------------------------------|
-| `litellm_error_code_metric_total`             | Total number of errors by error code and model |
-
-This metric provides a count of errors encountered, categorized by error code and model. For example:
-
-
-
 ### Proxy Requests / Spend Metrics
 
 | Metric Name          | Description                          |
@@ -79,6 +69,7 @@ This metric provides a count of errors encountered, categorized by error code an
 ### Error Monitoring Metrics
 
 | Metric Name          | Description                          |
+|----------------------|--------------------------------------|
 | `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
 | `litellm_error_code_metric_total`             | Total number of errors by error code and model |
 
@@ -96,6 +87,7 @@ This metric provides a count of errors encountered, categorized by error code an
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
+| `litellm_deployment_cooled_down`             |  Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down |
 | `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
 | `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
  `litellm_deployment_success_responses`              |  Total number of successful LLM API calls for deployment                               |
