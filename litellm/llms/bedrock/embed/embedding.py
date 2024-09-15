@@ -197,7 +197,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=dict(prepped.headers),
+                headers=prepped.headers,  # type: ignore
                 data=data,
             )
 
@@ -288,7 +288,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=dict(prepped.headers),
+                headers=prepped.headers,  # type: ignore
                 data=data,
             )
 
@@ -454,6 +454,7 @@ class BedrockEmbedding(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
+
         request = AWSRequest(
             method="POST", url=endpoint_url, data=json.dumps(data), headers=headers
         )
@@ -478,5 +479,5 @@ class BedrockEmbedding(BaseAWSLLM):
             aembedding=aembedding,
             timeout=timeout,
             client=client,
-            headers=dict(prepped.headers),
+            headers=prepped.headers,  # type: ignore
         )
