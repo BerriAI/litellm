@@ -197,8 +197,8 @@ class PrometheusLogger(CustomLogger):
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
-                documentation="LLM Deployment Analytics - Total number of failed LLM API calls via litellm",
-                labelnames=_logged_llm_labels,
+                documentation="LLM Deployment Analytics - Total number of failed LLM API calls via litellm. exception_status is the status of the exception from the llm api",
+                labelnames=_logged_llm_labels + ["exception_status"],
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
@@ -402,6 +402,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = litellm_params.get("metadata", {}).get(
             "user_api_key_team_alias", None
         )
+        exception = kwargs.get("exception", None)
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
@@ -439,8 +440,13 @@ class PrometheusLogger(CustomLogger):
             _metadata = _litellm_params.get("metadata", {})
             litellm_model_name = request_kwargs.get("model", None)
             api_base = _metadata.get("api_base", None)
+            if api_base is None:
+                api_base = _litellm_params.get("api_base", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
-            model_id = _metadata.get("model_id")
+            _model_info = _metadata.get("model_info") or {}
+            model_id = _model_info.get("id", None)
+            exception = request_kwargs.get("exception", None)
+            exception_status_code: str = str(getattr(exception, "status_code", None))
 
             """
             log these labels
@@ -458,6 +464,7 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
+                exception_status=exception_status_code,
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -486,8 +493,11 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name = request_kwargs.get("model", None)
             model_group = _metadata.get("model_group", None)
             api_base = _metadata.get("api_base", None)
+            if api_base is None:
+                api_base = _litellm_params.get("api_base", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
-            model_id = _metadata.get("model_id")
+            _model_info = _metadata.get("model_info") or {}
+            model_id = _model_info.get("id", None)
 
             remaining_requests = None
             remaining_tokens = None
