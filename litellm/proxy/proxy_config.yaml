@@ -16,5 +16,5 @@ general_settings:
  master_key: sk-1234 
 
 litellm_settings:
-  success_callback: ["datadog"]
+  success_callback: ["prometheus"]
 

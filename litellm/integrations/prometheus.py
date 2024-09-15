@@ -189,6 +189,12 @@ class PrometheusLogger(CustomLogger):
                     labelnames=_logged_llm_labels,
                 )
 
+                self.litellm_deployment_cooled_down = Counter(
+                    "litellm_deployment_cooled_down",
+                    "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic",
+                    labelnames=_logged_llm_labels,
+                )
+
                 self.litellm_deployment_success_responses = Counter(
                     name="litellm_deployment_success_responses",
                     documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
@@ -653,6 +659,20 @@ class PrometheusLogger(CustomLogger):
         self.set_litellm_deployment_state(
             2, litellm_model_name, model_id, api_base, api_provider
         )
+
+    def increment_deployment_cooled_down(
+        self,
+        litellm_model_name: str,
+        model_id: str,
+        api_base: str,
+        api_provider: str,
+    ):
+        """
+        increment metric when litellm.Router / load balancing logic places a deployment in cool down
+        """
+        self.litellm_deployment_cooled_down.labels(
+            litellm_model_name, model_id, api_base, api_provider
+        ).inc()
 
 
 def safe_get_remaining_budget(
