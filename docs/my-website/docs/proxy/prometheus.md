@@ -58,17 +58,9 @@ http://localhost:4000/metrics
 
 ## 📈 Metrics Tracked 
 
-### Error Metrics
+### Virtual Keys, Teams, Internal Users Metrics
 
-| Metric Name          | Description                          |
-|----------------------|--------------------------------------|
-| `litellm_error_code_metric_total`             | Total number of errors by error code and model |
-
-This metric provides a count of errors encountered, categorized by error code and model. For example:
-
-
-
-### Proxy Requests / Spend Metrics
+Use this for for tracking per [user, key, team, etc.](virtual_keys)
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
@@ -76,11 +68,32 @@ This metric provides a count of errors encountered, categorized by error code an
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 
-### Error Monitoring Metrics
+
+
+### LLM API / Provider Metrics
+
+Use this for LLM API Error monitoring and tracking remaining rate limits and token limits
 
 | Metric Name          | Description                          |
-| `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
-| `litellm_error_code_metric_total`             | Total number of errors by error code and model |
+|----------------------|--------------------------------------|
+ `litellm_deployment_success_responses`              |  Total number of successful LLM API calls for deployment                               |
+| `litellm_deployment_failure_responses`              | Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api                                   |
+| `litellm_deployment_total_requests`                 | Total number of LLM API calls for deployment - success + failure                      |
+| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
+| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
+| `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
+| `litellm_deployment_latency_per_output_token`       | Latency per output token for deployment                                                          |
+
+### Load Balancing, Fallback, Cooldown Metrics
+
+Use this for tracking [litellm router](../routing) load balancing metrics
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_deployment_cooled_down`             |  Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down |
+| `litellm_deployment_successful_fallbacks`           |  Number of successful fallback requests from primary model -> fallback model        |
+| `litellm_deployment_failed_fallbacks`               | Number of failed fallback requests from primary model -> fallback model            |
+
 
 ### Request Latency Metrics 
 
@@ -88,24 +101,6 @@ This metric provides a count of errors encountered, categorized by error code an
 |----------------------|--------------------------------------|
 | `litellm_request_total_latency_metric`             | Total latency (seconds) for a request to LiteLLM Proxy Server - tracked for labels `litellm_call_id`, `model` |
 | `litellm_llm_api_latency_metric`             | latency (seconds) for just the LLM API call - tracked for labels `litellm_call_id`, `model` |
-
-
-
-### LLM API / Provider Metrics
-
-| Metric Name          | Description                          |
-|----------------------|--------------------------------------|
-| `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
-| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
-| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
- `litellm_deployment_success_responses`              |  Total number of successful LLM API calls for deployment                               |
-| `litellm_deployment_failure_responses`              | Total number of failed LLM API calls for deployment                                   |
-| `litellm_deployment_total_requests`                 | Total number of LLM API calls for deployment - success + failure                      |
-| `litellm_deployment_latency_per_output_token`       | Latency per output token for deployment                                                          |
-| `litellm_deployment_successful_fallbacks`           |  Number of successful fallback requests from primary model -> fallback model        |
-| `litellm_deployment_failed_fallbacks`               | Number of failed fallback requests from primary model -> fallback model            |
-
-
 
 
 ### Budget Metrics

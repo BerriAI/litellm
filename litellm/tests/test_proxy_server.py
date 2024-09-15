@@ -762,7 +762,7 @@ async def test_team_update_redis():
     ) as mock_client:
         await _cache_team_object(
             team_id="1234",
-            team_table=LiteLLM_TeamTableCachedObj(),
+            team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
             user_api_key_cache=DualCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -776,7 +776,7 @@ async def test_get_team_redis(client_no_auth):
     Tests if get_team_object gets value from redis cache, if set
     """
     from litellm.caching import DualCache, RedisCache
-    from litellm.proxy.auth.auth_checks import _cache_team_object, get_team_object
+    from litellm.proxy.auth.auth_checks import get_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
@@ -917,7 +917,9 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         )
         litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
 
-        team_mock_client.update = AsyncMock(return_value=LiteLLM_TeamTableCachedObj())
+        team_mock_client.update = AsyncMock(
+            return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
+        )
 
         await team_member_add(
             data=team_member_add_request,
@@ -1095,7 +1097,9 @@ async def test_create_team_member_add_team_admin(
         )
         litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
 
-        team_mock_client.update = AsyncMock(return_value=LiteLLM_TeamTableCachedObj())
+        team_mock_client.update = AsyncMock(
+            return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
+        )
 
         try:
             await team_member_add(
@@ -1434,8 +1438,9 @@ async def test_gemini_pass_through_endpoint():
     print(resp.body)
 
 
+@pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
-async def test_proxy_model_group_alias_checks(prisma_client):
+async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     """
     Check if model group alias is returned on
 
@@ -1465,7 +1470,7 @@ async def test_proxy_model_group_alias_checks(prisma_client):
     model_alias = "gpt-4"
     router = litellm.Router(
         model_list=_model_list,
-        model_group_alias={model_alias: "gpt-3.5-turbo"},
+        model_group_alias={model_alias: {"model": "gpt-3.5-turbo", "hidden": hidden}},
     )
     setattr(litellm.proxy.proxy_server, "llm_router", router)
     setattr(litellm.proxy.proxy_server, "llm_model_list", _model_list)
@@ -1477,7 +1482,10 @@ async def test_proxy_model_group_alias_checks(prisma_client):
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
 
-    assert len(resp) == 2
+    if hidden:
+        assert len(resp["data"]) == 1
+    else:
+        assert len(resp["data"]) == 2
     print(resp)
 
     resp = await model_info_v1(
@@ -1489,7 +1497,10 @@ async def test_proxy_model_group_alias_checks(prisma_client):
         if model_alias == item["model_name"]:
             is_model_alias_in_list = True
 
-    assert is_model_alias_in_list
+    if hidden:
+        assert is_model_alias_in_list is False
+    else:
+        assert is_model_alias_in_list
 
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
@@ -1500,4 +1511,7 @@ async def test_proxy_model_group_alias_checks(prisma_client):
         if model_alias == item.model_group:
             is_model_alias_in_list = True
 
-    assert is_model_alias_in_list
+    if hidden:
+        assert is_model_alias_in_list is False
+    else:
+        assert is_model_alias_in_list, f"models: {models}"

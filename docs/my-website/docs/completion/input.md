@@ -39,29 +39,28 @@ This is a list of openai params we translate across providers.
 
 Use `litellm.get_supported_openai_params()` for an updated list of params for each model + provider 
 
-| Provider | temperature | max_tokens | top_p | stream | stream_options | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
-|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
-|Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
-|Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ |
-|Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
-|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
-|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ | | | |
-|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
-|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
-|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (model dependent) | |
-|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
-|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  | ✅ |  |  | ✅ |  | ✅ | ✅ |  |  |  |
-|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
-|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
-|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
+| Provider | temperature | max_completion_tokens | max_tokens | top_p | stream | stream_options | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Anthropic| ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
+|Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
+|Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+|Cohere| ✅ | ✅ | ✅ | ✅ |  ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
+|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
+|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ | | | |
+|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
+|VertexAI| ✅ | ✅ | ✅ | | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
+|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (model dependent) | |
+|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
+|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  | ✅ |  |  | ✅ |  | ✅ | ✅ |  |  |  |
+|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
+|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
 |Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
-|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ |  | |✅| | | | | | |
-|Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
-|ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
-|Github| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ (model dependent)|✅ (model dependent)| | |
+|Ollama| ✅ | ✅ | ✅ |✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ |  | |✅| | | | | | |
+|Databricks| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
+|ClarifAI| ✅ | ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
+|Github| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ (model dependent)|✅ (model dependent)| | |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 
@@ -88,6 +87,7 @@ def completion(
     stream: Optional[bool] = None,
     stream_options: Optional[dict] = None,
     stop=None,
+    max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -149,6 +149,8 @@ def completion(
     - `include_usage` *boolean (optional)* - If set, an additional chunk will be streamed before the data: [DONE] message. The usage field on this chunk shows the token usage statistics for the entire request, and the choices field will always be an empty array. All other chunks will also include a usage field, but with a null value. 
 
 - `stop`: *string/ array/ null (optional)* - Up to 4 sequences where the API will stop generating further tokens.
+
+- `max_completion_tokens`: *integer (optional)* -  An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
 
 - `max_tokens`: *integer (optional)* - The maximum number of tokens to generate in the chat completion.
 

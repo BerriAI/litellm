@@ -11,7 +11,15 @@ from litellm._logging import print_verbose
 logger = logging.getLogger(__name__)
 
 
-ILLEGAL_DISPLAY_PARAMS = ["messages", "api_key", "prompt", "input"]
+ILLEGAL_DISPLAY_PARAMS = [
+    "messages",
+    "api_key",
+    "prompt",
+    "input",
+    "vertex_credentials",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+]
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 

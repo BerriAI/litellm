@@ -158,6 +158,7 @@ class AnthropicConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "extra_headers",
@@ -172,6 +173,8 @@ class AnthropicConfig:
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value

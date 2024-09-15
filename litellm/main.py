@@ -264,6 +264,7 @@ async def acompletion(
     stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -303,6 +304,7 @@ async def acompletion(
         stream_options (dict, optional): A dictionary containing options for the streaming response. Only use this if stream is True.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
+        max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -341,6 +343,7 @@ async def acompletion(
         "stream_options": stream_options,
         "stop": stop,
         "max_tokens": max_tokens,
+        "max_completion_tokens": max_completion_tokens,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
         "logit_bias": logit_bias,
@@ -385,6 +388,7 @@ async def acompletion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
@@ -524,6 +528,15 @@ def mock_completion(
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,
             )
+        elif (
+            isinstance(mock_response, str)
+            and mock_response == "litellm.InternalServerError"
+        ):
+            raise litellm.InternalServerError(
+                message="this is a mock internal server error",
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
+            )
         elif isinstance(mock_response, str) and mock_response.startswith(
             "Exception: content_filter_policy"
         ):
@@ -633,6 +646,7 @@ def completion(
     stream: Optional[bool] = None,
     stream_options: Optional[dict] = None,
     stop=None,
+    max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -675,6 +689,7 @@ def completion(
         stream_options (dict, optional): A dictionary containing options for the streaming response. Only set this when you set stream: true.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
+        max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -737,6 +752,7 @@ def completion(
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
+    base_model = kwargs.get("base_model", None)
     ### TEXT COMPLETION CALLS ###
     text_completion = kwargs.get("text_completion", False)
     atext_completion = kwargs.get("atext_completion", False)
@@ -758,6 +774,7 @@ def completion(
         "stream",
         "stream_options",
         "stop",
+        "max_completion_tokens",
         "max_tokens",
         "presence_penalty",
         "frequency_penalty",
@@ -782,11 +799,9 @@ def completion(
         "top_logprobs",
         "extra_headers",
     ]
-    litellm_params = (
-        all_litellm_params  # use the external var., used in creating cache key as well.
-    )
 
-    default_params = openai_params + litellm_params
+    default_params = openai_params + all_litellm_params
+    litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
@@ -918,6 +933,7 @@ def completion(
             stream_options=stream_options,
             stop=stop,
             max_tokens=max_tokens,
+            max_completion_tokens=max_completion_tokens,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
@@ -973,6 +989,7 @@ def completion(
             text_completion=kwargs.get("text_completion"),
             azure_ad_token_provider=kwargs.get("azure_ad_token_provider"),
             user_continue_message=kwargs.get("user_continue_message"),
+            base_model=base_model,
         )
         logging.update_environment_variables(
             model=model,
@@ -1303,6 +1320,7 @@ def completion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
@@ -2123,7 +2141,10 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif "gemini" in model:
+            elif "gemini" in model or (
+                litellm_params.get("base_model") is not None
+                and "gemini" in litellm_params["base_model"]
+            ):
                 model_response = vertex_chat_completion.completion(  # type: ignore
                     model=model,
                     messages=messages,
@@ -2820,7 +2841,7 @@ def completion_with_retries(*args, **kwargs):
         )
 
     num_retries = kwargs.pop("num_retries", 3)
-    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop("retry_strategy", "constant_retry")  # type: ignore
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "constant_retry":
         retryer = tenacity.Retrying(
@@ -3154,6 +3175,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "deepseek"
@@ -3819,6 +3841,7 @@ async def atext_completion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "text-completion-codestral"
@@ -4997,7 +5020,9 @@ def speech(
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
-        Literal["completion", "embedding", "image_generation", "chat", "batch"]
+        Literal[
+            "completion", "embedding", "image_generation", "chat", "batch", "rerank"
+        ]
     ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
@@ -5112,6 +5137,12 @@ async def ahealth_check(
                 model_params.pop("messages", None)
                 model_params["prompt"] = prompt
                 await litellm.aimage_generation(**model_params)
+                response = {}
+            elif mode == "rerank":
+                model_params.pop("messages", None)
+                model_params["query"] = prompt
+                model_params["documents"] = ["my sample text"]
+                await litellm.arerank(**model_params)
                 response = {}
             elif "*" in model:
                 from litellm.litellm_core_utils.llm_request_utils import (
