@@ -5,7 +5,7 @@ Common utilities used across bedrock chat/embedding/image generation
 import os
 import types
 from enum import Enum
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Tuple, Union
 
 import httpx
 
@@ -575,7 +575,7 @@ def init_bedrock_client(
     # Iterate over parameters and update if needed
     for i, param in enumerate(params_to_check):
         if param and param.startswith("os.environ/"):
-            params_to_check[i] = get_secret(param)
+            params_to_check[i] = get_secret(param)  # type: ignore
     # Assign updated values back to parameters
     (
         aws_access_key_id,
@@ -618,13 +618,13 @@ def init_bedrock_client(
     import boto3
 
     if isinstance(timeout, float):
-        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
     elif isinstance(timeout, httpx.Timeout):
-        config = boto3.session.Config(
+        config = boto3.session.Config(  # type: ignore
             connect_timeout=timeout.connect, read_timeout=timeout.read
         )
     else:
-        config = boto3.session.Config()
+        config = boto3.session.Config()  # type: ignore
 
     ### CHECK STS ###
     if (
@@ -725,40 +725,6 @@ def init_bedrock_client(
     return client
 
 
-def get_runtime_endpoint(
-    api_base: Optional[str],
-    aws_bedrock_runtime_endpoint: Optional[str],
-    aws_region_name: str,
-) -> Tuple[str, str]:
-    env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-    if api_base is not None:
-        endpoint_url = api_base
-    elif aws_bedrock_runtime_endpoint is not None and isinstance(
-        aws_bedrock_runtime_endpoint, str
-    ):
-        endpoint_url = aws_bedrock_runtime_endpoint
-    elif env_aws_bedrock_runtime_endpoint and isinstance(
-        env_aws_bedrock_runtime_endpoint, str
-    ):
-        endpoint_url = env_aws_bedrock_runtime_endpoint
-    else:
-        endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
-
-    # Determine proxy_endpoint_url
-    if env_aws_bedrock_runtime_endpoint and isinstance(
-        env_aws_bedrock_runtime_endpoint, str
-    ):
-        proxy_endpoint_url = env_aws_bedrock_runtime_endpoint
-    elif aws_bedrock_runtime_endpoint is not None and isinstance(
-        aws_bedrock_runtime_endpoint, str
-    ):
-        proxy_endpoint_url = aws_bedrock_runtime_endpoint
-    else:
-        proxy_endpoint_url = endpoint_url
-
-    return endpoint_url, proxy_endpoint_url
-
-
 class ModelResponseIterator:
     def __init__(self, model_response):
         self.model_response = model_response
@@ -783,3 +749,21 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         self.is_done = True
         return self.model_response
+
+
+def get_bedrock_tool_name(response_tool_name: str) -> str:
+    """
+    If litellm formatted the input tool name, we need to convert it back to the original name.
+
+    Args:
+        response_tool_name (str): The name of the tool as received from the response.
+
+    Returns:
+        str: The original name of the tool.
+    """
+
+    if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
+        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
+            response_tool_name
+        ]
+    return response_tool_name
