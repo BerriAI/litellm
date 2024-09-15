@@ -197,7 +197,7 @@ class PrometheusLogger(CustomLogger):
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
-                documentation="LLM Deployment Analytics - Total number of failed LLM API calls via litellm. exception_status is the status of the exception from the llm api",
+                documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
                 labelnames=_logged_llm_labels + ["exception_status"],
             )
             self.litellm_deployment_total_requests = Counter(
