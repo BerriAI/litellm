@@ -3552,7 +3552,7 @@ def embedding(
                 client=client,
                 timeout=timeout,
                 aembedding=aembedding,
-                litellm_params=litellm_params,
+                litellm_params={},
                 api_base=api_base,
                 print_verbose=print_verbose,
                 extra_headers=extra_headers,
