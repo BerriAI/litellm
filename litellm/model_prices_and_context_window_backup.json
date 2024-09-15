@@ -1392,6 +1392,36 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "sambanova/Meta-Llama-3.1-8B-Instruct": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "sambanova/Meta-Llama-3.1-70B-Instruct": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "sambanova/Meta-Llama-3.1-405B-Instruct": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "friendliai/mixtral-8x7b-instruct-v0-1": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
