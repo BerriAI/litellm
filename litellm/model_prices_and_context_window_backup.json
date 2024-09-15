@@ -2581,6 +2581,27 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "gemini/gemini-1.5-flash-001": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30, 
+        "input_cost_per_token": 0.000000075,
+        "input_cost_per_token_above_128k_tokens": 0.00000015,
+        "output_cost_per_token": 0.0000003,
+        "output_cost_per_token_above_128k_tokens": 0.0000006,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "source": "https://ai.google.dev/pricing"
+    },
     "gemini/gemini-1.5-flash": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
