@@ -64,7 +64,8 @@ from ..prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
-from .common_utils import BedrockError, ModelResponseIterator, get_runtime_endpoint
+from .common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
+from .converse_chat.converse_transformation import AmazonConverseConfig
 
 BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -417,6 +418,7 @@ class BedrockLLM(BaseAWSLLM):
         except:
             raise BedrockError(message=response.text, status_code=422)
 
+        outputText: Optional[str] = None
         try:
             if provider == "cohere":
                 if "text" in completion_response:
@@ -566,23 +568,27 @@ class BedrockLLM(BaseAWSLLM):
 
         try:
             if (
-                len(outputText) > 0
+                outputText is not None
+                and len(outputText) > 0
                 and hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)
+                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
                 is None
             ):
-                model_response.choices[0].message.content = outputText
+                model_response.choices[0].message.content = outputText  # type: ignore
             elif (
                 hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)
+                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
                 is not None
             ):
                 pass
             else:
                 raise Exception()
-        except:
+        except Exception as e:
             raise BedrockError(
-                message=json.dumps(outputText), status_code=response.status_code
+                message="Error parsing received text={}.\nError-{}".format(
+                    outputText, str(e)
+                ),
+                status_code=response.status_code,
             )
 
         if stream and provider == "ai21":
@@ -594,8 +600,8 @@ class BedrockLLM(BaseAWSLLM):
             streaming_choice = litellm.utils.StreamingChoices()
             streaming_choice.index = model_response.choices[0].index
             delta_obj = litellm.utils.Delta(
-                content=getattr(model_response.choices[0].message, "content", None),
-                role=model_response.choices[0].message.role,
+                content=getattr(model_response.choices[0].message, "content", None),  # type: ignore
+                role=model_response.choices[0].message.role,  # type: ignore
             )
             streaming_choice.delta = delta_obj
             streaming_model_response.choices = [streaming_choice]
@@ -731,7 +737,7 @@ class BedrockLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = get_runtime_endpoint(
+        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
@@ -1002,7 +1008,7 @@ class BedrockLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise BedrockError(status_code=error_code, message=response.text)
+            raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException as e:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -1111,183 +1117,6 @@ class BedrockLLM(BaseAWSLLM):
 
     def embedding(self, *args, **kwargs):
         return super().embedding(*args, **kwargs)
-
-
-class AmazonConverseConfig:
-    """
-    Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
-    #2 - https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html#conversation-inference-supported-models-features
-    """
-
-    maxTokens: Optional[int]
-    stopSequences: Optional[List[str]]
-    temperature: Optional[int]
-    topP: Optional[int]
-
-    def __init__(
-        self,
-        maxTokens: Optional[int] = None,
-        stopSequences: Optional[List[str]] = None,
-        temperature: Optional[int] = None,
-        topP: Optional[int] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        supported_params = [
-            "max_tokens",
-            "max_completion_tokens",
-            "stream",
-            "stream_options",
-            "stop",
-            "temperature",
-            "top_p",
-            "extra_headers",
-            "response_format",
-        ]
-
-        if (
-            model.startswith("anthropic")
-            or model.startswith("mistral")
-            or model.startswith("cohere")
-            or model.startswith("meta.llama3-1")
-        ):
-            supported_params.append("tools")
-
-        if model.startswith("anthropic") or model.startswith("mistral"):
-            # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-            supported_params.append("tool_choice")
-
-        return supported_params
-
-    def map_tool_choice_values(
-        self, model: str, tool_choice: Union[str, dict], drop_params: bool
-    ) -> Optional[ToolChoiceValuesBlock]:
-        if tool_choice == "none":
-            if litellm.drop_params is True or drop_params is True:
-                return None
-            else:
-                raise litellm.utils.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool_choice={}. To drop it from the call, set `litellm.drop_params = True.".format(
-                        tool_choice
-                    ),
-                    status_code=400,
-                )
-        elif tool_choice == "required":
-            return ToolChoiceValuesBlock(any={})
-        elif tool_choice == "auto":
-            return ToolChoiceValuesBlock(auto={})
-        elif isinstance(tool_choice, dict):
-            # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-            specific_tool = SpecificToolChoiceBlock(
-                name=tool_choice.get("function", {}).get("name", "")
-            )
-            return ToolChoiceValuesBlock(tool=specific_tool)
-        else:
-            raise litellm.utils.UnsupportedParamsError(
-                message="Bedrock doesn't support tool_choice={}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.".format(
-                    tool_choice
-                ),
-                status_code=400,
-            )
-
-    def get_supported_image_types(self) -> List[str]:
-        return ["png", "jpeg", "gif", "webp"]
-
-    def map_openai_params(
-        self,
-        model: str,
-        non_default_params: dict,
-        optional_params: dict,
-        drop_params: bool,
-    ) -> dict:
-        for param, value in non_default_params.items():
-            if param == "response_format":
-                json_schema: Optional[dict] = None
-                schema_name: str = ""
-                if "response_schema" in value:
-                    json_schema = value["response_schema"]
-                    schema_name = "json_tool_call"
-                elif "json_schema" in value:
-                    json_schema = value["json_schema"]["schema"]
-                    schema_name = value["json_schema"]["name"]
-                """
-                Follow similar approach to anthropic - translate to a single tool call. 
-
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
-                if json_schema is not None:
-                    _tool_choice = self.map_tool_choice_values(
-                        model=model, tool_choice="required", drop_params=drop_params  # type: ignore
-                    )
-
-                    _tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=schema_name, parameters=json_schema
-                        ),
-                    )
-
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
-                else:
-                    if litellm.drop_params is True or drop_params is True:
-                        pass
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(
-                                value
-                            ),
-                            status_code=400,
-                        )
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    if len(value) == 0:  # converse raises error for empty strings
-                        continue
-                    value = [value]
-                optional_params["stopSequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["topP"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "tool_choice":
-                _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value, drop_params=drop_params  # type: ignore
-                )
-                if _tool_choice_value is not None:
-                    optional_params["tool_choice"] = _tool_choice_value
-        return optional_params
 
 
 class BedrockConverseLLM(BaseAWSLLM):
@@ -1614,7 +1443,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = get_runtime_endpoint(
+        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
@@ -1813,7 +1642,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise BedrockError(status_code=error_code, message=response.text)
+            raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -1845,24 +1674,6 @@ def get_response_stream_shape():
         _response_stream_shape_cache = bedrock_service_model.shape_for("ResponseStream")
 
     return _response_stream_shape_cache
-
-
-def get_bedrock_tool_name(response_tool_name: str) -> str:
-    """
-    If litellm formatted the input tool name, we need to convert it back to the original name.
-
-    Args:
-        response_tool_name (str): The name of the tool as received from the response.
-
-    Returns:
-        str: The original name of the tool.
-    """
-
-    if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
-        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
-            response_tool_name
-        ]
-    return response_tool_name
 
 
 class AWSEventStreamDecoder:

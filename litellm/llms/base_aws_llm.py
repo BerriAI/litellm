@@ -1,5 +1,6 @@
+import hashlib
 import json
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -28,6 +29,14 @@ class BaseAWSLLM(BaseLLM):
         self.iam_cache = DualCache()
         super().__init__()
 
+    def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
+        """
+        Generate a unique cache key based on the credential arguments.
+        """
+        # Convert credential arguments to a JSON string and hash it to create a unique key
+        credential_str = json.dumps(credential_args, sort_keys=True)
+        return hashlib.sha256(credential_str.encode()).hexdigest()
+
     def get_credentials(
         self,
         aws_access_key_id: Optional[str] = None,
@@ -43,7 +52,12 @@ class BaseAWSLLM(BaseLLM):
         """
         Return a boto3.Credentials object
         """
+        args = locals()
+        args.pop("self")
+        cache_key = self.get_cache_key(args)
+
         import boto3
+        from botocore.credentials import Credentials
 
         ## CHECK IS  'os.environ/' passed in
         params_to_check: List[Optional[str]] = [
@@ -186,7 +200,6 @@ class BaseAWSLLM(BaseLLM):
 
             # Extract the credentials from the response and convert to Session Credentials
             sts_credentials = sts_response["Credentials"]
-            from botocore.credentials import Credentials
 
             credentials = Credentials(
                 access_key=sts_credentials["AccessKeyId"],
@@ -211,12 +224,59 @@ class BaseAWSLLM(BaseLLM):
                 secret_key=aws_secret_access_key,
                 token=aws_session_token,
             )
+
             return credentials
         else:
+
+            # Check if credentials are already in cache. These credentials have no expiry time.
+            cached_credentials: Optional[Credentials] = self.iam_cache.get_cache(
+                cache_key
+            )
+            if cached_credentials:
+                return cached_credentials
+
             session = boto3.Session(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
                 region_name=aws_region_name,
             )
 
-            return session.get_credentials()
+            credentials = session.get_credentials()
+
+            self.iam_cache.set_cache(cache_key, credentials, ttl=3600 - 60)
+
+            return credentials
+
+    def get_runtime_endpoint(
+        self,
+        api_base: Optional[str],
+        aws_bedrock_runtime_endpoint: Optional[str],
+        aws_region_name: str,
+    ) -> Tuple[str, str]:
+        env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        if api_base is not None:
+            endpoint_url = api_base
+        elif aws_bedrock_runtime_endpoint is not None and isinstance(
+            aws_bedrock_runtime_endpoint, str
+        ):
+            endpoint_url = aws_bedrock_runtime_endpoint
+        elif env_aws_bedrock_runtime_endpoint and isinstance(
+            env_aws_bedrock_runtime_endpoint, str
+        ):
+            endpoint_url = env_aws_bedrock_runtime_endpoint
+        else:
+            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+
+        # Determine proxy_endpoint_url
+        if env_aws_bedrock_runtime_endpoint and isinstance(
+            env_aws_bedrock_runtime_endpoint, str
+        ):
+            proxy_endpoint_url = env_aws_bedrock_runtime_endpoint
+        elif aws_bedrock_runtime_endpoint is not None and isinstance(
+            aws_bedrock_runtime_endpoint, str
+        ):
+            proxy_endpoint_url = aws_bedrock_runtime_endpoint
+        else:
+            proxy_endpoint_url = endpoint_url
+
+        return endpoint_url, proxy_endpoint_url
