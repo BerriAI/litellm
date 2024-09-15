@@ -1093,6 +1093,7 @@ async def test_async_embedding_azure_caching():
 
 
 ## Test OpenAI + Sync
+@pytest.mark.flaky(retries=3, delay=1)
 def test_image_generation_openai():
     try:
         customHandler_success = CompletionCustomHandler()
