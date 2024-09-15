@@ -173,6 +173,13 @@ def get_llm_provider(
                     or "https://api.cerebras.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("CEREBRAS_API_KEY")
+            elif custom_llm_provider == "sambanova":
+                api_base = (
+                    api_base
+                    or get_secret("SAMBANOVA_API_BASE")
+                    or "https://api.sambanova.ai/v1"
+                )  # type: ignore
+                dynamic_api_key = api_key or get_secret("SAMBANOVA_API_KEY")
             elif (custom_llm_provider == "ai21_chat") or (
                 custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
             ):
@@ -336,6 +343,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret("CEREBRAS_API_KEY")
+                    elif endpoint == "https://api.sambanova.ai/v1":
+                        custom_llm_provider = "sambanova"
+                        dynamic_api_key = get_secret("SAMBANOVA_API_KEY")
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret("AI21_API_KEY")

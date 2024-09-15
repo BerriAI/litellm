@@ -1,16 +1,16 @@
 """
-Cerebras Chat Completions API
+Sambanova Chat Completions API
 
 this is OpenAI compatible - no translation needed / occurs
 """
 
 import types
-from typing import Optional, Union
+from typing import Optional
 
 
-class CerebrasConfig:
+class SambanovaConfig:
     """
-    Reference: https://inference-docs.cerebras.ai/api-reference/chat-completions
+    Reference: https://community.sambanova.ai/t/create-chat-completion-api/
 
     Below are the parameters:
     """
@@ -70,7 +70,6 @@ class CerebrasConfig:
 
         return [
             "max_tokens",
-            "max_completion_tokens",
             "response_format",
             "seed",
             "stop",
@@ -87,8 +86,6 @@ class CerebrasConfig:
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
+            if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params

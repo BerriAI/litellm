@@ -264,6 +264,7 @@ async def acompletion(
     stream_options: Optional[dict] = None,
     stop=None,
     max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -303,6 +304,7 @@ async def acompletion(
         stream_options (dict, optional): A dictionary containing options for the streaming response. Only use this if stream is True.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
+        max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -341,6 +343,7 @@ async def acompletion(
         "stream_options": stream_options,
         "stop": stop,
         "max_tokens": max_tokens,
+        "max_completion_tokens": max_completion_tokens,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
         "logit_bias": logit_bias,
@@ -385,6 +388,7 @@ async def acompletion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
@@ -524,6 +528,15 @@ def mock_completion(
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,
             )
+        elif (
+            isinstance(mock_response, str)
+            and mock_response == "litellm.InternalServerError"
+        ):
+            raise litellm.InternalServerError(
+                message="this is a mock internal server error",
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
+            )
         elif isinstance(mock_response, str) and mock_response.startswith(
             "Exception: content_filter_policy"
         ):
@@ -633,6 +646,7 @@ def completion(
     stream: Optional[bool] = None,
     stream_options: Optional[dict] = None,
     stop=None,
+    max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -675,6 +689,7 @@ def completion(
         stream_options (dict, optional): A dictionary containing options for the streaming response. Only set this when you set stream: true.
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
+        max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -759,6 +774,7 @@ def completion(
         "stream",
         "stream_options",
         "stop",
+        "max_completion_tokens",
         "max_tokens",
         "presence_penalty",
         "frequency_penalty",
@@ -917,6 +933,7 @@ def completion(
             stream_options=stream_options,
             stop=stop,
             max_tokens=max_tokens,
+            max_completion_tokens=max_completion_tokens,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
@@ -1303,6 +1320,7 @@ def completion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
@@ -3157,6 +3175,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "deepseek"
@@ -3822,6 +3841,7 @@ async def atext_completion(
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "text-completion-codestral"

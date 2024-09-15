@@ -2765,6 +2765,7 @@ def get_optional_params(
     stream_options=None,
     stop=None,
     max_tokens=None,
+    max_completion_tokens=None,
     presence_penalty=None,
     frequency_penalty=None,
     logit_bias=None,
@@ -2842,6 +2843,7 @@ def get_optional_params(
         "stream_options": None,
         "stop": None,
         "max_tokens": None,
+        "max_completion_tokens": None,
         "presence_penalty": None,
         "frequency_penalty": None,
         "logit_bias": None,
@@ -5974,6 +5976,10 @@ def check_valid_key(model: str, api_key: str):
 
 def _should_retry(status_code: int):
     """
+    Retries on 408, 409, 429 and 500 errors.
+
+    Any client error in the 400-499 range that isn't explicitly handled (such as 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, etc.) would not trigger a retry.
+
     Reimplementation of openai's should retry logic, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L639
     """

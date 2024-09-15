@@ -161,6 +161,7 @@ class AmazonCohereChatConfig:
     def get_supported_openai_params(self) -> List[str]:
         return [
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "stop",
             "temperature",
@@ -177,7 +178,7 @@ class AmazonCohereChatConfig:
         self, non_default_params: dict, optional_params: dict
     ) -> dict:
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
@@ -1156,6 +1157,7 @@ class AmazonConverseConfig:
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "stream_options",
             "stop",
@@ -1263,7 +1265,7 @@ class AmazonConverseConfig:
                             ),
                             status_code=400,
                         )
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
