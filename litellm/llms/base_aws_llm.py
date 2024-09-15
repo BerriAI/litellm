@@ -243,7 +243,10 @@ class BaseAWSLLM(BaseLLM):
 
             credentials = session.get_credentials()
 
-            self.iam_cache.set_cache(cache_key, credentials, ttl=3600 - 60)
+            if (
+                credentials.token is None
+            ):  # don't cache if session token exists. The expiry time for that is not known.
+                self.iam_cache.set_cache(cache_key, credentials, ttl=3600 - 60)
 
             return credentials
 
