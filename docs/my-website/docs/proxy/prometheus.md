@@ -84,7 +84,7 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
 | `litellm_deployment_latency_per_output_token`       | Latency per output token for deployment                                                          |
 
-## Load Balancing, Fallback, Cooldown Metrics
+### Load Balancing, Fallback, Cooldown Metrics
 
 Use this for tracking [litellm router](../routing) load balancing metrics
 
