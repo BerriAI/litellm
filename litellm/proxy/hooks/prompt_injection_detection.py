@@ -232,7 +232,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         )
 
         if self.prompt_injection_params is None:
-            return
+            return None
 
         formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
         is_prompt_attack = False

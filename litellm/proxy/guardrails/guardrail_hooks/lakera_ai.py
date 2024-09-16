@@ -143,7 +143,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         ):
             return
         text = ""
-        _json_data = {}
+        _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
             prompt_injection_obj: Optional[GuardrailItem] = (
                 litellm.guardrail_name_config_map.get("prompt_injection")
