@@ -15,6 +15,9 @@ class CustomGuardrail(CustomLogger):
     ):
         self.guardrail_name = guardrail_name
         self.event_hook: Optional[GuardrailEventHooks] = event_hook
+        self.moderation_check = (
+            None  # used for V1 implementation - backwards compatibility
+        )
         super().__init__(**kwargs)
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
