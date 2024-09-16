@@ -138,59 +138,42 @@ async def generate_key_fn(
         # check if user set default key/generate params on config.yaml
         if litellm.upperbound_key_generate_params is not None:
             for elem in data:
-                # if key in litellm.upperbound_key_generate_params, use the min of value and litellm.upperbound_key_generate_params[key]
                 key, value = elem
-                if (
-                    value is not None
-                    and getattr(litellm.upperbound_key_generate_params, key, None)
-                    is not None
-                ):
-                    # if value is float/int
-                    if key in [
-                        "max_budget",
-                        "max_parallel_requests",
-                        "tpm_limit",
-                        "rpm_limit",
-                    ]:
-                        if value > getattr(litellm.upperbound_key_generate_params, key):
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={getattr(litellm.upperbound_key_generate_params, key)}"
-                                },
+                upperbound_value = getattr(
+                    litellm.upperbound_key_generate_params, key, None
+                )
+                if upperbound_value is not None:
+                    if value is None:
+                        # Use the upperbound value if user didn't provide a value
+                        setattr(data, key, upperbound_value)
+                    else:
+                        # Compare with upperbound for numeric fields
+                        if key in [
+                            "max_budget",
+                            "max_parallel_requests",
+                            "tpm_limit",
+                            "rpm_limit",
+                        ]:
+                            if value > upperbound_value:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail={
+                                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                                    },
+                                )
+                        # Compare durations
+                        elif key in ["budget_duration", "duration"]:
+                            upperbound_duration = _duration_in_seconds(
+                                duration=upperbound_value
                             )
-                    elif key == "budget_duration":
-                        # budgets are in 1s, 1m, 1h, 1d, 1m (30s, 30m, 30h, 30d, 30m)
-                        # compare the duration in seconds and max duration in seconds
-                        upperbound_budget_duration = _duration_in_seconds(
-                            duration=getattr(
-                                litellm.upperbound_key_generate_params, key
-                            )
-                        )
-                        user_set_budget_duration = _duration_in_seconds(duration=value)
-                        if user_set_budget_duration > upperbound_budget_duration:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"Budget duration is over max limit set in config - user_value={user_set_budget_duration}; max_value={upperbound_budget_duration}"
-                                },
-                            )
-                    elif (
-                        key == "duration"
-                        and litellm.upperbound_key_generate_params.duration
-                    ):
-                        # duration is in 1s, 1m, 1h, 1d, 1m (30s, 30m, 30h, 30d, 30m)
-                        upperbound_duration = _duration_in_seconds(
-                            duration=litellm.upperbound_key_generate_params.duration
-                        )
-                        user_set_duration = _duration_in_seconds(duration=value)
-                        if user_set_duration > upperbound_duration:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"Duration is over max limit set in config - user_value={value}; max_value={litellm.upperbound_key_generate_params.duration}"
-                                },
-                            )
+                            user_duration = _duration_in_seconds(duration=value)
+                            if user_duration > upperbound_duration:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail={
+                                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                                    },
+                                )
 
         # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
         _budget_id = None

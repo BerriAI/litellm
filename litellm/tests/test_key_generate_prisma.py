@@ -2070,11 +2070,6 @@ async def test_upperbound_key_param_larger_budget(prisma_client):
 
 @pytest.mark.asyncio()
 async def test_upperbound_key_param_larger_duration(prisma_client):
-    """
-    - create key
-    - get key info
-    - assert key_name is not null
-    """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
@@ -2091,6 +2086,34 @@ async def test_upperbound_key_param_larger_duration(prisma_client):
         # print(result)
     except Exception as e:
         assert e.code == str(400)
+
+
+@pytest.mark.asyncio()
+async def test_upperbound_key_param_none_duration(prisma_client):
+    from datetime import datetime, timedelta
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+        max_budget=100, duration="14d"
+    )
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest()
+        key = await generate_key_fn(request)
+
+        print(key)
+        # print(result)
+
+        assert key.max_budget == 100
+        assert key.expires is not None
+
+        _date_key_expires = key.expires.date()
+        _fourteen_days_from_now = (datetime.now() + timedelta(days=14)).date()
+
+        assert _date_key_expires == _fourteen_days_from_now
+    except Exception as e:
+        pytest.fail(f"Got exception {e}")
 
 
 def test_get_bearer_token():
