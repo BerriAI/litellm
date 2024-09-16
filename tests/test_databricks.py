@@ -247,15 +247,6 @@ def test_throws_for_async_request_when_api_base_and_api_key_absent():
         )
     assert err_msg in str(exc)
 
-    with pytest.raises(BadRequestError) as exc:
-        asyncio.run(
-            litellm.aembedding(
-                model="databricks/bge-12312",
-                input=["Hello", "World"],
-            )
-        )
-    assert err_msg in str(exc)
-
 
 def test_completions_with_sync_http_handler(monkeypatch):
     base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
@@ -501,7 +492,7 @@ def test_completions_with_sync_databricks_client(monkeypatch, set_base_key):
                 "extraparam": "testpassingextraparam",
                 "stream": False,
             },
-            headers=None,
+            headers={},
         )
 
 

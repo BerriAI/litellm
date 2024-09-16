@@ -259,9 +259,6 @@ class DatabricksChatCompletion(BaseLLM):
         emit_log_event(log_fn=logging_obj.pre_call)
 
         def format_response(response: Union[ModelResponse, CustomStreamWrapper]):
-            if not isinstance(response, ModelResponse):
-                return response
-
             base_model: Optional[str] = optional_params.pop("base_model", None)
             if response.model is not None:
                 response.model = custom_llm_provider + "/" + response.model
