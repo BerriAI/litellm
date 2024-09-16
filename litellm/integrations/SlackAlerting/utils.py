@@ -5,12 +5,13 @@ Utils used for slack alerting
 from typing import Dict, List, Optional, Union
 
 import litellm
+from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
 
 
 def process_slack_alerting_variables(
-    alert_to_webhook_url: Optional[Dict[str, Union[List[str], str]]]
-) -> Optional[Dict[str, Union[List[str], str]]]:
+    alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]]
+) -> Optional[Dict[AlertType, Union[List[str], str]]]:
     """
     process alert_to_webhook_url
     - check if any urls are set as os.environ/SLACK_WEBHOOK_URL_1 read env var and set the correct value

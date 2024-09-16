@@ -174,6 +174,7 @@ async def health_services_endpoint(
                             not in proxy_logging_obj.slack_alerting_instance.alert_types
                         ):
                             continue
+
                         test_message = "default test message"
                         if alert_type == "llm_exceptions":
                             test_message = f"LLM Exception test alert"
@@ -189,22 +190,11 @@ async def health_services_endpoint(
                             test_message = f"Outage Alert Exception test alert"
                         elif alert_type == "daily_reports":
                             test_message = f"Daily Reports test alert"
+                        else:
+                            test_message = f"Budget Alert test alert"
 
-                        AlertType = Literal[
-                            "llm_exceptions",
-                            "llm_too_slow",
-                            "llm_requests_hanging",
-                            "budget_alerts",
-                            "db_exceptions",
-                        ]
                         await proxy_logging_obj.alerting_handler(
-                            message=test_message,
-                            level="Low",
-                            alert_type=(
-                                alert_type
-                                if alert_type in AlertType.__args__
-                                else "budget_alerts"
-                            ),
+                            message=test_message, level="Low", alert_type=alert_type
                         )
                 else:
                     await proxy_logging_obj.alerting_handler(

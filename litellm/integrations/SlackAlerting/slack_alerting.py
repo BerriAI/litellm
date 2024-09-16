@@ -71,7 +71,7 @@ class SlackAlerting(CustomBatchLogger):
             "outage_alerts",
         ],
         alert_to_webhook_url: Optional[
-            Dict[str, Union[List[str], str]]
+            Dict[AlertType, Union[List[str], str]]
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: Optional[str] = None,
@@ -100,7 +100,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting: Optional[List] = None,
         alerting_threshold: Optional[float] = None,
         alert_types: Optional[List] = None,
-        alert_to_webhook_url: Optional[Dict[str, Union[List[str], str]]] = None,
+        alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
         alerting_args: Optional[Dict] = None,
         llm_router: Optional[litellm.Router] = None,
     ):
