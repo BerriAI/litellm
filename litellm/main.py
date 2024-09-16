@@ -95,6 +95,7 @@ from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
+from .llms.OpenAI.chat.o1 import OpenAIO1ChatCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.factory import (
@@ -161,6 +162,7 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -1366,25 +1368,46 @@ def completion(
 
             ## COMPLETION CALL
             try:
-                response = openai_chat_completions.completion(
-                    model=model,
-                    messages=messages,
-                    headers=headers,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=api_key,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    timeout=timeout,  # type: ignore
-                    custom_prompt_dict=custom_prompt_dict,
-                    client=client,  # pass AsyncOpenAI, OpenAI client
-                    organization=organization,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+                    response = openai_o1_chat_completions.completion(
+                        model=model,
+                        messages=messages,
+                        headers=headers,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        api_key=api_key,
+                        api_base=api_base,
+                        acompletion=acompletion,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        timeout=timeout,  # type: ignore
+                        custom_prompt_dict=custom_prompt_dict,
+                        client=client,  # pass AsyncOpenAI, OpenAI client
+                        organization=organization,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    response = openai_chat_completions.completion(
+                        model=model,
+                        messages=messages,
+                        headers=headers,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        api_key=api_key,
+                        api_base=api_base,
+                        acompletion=acompletion,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        timeout=timeout,  # type: ignore
+                        custom_prompt_dict=custom_prompt_dict,
+                        client=client,  # pass AsyncOpenAI, OpenAI client
+                        organization=organization,
+                        custom_llm_provider=custom_llm_provider,
+                    )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(

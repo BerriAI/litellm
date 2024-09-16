@@ -358,7 +358,7 @@ class DatabricksChatCompletion(BaseLLM):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise DatabricksError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
             raise DatabricksError(status_code=500, message=str(e))
@@ -371,7 +371,7 @@ class DatabricksChatCompletion(BaseLLM):
         )
         response = ModelResponse(**response_json)
 
-        response.model = custom_llm_provider + "/" + response.model
+        response.model = custom_llm_provider + "/" + (response.model or "")
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
@@ -520,7 +520,7 @@ class DatabricksChatCompletion(BaseLLM):
                     response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise DatabricksError(
-                        status_code=e.response.status_code, message=response.text
+                        status_code=e.response.status_code, message=e.response.text
                     )
                 except httpx.TimeoutException as e:
                     raise DatabricksError(
@@ -531,7 +531,7 @@ class DatabricksChatCompletion(BaseLLM):
 
         response = ModelResponse(**response_json)
 
-        response.model = custom_llm_provider + "/" + response.model
+        response.model = custom_llm_provider + "/" + (response.model or "")
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
@@ -648,7 +648,7 @@ class DatabricksChatCompletion(BaseLLM):
         except httpx.HTTPStatusError as e:
             raise DatabricksError(
                 status_code=e.response.status_code,
-                message=response.text if response else str(e),
+                message=e.response.text,
             )
         except httpx.TimeoutException as e:
             raise DatabricksError(status_code=408, message="Timeout error occurred.")
