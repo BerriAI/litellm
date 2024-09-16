@@ -7,18 +7,22 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
-from typing import Optional, Literal
-import litellm
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
-from litellm.utils import get_formatted_prompt
-from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
-from fastapi import HTTPException
-import json, traceback, re
+import json
+import re
+import traceback
 from difflib import SequenceMatcher
-from typing import List
+from typing import List, Literal, Optional
+
+from fastapi import HTTPException
+from typing_extensions import overload
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
+from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
+from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
@@ -201,7 +205,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 and self.prompt_injection_params is not None
                 and self.prompt_injection_params.reject_as_response
             ):
-                return e.detail["error"]
+                return e.detail.get("error")
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
@@ -211,12 +215,18 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
-    async def async_moderation_hook(
+    async def async_moderation_hook(  # type: ignore
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
-    ):
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
+    ) -> Optional[bool]:
         self.print_verbose(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
         )

@@ -1306,6 +1306,11 @@ class PrismaClient:
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
+
+                if hashed_token is None:
+                    raise ValueError(
+                        f"Invalid token passed={token}, hashed_token is None{hashed_token}"
+                    )
                 if query_type == "find_unique":
                     if token is None:
                         raise HTTPException(
