@@ -92,6 +92,7 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
+    litellm_parent_otel_span: Optional[Any] = None
     # Step 1: Remove the litellm_parent_otel_span
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
@@ -100,7 +101,7 @@ def safe_deep_copy(data):
     new_data = copy.deepcopy(data)
 
     # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict):
+    if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
@@ -467,7 +468,7 @@ class ProxyLogging:
 
                     # V1 implementation - backwards compatibility
                     if callback.event_hook is None:
-                        if callback.moderation_check == "pre_call":
+                        if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
                         # Main - V2 Guardrails implementation
@@ -992,7 +993,7 @@ class PrismaClient:
                 return
             else:
                 ## check if required view exists ##
-                if required_view not in ret[0]["view_names"]:
+                if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
                     await self.db.execute_raw(
                         """
@@ -1014,7 +1015,9 @@ class PrismaClient:
                 else:
                     # don't block execution if these views are missing
                     # Convert lists to sets for efficient difference calculation
-                    ret_view_names_set = set(ret[0]["view_names"])
+                    ret_view_names_set = (
+                        set(ret[0]["view_names"]) if ret[0]["view_names"] else set()
+                    )
                     expected_views_set = set(expected_views)
                     # Find missing views
                     missing_views = expected_views_set - ret_view_names_set
@@ -1296,6 +1299,7 @@ class PrismaClient:
         verbose_proxy_logger.debug(
             f"PrismaClient: get_data - args_passed_in: {args_passed_in}"
         )
+        hashed_token: Optional[str] = None
         try:
             response: Any = None
             if (token is not None and table_name is None) or (
@@ -1310,7 +1314,7 @@ class PrismaClient:
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
-                if query_type == "find_unique":
+                if query_type == "find_unique" and hashed_token is not None:
                     if token is None:
                         raise HTTPException(
                             status_code=400,
@@ -1711,7 +1715,7 @@ class PrismaClient:
                     updated_data = json.dumps(updated_data)
                     updated_table_row = self.db.litellm_config.upsert(
                         where={"param_name": k},
-                        data={
+                        data={  # type: ignore
                             "create": {"param_name": k, "param_value": updated_data},
                             "update": {"param_value": updated_data},
                         },
@@ -2265,11 +2269,13 @@ class DBClient:
         """
         For closing connection on server shutdown
         """
-        return await self.db.disconnect()
+        return await self.db.disconnect()  # type: ignore
 
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
+    instance_name: Optional[str] = None
+    module_name: Optional[str] = None
     try:
         print_verbose(f"value: {value}")
         # Split the path by dots to separate module from instance
@@ -2302,7 +2308,12 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         return instance
     except ImportError as e:
         # Re-raise the exception with a user-friendly message
-        raise ImportError(f"Could not import {instance_name} from {module_name}") from e
+        if instance_name and module_name:
+            raise ImportError(
+                f"Could not import {instance_name} from {module_name}"
+            ) from e
+        else:
+            raise e
     except Exception as e:
         raise e
 
@@ -2368,12 +2379,12 @@ async def send_email(receiver_email, subject, html):
 
     try:
         # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:  # type: ignore
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account
-            server.login(smtp_username, smtp_password)
+            server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
             server.send_message(email_message)
@@ -2930,10 +2941,10 @@ async def update_spend(
                     )
                 break
             except httpx.ReadTimeout:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                if i >= n_retry_times:  # type: ignore
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
+                await asyncio.sleep(2**i)  # type: ignore
             except Exception as e:
                 import traceback
 
@@ -3044,10 +3055,10 @@ def get_error_message_str(e: Exception) -> str:
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
         elif hasattr(e, "message"):
-            if isinstance(e.message, "str"):
-                error_message = e.message
-            elif isinstance(e.message, dict):
-                error_message = json.dumps(e.message)
+            if isinstance(e.message, "str"):  # type: ignore
+                error_message = e.message  # type: ignore
+            elif isinstance(e.message, dict):  # type: ignore
+                error_message = json.dumps(e.message)  # type: ignore
         else:
             error_message = str(e)
     else:

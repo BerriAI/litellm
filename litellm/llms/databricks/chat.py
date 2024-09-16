@@ -249,7 +249,7 @@ class DatabricksChatCompletion(BaseLLM):
         databricks_client = get_databricks_model_serving_client_wrapper(
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
-            support_async=acompletion,
+            support_async=acompletion or False,
             api_key=api_key,
             api_base=api_base,
             http_handler=client,
@@ -395,6 +395,7 @@ class DatabricksChatCompletion(BaseLLM):
             self.client = client
 
         ## EMBEDDING CALL
+        response = None
         try:
             response = self.client.post(
                 api_base,
