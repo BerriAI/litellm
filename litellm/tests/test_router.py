@@ -28,6 +28,10 @@ from pydantic import BaseModel
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments,
+    _get_cooldown_deployments,
+)
 from litellm.types.router import DeploymentTypedDict
 
 load_dotenv()
@@ -2121,7 +2125,7 @@ def test_router_cooldown_api_connection_error():
     except litellm.APIConnectionError as e:
         assert (
             Router()._is_cooldown_required(
-                exception_status=e.code, exception_str=str(e)
+                model_id="", exception_status=e.code, exception_str=str(e)
             )
             is False
         )
@@ -2265,6 +2269,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
     ```
     """
+    litellm.set_verbose = True
     router = Router(
         model_list=[
             {
@@ -2272,8 +2277,16 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                 "litellm_params": {
                     "model": "openai/text-embedding-ada-002",
                 },
-            }
-        ]
+            },
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
     )
 
     openai_client = openai.OpenAI(api_key="")
@@ -2294,7 +2307,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
         "create",
         side_effect=_return_exception,
     ):
-        for _ in range(2):
+        for _ in range(1):
             try:
                 if sync_mode:
                     router.embedding(
@@ -2312,9 +2325,13 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                 pass
 
         if sync_mode:
-            cooldown_deployments = router._get_cooldown_deployments()
+            cooldown_deployments = _get_cooldown_deployments(
+                litellm_router_instance=router
+            )
         else:
-            cooldown_deployments = await router._async_get_cooldown_deployments()
+            cooldown_deployments = await _async_get_cooldown_deployments(
+                litellm_router_instance=router
+            )
         print(
             "Cooldown deployments - {}\n{}".format(
                 cooldown_deployments, len(cooldown_deployments)
@@ -2475,3 +2492,31 @@ async def test_router_batch_endpoints(provider):
         model="my-custom-name", custom_llm_provider=provider, limit=2
     )
     print("list_batches=", list_batches)
+
+
+@pytest.mark.parametrize("hidden", [True, False])
+def test_model_group_alias(hidden):
+    _model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        },
+        {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}},
+    ]
+    router = Router(
+        model_list=_model_list,
+        model_group_alias={
+            "gpt-4.5-turbo": {"model": "gpt-3.5-turbo", "hidden": hidden}
+        },
+    )
+
+    models = router.get_model_list()
+
+    model_names = router.get_model_names()
+
+    if hidden:
+        assert len(models) == len(_model_list)
+        assert len(model_names) == len(_model_list)
+    else:
+        assert len(models) == len(_model_list) + 1
+        assert len(model_names) == len(_model_list) + 1

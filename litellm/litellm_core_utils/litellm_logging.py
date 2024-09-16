@@ -69,7 +69,7 @@ from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
-from ..integrations.datadog import DataDogLogger
+from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket import GCSBucketLogger
@@ -924,6 +924,7 @@ class Logging:
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
+                        temp_langfuse_logger = langFuseLogger
                         if langFuseLogger is None or (
                             (
                                 self.langfuse_public_key is not None
@@ -940,12 +941,12 @@ class Logging:
                                 and self.langfuse_host != langFuseLogger.langfuse_host
                             )
                         ):
-                            langFuseLogger = LangFuseLogger(
+                            temp_langfuse_logger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
                                 langfuse_host=self.langfuse_host,
                             )
-                        _response = langFuseLogger.log_event(
+                        _response = temp_langfuse_logger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
@@ -961,33 +962,6 @@ class Logging:
                                     service_name="langfuse",
                                     trace_id=_trace_id,
                                 )
-                    if callback == "datadog":
-                        global dataDogLogger
-                        verbose_logger.debug("reaches datadog for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"datadog: is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose("reaches datadog for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
-                        dataDogLogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
                     if callback == "generic":
                         global genericAPILogger
                         verbose_logger.debug("reaches langfuse for success logging!")
@@ -1608,14 +1582,23 @@ class Logging:
         """
         from litellm.types.router import RouterErrors
 
+        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") or {}
+
+        ## BASE CASE ## check if rate limit error for model group size 1
+        is_base_case = False
+        if metadata.get("model_group_size") is not None:
+            model_group_size = metadata.get("model_group_size")
+            if isinstance(model_group_size, int) and model_group_size == 1:
+                is_base_case = True
         ## check if special error ##
-        if RouterErrors.no_deployments_available.value not in str(exception):
+        if (
+            RouterErrors.no_deployments_available.value not in str(exception)
+            and is_base_case is False
+        ):
             return
 
         ## get original model group ##
-
-        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
-        metadata = litellm_params.get("metadata") or {}
 
         model_group = metadata.get("model_group") or None
         for callback in litellm._async_failure_callback:
@@ -1925,6 +1908,38 @@ class Logging:
 
         return trace_id
 
+    def _get_callback_object(self, service_name: Literal["langfuse"]) -> Optional[Any]:
+        """
+        Return dynamic callback object.
+
+        Meant to solve issue when doing key-based/team-based logging
+        """
+        global langFuseLogger
+
+        if service_name == "langfuse":
+            if langFuseLogger is None or (
+                (
+                    self.langfuse_public_key is not None
+                    and self.langfuse_public_key != langFuseLogger.public_key
+                )
+                or (
+                    self.langfuse_public_key is not None
+                    and self.langfuse_public_key != langFuseLogger.public_key
+                )
+                or (
+                    self.langfuse_host is not None
+                    and self.langfuse_host != langFuseLogger.langfuse_host
+                )
+            ):
+                return LangFuseLogger(
+                    langfuse_public_key=self.langfuse_public_key,
+                    langfuse_secret=self.langfuse_secret,
+                    langfuse_host=self.langfuse_host,
+                )
+            return langFuseLogger
+
+        return None
+
 
 def set_callbacks(callback_list, function_id=None):
     """
@@ -2083,6 +2098,14 @@ def _init_custom_logger_compatible_class(
         _prometheus_logger = PrometheusLogger()
         _in_memory_loggers.append(_prometheus_logger)
         return _prometheus_logger  # type: ignore
+    elif logging_integration == "datadog":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, DataDogLogger):
+                return callback  # type: ignore
+
+        _datadog_logger = DataDogLogger()
+        _in_memory_loggers.append(_datadog_logger)
+        return _datadog_logger  # type: ignore
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
@@ -2208,6 +2231,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
             if isinstance(callback, PrometheusLogger):
+                return callback
+    elif logging_integration == "datadog":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, DataDogLogger):
                 return callback
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:

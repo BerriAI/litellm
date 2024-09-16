@@ -94,11 +94,19 @@ class DatabricksConfig:
         ]
 
     def get_supported_openai_params(self):
-        return ["stream", "stop", "temperature", "top_p", "max_tokens", "n"]
+        return [
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "max_completion_tokens",
+            "n",
+        ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["n"] = value

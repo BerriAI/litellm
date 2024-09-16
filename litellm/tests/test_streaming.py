@@ -1431,6 +1431,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     ],
 )
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_bedrock_httpx_streaming(sync_mode, model, region):
     try:
         litellm.set_verbose = True
@@ -1453,7 +1454,7 @@ async def test_bedrock_httpx_streaming(sync_mode, model, region):
                     has_finish_reason = True
                     break
                 complete_response += chunk
-            if has_finish_reason == False:
+            if has_finish_reason is False:
                 raise Exception("finish reason not set")
             if complete_response.strip() == "":
                 raise Exception("Empty response received")

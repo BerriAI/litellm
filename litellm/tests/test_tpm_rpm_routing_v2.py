@@ -17,6 +17,8 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 import litellm
@@ -459,3 +461,138 @@ async def test_router_completion_streaming():
 - Unit test for sync 'pre_call_checks' 
 - Unit test for async 'async_pre_call_checks' 
 """
+
+
+@pytest.mark.asyncio
+async def test_router_caching_ttl():
+    """
+    Confirm caching ttl's work as expected.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/5609
+    """
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+                "mock_response": "Hello world",
+            },
+            "model_info": {"id": 1},
+        }
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+        redis_port=os.getenv("REDIS_PORT"),
+    )
+
+    assert router.cache.redis_cache is not None
+
+    increment_cache_kwargs = {}
+    with patch.object(
+        router.cache.redis_cache,
+        "async_increment",
+        new=AsyncMock(),
+    ) as mock_client:
+        await router.acompletion(model=model, messages=messages)
+
+        mock_client.assert_called_once()
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+        print(f"mock_client.call_args.args: {mock_client.call_args.args}")
+
+        increment_cache_kwargs = {
+            "key": mock_client.call_args.args[0],
+            "value": mock_client.call_args.args[1],
+            "ttl": mock_client.call_args.kwargs["ttl"],
+        }
+
+        assert mock_client.call_args.kwargs["ttl"] == 60
+
+    ## call redis async increment and check if ttl correctly set
+    await router.cache.redis_cache.async_increment(**increment_cache_kwargs)
+
+    _redis_client = router.cache.redis_cache.init_async_client()
+
+    async with _redis_client as redis_client:
+        current_ttl = await redis_client.ttl(increment_cache_kwargs["key"])
+
+        assert current_ttl >= 0
+
+        print(f"current_ttl: {current_ttl}")
+
+
+def test_router_caching_ttl_sync():
+    """
+    Confirm caching ttl's work as expected.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/5609
+    """
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+                "mock_response": "Hello world",
+            },
+            "model_info": {"id": 1},
+        }
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+        redis_port=os.getenv("REDIS_PORT"),
+    )
+
+    assert router.cache.redis_cache is not None
+
+    increment_cache_kwargs = {}
+    with patch.object(
+        router.cache.redis_cache,
+        "increment_cache",
+        new=MagicMock(),
+    ) as mock_client:
+        router.completion(model=model, messages=messages)
+
+        print(mock_client.call_args_list)
+        mock_client.assert_called()
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+        print(f"mock_client.call_args.args: {mock_client.call_args.args}")
+
+        increment_cache_kwargs = {
+            "key": mock_client.call_args.args[0],
+            "value": mock_client.call_args.args[1],
+            "ttl": mock_client.call_args.kwargs["ttl"],
+        }
+
+        assert mock_client.call_args.kwargs["ttl"] == 60
+
+    ## call redis async increment and check if ttl correctly set
+    router.cache.redis_cache.increment_cache(**increment_cache_kwargs)
+
+    _redis_client = router.cache.redis_cache.redis_client
+
+    current_ttl = _redis_client.ttl(increment_cache_kwargs["key"])
+
+    assert current_ttl >= 0
+
+    print(f"current_ttl: {current_ttl}")

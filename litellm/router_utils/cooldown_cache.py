@@ -83,7 +83,7 @@ class CooldownCache:
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = await self.cache.async_batch_get_cache(keys=keys)
+        results = await self.cache.async_batch_get_cache(keys=keys) or []
 
         active_cooldowns = []
         # Process the results
@@ -101,7 +101,7 @@ class CooldownCache:
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = self.cache.batch_get_cache(keys=keys)
+        results = self.cache.batch_get_cache(keys=keys) or []
 
         active_cooldowns = []
         # Process the results
@@ -119,17 +119,19 @@ class CooldownCache:
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = self.cache.batch_get_cache(keys=keys)
+        results = self.cache.batch_get_cache(keys=keys) or []
 
-        min_cooldown_time = self.default_cooldown_time
+        min_cooldown_time: Optional[float] = None
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
                 cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                if cooldown_cache_value["cooldown_time"] < min_cooldown_time:
+                if min_cooldown_time is None:
+                    min_cooldown_time = cooldown_cache_value["cooldown_time"]
+                elif cooldown_cache_value["cooldown_time"] < min_cooldown_time:
                     min_cooldown_time = cooldown_cache_value["cooldown_time"]
 
-        return min_cooldown_time
+        return min_cooldown_time or self.default_cooldown_time
 
 
 # Usage example:

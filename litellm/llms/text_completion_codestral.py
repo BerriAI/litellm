@@ -141,6 +141,7 @@ class MistralTextCompletionConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "seed",
             "stop",
@@ -154,7 +155,7 @@ class MistralTextCompletionConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "stream" and value == True:
                 optional_params["stream"] = value
