@@ -57,6 +57,14 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "parallel_tool_calls",
             "function_call",
             "functions",
+            "temperature",
+            "top_p",
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+            "top_logprobs",
+            "response_format",
+            "stop",
         ]
 
         return [

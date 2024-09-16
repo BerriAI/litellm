@@ -80,7 +80,13 @@ async def gemini_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    gemini_api_key = litellm.utils.get_secret(secret_name="GEMINI_API_KEY")
+    gemini_api_key: Optional[str] = litellm.utils.get_secret(  # type: ignore
+        secret_name="GEMINI_API_KEY"
+    )
+    if gemini_api_key is None:
+        raise Exception(
+            "Required 'GEMINI_API_KEY' in environment to make pass-through calls to Google AI Studio."
+        )
     # Merge query parameters, giving precedence to those in updated_url
     merged_params = dict(request.query_params)
     merged_params.update({"key": gemini_api_key})
@@ -99,8 +105,8 @@ async def gemini_proxy_route(
         request,
         fastapi_response,
         user_api_key_dict,
-        query_params=merged_params,
-        stream=is_streaming_request,
+        query_params=merged_params,  # type: ignore
+        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -142,7 +148,7 @@ async def cohere_proxy_route(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,
+        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -208,15 +214,15 @@ async def bedrock_proxy_route(
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(prepped.url),
-        custom_headers=prepped.headers,
+        custom_headers=prepped.headers,  # type: ignore
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,
-        custom_body=data,
-        query_params={},
+        stream=is_streaming_request,  # type: ignore
+        custom_body=data,  # type: ignore
+        query_params={},  # type: ignore
     )
 
     return received_value

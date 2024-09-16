@@ -8149,9 +8149,7 @@ def exception_type(
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
-                    message="{}\n{}".format(
-                        str(original_exception), traceback.format_exc()
-                    ),
+                    message="{} - {}".format(exception_provider, error_str),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=original_exception.request,
