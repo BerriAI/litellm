@@ -5,6 +5,7 @@ Utils used for slack alerting
 from typing import Dict, List, Optional, Union
 
 import litellm
+from litellm.secret_managers.main import get_secret
 
 
 def process_slack_alerting_variables(
@@ -22,7 +23,7 @@ def process_slack_alerting_variables(
             _webhook_values = []
             for webhook_url in webhook_urls:
                 if "os.environ/" in webhook_url:
-                    _env_value = litellm.get_secret.get_secret(secret_name=webhook_url)
+                    _env_value = get_secret(secret_name=webhook_url)
                     if not isinstance(_env_value, str):
                         raise ValueError(
                             f"Invalid webhook url value for: {webhook_url}. Got type={type(_env_value)}"
@@ -32,7 +33,7 @@ def process_slack_alerting_variables(
                     _webhook_values.append(webhook_url)
         else:
             if "os.environ/" in webhook_urls:
-                _env_value = litellm.get_secret.get_secret(secret_name=webhook_urls)
+                _env_value = get_secret(secret_name=webhook_urls)
                 if not isinstance(_env_value, str):
                     raise ValueError(
                         f"Invalid webhook url value for: {webhook_urls}. Got type={type(_env_value)}"
