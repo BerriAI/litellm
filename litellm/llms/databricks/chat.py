@@ -7,23 +7,20 @@ import time
 import types
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.databricks.exceptions import DatabricksError
-from litellm.llms.databricks.streaming_utils import ModelResponseIterator
-from litellm.types.llms.openai import (
-    ChatCompletionDeltaChunk,
-    ChatCompletionResponseMessage,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionUsageBlock,
+from litellm.llms.databricks.client import (
+    DatabricksModelServingClientWrapper,
+    get_databricks_model_serving_client_wrapper,
 )
+from litellm.llms.databricks.exceptions import DatabricksError
 from litellm.types.utils import (
     CustomStreamingDecoder,
     GenericStreamingChunk,
@@ -158,83 +155,9 @@ class DatabricksEmbeddingConfig:
         return optional_params
 
 
-async def make_call(
-    client: AsyncHTTPHandler,
-    api_base: str,
-    headers: dict,
-    data: str,
-    model: str,
-    messages: list,
-    logging_obj,
-    streaming_decoder: Optional[CustomStreamingDecoder] = None,
-):
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
-
-    if response.status_code != 200:
-        raise DatabricksError(status_code=response.status_code, message=response.text)
-
-    if streaming_decoder is not None:
-        completion_stream: Any = streaming_decoder.aiter_bytes(
-            response.aiter_bytes(chunk_size=1024)
-        )
-    else:
-        completion_stream = ModelResponseIterator(
-            streaming_response=response.aiter_lines(), sync_stream=False
-        )
-    # LOGGING
-    logging_obj.post_call(
-        input=messages,
-        api_key="",
-        original_response=completion_stream,  # Pass the completion stream for logging
-        additional_args={"complete_input_dict": data},
-    )
-
-    return completion_stream
-
-
-def make_sync_call(
-    client: Optional[HTTPHandler],
-    api_base: str,
-    headers: dict,
-    data: str,
-    model: str,
-    messages: list,
-    logging_obj,
-    streaming_decoder: Optional[CustomStreamingDecoder] = None,
-):
-    if client is None:
-        client = HTTPHandler()  # Create a new client if none provided
-
-    response = client.post(api_base, headers=headers, data=data, stream=True)
-
-    if response.status_code != 200:
-        raise DatabricksError(status_code=response.status_code, message=response.read())
-
-    if streaming_decoder is not None:
-        completion_stream = streaming_decoder.iter_bytes(
-            response.iter_bytes(chunk_size=1024)
-        )
-    else:
-        completion_stream = ModelResponseIterator(
-            streaming_response=response.iter_lines(), sync_stream=True
-        )
-
-    # LOGGING
-    logging_obj.post_call(
-        input=messages,
-        api_key="",
-        original_response="first stream response received",
-        additional_args={"complete_input_dict": data},
-    )
-
-    return completion_stream
-
-
 class DatabricksChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
-
-    # makes headers for API call
 
     def _validate_environment(
         self,
@@ -271,104 +194,6 @@ class DatabricksChatCompletion(BaseLLM):
             api_base = "{}/embeddings".format(api_base)
         return api_base, headers
 
-    async def acompletion_stream_function(
-        self,
-        model: str,
-        messages: list,
-        custom_llm_provider: str,
-        api_base: str,
-        custom_prompt_dict: dict,
-        model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        stream,
-        data: dict,
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
-        client: Optional[AsyncHTTPHandler] = None,
-        streaming_decoder: Optional[CustomStreamingDecoder] = None,
-    ) -> CustomStreamWrapper:
-
-        data["stream"] = True
-        streamwrapper = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_call,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                streaming_decoder=streaming_decoder,
-            ),
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            logging_obj=logging_obj,
-        )
-        return streamwrapper
-
-    async def acompletion_function(
-        self,
-        model: str,
-        messages: list,
-        api_base: str,
-        custom_prompt_dict: dict,
-        model_response: ModelResponse,
-        custom_llm_provider: str,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        stream,
-        data: dict,
-        base_model: Optional[str],
-        optional_params: dict,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> ModelResponse:
-        if timeout is None:
-            timeout = httpx.Timeout(timeout=600.0, connect=5.0)
-
-        self.async_handler = AsyncHTTPHandler(timeout=timeout)
-
-        try:
-            response = await self.async_handler.post(
-                api_base, headers=headers, data=json.dumps(data)
-            )
-            response.raise_for_status()
-
-            response_json = response.json()
-        except httpx.HTTPStatusError as e:
-            raise DatabricksError(
-                status_code=e.response.status_code,
-                message=e.response.text,
-            )
-        except httpx.TimeoutException as e:
-            raise DatabricksError(status_code=408, message="Timeout error occurred.")
-        except Exception as e:
-            raise DatabricksError(status_code=500, message=str(e))
-
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=response_json,
-            additional_args={"complete_input_dict": data},
-        )
-        response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + response.model
-
-        if base_model is not None:
-            response._hidden_params["model"] = base_model
-        return response
-
     def completion(
         self,
         model: str,
@@ -379,8 +204,8 @@ class DatabricksChatCompletion(BaseLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        api_key: Optional[str],
-        logging_obj,
+        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         acompletion=None,
         litellm_params=None,
@@ -393,142 +218,77 @@ class DatabricksChatCompletion(BaseLLM):
             CustomStreamingDecoder
         ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
     ):
+        def emit_log_event(log_fn: Callable, response: Optional[str] = None):
+            response_kwargs = {"original_response": response} if response else {}
+            log_fn(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "complete_input_dict": {
+                        "model": model,
+                        "messages": messages,
+                        **optional_params,
+                    },
+                    "api_base": api_base,
+                    "headers": headers,
+                },
+                **response_kwargs,
+            )
+
         custom_endpoint = custom_endpoint or optional_params.pop(
             "custom_endpoint", None
         )
-        base_model: Optional[str] = optional_params.pop("base_model", None)
-        api_base, headers = self._validate_environment(
-            api_base=api_base,
+        databricks_client = get_databricks_model_serving_client_wrapper(
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+            support_async=acompletion,
             api_key=api_key,
-            endpoint_type="chat_completions",
+            api_base=api_base,
+            http_handler=client,
+            timeout=timeout,
             custom_endpoint=custom_endpoint,
             headers=headers,
+            streaming_decoder=streaming_decoder,
         )
-        ## Load Config
-        config = litellm.DatabricksConfig().get_config()
-        for k, v in config.items():
-            if (
-                k not in optional_params
-            ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
 
-        stream: bool = optional_params.get("stream", None) or False
+        for k, v in litellm.DatabricksConfig().get_config().items():
+            optional_params.setdefault(k, v)
+        stream: bool = optional_params.get("stream", False)
         optional_params["stream"] = stream
 
-        data = {
-            "model": model,
-            "messages": messages,
-            **optional_params,
-        }
+        emit_log_event(log_fn=logging_obj.pre_call)
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        def format_response(response: Union[ModelResponse, CustomStreamWrapper]):
+            base_model: Optional[str] = optional_params.pop("base_model", None)
+            if response.model is not None:
+                response.model = custom_llm_provider + "/" + response.model
+            if base_model is not None and response.model is not None:
+                response._hidden_params["model"] = base_model
+
+            return response
+
         if acompletion is True:
-            if client is not None and isinstance(client, HTTPHandler):
-                client = None
-            if (
-                stream is not None and stream is True
-            ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
-                print_verbose("makes async anthropic streaming POST request")
-                data["stream"] = stream
-                return self.acompletion_stream_function(
-                    model=model,
+
+            async def get_async_completion():
+                response = await databricks_client.acompletion(
+                    endpoint_name=model,
                     messages=messages,
-                    data=data,
-                    api_base=api_base,
-                    custom_prompt_dict=custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    api_key=api_key,
-                    logging_obj=logging_obj,
                     optional_params=optional_params,
                     stream=stream,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    client=client,
-                    custom_llm_provider=custom_llm_provider,
-                    streaming_decoder=streaming_decoder,
                 )
-            else:
-                return self.acompletion_function(
-                    model=model,
-                    messages=messages,
-                    data=data,
-                    api_base=api_base,
-                    custom_prompt_dict=custom_prompt_dict,
-                    custom_llm_provider=custom_llm_provider,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    api_key=api_key,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=stream,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    timeout=timeout,
-                    base_model=base_model,
-                )
+                emit_log_event(log_fn=logging_obj.post_call, response=str(response))
+                return format_response(response)
+
+            return get_async_completion()
         else:
-            if client is None or not isinstance(client, HTTPHandler):
-                client = HTTPHandler(timeout=timeout)  # type: ignore
-            ## COMPLETION CALL
-            if stream is True:
-                return CustomStreamWrapper(
-                    completion_stream=None,
-                    make_call=partial(
-                        make_sync_call,
-                        client=None,
-                        api_base=api_base,
-                        headers=headers,  # type: ignore
-                        data=json.dumps(data),
-                        model=model,
-                        messages=messages,
-                        logging_obj=logging_obj,
-                        streaming_decoder=streaming_decoder,
-                    ),
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    logging_obj=logging_obj,
-                )
-            else:
-                try:
-                    response = client.post(
-                        api_base, headers=headers, data=json.dumps(data)
-                    )
-                    response.raise_for_status()
-
-                    response_json = response.json()
-                except httpx.HTTPStatusError as e:
-                    raise DatabricksError(
-                        status_code=e.response.status_code, message=response.text
-                    )
-                except httpx.TimeoutException as e:
-                    raise DatabricksError(
-                        status_code=408, message="Timeout error occurred."
-                    )
-                except Exception as e:
-                    raise DatabricksError(status_code=500, message=str(e))
-
-        response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + response.model
-
-        if base_model is not None:
-            response._hidden_params["model"] = base_model
-
-        return response
+            response = databricks_client.completion(
+                endpoint_name=model,
+                messages=messages,
+                optional_params=optional_params,
+                stream=stream,
+            )
+            emit_log_event(log_fn=logging_obj.post_call, response=str(response))
+            return format_response(response)
 
     async def aembedding(
         self,
