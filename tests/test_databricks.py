@@ -128,6 +128,7 @@ def mock_http_handler_chat_streaming_response() -> MagicMock:
 
     mock_response = MagicMock()
     mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.status_code = 200
 
     return mock_response
 
@@ -142,6 +143,7 @@ def mock_http_handler_chat_async_streaming_response() -> MagicMock:
 
     mock_response = MagicMock()
     mock_response.aiter_lines.return_value = mock_iter_lines()
+    mock_response.status_code = 200
 
     return mock_response
 
