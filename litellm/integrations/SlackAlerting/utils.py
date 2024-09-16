@@ -20,7 +20,7 @@ def process_slack_alerting_variables(
 
     for alert_type, webhook_urls in alert_to_webhook_url.items():
         if isinstance(webhook_urls, list):
-            _webhook_values = []
+            _webhook_values: List[str] = []
             for webhook_url in webhook_urls:
                 if "os.environ/" in webhook_url:
                     _env_value = get_secret(secret_name=webhook_url)
@@ -31,17 +31,20 @@ def process_slack_alerting_variables(
                     _webhook_values.append(_env_value)
                 else:
                     _webhook_values.append(webhook_url)
+
+            alert_to_webhook_url[alert_type] = _webhook_values
         else:
+            _webhook_value_str: str = webhook_urls
             if "os.environ/" in webhook_urls:
                 _env_value = get_secret(secret_name=webhook_urls)
                 if not isinstance(_env_value, str):
                     raise ValueError(
                         f"Invalid webhook url value for: {webhook_urls}. Got type={type(_env_value)}"
                     )
-                _webhook_values = _env_value
+                _webhook_value_str = _env_value
             else:
-                _webhook_values = webhook_urls
+                _webhook_value_str = webhook_urls
 
-        alert_to_webhook_url[alert_type] = _webhook_values
+            alert_to_webhook_url[alert_type] = _webhook_value_str
 
     return alert_to_webhook_url
