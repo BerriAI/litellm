@@ -160,10 +160,19 @@ class LiteLLMBase(BaseModel):
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
     """
     Set default upperbound to max budget a key called via `/key/generate` can be.
+
+    Args:
+        max_budget (Optional[float], optional): Max budget a key can be. Defaults to None.
+        budget_duration (Optional[str], optional): Duration of the budget. Defaults to None.
+        duration (Optional[str], optional): Duration of the key. Defaults to None.
+        max_parallel_requests (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+        tpm_limit (Optional[int], optional): Tpm limit. Defaults to None.
+        rpm_limit (Optional[int], optional): Rpm limit. Defaults to None.
     """
 
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
+    duration: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
