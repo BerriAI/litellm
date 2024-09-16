@@ -2045,7 +2045,7 @@ async def test_default_key_params(prisma_client):
 
 
 @pytest.mark.asyncio()
-async def test_upperbound_key_params(prisma_client):
+async def test_upperbound_key_param_larger_budget(prisma_client):
     """
     - create key
     - get key info
@@ -2063,6 +2063,31 @@ async def test_upperbound_key_params(prisma_client):
             budget_duration="30d",
         )
         key = await generate_key_fn(request)
+        # print(result)
+    except Exception as e:
+        assert e.code == str(400)
+
+
+@pytest.mark.asyncio()
+async def test_upperbound_key_param_larger_duration(prisma_client):
+    """
+    - create key
+    - get key info
+    - assert key_name is not null
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+        max_budget=100, duration="14d"
+    )
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest(
+            max_budget=10,
+            duration="30d",
+        )
+        key = await generate_key_fn(request)
+        pytest.fail("Expected this to fail but it passed")
         # print(result)
     except Exception as e:
         assert e.code == str(400)
