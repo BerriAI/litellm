@@ -16,7 +16,7 @@ def process_slack_alerting_variables(
     - check if any urls are set as os.environ/SLACK_WEBHOOK_URL_1 read env var and set the correct value
     """
     if alert_to_webhook_url is None:
-        return
+        return None
 
     for alert_type, webhook_urls in alert_to_webhook_url.items():
         if isinstance(webhook_urls, list):
