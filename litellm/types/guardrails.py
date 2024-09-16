@@ -71,7 +71,7 @@ class LakeraCategoryThresholds(TypedDict, total=False):
     jailbreak: float
 
 
-class LitellmParams(TypedDict, total=False):
+class LitellmParams(TypedDict):
     guardrail: str
     mode: str
     api_key: str
@@ -87,6 +87,7 @@ class LitellmParams(TypedDict, total=False):
     # Presidio params
     output_parse_pii: Optional[bool]
     presidio_ad_hoc_recognizers: Optional[str]
+    mock_redacted_text: Optional[dict]
 
 
 class Guardrail(TypedDict):

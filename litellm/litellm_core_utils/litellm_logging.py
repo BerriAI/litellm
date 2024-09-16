@@ -865,7 +865,6 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                     if callback == "logfire" and logfireLogger is not None:
-                        global logfireLogger
                         verbose_logger.debug("reaches logfire for success logging!")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
@@ -1488,7 +1487,6 @@ class Logging:
                             else:
                                 litellm.cache.add_cache(result, **kwargs)
                 if callback == "openmeter" and openMeterLogger is not None:
-                    global openMeterLogger
                     if self.stream is True:
                         if (
                             "async_complete_streaming_response"
