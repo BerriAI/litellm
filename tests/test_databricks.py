@@ -501,7 +501,7 @@ def test_completions_with_sync_databricks_client(monkeypatch, set_base_key):
                 "extraparam": "testpassingextraparam",
                 "stream": False,
             },
-            headers=None,
+            headers={},
         )
 
 
@@ -672,5 +672,5 @@ def test_embeddings_with_sync_databricks_client(monkeypatch, set_base_key):
                 "input": inputs,
                 "extraparam": "testpassingextraparam",
             },
-            headers=None,
+            headers={},
         )
