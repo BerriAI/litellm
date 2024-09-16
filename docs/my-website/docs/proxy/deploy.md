@@ -265,12 +265,12 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 
 ## Options to deploy LiteLLM 
 
-| Docs | When to Use |
-| --- | --- |
-| [Quick Start](#quick-start) | call 100+ LLMs + Load Balancing |
-| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend (Note: When deploying with a database providing a `DATABASE_URL` and `LITELLM_MASTER_KEY` are required in your env ) |
-| [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
-| [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
+| Docs                                                                                              | When to Use                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Quick Start](#quick-start)                                                                       | call 100+ LLMs + Load Balancing                                                                                                                       |
+| [Deploy with Database](#deploy-with-database)                                                     | + use Virtual Keys + Track Spend (Note: When deploying with a database providing a `DATABASE_URL` and `LITELLM_MASTER_KEY` are required in your env ) |
+| [LiteLLM container + Redis](#litellm-container--redis)                                            | + load balance across multiple litellm containers                                                                                                     |
+| [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers                                                                    |
 
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
@@ -943,6 +943,7 @@ export DATABASE_USER="db-user"
 export DATABASE_PORT="5432"
 export DATABASE_HOST="database-1-instance-1.cs1ksmwz2xt3.us-west-2.rds.amazonaws.com"
 export DATABASE_NAME="database-1-instance-1"
+export DATABASE_SCHEMA="schema-name" # skip to use the default "public" schema
 ```
 
 3. Run proxy with iam+rds

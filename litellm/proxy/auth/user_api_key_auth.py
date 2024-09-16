@@ -109,11 +109,8 @@ async def user_api_key_auth(
     ),
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
-        allowed_routes_check,
-        common_checks,
         custom_db_client,
         general_settings,
-        get_actual_routes,
         jwt_handler,
         litellm_proxy_admin_name,
         llm_model_list,
@@ -124,6 +121,8 @@ async def user_api_key_auth(
         user_api_key_cache,
         user_custom_auth,
     )
+
+    parent_otel_span: Optional[Span] = None
 
     try:
         route: str = get_request_route(request=request)
@@ -137,6 +136,7 @@ async def user_api_key_auth(
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
+        passed_in_key: Optional[str] = None
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
@@ -161,7 +161,6 @@ async def user_api_key_auth(
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
             )
 
-        parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
@@ -189,7 +188,7 @@ async def user_api_key_auth(
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
         if (
-            route in LiteLLMRoutes.public_routes.value
+            route in LiteLLMRoutes.public_routes.value  # type: ignore
             or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
@@ -250,6 +249,7 @@ async def user_api_key_auth(
                         raise Exception(
                             f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
                         )
+
                 # get team id
                 team_id = jwt_handler.get_team_id(
                     token=jwt_valid_token, default_value=None
@@ -296,10 +296,30 @@ async def user_api_key_auth(
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+                # [OPTIONAL] allowed user email domains
+                valid_user_email: Optional[bool] = None
+                user_email: Optional[str] = None
+                if jwt_handler.is_enforced_email_domain():
+                    """
+                    if 'allowed_email_subdomains' is set,
+
+                    - checks if token contains 'email' field
+                    - checks if 'email' is from an allowed domain
+                    """
+                    user_email = jwt_handler.get_user_email(
+                        token=jwt_valid_token, default_value=None
+                    )
+                    if user_email is None:
+                        valid_user_email = False
+                    else:
+                        valid_user_email = jwt_handler.is_allowed_domain(
+                            user_email=user_email
+                        )
+
                 # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
                 user_object = None
                 user_id = jwt_handler.get_user_id(
-                    token=jwt_valid_token, default_value=None
+                    token=jwt_valid_token, default_value=user_email
                 )
                 if user_id is not None:
                     # get the user object
@@ -307,11 +327,12 @@ async def user_api_key_auth(
                         user_id=user_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
-                        user_id_upsert=jwt_handler.is_upsert_user_id(),
+                        user_id_upsert=jwt_handler.is_upsert_user_id(
+                            valid_user_email=valid_user_email
+                        ),
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
                     )
-
                 # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
                 end_user_object = None
                 end_user_id = jwt_handler.get_end_user_id(
@@ -388,7 +409,7 @@ async def user_api_key_auth(
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
         is_mapped_pass_through_route: bool = False
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
             if route.startswith(mapped_route):
                 is_mapped_pass_through_route = True
         if is_mapped_pass_through_route:
@@ -422,10 +443,9 @@ async def user_api_key_auth(
                             header_key = headers.get("litellm_user_api_key", "")
                             if (
                                 isinstance(request.headers, dict)
-                                and request.headers.get(key=header_key) is not None
+                                and request.headers.get(key=header_key) is not None  # type: ignore
                             ):
-                                api_key = request.headers.get(key=header_key)
-
+                                api_key = request.headers.get(key=header_key)  # type: ignore
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -546,7 +566,9 @@ async def user_api_key_auth(
                         if field_name in valid_token.__fields__:
                             setattr(valid_token, field_name, v)
             except Exception as e:
-                verbose_logger.warning(e)
+                verbose_logger.debug(
+                    e
+                )  # moving from .warning to .debug as it spams logs when team missing from cache.
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -582,7 +604,7 @@ async def user_api_key_auth(
 
         ## IF it's not a master key
         ## Route should not be in master_key_only_routes
-        if route in LiteLLMRoutes.master_key_only_routes.value:
+        if route in LiteLLMRoutes.master_key_only_routes.value:  # type: ignore
             raise Exception(
                 f"Tried to access route={route}, which is only for MASTER KEY"
             )
@@ -645,8 +667,9 @@ async def user_api_key_auth(
                 "allowed_model_region"
             )
 
+        user_obj: Optional[LiteLLM_UserTable] = None
+        valid_token_dict: dict = {}
         if valid_token is not None:
-            user_obj: Optional[LiteLLM_UserTable] = None
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
@@ -662,6 +685,7 @@ async def user_api_key_auth(
 
             # Check 1. If token can call model
             _model_alias_map = {}
+            model: Optional[str] = None
             if (
                 hasattr(valid_token, "team_model_aliases")
                 and valid_token.team_model_aliases is not None
@@ -674,6 +698,7 @@ async def user_api_key_auth(
                 _model_alias_map = {**valid_token.aliases}
             litellm.model_alias_map = _model_alias_map
             config = valid_token.config
+
             if config != {}:
                 model_list = config.get("model_list", [])
                 llm_model_list = model_list
@@ -802,7 +827,7 @@ async def user_api_key_auth(
                 # collect information for alerting #
                 ####################################
 
-                user_email: Optional[str] = None
+                user_email = None
                 # Check if the token has any user id information
                 if user_obj is not None:
                     user_email = user_obj.user_email
@@ -863,7 +888,10 @@ async def user_api_key_auth(
                     and max_budget_per_model.get(current_model, None) is not None
                 ):
                     if (
-                        model_spend[0]["model"] == current_model
+                        "model" in model_spend[0]
+                        and model_spend[0].get("model") == current_model
+                        and "_sum" in model_spend[0]
+                        and "spend" in model_spend[0]["_sum"]
                         and model_spend[0]["_sum"]["spend"]
                         >= max_budget_per_model[current_model]
                     ):
@@ -903,16 +931,19 @@ async def user_api_key_auth(
                     )
 
             # Check 8: Additional Common Checks across jwt + key auth
-            _team_obj = LiteLLM_TeamTable(
-                team_id=valid_token.team_id,
-                max_budget=valid_token.team_max_budget,
-                spend=valid_token.team_spend,
-                tpm_limit=valid_token.team_tpm_limit,
-                rpm_limit=valid_token.team_rpm_limit,
-                blocked=valid_token.team_blocked,
-                models=valid_token.team_models,
-                metadata=valid_token.team_metadata,
-            )
+            if valid_token.team_id is not None:
+                _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
+                    team_id=valid_token.team_id,
+                    max_budget=valid_token.team_max_budget,
+                    spend=valid_token.team_spend,
+                    tpm_limit=valid_token.team_tpm_limit,
+                    rpm_limit=valid_token.team_rpm_limit,
+                    blocked=valid_token.team_blocked,
+                    models=valid_token.team_models,
+                    metadata=valid_token.team_metadata,
+                )
+            else:
+                _team_obj = None
 
             user_api_key_cache.set_cache(
                 key=valid_token.team_id, value=_team_obj
@@ -1021,7 +1052,7 @@ async def user_api_key_auth(
                 "/global/predict/spend/logs",
                 "/global/activity",
                 "/health/services",
-            ] + LiteLLMRoutes.info_routes.value
+            ] + LiteLLMRoutes.info_routes.value  # type: ignore
             # check if the current route startswith any of the allowed routes
             if (
                 route is not None
@@ -1082,7 +1113,7 @@ async def user_api_key_auth(
 
         # Log this exception to OTEL
         if open_telemetry_logger is not None:
-            await open_telemetry_logger.async_post_call_failure_hook(
+            await open_telemetry_logger.async_post_call_failure_hook(  # type: ignore
                 original_exception=e,
                 user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
             )

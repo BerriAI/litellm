@@ -94,16 +94,16 @@ class AzureOpenAIConfig(OpenAIConfig):
         top_p: Optional[int] = None,
     ) -> None:
         super().__init__(
-            frequency_penalty,
-            function_call,
-            functions,
-            logit_bias,
-            max_tokens,
-            n,
-            presence_penalty,
-            stop,
-            temperature,
-            top_p,
+            frequency_penalty=frequency_penalty,
+            function_call=function_call,
+            functions=functions,
+            logit_bias=logit_bias,
+            max_tokens=max_tokens,
+            n=n,
+            presence_penalty=presence_penalty,
+            stop=stop,
+            temperature=temperature,
+            top_p=top_p,
         )
 
 

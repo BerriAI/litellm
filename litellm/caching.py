@@ -304,40 +304,25 @@ class RedisCache(BaseCache):
                 f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
             )
 
-    def increment_cache(self, key, value: int, **kwargs) -> int:
+    def increment_cache(
+        self, key, value: int, ttl: Optional[float] = None, **kwargs
+    ) -> int:
         _redis_client = self.redis_client
         start_time = time.time()
         try:
             result = _redis_client.incr(name=key, amount=value)
-            ## LOGGING ##
-            end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    call_type="increment_cache",
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                )
-            )
+
+            if ttl is not None:
+                # check if key already has ttl, if not -> set ttl
+                current_ttl = _redis_client.ttl(key)
+                if current_ttl == -1:
+                    # Key has no expiration
+                    _redis_client.expire(key, ttl)
             return result
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    error=e,
-                    call_type="increment_cache",
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                )
-            )
             verbose_logger.error(
                 "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
@@ -606,12 +591,22 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
-    async def async_increment(self, key, value: float, **kwargs) -> float:
+    async def async_increment(
+        self, key, value: float, ttl: Optional[float] = None, **kwargs
+    ) -> float:
         _redis_client = self.init_async_client()
         start_time = time.time()
         try:
             async with _redis_client as redis_client:
                 result = await redis_client.incrbyfloat(name=key, amount=value)
+
+                if ttl is not None:
+                    # check if key already has ttl, if not -> set ttl
+                    current_ttl = await redis_client.ttl(key)
+                    if current_ttl == -1:
+                        # Key has no expiration
+                        await redis_client.expire(key, ttl)
+
                 ## LOGGING ##
                 end_time = time.time()
                 _duration = end_time - start_time

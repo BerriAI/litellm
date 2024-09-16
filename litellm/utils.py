@@ -76,6 +76,7 @@ from litellm.types.llms.openai import (
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
     CallTypes,
     ChatCompletionDeltaToolCall,
@@ -84,7 +85,6 @@ from litellm.types.utils import (
     Delta,
     Embedding,
     EmbeddingResponse,
-    FileTypes,
     ImageResponse,
     Message,
     ModelInfo,
@@ -120,11 +120,26 @@ with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") 
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
+from concurrent.futures import ThreadPoolExecutor
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+    get_args,
+)
 
 from openai import OpenAIError as OriginalError
 
 from ._logging import verbose_logger
-from .caching import QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
+from .caching import Cache, QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -149,31 +164,6 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
-
-try:
-    from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
-except Exception as e:
-    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
-
-from concurrent.futures import ThreadPoolExecutor
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-    cast,
-    get_args,
-)
-
-from .caching import Cache
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -2339,6 +2329,7 @@ def get_litellm_params(
     text_completion=None,
     azure_ad_token_provider=None,
     user_continue_message=None,
+    base_model=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2365,6 +2356,8 @@ def get_litellm_params(
         "text_completion": text_completion,
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
+        "base_model": base_model
+        or _get_base_model_from_litellm_call_metadata(metadata=metadata),
     }
 
     return litellm_params
@@ -2762,6 +2755,7 @@ def get_optional_params(
     stream_options=None,
     stop=None,
     max_tokens=None,
+    max_completion_tokens=None,
     presence_penalty=None,
     frequency_penalty=None,
     logit_bias=None,
@@ -2839,6 +2833,7 @@ def get_optional_params(
         "stream_options": None,
         "stop": None,
         "max_tokens": None,
+        "max_completion_tokens": None,
         "presence_penalty": None,
         "frequency_penalty": None,
         "logit_bias": None,
@@ -5971,6 +5966,10 @@ def check_valid_key(model: str, api_key: str):
 
 def _should_retry(status_code: int):
     """
+    Retries on 408, 409, 429 and 500 errors.
+
+    Any client error in the 400-499 range that isn't explicitly handled (such as 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, etc.) would not trigger a retry.
+
     Reimplementation of openai's should retry logic, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L639
     """
@@ -6063,11 +6062,11 @@ def _calculate_retry_after(
     max_retries: int,
     response_headers: Optional[httpx.Headers] = None,
     min_timeout: int = 0,
-):
+) -> Union[float, int]:
     retry_after = _get_retry_after_from_exception_header(response_headers)
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
-    if 0 < retry_after <= 60:
+    if retry_after is not None and 0 < retry_after <= 60:
         return retry_after
 
     initial_retry_delay = 0.5
@@ -8150,9 +8149,7 @@ def exception_type(
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
-                    message="{}\n{}".format(
-                        str(original_exception), traceback.format_exc()
-                    ),
+                    message="{} - {}".format(exception_provider, error_str),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=original_exception.request,
@@ -10962,6 +10959,22 @@ def get_logging_id(start_time, response_obj):
         return None
 
 
+def _get_base_model_from_litellm_call_metadata(
+    metadata: Optional[dict],
+) -> Optional[str]:
+    if metadata is None:
+        return None
+
+    if metadata is not None:
+        model_info = metadata.get("model_info", {})
+
+        if model_info is not None:
+            base_model = model_info.get("base_model", None)
+            if base_model is not None:
+                return base_model
+    return None
+
+
 def _get_base_model_from_metadata(model_call_details=None):
     if model_call_details is None:
         return None
@@ -10970,13 +10983,7 @@ def _get_base_model_from_metadata(model_call_details=None):
     if litellm_params is not None:
         metadata = litellm_params.get("metadata", {})
 
-        if metadata is not None:
-            model_info = metadata.get("model_info", {})
-
-            if model_info is not None:
-                base_model = model_info.get("base_model", None)
-                if base_model is not None:
-                    return base_model
+        return _get_base_model_from_litellm_call_metadata(metadata=metadata)
     return None
 
 

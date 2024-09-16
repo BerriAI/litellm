@@ -608,9 +608,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             global_max_parallel_requests = _metadata.get(
                 "global_max_parallel_requests", None
             )
-            user_api_key = (
-                kwargs["litellm_params"].get("metadata", {}).get("user_api_key", None)
-            )
+            user_api_key = _metadata.get("user_api_key", None)
             self.print_verbose(f"user_api_key: {user_api_key}")
             if user_api_key is None:
                 return

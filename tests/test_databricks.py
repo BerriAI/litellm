@@ -37,7 +37,12 @@ def mock_chat_response() -> Dict[str, Any]:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 230, "completion_tokens": 38, "total_tokens": 268},
+        "usage": {
+            "prompt_tokens": 230,
+            "completion_tokens": 38,
+            "total_tokens": 268,
+            "completion_tokens_details": None,
+        },
         "system_fingerprint": None,
     }
 
@@ -191,13 +196,14 @@ def mock_embedding_response() -> Dict[str, Any]:
             "prompt_tokens": 8,
             "total_tokens": 8,
             "completion_tokens": 0,
+            "completion_tokens_details": None,
         },
     }
 
 
 @pytest.mark.parametrize("set_base", [True, False])
 def test_throws_if_only_one_of_api_base_or_api_key_set(monkeypatch, set_base):
-    err_msg = (
+    completions_err_msg = (
         "Databricks API base URL and API key must both be set, or both must be unset"
     )
 
@@ -206,22 +212,26 @@ def test_throws_if_only_one_of_api_base_or_api_key_set(monkeypatch, set_base):
             "DATABRICKS_API_BASE",
             "https://my.workspace.cloud.databricks.com/serving-endpoints",
         )
+        embeddings_err_msg = "A call is being made to LLM Provider but no key is set"
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
+        embeddings_err_msg = (
+            "A call is being made to LLM Provider but no api base is set"
+        )
 
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(
             model="databricks/dbrx-instruct-071224",
             messages={"role": "user", "content": "How are you?"},
         )
-        assert err_msg in str(exc)
+    assert completions_err_msg in str(exc)
 
     with pytest.raises(BadRequestError) as exc:
         litellm.embedding(
             model="databricks/bge-12312",
             input=["Hello", "World"],
         )
-        assert err_msg in str(exc)
+    assert embeddings_err_msg in str(exc)
 
 
 def test_throws_if_api_base_and_api_key_absent_and_databricks_sdk_not_installed(

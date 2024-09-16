@@ -32,7 +32,7 @@ from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -92,6 +92,7 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
+    litellm_parent_otel_span: Optional[Any] = None
     # Step 1: Remove the litellm_parent_otel_span
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
@@ -100,7 +101,7 @@ def safe_deep_copy(data):
     new_data = copy.deepcopy(data)
 
     # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict):
+    if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
@@ -467,7 +468,7 @@ class ProxyLogging:
 
                     # V1 implementation - backwards compatibility
                     if callback.event_hook is None:
-                        if callback.moderation_check == "pre_call":
+                        if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
                         # Main - V2 Guardrails implementation
@@ -960,207 +961,241 @@ class PrismaClient:
         # This is more efficient because it lets us check for all views in one
         # query instead of multiple queries.
         try:
+            expected_views = [
+                "LiteLLM_VerificationTokenView",
+                "MonthlyGlobalSpend",
+                "Last30dKeysBySpend",
+                "Last30dModelsBySpend",
+                "MonthlyGlobalSpendPerKey",
+                "MonthlyGlobalSpendPerUserPerKey",
+                "Last30dTopEndUsersSpend",
+            ]
+            required_view = "LiteLLM_VerificationTokenView"
+            expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             ret = await self.db.query_raw(
-                """
-                    SELECT SUM(1) FROM pg_views
+                f"""
+                WITH existing_views AS (
+                    SELECT viewname
+                    FROM pg_views
                     WHERE schemaname = 'public' AND viewname IN (
-                        'LiteLLM_VerificationTokenView',
-                        'MonthlyGlobalSpend',
-                        'Last30dKeysBySpend',
-                        'Last30dModelsBySpend',
-                        'MonthlyGlobalSpendPerKey',
-                        'MonthlyGlobalSpendPerUserPerKey',
-                        'Last30dTopEndUsersSpend'
+                        {expected_views_str}
                     )
-                    """
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM existing_views) AS view_count,
+                    ARRAY_AGG(viewname) AS view_names
+                FROM existing_views
+                """
             )
-            if ret[0]["sum"] == 8:
-                print("All necessary views exist!")  # noqa
+            expected_total_views = len(expected_views)
+            if ret[0]["view_count"] == expected_total_views:
+                verbose_proxy_logger.info("All necessary views exist!")
                 return
-        except Exception:
-            pass
+            else:
+                ## check if required view exists ##
+                if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
+                    await self.health_check()  # make sure we can connect to db
+                    await self.db.execute_raw(
+                        """
+                            CREATE VIEW "LiteLLM_VerificationTokenView" AS
+                            SELECT
+                            v.*,
+                            t.spend AS team_spend,
+                            t.max_budget AS team_max_budget,
+                            t.tpm_limit AS team_tpm_limit,
+                            t.rpm_limit AS team_rpm_limit
+                            FROM "LiteLLM_VerificationToken" v
+                            LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
+                        """
+                    )
 
-        try:
-            # Try to select one row from the view
-            await self.db.query_raw(
-                """SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1"""
-            )
-            print("LiteLLM_VerificationTokenView Exists!")  # noqa
+                    verbose_proxy_logger.info(
+                        "LiteLLM_VerificationTokenView Created in DB!"
+                    )
+                else:
+                    # don't block execution if these views are missing
+                    # Convert lists to sets for efficient difference calculation
+                    ret_view_names_set = (
+                        set(ret[0]["view_names"]) if ret[0]["view_names"] else set()
+                    )
+                    expected_views_set = set(expected_views)
+                    # Find missing views
+                    missing_views = expected_views_set - ret_view_names_set
+
+                    verbose_proxy_logger.warning(
+                        "\n\n\033[93mNot all views exist in db, needed for UI 'Usage' tab. Missing={}.\nRun 'create_views.py' from https://github.com/BerriAI/litellm/tree/main/db_scripts to create missing views.\033[0m\n".format(
+                            missing_views
+                        )
+                    )
+
         except Exception as e:
+            raise
+
+            # try:
+            #     # Try to select one row from the view
+            #     await self.db.query_raw(
+            #         """SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1"""
+            #     )
+            #     print("LiteLLM_VerificationTokenView Exists!")  # noqa
+            # except Exception as e:
             # If an error occurs, the view does not exist, so create it
-            value = await self.health_check()
-            await self.db.execute_raw(
-                """
-                    CREATE VIEW "LiteLLM_VerificationTokenView" AS
-                    SELECT 
-                    v.*, 
-                    t.spend AS team_spend, 
-                    t.max_budget AS team_max_budget, 
-                    t.tpm_limit AS team_tpm_limit, 
-                    t.rpm_limit AS team_rpm_limit
-                    FROM "LiteLLM_VerificationToken" v
-                    LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                """
-            )
 
-            print("LiteLLM_VerificationTokenView Created!")  # noqa
+        # try:
+        #     await self.db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
+        #     print("MonthlyGlobalSpend Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #     CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS
+        #     SELECT
+        #     DATE("startTime") AS date,
+        #     SUM("spend") AS spend
+        #     FROM
+        #     "LiteLLM_SpendLogs"
+        #     WHERE
+        #     "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        #     GROUP BY
+        #     DATE("startTime");
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-        try:
-            await self.db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
-            print("MonthlyGlobalSpend Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-            CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
-            SELECT
-            DATE("startTime") AS date, 
-            SUM("spend") AS spend 
-            FROM 
-            "LiteLLM_SpendLogs" 
-            WHERE 
-            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
-            GROUP BY 
-            DATE("startTime");
-            """
-            await self.db.execute_raw(query=sql_query)
+        #     print("MonthlyGlobalSpend Created!")  # noqa
 
-            print("MonthlyGlobalSpend Created!")  # noqa
+        # try:
+        #     await self.db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
+        #     print("Last30dKeysBySpend Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #     CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
+        #     SELECT
+        #     L."api_key",
+        #     V."key_alias",
+        #     V."key_name",
+        #     SUM(L."spend") AS total_spend
+        #     FROM
+        #     "LiteLLM_SpendLogs" L
+        #     LEFT JOIN
+        #     "LiteLLM_VerificationToken" V
+        #     ON
+        #     L."api_key" = V."token"
+        #     WHERE
+        #     L."startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        #     GROUP BY
+        #     L."api_key", V."key_alias", V."key_name"
+        #     ORDER BY
+        #     total_spend DESC;
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-        try:
-            await self.db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
-            print("Last30dKeysBySpend Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-            CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
-            SELECT 
-            L."api_key", 
-            V."key_alias",
-            V."key_name",
-            SUM(L."spend") AS total_spend
-            FROM
-            "LiteLLM_SpendLogs" L
-            LEFT JOIN 
-            "LiteLLM_VerificationToken" V
-            ON
-            L."api_key" = V."token"
-            WHERE
-            L."startTime" >= (CURRENT_DATE - INTERVAL '30 days')
-            GROUP BY
-            L."api_key", V."key_alias", V."key_name"
-            ORDER BY
-            total_spend DESC;
-            """
-            await self.db.execute_raw(query=sql_query)
+        #     print("Last30dKeysBySpend Created!")  # noqa
 
-            print("Last30dKeysBySpend Created!")  # noqa
+        # try:
+        #     await self.db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
+        #     print("Last30dModelsBySpend Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #     CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
+        #     SELECT
+        #     "model",
+        #     SUM("spend") AS total_spend
+        #     FROM
+        #     "LiteLLM_SpendLogs"
+        #     WHERE
+        #     "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        #     AND "model" != ''
+        #     GROUP BY
+        #     "model"
+        #     ORDER BY
+        #     total_spend DESC;
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-        try:
-            await self.db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
-            print("Last30dModelsBySpend Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-            CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
-            SELECT
-            "model",
-            SUM("spend") AS total_spend
-            FROM
-            "LiteLLM_SpendLogs"
-            WHERE
-            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
-            AND "model" != ''
-            GROUP BY
-            "model"
-            ORDER BY
-            total_spend DESC;
-            """
-            await self.db.execute_raw(query=sql_query)
+        #     print("Last30dModelsBySpend Created!")  # noqa
+        # try:
+        #     await self.db.query_raw(
+        #         """SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1"""
+        #     )
+        #     print("MonthlyGlobalSpendPerKey Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #         CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS
+        #         SELECT
+        #         DATE("startTime") AS date,
+        #         SUM("spend") AS spend,
+        #         api_key as api_key
+        #         FROM
+        #         "LiteLLM_SpendLogs"
+        #         WHERE
+        #         "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        #         GROUP BY
+        #         DATE("startTime"),
+        #         api_key;
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-            print("Last30dModelsBySpend Created!")  # noqa
-        try:
-            await self.db.query_raw(
-                """SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1"""
-            )
-            print("MonthlyGlobalSpendPerKey Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-                CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
-                SELECT
-                DATE("startTime") AS date, 
-                SUM("spend") AS spend,
-                api_key as api_key
-                FROM 
-                "LiteLLM_SpendLogs" 
-                WHERE 
-                "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
-                GROUP BY 
-                DATE("startTime"),
-                api_key;
-            """
-            await self.db.execute_raw(query=sql_query)
+        #     print("MonthlyGlobalSpendPerKey Created!")  # noqa
+        # try:
+        #     await self.db.query_raw(
+        #         """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
+        #     )
+        #     print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #         CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS
+        #         SELECT
+        #         DATE("startTime") AS date,
+        #         SUM("spend") AS spend,
+        #         api_key as api_key,
+        #         "user" as "user"
+        #         FROM
+        #         "LiteLLM_SpendLogs"
+        #         WHERE
+        #         "startTime" >= (CURRENT_DATE - INTERVAL '20 days')
+        #         GROUP BY
+        #         DATE("startTime"),
+        #         "user",
+        #         api_key;
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-            print("MonthlyGlobalSpendPerKey Created!")  # noqa
-        try:
-            await self.db.query_raw(
-                """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
-            )
-            print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-                CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
-                SELECT
-                DATE("startTime") AS date, 
-                SUM("spend") AS spend,
-                api_key as api_key,
-                "user" as "user"
-                FROM 
-                "LiteLLM_SpendLogs" 
-                WHERE 
-                "startTime" >= (CURRENT_DATE - INTERVAL '20 days')
-                GROUP BY 
-                DATE("startTime"),
-                "user",
-                api_key;
-            """
-            await self.db.execute_raw(query=sql_query)
+        #     print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
 
-            print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
+        # try:
+        #     await self.db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
+        #     print("DailyTagSpend Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #     CREATE OR REPLACE VIEW DailyTagSpend AS
+        #     SELECT
+        #         jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        #         DATE(s."startTime") AS spend_date,
+        #         COUNT(*) AS log_count,
+        #         SUM(spend) AS total_spend
+        #     FROM "LiteLLM_SpendLogs" s
+        #     GROUP BY individual_request_tag, DATE(s."startTime");
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-        try:
-            await self.db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
-            print("DailyTagSpend Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-            CREATE OR REPLACE VIEW DailyTagSpend AS
-            SELECT
-                jsonb_array_elements_text(request_tags) AS individual_request_tag,
-                DATE(s."startTime") AS spend_date,
-                COUNT(*) AS log_count,
-                SUM(spend) AS total_spend
-            FROM "LiteLLM_SpendLogs" s
-            GROUP BY individual_request_tag, DATE(s."startTime");
-            """
-            await self.db.execute_raw(query=sql_query)
+        #     print("DailyTagSpend Created!")  # noqa
 
-            print("DailyTagSpend Created!")  # noqa
+        # try:
+        #     await self.db.query_raw(
+        #         """SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1"""
+        #     )
+        #     print("Last30dTopEndUsersSpend Exists!")  # noqa
+        # except Exception as e:
+        #     sql_query = """
+        #     CREATE VIEW "Last30dTopEndUsersSpend" AS
+        #     SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
+        #     FROM "LiteLLM_SpendLogs"
+        #     WHERE end_user <> '' AND end_user <> user
+        #     AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+        #     GROUP BY end_user
+        #     ORDER BY total_spend DESC
+        #     LIMIT 100;
+        #     """
+        #     await self.db.execute_raw(query=sql_query)
 
-        try:
-            await self.db.query_raw(
-                """SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1"""
-            )
-            print("Last30dTopEndUsersSpend Exists!")  # noqa
-        except Exception as e:
-            sql_query = """
-            CREATE VIEW "Last30dTopEndUsersSpend" AS
-            SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
-            FROM "LiteLLM_SpendLogs"
-            WHERE end_user <> '' AND end_user <> user
-            AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
-            GROUP BY end_user
-            ORDER BY total_spend DESC
-            LIMIT 100;
-            """
-            await self.db.execute_raw(query=sql_query)
-
-            print("Last30dTopEndUsersSpend Created!")  # noqa
+        #     print("Last30dTopEndUsersSpend Created!")  # noqa
 
         return
 
@@ -1264,6 +1299,7 @@ class PrismaClient:
         verbose_proxy_logger.debug(
             f"PrismaClient: get_data - args_passed_in: {args_passed_in}"
         )
+        hashed_token: Optional[str] = None
         try:
             response: Any = None
             if (token is not None and table_name is None) or (
@@ -1278,7 +1314,7 @@ class PrismaClient:
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
-                if query_type == "find_unique":
+                if query_type == "find_unique" and hashed_token is not None:
                     if token is None:
                         raise HTTPException(
                             status_code=400,
@@ -1679,7 +1715,7 @@ class PrismaClient:
                     updated_data = json.dumps(updated_data)
                     updated_table_row = self.db.litellm_config.upsert(
                         where={"param_name": k},
-                        data={
+                        data={  # type: ignore
                             "create": {"param_name": k, "param_value": updated_data},
                             "update": {"param_value": updated_data},
                         },
@@ -2233,11 +2269,13 @@ class DBClient:
         """
         For closing connection on server shutdown
         """
-        return await self.db.disconnect()
+        return await self.db.disconnect()  # type: ignore
 
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
+    instance_name: Optional[str] = None
+    module_name: Optional[str] = None
     try:
         print_verbose(f"value: {value}")
         # Split the path by dots to separate module from instance
@@ -2270,7 +2308,12 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         return instance
     except ImportError as e:
         # Re-raise the exception with a user-friendly message
-        raise ImportError(f"Could not import {instance_name} from {module_name}") from e
+        if instance_name and module_name:
+            raise ImportError(
+                f"Could not import {instance_name} from {module_name}"
+            ) from e
+        else:
+            raise e
     except Exception as e:
         raise e
 
@@ -2336,12 +2379,12 @@ async def send_email(receiver_email, subject, html):
 
     try:
         # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:  # type: ignore
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account
-            server.login(smtp_username, smtp_password)
+            server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
             server.send_message(email_message)
@@ -2898,10 +2941,10 @@ async def update_spend(
                     )
                 break
             except httpx.ReadTimeout:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                if i >= n_retry_times:  # type: ignore
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
+                await asyncio.sleep(2**i)  # type: ignore
             except Exception as e:
                 import traceback
 
@@ -3012,10 +3055,10 @@ def get_error_message_str(e: Exception) -> str:
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
         elif hasattr(e, "message"):
-            if isinstance(e.message, "str"):
-                error_message = e.message
-            elif isinstance(e.message, dict):
-                error_message = json.dumps(e.message)
+            if isinstance(e.message, "str"):  # type: ignore
+                error_message = e.message  # type: ignore
+            elif isinstance(e.message, dict):  # type: ignore
+                error_message = json.dumps(e.message)  # type: ignore
         else:
             error_message = str(e)
     else:

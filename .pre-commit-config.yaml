@@ -1,9 +1,9 @@
 repos:
 -   repo: local
     hooks:
-    -   id: mypy
-        name: mypy
-        entry: python3 -m mypy --ignore-missing-imports
+    -   id: pyright
+        name: pyright
+        entry: pyright
         language: system
         types: [python]
         files: ^litellm/

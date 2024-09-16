@@ -25,9 +25,6 @@ class RerankResponse(BaseModel):
     meta: dict  # Contains api_version and billed_units
     _hidden_params: dict = {}
 
-    class Config:
-        underscore_attrs_are_private = True
-
     def __getitem__(self, key):
         return self.__dict__[key]
 

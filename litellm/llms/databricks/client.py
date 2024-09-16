@@ -84,7 +84,7 @@ class DatabricksModelServingClientWrapper:
         endpoint_name: str,
         messages: List[Dict[str, str]],
         optional_params: Dict[str, Any],
-    ):
+    ) -> Any:
         """
         Base method for sending a buffered / standard chat completion request to a Databricks Model
         Serving endpoint and retrieving a response. This method should be implemented by subclasses.
@@ -96,7 +96,7 @@ class DatabricksModelServingClientWrapper:
         endpoint_name: str,
         messages: List[Dict[str, str]],
         optional_params: Dict[str, Any],
-    ):
+    ) -> Any:
         """
         Base method for sending an streaming chat completion request to a Databricks Model
         Serving endpoint and retrieving a response. This method should be implemented by subclasses.
@@ -359,10 +359,15 @@ class DatabricksModelServingHandlerWrapper(DatabricksModelServingClientWrapper):
             **optional_params,
         }
 
-    def _handle_errors(self, exception: Exception, response: Optional[httpx.Response]):
+    def _handle_errors(
+        self,
+        exception: Union[httpx.HTTPStatusError, httpx.TimeoutException, Exception],
+        response: Optional[httpx.Response],
+    ):
         if isinstance(exception, httpx.HTTPStatusError) and response is not None:
+            status_exception: httpx.HTTPStatusError = exception
             raise DatabricksError(
-                status_code=exception.response.status_code, message=response.text
+                status_code=status_exception.response.status_code, message=response.text
             )
         elif isinstance(exception, httpx.TimeoutException):
             raise DatabricksError(status_code=408, message="Timeout error occurred.")
@@ -382,16 +387,16 @@ class DatabricksModelServingHTTPHandlerWrapper(DatabricksModelServingHandlerWrap
         endpoint_name: str,
         messages: List[Dict[str, str]],
         optional_params: Dict[str, Any],
-    ):
+    ) -> Any:
         data = self._prepare_completions_data(endpoint_name, messages, optional_params)
         response = None
         try:
-            response = self.http_handler.post(
+            response: Optional[httpx.Response] = self.http_handler.post(
                 self._get_api_base(endpoint_type="chat_completions"),
                 headers=self._build_headers(),
                 data=json.dumps(data),
             )
-            if isinstance(response, httpx.Response):
+            if response is not None:
                 response.raise_for_status()
                 return ModelResponse(**response.json())
             else:
@@ -410,7 +415,7 @@ class DatabricksModelServingHTTPHandlerWrapper(DatabricksModelServingHandlerWrap
         endpoint_name: str,
         messages: List[Dict[str, str]],
         optional_params: Dict[str, Any],
-    ):
+    ) -> Any:
         data = self._prepare_completions_data(endpoint_name, messages, optional_params)
 
         def make_call(client: HTTPHandler):
@@ -457,7 +462,7 @@ class DatabricksModelServingAsyncHTTPHandlerWrapper(
         endpoint_name: str,
         messages: List[Dict[str, str]],
         optional_params: Dict[str, Any],
-    ):
+    ) -> Any:
         data = self._prepare_completions_data(endpoint_name, messages, optional_params)
         response = None
         try:
@@ -476,7 +481,7 @@ class DatabricksModelServingAsyncHTTPHandlerWrapper(
         endpoint_name: str,
         messages: List[Dict[str, str]],
         optional_params: Dict[str, Any],
-    ):
+    ) -> Any:
         data = self._prepare_completions_data(endpoint_name, messages, optional_params)
 
         async def make_call(client: AsyncHTTPHandler):

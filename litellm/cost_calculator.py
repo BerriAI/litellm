@@ -829,18 +829,11 @@ def response_cost_calculator(
         )
         return None
     except Exception as e:
-        if litellm.suppress_debug_info:  # allow cli tools to suppress this information.
-            verbose_logger.debug(
-                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                    str(e), traceback.format_exc()
-                )
+        verbose_logger.debug(
+            "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
+                str(e), traceback.format_exc()
             )
-        else:
-            verbose_logger.warning(
-                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                    str(e), traceback.format_exc()
-                )
-            )
+        )
         return None
 
 
