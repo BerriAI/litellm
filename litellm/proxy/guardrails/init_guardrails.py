@@ -1,10 +1,11 @@
 import importlib
 import traceback
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, RootModel
 
 import litellm
+from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 
@@ -16,7 +17,6 @@ from litellm.types.guardrails import (
     GuardrailItemSpec,
     LakeraCategoryThresholds,
     LitellmParams,
-    guardrailConfig,
 )
 
 all_guardrails: List[GuardrailItem] = []
@@ -98,18 +98,13 @@ def init_guardrails_v2(
         # Init litellm params for guardrail
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
-        litellm_params = LitellmParams(
-            guardrail=litellm_params_data["guardrail"],
-            mode=litellm_params_data["mode"],
-            api_key=litellm_params_data.get("api_key"),
-            api_base=litellm_params_data.get("api_base"),
-            guardrailIdentifier=litellm_params_data.get("guardrailIdentifier"),
-            guardrailVersion=litellm_params_data.get("guardrailVersion"),
-            output_parse_pii=litellm_params_data.get("output_parse_pii"),
-            presidio_ad_hoc_recognizers=litellm_params_data.get(
-                "presidio_ad_hoc_recognizers"
-            ),
-        )
+
+        _litellm_params_kwargs = {
+            k: litellm_params_data[k] if k in litellm_params_data else None
+            for k in LitellmParams.__annotations__.keys()
+        }
+
+        litellm_params = LitellmParams(**_litellm_params_kwargs)  # type: ignore
 
         if (
             "category_thresholds" in litellm_params_data
@@ -122,15 +117,11 @@ def init_guardrails_v2(
 
         if litellm_params["api_key"]:
             if litellm_params["api_key"].startswith("os.environ/"):
-                litellm_params["api_key"] = litellm.get_secret(
-                    litellm_params["api_key"]
-                )
+                litellm_params["api_key"] = str(get_secret(litellm_params["api_key"]))  # type: ignore
 
         if litellm_params["api_base"]:
             if litellm_params["api_base"].startswith("os.environ/"):
-                litellm_params["api_base"] = litellm.get_secret(
-                    litellm_params["api_base"]
-                )
+                litellm_params["api_base"] = str(get_secret(litellm_params["api_base"]))  # type: ignore
 
         # Init guardrail CustomLoggerClass
         if litellm_params["guardrail"] == "aporia":
@@ -182,6 +173,7 @@ def init_guardrails_v2(
                 presidio_ad_hoc_recognizers=litellm_params[
                     "presidio_ad_hoc_recognizers"
                 ],
+                mock_redacted_text=litellm_params.get("mock_redacted_text") or None,
             )
 
             if litellm_params["output_parse_pii"] is True:

@@ -4,6 +4,11 @@ import litellm
 
 
 class TraceloopLogger:
+    """
+    WARNING: DEPRECATED
+    Use the OpenTelemetry standard integration instead
+    """
+
     def __init__(self):
         try:
             from traceloop.sdk.tracing.tracing import TracerWrapper
