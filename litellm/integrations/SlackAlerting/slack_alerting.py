@@ -1605,6 +1605,9 @@ Model Info:
 
         :param time_range: A string specifying the time range, e.g., "1d", "7d", "30d"
         """
+        if self.alerting is None or "spend_reports" not in self.alert_types:
+            return
+
         try:
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
                 _get_spend_report_for_time_range,

@@ -226,7 +226,6 @@ from litellm.proxy.utils import (
     hash_token,
     log_to_opentelemetry,
     reset_budget,
-    send_email,
     update_spend,
 )
 from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (

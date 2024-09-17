@@ -93,6 +93,7 @@ def safe_deep_copy(data):
         return data
 
     # Step 1: Remove the litellm_parent_otel_span
+    litellm_parent_otel_span: Optional[Any] = None
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
@@ -100,7 +101,7 @@ def safe_deep_copy(data):
     new_data = copy.deepcopy(data)
 
     # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict):
+    if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
@@ -467,7 +468,7 @@ class ProxyLogging:
 
                     # V1 implementation - backwards compatibility
                     if callback.event_hook is None:
-                        if callback.moderation_check == "pre_call":
+                        if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
                         # Main - V2 Guardrails implementation
@@ -886,7 +887,12 @@ class PrismaClient:
     org_list_transactons: dict = {}
     spend_log_transactions: List = []
 
-    def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
+    def __init__(
+        self,
+        database_url: str,
+        proxy_logging_obj: ProxyLogging,
+        http_client: Optional[Any] = None,
+    ):
         verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
@@ -917,7 +923,10 @@ class PrismaClient:
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
-        self.db = Prisma()  # Client to connect to Prisma db
+        if http_client is not None:
+            self.db = Prisma(http=http_client)
+        else:
+            self.db = Prisma()  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
@@ -1302,6 +1311,7 @@ class PrismaClient:
                 table_name is not None and table_name == "key"
             ):
                 # check if plain text or hash
+                hashed_token: Optional[str] = None
                 if token is not None:
                     if isinstance(token, str):
                         hashed_token = token
@@ -1310,7 +1320,7 @@ class PrismaClient:
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
-                if query_type == "find_unique":
+                if query_type == "find_unique" and hashed_token is not None:
                     if token is None:
                         raise HTTPException(
                             status_code=400,
@@ -1710,9 +1720,9 @@ class PrismaClient:
                     updated_data = v
                     updated_data = json.dumps(updated_data)
                     updated_table_row = self.db.litellm_config.upsert(
-                        where={"param_name": k},
+                        where={"param_name": k},  # type: ignore
                         data={
-                            "create": {"param_name": k, "param_value": updated_data},
+                            "create": {"param_name": k, "param_value": updated_data},  # type: ignore
                             "update": {"param_value": updated_data},
                         },
                     )
@@ -2265,11 +2275,13 @@ class DBClient:
         """
         For closing connection on server shutdown
         """
-        return await self.db.disconnect()
+        return await self.db.disconnect()  # type: ignore
 
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
+    module_name: Optional[str] = None
+    instance_name: Optional[str] = None
     try:
         print_verbose(f"value: {value}")
         # Split the path by dots to separate module from instance
@@ -2368,12 +2380,12 @@ async def send_email(receiver_email, subject, html):
 
     try:
         # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:  # type: ignore
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account
-            server.login(smtp_username, smtp_password)
+            server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
             server.send_message(email_message)
@@ -2930,10 +2942,10 @@ async def update_spend(
                     )
                 break
             except httpx.ReadTimeout:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
+                if i >= n_retry_times:  # type: ignore
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
+                await asyncio.sleep(2**i)  # type: ignore
             except Exception as e:
                 import traceback
 
@@ -3044,10 +3056,10 @@ def get_error_message_str(e: Exception) -> str:
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
         elif hasattr(e, "message"):
-            if isinstance(e.message, "str"):
-                error_message = e.message
-            elif isinstance(e.message, dict):
-                error_message = json.dumps(e.message)
+            if isinstance(e.message, "str"):  # type: ignore
+                error_message = e.message  # type: ignore
+            elif isinstance(e.message, dict):  # type: ignore
+                error_message = json.dumps(e.message)  # type: ignore
         else:
             error_message = str(e)
     else:
