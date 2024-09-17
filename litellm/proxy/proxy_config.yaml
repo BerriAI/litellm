@@ -31,9 +31,8 @@ general_settings:
       "os.environ/SLACK_WEBHOOK_URL_2",
     ],
   }
-  key_management_system: "azure_key_vault"
 
 
 litellm_settings:
-  success_callback: ["prometheus"]
+  callbacks: ["gcs_bucket"]
 
