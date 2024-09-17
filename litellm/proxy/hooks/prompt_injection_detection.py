@@ -14,6 +14,7 @@ from difflib import SequenceMatcher
 from typing import List, Literal, Optional
 
 from fastapi import HTTPException
+from typing_extensions import overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -204,7 +205,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 and self.prompt_injection_params is not None
                 and self.prompt_injection_params.reject_as_response
             ):
-                return e.detail["error"]  # type: ignore
+                return e.detail.get("error")
             raise e
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -224,13 +225,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "moderation",
             "audio_transcription",
         ],
-    ):
+    ) -> Optional[bool]:
         self.print_verbose(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
         )
 
         if self.prompt_injection_params is None:
-            return
+            return None
 
         formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
         is_prompt_attack = False

@@ -94,6 +94,7 @@ def safe_deep_copy(data):
 
     litellm_parent_otel_span: Optional[Any] = None
     # Step 1: Remove the litellm_parent_otel_span
+    litellm_parent_otel_span = None
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
@@ -520,13 +521,7 @@ class ProxyLogging:
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
-        alert_type: Literal[
-            "llm_exceptions",
-            "llm_too_slow",
-            "llm_requests_hanging",
-            "budget_alerts",
-            "db_exceptions",
-        ],
+        alert_type: AlertType,
         request_data: Optional[dict] = None,
     ):
         """
@@ -1306,6 +1301,7 @@ class PrismaClient:
                 table_name is not None and table_name == "key"
             ):
                 # check if plain text or hash
+                hashed_token = None
                 if token is not None:
                     if isinstance(token, str):
                         hashed_token = token
@@ -1321,7 +1317,7 @@ class PrismaClient:
                             detail={"error": f"No token passed in. Token={token}"},
                         )
                     response = await self.db.litellm_verificationtoken.find_unique(
-                        where={"token": hashed_token},
+                        where={"token": hashed_token},  # type: ignore
                         include={"litellm_budget_table": True},
                     )
                     if response is not None:
@@ -1715,8 +1711,8 @@ class PrismaClient:
                     updated_data = json.dumps(updated_data)
                     updated_table_row = self.db.litellm_config.upsert(
                         where={"param_name": k},
-                        data={  # type: ignore
-                            "create": {"param_name": k, "param_value": updated_data},
+                        data={
+                            "create": {"param_name": k, "param_value": updated_data},  # type: ignore
                             "update": {"param_value": updated_data},
                         },
                     )
@@ -2269,13 +2265,15 @@ class DBClient:
         """
         For closing connection on server shutdown
         """
-        return await self.db.disconnect()  # type: ignore
+        if self.db is not None:
+            return await self.db.disconnect()  # type: ignore
+        return asyncio.sleep(0)  # Return a dummy coroutine if self.db is None
 
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
-    instance_name: Optional[str] = None
-    module_name: Optional[str] = None
+    module_name = value
+    instance_name = None
     try:
         print_verbose(f"value: {value}")
         # Split the path by dots to separate module from instance
@@ -2373,6 +2371,15 @@ async def send_email(receiver_email, subject, html):
     verbose_proxy_logger.debug(
         "sending email from %s to %s", sender_email, receiver_email
     )
+
+    if smtp_host is None:
+        raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
+
+    if smtp_username is None:
+        raise ValueError("Trying to use SMTP, but SMTP_USERNAME is not set")
+
+    if smtp_password is None:
+        raise ValueError("Trying to use SMTP, but SMTP_PASSWORD is not set")
 
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
@@ -2566,6 +2573,7 @@ async def update_spend(
     spend_logs: list,
     """
     n_retry_times = 3
+    i = None
     ### UPDATE USER TABLE ###
     if len(prisma_client.user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
@@ -2941,7 +2949,9 @@ async def update_spend(
                     )
                 break
             except httpx.ReadTimeout:
-                if i >= n_retry_times:  # type: ignore
+                if i is None:
+                    i = 0
+                if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
                 await asyncio.sleep(2**i)  # type: ignore
@@ -3055,10 +3065,11 @@ def get_error_message_str(e: Exception) -> str:
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
         elif hasattr(e, "message"):
-            if isinstance(e.message, "str"):  # type: ignore
-                error_message = e.message  # type: ignore
-            elif isinstance(e.message, dict):  # type: ignore
-                error_message = json.dumps(e.message)  # type: ignore
+            _error = getattr(e, "message", None)
+            if isinstance(_error, str):
+                error_message = _error
+            elif isinstance(_error, dict):
+                error_message = json.dumps(_error)
         else:
             error_message = str(e)
     else:
