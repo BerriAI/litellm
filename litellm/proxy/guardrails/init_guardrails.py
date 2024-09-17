@@ -1,10 +1,11 @@
 import importlib
 import traceback
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, RootModel
 
 import litellm
+from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 
@@ -116,11 +117,11 @@ def init_guardrails_v2(
 
         if litellm_params["api_key"]:
             if litellm_params["api_key"].startswith("os.environ/"):
-                litellm_params["api_key"] = get_secret(litellm_params["api_key"])  # type: ignore
+                litellm_params["api_key"] = str(get_secret(litellm_params["api_key"]))  # type: ignore
 
         if litellm_params["api_base"]:
             if litellm_params["api_base"].startswith("os.environ/"):
-                litellm_params["api_base"] = get_secret(litellm_params["api_base"])  # type: ignore
+                litellm_params["api_base"] = str(get_secret(litellm_params["api_base"]))  # type: ignore
 
         # Init guardrail CustomLoggerClass
         if litellm_params["guardrail"] == "aporia":
