@@ -2419,6 +2419,7 @@ def get_standard_logging_object_payload(
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            requester_metadata=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
