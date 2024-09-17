@@ -1309,7 +1309,6 @@ class PrismaClient:
                 table_name is not None and table_name == "key"
             ):
                 # check if plain text or hash
-                hashed_token: Optional[str] = None
                 if token is not None:
                     if isinstance(token, str):
                         hashed_token = token
