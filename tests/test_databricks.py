@@ -30,7 +30,12 @@ def mock_chat_response() -> Dict[str, Any]:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 230, "completion_tokens": 38, "total_tokens": 268},
+        "usage": {
+            "prompt_tokens": 230,
+            "completion_tokens": 38,
+            "completion_tokens_details": None,
+            "total_tokens": 268,
+        },
         "system_fingerprint": None,
     }
 
@@ -184,21 +189,27 @@ def mock_embedding_response() -> Dict[str, Any]:
             "prompt_tokens": 8,
             "total_tokens": 8,
             "completion_tokens": 0,
+            "completion_tokens_details": None,
         },
     }
 
 
 @pytest.mark.parametrize("set_base", [True, False])
-def test_throws_if_only_one_of_api_base_or_api_key_set(monkeypatch, set_base):
+def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
+    monkeypatch, set_base
+):
+    # Simulate that the databricks SDK is not installed
+    monkeypatch.setitem(sys.modules, "databricks.sdk", None)
+
+    err_msg = "the Databricks base URL and API key are not set"
+
     if set_base:
         monkeypatch.setenv(
             "DATABRICKS_API_BASE",
             "https://my.workspace.cloud.databricks.com/serving-endpoints",
         )
-        err_msg = "A call is being made to LLM Provider but no key is set"
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
-        err_msg = "A call is being made to LLM Provider but no api base is set"
 
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(
