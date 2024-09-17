@@ -38,6 +38,9 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE as runtime
 
+# Update dependencies and clean up - handles debian security issue
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
+
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .
