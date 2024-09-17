@@ -14,7 +14,6 @@ import binascii
 import copy
 import datetime
 import hashlib
-import imghdr
 import inspect
 import io
 import itertools
@@ -1809,6 +1808,25 @@ def calculate_tiles_needed(
     total_tiles = tiles_across * tiles_down
     return total_tiles
 
+def get_image_type(image_data: bytes) -> Union[str, None]:
+    """ take an image (really only the first ~100 bytes max are needed)
+    and return 'png' 'gif' 'jpeg' 'heic' or None. method added to
+    allow deprecation of imghdr in 3.13"""
+
+    if image_data[0:8] == b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a":
+        return "png"
+
+    if image_data[0:4] == b"GIF8" and image_data[5:6] == b"a":
+        return "gif"
+
+    if image_data[0:3] == b"\xff\xd8\xff":
+        return "jpeg"
+
+    if image_data[4:8] == b"ftyp":
+        return "heic"
+
+    return None
+
 
 def get_image_dimensions(data):
     img_data = None
@@ -1824,7 +1842,7 @@ def get_image_dimensions(data):
         header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
-    img_type = imghdr.what(None, h=img_data)
+    img_type = get_image_type(img_data)
 
     if img_type == "png":
         w, h = struct.unpack(">LL", img_data[16:24])
