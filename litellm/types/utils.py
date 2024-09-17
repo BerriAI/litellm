@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes
+from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
 from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
@@ -1262,10 +1262,14 @@ class StandardLoggingModelInformation(TypedDict):
     model_map_value: Optional[ModelInfo]
 
 
+StandardLoggingPayloadStatus = Literal["success", "failure"]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
     response_cost: float
+    status: StandardLoggingPayloadStatus
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -1286,6 +1290,7 @@ class StandardLoggingPayload(TypedDict):
     requester_ip_address: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
+    error_str: Optional[str]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
 

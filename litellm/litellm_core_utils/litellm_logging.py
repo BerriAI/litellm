@@ -43,6 +43,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -668,6 +669,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             logging_obj=self,
+                            status="success",
                         )
                     )
                 elif isinstance(result, dict):  # pass-through endpoints
@@ -679,6 +681,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             logging_obj=self,
+                            status="success",
                         )
                     )
             else:  # streaming chunks + image gen.
@@ -762,6 +765,7 @@ class Logging:
                         start_time=start_time,
                         end_time=end_time,
                         logging_obj=self,
+                        status="success",
                     )
                 )
             if self.dynamic_success_callbacks is not None and isinstance(
@@ -1390,6 +1394,7 @@ class Logging:
                     start_time=start_time,
                     end_time=end_time,
                     logging_obj=self,
+                    status="success",
                 )
             )
         if self.dynamic_async_success_callbacks is not None and isinstance(
@@ -1634,6 +1639,20 @@ class Logging:
                 self.model_call_details["litellm_params"].get("metadata", {}) or {}
             )
             metadata.update(exception.headers)
+
+        ## STANDARDIZED LOGGING PAYLOAD
+
+        self.model_call_details["standard_logging_object"] = (
+            get_standard_logging_object_payload(
+                kwargs=self.model_call_details,
+                init_response_obj={},
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=self,
+                status="failure",
+                error_str=str(exception),
+            )
+        )
         return start_time, end_time
 
     async def special_failure_handlers(self, exception: Exception):
@@ -2336,10 +2355,12 @@ def is_valid_sha256_hash(value: str) -> bool:
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
-    init_response_obj: Any,
+    init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,
     end_time: dt_object,
     logging_obj: Logging,
+    status: StandardLoggingPayloadStatus,
+    error_str: Optional[str] = None,
 ) -> Optional[StandardLoggingPayload]:
     try:
         if kwargs is None:
@@ -2486,6 +2507,7 @@ def get_standard_logging_object_payload(
             id=str(id),
             call_type=call_type or "",
             cache_hit=cache_hit,
+            status=status,
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
             endTime=end_time_float,
@@ -2510,6 +2532,7 @@ def get_standard_logging_object_payload(
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
+            error_str=error_str,
         )
 
         verbose_logger.debug(

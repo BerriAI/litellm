@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.utils import StandardLoggingPayload
 
 
 class LangsmithInputs(BaseModel):
@@ -75,6 +76,12 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_project=langsmith_project,
             langsmith_base_url=langsmith_base_url,
         )
+        self.sampling_rate: float = (
+            float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
+            and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
+            else 1.0
+        )
         self.langsmith_default_run_name = os.getenv(
             "LANGSMITH_DEFAULT_RUN_NAME", "LLMRun"
         )
@@ -126,120 +133,113 @@ class LangsmithLogger(CustomBatchLogger):
         )
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
-        import datetime
+        import json
         from datetime import datetime as dt
-        from datetime import timezone
-
-        metadata = kwargs.get("litellm_params", {}).get("metadata", {}) or {}
-        new_metadata = {}
-        for key, value in metadata.items():
-            if (
-                isinstance(value, list)
-                or isinstance(value, str)
-                or isinstance(value, int)
-                or isinstance(value, float)
-            ):
-                new_metadata[key] = value
-            elif isinstance(value, BaseModel):
-                new_metadata[key] = value.model_dump_json()
-            elif isinstance(value, dict):
-                for k, v in value.items():
-                    if isinstance(v, dt):
-                        value[k] = v.isoformat()
-                new_metadata[key] = value
-
-        metadata = new_metadata
-
-        kwargs["user_api_key"] = metadata.get("user_api_key", None)
-        kwargs["user_api_key_user_id"] = metadata.get("user_api_key_user_id", None)
-        kwargs["user_api_key_team_alias"] = metadata.get(
-            "user_api_key_team_alias", None
-        )
-
-        project_name = metadata.get(
-            "project_name", self.default_credentials["LANGSMITH_PROJECT"]
-        )
-        run_name = metadata.get("run_name", self.langsmith_default_run_name)
-        run_id = metadata.get("id", None)
-        parent_run_id = metadata.get("parent_run_id", None)
-        trace_id = metadata.get("trace_id", None)
-        session_id = metadata.get("session_id", None)
-        dotted_order = metadata.get("dotted_order", None)
-        tags = metadata.get("tags", []) or []
-        verbose_logger.debug(
-            f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
-        )
 
         try:
-            start_time = kwargs["start_time"].astimezone(timezone.utc).isoformat()
-            end_time = kwargs["end_time"].astimezone(timezone.utc).isoformat()
-        except:
-            start_time = datetime.datetime.utcnow().isoformat()
-            end_time = datetime.datetime.utcnow().isoformat()
+            _litellm_params = kwargs.get("litellm_params", {}) or {}
+            metadata = _litellm_params.get("metadata", {}) or {}
+            new_metadata = {}
+            for key, value in metadata.items():
+                if (
+                    isinstance(value, list)
+                    or isinstance(value, str)
+                    or isinstance(value, int)
+                    or isinstance(value, float)
+                ):
+                    new_metadata[key] = value
+                elif isinstance(value, BaseModel):
+                    new_metadata[key] = value.model_dump_json()
+                elif isinstance(value, dict):
+                    for k, v in value.items():
+                        if isinstance(v, dt):
+                            value[k] = v.isoformat()
+                    new_metadata[key] = value
 
-        # filter out kwargs to not include any dicts, langsmith throws an erros when trying to log kwargs
-        logged_kwargs = LangsmithInputs(**kwargs)
-        kwargs = logged_kwargs.model_dump()
+            metadata = new_metadata
 
-        new_kwargs = {}
-        for key in kwargs:
-            value = kwargs[key]
-            if key == "start_time" or key == "end_time" or value is None:
-                pass
-            elif key == "original_response" and not isinstance(value, str):
-                new_kwargs[key] = str(value)
-            elif type(value) == datetime.datetime:
-                new_kwargs[key] = value.isoformat()
-            elif type(value) != dict and is_serializable(value=value):
-                new_kwargs[key] = value
-            elif not is_serializable(value=value):
-                continue
+            kwargs["user_api_key"] = metadata.get("user_api_key", None)
+            kwargs["user_api_key_user_id"] = metadata.get("user_api_key_user_id", None)
+            kwargs["user_api_key_team_alias"] = metadata.get(
+                "user_api_key_team_alias", None
+            )
 
-        if isinstance(response_obj, BaseModel):
-            try:
-                response_obj = response_obj.model_dump()
-            except:
-                response_obj = response_obj.dict()  # type: ignore
+            project_name = metadata.get(
+                "project_name", self.default_credentials["LANGSMITH_PROJECT"]
+            )
+            run_name = metadata.get("run_name", self.langsmith_default_run_name)
+            run_id = metadata.get("id", None)
+            parent_run_id = metadata.get("parent_run_id", None)
+            trace_id = metadata.get("trace_id", None)
+            session_id = metadata.get("session_id", None)
+            dotted_order = metadata.get("dotted_order", None)
+            tags = metadata.get("tags", []) or []
+            verbose_logger.debug(
+                f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
+            )
 
-        data = {
-            "name": run_name,
-            "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
-            "inputs": new_kwargs,
-            "outputs": response_obj,
-            "session_name": project_name,
-            "start_time": start_time,
-            "end_time": end_time,
-            "tags": tags,
-            "extra": metadata,
-        }
+            # filter out kwargs to not include any dicts, langsmith throws an erros when trying to log kwargs
+            # logged_kwargs = LangsmithInputs(**kwargs)
+            # kwargs = logged_kwargs.model_dump()
 
-        if run_id:
-            data["id"] = run_id
+            # new_kwargs = {}
+            # Ensure everything in the payload is converted to str
+            payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
 
-        if parent_run_id:
-            data["parent_run_id"] = parent_run_id
+            if payload is None:
+                raise Exception("Error logging request payload. Payload=none.")
 
-        if trace_id:
-            data["trace_id"] = trace_id
+            new_kwargs = payload
+            metadata = payload[
+                "metadata"
+            ]  # ensure logged metadata is json serializable
 
-        if session_id:
-            data["session_id"] = session_id
+            data = {
+                "name": run_name,
+                "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
+                "inputs": new_kwargs,
+                "outputs": new_kwargs["response"],
+                "session_name": project_name,
+                "start_time": new_kwargs["startTime"],
+                "end_time": new_kwargs["endTime"],
+                "tags": tags,
+                "extra": metadata,
+            }
 
-        if dotted_order:
-            data["dotted_order"] = dotted_order
+            if payload["error_str"] is not None and payload["status"] == "failure":
+                data["error"] = payload["error_str"]
 
-        if "id" not in data or data["id"] is None:
-            """
-            for /batch langsmith requires id, trace_id and dotted_order passed as params
-            """
-            run_id = str(uuid.uuid4())
-            data["id"] = str(run_id)
-            data["trace_id"] = str(run_id)
-            data["dotted_order"] = self.make_dot_order(run_id=run_id)
+            if run_id:
+                data["id"] = run_id
 
-        verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
+            if parent_run_id:
+                data["parent_run_id"] = parent_run_id
 
-        return data
+            if trace_id:
+                data["trace_id"] = trace_id
+
+            if session_id:
+                data["session_id"] = session_id
+
+            if dotted_order:
+                data["dotted_order"] = dotted_order
+
+            if "id" not in data or data["id"] is None:
+                """
+                for /batch langsmith requires id, trace_id and dotted_order passed as params
+                """
+                run_id = str(uuid.uuid4())
+                data["id"] = str(run_id)
+                data["trace_id"] = str(run_id)
+                data["dotted_order"] = self.make_dot_order(run_id=run_id)
+
+            verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
+
+            return data
+        except Exception:
+            raise
 
     def _send_batch(self):
         if not self.log_queue:
@@ -269,8 +269,8 @@ class LangsmithLogger(CustomBatchLogger):
                 )
 
             self.log_queue.clear()
-        except Exception as e:
-            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
+        except Exception:
+            verbose_logger.exception("Langsmith Layer Error - Error sending batch.")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -307,12 +307,7 @@ class LangsmithLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            sampling_rate = (
-                float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
-                if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
-                else 1.0
-            )
+            sampling_rate = self.sampling_rate
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
@@ -335,8 +330,36 @@ class LangsmithLogger(CustomBatchLogger):
             )
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
-        except:
-            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
+        except Exception:
+            verbose_logger.exception(
+                "Langsmith Layer Error - error logging async success event."
+            )
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        sampling_rate = self.sampling_rate
+        random_sample = random.random()
+        if random_sample > sampling_rate:
+            verbose_logger.info(
+                "Skipping Langsmith logging. Sampling rate={}, random_sample={}".format(
+                    sampling_rate, random_sample
+                )
+            )
+            return  # Skip logging
+        verbose_logger.info("Langsmith Failure Event Logging!")
+        try:
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            self.log_queue.append(data)
+            verbose_logger.debug(
+                "Langsmith logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+        except Exception:
+            verbose_logger.exception(
+                "Langsmith Layer Error - error logging async failure event."
+            )
 
     async def async_send_batch(self):
         """
@@ -348,8 +371,6 @@ class LangsmithLogger(CustomBatchLogger):
 
         Raises: Does not raise an exception, will only verbose_logger.exception()
         """
-        import json
-
         if not self.log_queue:
             return
 
