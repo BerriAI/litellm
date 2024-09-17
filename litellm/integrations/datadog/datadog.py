@@ -80,8 +80,6 @@ class DataDogLogger(CustomBatchLogger):
             super().__init__(
                 **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE
             )
-            if self not in litellm.service_callback:
-                litellm.service_callback.append(self)  # type: ignore
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog: Got exception on init Datadog client {str(e)}"
@@ -364,3 +362,19 @@ class DataDogLogger(CustomBatchLogger):
                 f"Datadog: Logger - Exception in async_service_failure_hook: {e}"
             )
         pass
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Any] = None,
+        start_time: Optional[Union[datetimeObj, float]] = None,
+        end_time: Optional[Union[float, datetimeObj]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """
+        Logs success from Redis, Postgres (Adjacent systems), as 'INFO' on DataDog
+
+        No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
+        """
+        return

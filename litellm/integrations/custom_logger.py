@@ -229,25 +229,3 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
-
-    # Service Hooks - Triggered when Redis, DB, Adjacent systems raise an error
-    async def async_service_success_hook(
-        self,
-        payload: ServiceLoggerPayload,
-        parent_otel_span: Optional[Any] = None,
-        start_time: Optional[Union[datetimeObj, float]] = None,
-        end_time: Optional[Union[float, datetimeObj]] = None,
-        event_metadata: Optional[dict] = None,
-    ):
-        pass
-
-    async def async_service_failure_hook(
-        self,
-        payload: ServiceLoggerPayload,
-        error: Optional[str] = "",
-        parent_otel_span: Optional[Any] = None,
-        start_time: Optional[Union[datetimeObj, float]] = None,
-        end_time: Optional[Union[float, datetimeObj]] = None,
-        event_metadata: Optional[dict] = None,
-    ):
-        pass
