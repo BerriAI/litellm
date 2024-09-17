@@ -195,7 +195,8 @@ async def user_auth(request: Request):
     - os.environ["SMTP_PASSWORD"]
     - os.environ["SMTP_SENDER_EMAIL"]
     """
-    from litellm.proxy.proxy_server import prisma_client, send_email
+    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.utils import send_email
 
     data = await request.json()  # type: ignore
     user_email = data["user_email"]
@@ -212,7 +213,7 @@ async def user_auth(request: Request):
     )
     ### if so - generate a 24 hr key with that user id
     if response is not None:
-        user_id = response.user_id
+        user_id = response.user_id  # type: ignore
         response = await generate_key_helper_fn(
             request_type="key",
             **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id},  # type: ignore
@@ -345,6 +346,7 @@ async def user_info(
             for team in teams_1:
                 team_id_list.append(team.team_id)
 
+        teams_2: Optional[Any] = None
         if user_info is not None:
             # *NEW* get all teams in user 'teams' field
             teams_2 = await prisma_client.get_data(
@@ -375,7 +377,7 @@ async def user_info(
                     ),
                     user_api_key_dict=user_api_key_dict,
                 )
-            else:
+            elif caller_user_info is not None:
                 teams_2 = await prisma_client.get_data(
                     team_id_list=caller_user_info.teams,
                     table_name="team",
@@ -395,7 +397,7 @@ async def user_info(
             query_type="find_all",
         )
 
-        if user_info is None:
+        if user_info is None and keys is not None:
             ## make sure we still return a total spend ##
             spend = 0
             for k in keys:
@@ -404,32 +406,35 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = []
-        for key in keys:
-            if (
-                key.token == litellm_master_key_hash
-                and general_settings.get("disable_master_key_return", False)
-                == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
-            ):
-                continue
+        if keys is None:
+            pass
+        else:
+            for key in keys:
+                if (
+                    key.token == litellm_master_key_hash
+                    and general_settings.get("disable_master_key_return", False)
+                    == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+                ):
+                    continue
 
-            try:
-                key = key.model_dump()  # noqa
-            except:
-                # if using pydantic v1
-                key = key.dict()
-            if (
-                "team_id" in key
-                and key["team_id"] is not None
-                and key["team_id"] != "litellm-dashboard"
-            ):
-                team_info = await prisma_client.get_data(
-                    team_id=key["team_id"], table_name="team"
-                )
-                team_alias = getattr(team_info, "team_alias", None)
-                key["team_alias"] = team_alias
-            else:
-                key["team_alias"] = "None"
-            returned_keys.append(key)
+                try:
+                    key = key.model_dump()  # noqa
+                except:
+                    # if using pydantic v1
+                    key = key.dict()
+                if (
+                    "team_id" in key
+                    and key["team_id"] is not None
+                    and key["team_id"] != "litellm-dashboard"
+                ):
+                    team_info = await prisma_client.get_data(
+                        team_id=key["team_id"], table_name="team"
+                    )
+                    team_alias = getattr(team_info, "team_alias", None)
+                    key["team_alias"] = team_alias
+                else:
+                    key["team_alias"] = "None"
+                returned_keys.append(key)
 
         response_data = {
             "user_id": user_id,
@@ -539,6 +544,7 @@ async def user_update(
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
+        response: Optional[Any] = None
         if data.user_id is not None and len(data.user_id) > 0:
             non_default_values["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update user, user_id condition block.")
@@ -573,7 +579,7 @@ async def user_update(
                         data=non_default_values,
                         table_name="user",
                     )
-        return response
+        return response  # type: ignore
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.error(

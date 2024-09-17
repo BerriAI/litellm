@@ -189,6 +189,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             # Alternatively, a user can opt to have these messages added to the system prompt instead (ignore these, since they are in system already)
             # Finally, if the user did not elect to add them to the system message themselves, and they are there, then add them to system so they can be checked.
             # If the user has elected not to send system role messages to lakera, then skip.
+
             if system_message is not None:
                 if not litellm.add_function_to_prompt:
                     content = system_message.get("content")
