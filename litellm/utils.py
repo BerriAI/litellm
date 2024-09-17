@@ -6322,7 +6322,6 @@ def exception_type(
                 _deployment = _metadata.get("deployment")
                 extra_information = f"\nModel: {model}"
 
-                exception_provider = "Unknown"
                 if (
                     isinstance(custom_llm_provider, str)
                     and len(custom_llm_provider) > 0
