@@ -297,3 +297,14 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 - Deploy LiteLLM Proxy Server
 
 
+
+## Disable Admin UI
+
+Set `DISABLE_ADMIN_UI="True"` in your environment to disable the Admin UI. 
+
+Useful, if your security team has additional restrictions on UI usage. 
+
+
+**Expected Response**
+
+<Image img={require('../../img/admin_ui_disabled.png')}/>
