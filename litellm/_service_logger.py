@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
-from litellm.main import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
