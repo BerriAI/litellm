@@ -652,7 +652,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         return
 
     try:
-        from azure.identity import ClientSecretCredential
+        from azure.identity import ClientSecretCredential, DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
 
         # Set your Azure Key Vault URI
@@ -670,9 +670,10 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
             and tenant_id is not None
         ):
             # Initialize the ClientSecretCredential
-            credential = ClientSecretCredential(
-                client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-            )
+            # credential = ClientSecretCredential(
+            #     client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
+            # )
+            credential = DefaultAzureCredential()
 
             # Create the SecretClient using the credential
             client = SecretClient(vault_url=KVUri, credential=credential)
