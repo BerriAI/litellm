@@ -167,11 +167,11 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
             if self.prompt_injection_params is not None:
                 # 1. check if heuristics check turned on
-                if self.prompt_injection_params.heuristics_check == True:
+                if self.prompt_injection_params.heuristics_check is True:
                     is_prompt_attack = self.check_user_input_similarity(
                         user_input=formatted_prompt
                     )
-                    if is_prompt_attack == True:
+                    if is_prompt_attack is True:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -179,14 +179,14 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                             },
                         )
                 # 2. check if vector db similarity check turned on [TODO] Not Implemented yet
-                if self.prompt_injection_params.vector_db_check == True:
+                if self.prompt_injection_params.vector_db_check is True:
                     pass
             else:
                 is_prompt_attack = self.check_user_input_similarity(
                     user_input=formatted_prompt
                 )
 
-            if is_prompt_attack == True:
+            if is_prompt_attack is True:
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -201,19 +201,18 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)
-                and "error" in e.detail
+                and "error" in e.detail  # type: ignore
                 and self.prompt_injection_params is not None
                 and self.prompt_injection_params.reject_as_response
             ):
                 return e.detail.get("error")
             raise e
         except Exception as e:
-            verbose_proxy_logger.error(
+            verbose_proxy_logger.exception(
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            verbose_proxy_logger.debug(traceback.format_exc())
 
     async def async_moderation_hook(  # type: ignore
         self,
