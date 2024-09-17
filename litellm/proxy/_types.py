@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
-from litellm.types.router import UpdateRouterConfig
+from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
 if TYPE_CHECKING:
@@ -1826,6 +1826,8 @@ class ProxyException(Exception):
             or "No deployments available" in self.message
         ):
             self.code = "429"
+        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
+            self.code = 401
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
