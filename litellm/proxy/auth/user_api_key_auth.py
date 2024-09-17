@@ -446,7 +446,6 @@ async def user_api_key_auth(
                                 and request.headers.get(key=header_key) is not None  # type: ignore
                             ):
                                 api_key = request.headers.get(key=header_key)  # type: ignore
-
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(

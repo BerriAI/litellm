@@ -6,10 +6,14 @@ import asyncio
 import os
 
 # Enter your DATABASE_URL here
-os.environ["DATABASE_URL"] = "postgresql://xxxxxxx"
+
 from prisma import Prisma
 
-db = Prisma()
+db = Prisma(
+    http={
+        "timeout": 60000,
+    },
+)
 
 
 async def check_view_exists():
@@ -47,25 +51,22 @@ async def check_view_exists():
 
         print("LiteLLM_VerificationTokenView Created!")  # noqa
 
-    try:
-        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
-        print("MonthlyGlobalSpend Exists!")  # noqa
-    except Exception as e:
-        sql_query = """
-        CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
+    sql_query = """
+        CREATE MATERIALIZED VIEW IF NOT EXISTS "MonthlyGlobalSpend" AS 
         SELECT
-        DATE("startTime") AS date, 
-        SUM("spend") AS spend 
+            DATE_TRUNC('day', "startTime") AS date, 
+            SUM("spend") AS spend 
         FROM 
-        "LiteLLM_SpendLogs" 
+            "LiteLLM_SpendLogs" 
         WHERE 
-        "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            "startTime" >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY 
-        DATE("startTime");
-        """
-        await db.execute_raw(query=sql_query)
+            DATE_TRUNC('day', "startTime");
+    """
+    # Execute the queries
+    await db.execute_raw(query=sql_query)
 
-        print("MonthlyGlobalSpend Created!")  # noqa
+    print("MonthlyGlobalSpend Created!")  # noqa
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")

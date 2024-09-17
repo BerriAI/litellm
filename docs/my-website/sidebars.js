@@ -255,6 +255,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/opentelemetry_integration",
         "observability/langfuse_integration",
         "observability/logfire_integration",
         "observability/gcs_bucket_integration",
@@ -271,7 +272,7 @@ const sidebars = {
         "observability/openmeter",
         "observability/promptlayer_integration",
         "observability/wandb_integration",
-        "observability/traceloop_integration",
+        "observability/slack_integration",
         "observability/athina_integration",
         "observability/lunary_integration",
         "observability/greenscale_integration",
