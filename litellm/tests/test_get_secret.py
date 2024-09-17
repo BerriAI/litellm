@@ -9,10 +9,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 
-
 import litellm
-from litellm.secret_managers.main import get_secret
 from litellm.proxy._types import KeyManagementSystem
+from litellm.secret_managers.main import get_secret
 
 
 class MockSecretClient:
