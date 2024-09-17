@@ -143,6 +143,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         ):
             return
         text = ""
+        _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
             prompt_injection_obj: Optional[GuardrailItem] = (
                 litellm.guardrail_name_config_map.get("prompt_injection")
@@ -320,7 +321,13 @@ class lakeraAI_Moderation(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         if self.event_hook is None:
             if self.moderation_check == "pre_call":

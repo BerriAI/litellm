@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # 🚨 Alerting / Webhooks
 
@@ -149,6 +151,10 @@ spend_reports -> go to slack channel #llm-spend-reports
 
 Set `alert_to_webhook_url` on your config.yaml
 
+<Tabs>
+
+<TabItem label="1 channel per alert" value="1">
+
 ```yaml
 model_list:
   - model_name: gpt-4
@@ -177,6 +183,44 @@ general_settings:
 litellm_settings:
   success_callback: ["langfuse"]
 ```
+</TabItem>
+
+<TabItem label="multiple channels per alert" value="2">
+
+Provide multiple slack channels for a given alert type
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings: 
+  master_key: sk-1234
+  alerting: ["slack"]
+  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
+  alert_to_webhook_url: {
+    "llm_exceptions": ["os.environ/SLACK_WEBHOOK_URL", "os.environ/SLACK_WEBHOOK_URL_2"],
+    "llm_too_slow": ["https://webhook.site/7843a980-a494-4967-80fb-d502dbc16886", "https://webhook.site/28cfb179-f4fb-4408-8129-729ff55cf213"],
+    "llm_requests_hanging": ["os.environ/SLACK_WEBHOOK_URL_5", "os.environ/SLACK_WEBHOOK_URL_6"],
+    "budget_alerts": ["os.environ/SLACK_WEBHOOK_URL_7", "os.environ/SLACK_WEBHOOK_URL_8"],
+    "db_exceptions": ["os.environ/SLACK_WEBHOOK_URL_9", "os.environ/SLACK_WEBHOOK_URL_10"],
+    "daily_reports": ["os.environ/SLACK_WEBHOOK_URL_11", "os.environ/SLACK_WEBHOOK_URL_12"],
+    "spend_reports": ["os.environ/SLACK_WEBHOOK_URL_13", "os.environ/SLACK_WEBHOOK_URL_14"],
+    "cooldown_deployment": ["os.environ/SLACK_WEBHOOK_URL_15", "os.environ/SLACK_WEBHOOK_URL_16"],
+    "new_model_added": ["os.environ/SLACK_WEBHOOK_URL_17", "os.environ/SLACK_WEBHOOK_URL_18"],
+    "outage_alerts": ["os.environ/SLACK_WEBHOOK_URL_19", "os.environ/SLACK_WEBHOOK_URL_20"],
+  }
+
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+
+</TabItem>
+
+</Tabs>
 
 Test it - send a valid llm request - expect to see a `llm_too_slow` alert in it's own slack channel
 
@@ -192,36 +236,6 @@ curl -i http://localhost:4000/v1/chat/completions \
 }'
 ```
 
-
-### Provide multiple slack channels for a given alert type
-
-Just add it like this - `alert_type: [<hook_url_channel_1>, <hook_url_channel_2>]`. 
-
-1. Setup config.yaml
-
-```yaml
-general_settings: 
-  master_key: sk-1234
-  alerting: ["slack"]
-  alert_to_webhook_url: {
-    "spend_reports": ["https://webhook.site/7843a980-a494-4967-80fb-d502dbc16886", "https://webhook.site/28cfb179-f4fb-4408-8129-729ff55cf213"]
-  }
-```
-
-2. Start proxy 
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it! 
-
-```bash
-curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
--H 'Authorization: Bearer sk-1234'
-```
-
-In case of error, check server logs for the error message!
 
 ### Using MS Teams Webhooks
 
