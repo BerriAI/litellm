@@ -391,6 +391,7 @@ class DatabricksChatCompletion(BaseLLM):
             additional_args={"complete_input_dict": data},
         )
         response = ModelResponse(**response_json)
+
         if response.model is not None:
             response.model = custom_llm_provider + "/" + response.model
 
@@ -554,7 +555,8 @@ class DatabricksChatCompletion(BaseLLM):
 
         response = ModelResponse(**response_json)
 
-        response.model = custom_llm_provider + "/" + response.model
+        if response.model is not None:
+            response.model = custom_llm_provider + "/" + response.model
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
