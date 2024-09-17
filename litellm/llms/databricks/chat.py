@@ -263,10 +263,10 @@ class DatabricksChatCompletion(BaseLLM):
                 )
 
                 if api_key is None:
-                    headers = {
-                        **databricks_client.config.authenticate(),
-                        **headers,
-                    }
+                    databricks_auth_headers: dict[str, str] = (
+                        databricks_client.config.authenticate()
+                    )
+                    headers = {**databricks_auth_headers, **headers}
             except ImportError:
                 raise DatabricksError(
                     status_code=400,
