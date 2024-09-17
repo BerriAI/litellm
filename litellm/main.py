@@ -95,7 +95,7 @@ from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
-from .llms.OpenAI.chat.o1 import OpenAIO1ChatCompletion
+from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.factory import (
