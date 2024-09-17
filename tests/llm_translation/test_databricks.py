@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 
 import litellm
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import BadRequestError, InternalServerError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
 
@@ -30,7 +30,12 @@ def mock_chat_response() -> Dict[str, Any]:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 230, "completion_tokens": 38, "total_tokens": 268},
+        "usage": {
+            "prompt_tokens": 230,
+            "completion_tokens": 38,
+            "total_tokens": 268,
+            "completion_tokens_details": None,
+        },
         "system_fingerprint": None,
     }
 
@@ -184,6 +189,7 @@ def mock_embedding_response() -> Dict[str, Any]:
             "prompt_tokens": 8,
             "total_tokens": 8,
             "completion_tokens": 0,
+            "completion_tokens_details": None,
         },
     }
 
@@ -195,9 +201,13 @@ def test_throws_if_only_one_of_api_base_or_api_key_set(monkeypatch, set_base):
             "DATABRICKS_API_BASE",
             "https://my.workspace.cloud.databricks.com/serving-endpoints",
         )
+        monkeypatch.delenv(
+            "DATABRICKS_API_KEY",
+        )
         err_msg = "A call is being made to LLM Provider but no key is set"
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
+        monkeypatch.delenv("DATABRICKS_API_BASE")
         err_msg = "A call is being made to LLM Provider but no api base is set"
 
     with pytest.raises(BadRequestError) as exc:
