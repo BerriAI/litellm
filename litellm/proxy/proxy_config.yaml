@@ -20,8 +20,8 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app
 
-general_settings: 
- master_key: sk-1234 
+general_settings:
+  key_management_system: "azure_key_vault"
 
 litellm_settings:
   success_callback: ["prometheus"]
