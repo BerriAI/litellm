@@ -519,18 +519,17 @@ class DatabricksChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                 )
             else:
-                http_response: Optional[httpx.Response] = None
                 try:
-                    http_response = client.post(
+                    response = client.post(
                         api_base, headers=headers, data=json.dumps(data)
                     )
-                    http_response.raise_for_status()
+                    response.raise_for_status()
 
-                    response_json = http_response.json()
+                    response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise DatabricksError(
                         status_code=e.response.status_code,
-                        message=http_response.text if http_response else str(e),
+                        message=e.response.text,
                     )
                 except httpx.TimeoutException as e:
                     raise DatabricksError(
@@ -539,7 +538,7 @@ class DatabricksChatCompletion(BaseLLM):
                 except Exception as e:
                     raise DatabricksError(status_code=500, message=str(e))
 
-        response: ModelResponse = ModelResponse(**response_json)
+        response = ModelResponse(**response_json)
 
         response.model = custom_llm_provider + "/" + (response.model or "")
 
@@ -645,17 +644,16 @@ class DatabricksChatCompletion(BaseLLM):
             self.client = client
 
         ## EMBEDDING CALL
-        http_response: Optional[httpx.Response] = None
         try:
-            http_response = self.client.post(
+            response = self.client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
             )  # type: ignore
 
-            http_response.raise_for_status()  # type: ignore
+            response.raise_for_status()  # type: ignore
 
-            response_json = http_response.json()  # type: ignore
+            response_json = response.json()  # type: ignore
         except httpx.HTTPStatusError as e:
             raise DatabricksError(
                 status_code=e.response.status_code,
