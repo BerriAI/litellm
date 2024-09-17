@@ -975,12 +975,13 @@ class PrismaClient:
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
+            pg_schema = os.getenv("DATABASE_SCHEMA", "public")
             ret = await self.db.query_raw(
                 f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
-                    WHERE schemaname = 'public' AND viewname IN (
+                    WHERE schemaname = '{pg_schema}' AND viewname IN (
                         {expected_views_str}
                     )
                 )
