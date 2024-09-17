@@ -158,6 +158,7 @@ class VertexAIConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "tools",
             "tool_choice",
@@ -184,7 +185,7 @@ class VertexAIConfig:
                     optional_params["stop_sequences"] = [value]
                 elif isinstance(value, list):
                     optional_params["stop_sequences"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and value["type"] == "json_object":
                 optional_params["response_mime_type"] = "application/json"
@@ -319,6 +320,7 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "tools",
             "tool_choice",
@@ -413,7 +415,7 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     optional_params["stop_sequences"] = [value]
                 elif isinstance(value, list):
                     optional_params["stop_sequences"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format":  # type: ignore
                 if value["type"] == "json_object":  # type: ignore
@@ -554,6 +556,7 @@ class VertexGeminiConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "tools",
             "functions",
@@ -653,7 +656,7 @@ class VertexGeminiConfig:
                     optional_params["stop_sequences"] = [value]
                 elif isinstance(value, list):
                     optional_params["stop_sequences"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and isinstance(value, dict):  # type: ignore
                 if value["type"] == "json_object":

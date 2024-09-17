@@ -218,7 +218,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response = await self.async_handler.post(
             url=prepared_request.url,
             json=request_data,  # type: ignore
-            headers=prepared_request.headers,
+            headers=prepared_request.headers,  # type: ignore
         )
         verbose_proxy_logger.debug("Bedrock AI response: %s", response.text)
         if response.status_code == 200:
@@ -243,12 +243,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.types.guardrails import GuardrailEventHooks
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:

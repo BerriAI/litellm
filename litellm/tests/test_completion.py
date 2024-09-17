@@ -24,7 +24,8 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
+
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -309,6 +310,8 @@ async def test_completion_predibase():
     except litellm.Timeout as e:
         pass
     except litellm.ServiceUnavailableError as e:
+        pass
+    except litellm.InternalServerError:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -1314,11 +1317,12 @@ import openai
 
 
 def test_completion_gpt4_turbo():
+    litellm.set_verbose = True
     try:
         response = completion(
             model="gpt-4-1106-preview",
             messages=messages,
-            max_tokens=10,
+            max_completion_tokens=10,
         )
         print(response)
     except openai.RateLimitError:

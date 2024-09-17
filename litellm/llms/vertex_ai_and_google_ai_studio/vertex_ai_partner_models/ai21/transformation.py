@@ -46,6 +46,10 @@ class VertexAIAi21Config:
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
     ):
+        if "max_completion_tokens" in non_default_params:
+            non_default_params["max_tokens"] = non_default_params.pop(
+                "max_completion_tokens"
+            )
         return litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,

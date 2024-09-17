@@ -102,7 +102,7 @@ async def test_router_retries_errors(sync_mode, error_type):
         },
     ]
 
-    router = Router(model_list=model_list, allowed_fails=3)
+    router = Router(model_list=model_list, set_verbose=True, debug_level="DEBUG")
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -118,6 +118,12 @@ async def test_router_retries_errors(sync_mode, error_type):
             else Exception("Invalid Request")
         ),
     }
+    for _ in range(4):
+        response = await router.acompletion(
+            model="azure/gpt-3.5-turbo",
+            messages=messages,
+            mock_response="1st success to ensure deployment is healthy",
+        )
 
     try:
         if sync_mode:

@@ -46,6 +46,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "dynamic_rate_limiter",
     "langsmith",
     "prometheus",
+    "datadog",
     "galileo",
     "braintrust",
     "arize",
@@ -463,6 +464,7 @@ openai_compatible_endpoints: List = [
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
+    "api.sambanova.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -472,6 +474,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "sambanova",
     "ai21_chat",
     "volcengine",
     "codestral",
@@ -724,6 +727,7 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DEEPSEEK = "deepseek"
+    SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
     VOYAGE = "voyage"
     CLOUDFLARE = "cloudflare"
@@ -911,7 +915,7 @@ from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock.chat import (
+from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
@@ -939,14 +943,21 @@ from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConf
 from .llms.OpenAI.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
-    MistralConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
     GroqConfig,
     AzureAIStudioConfig,
 )
+from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.OpenAI.chat.o1_transformation import (
+    OpenAIO1Config,
+)
+from .llms.OpenAI.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+)
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
+from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig

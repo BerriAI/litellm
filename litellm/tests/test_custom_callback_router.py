@@ -533,6 +533,7 @@ async def test_async_chat_azure_with_fallbacks():
     try:
         customHandler_fallbacks = CompletionCustomHandler()
         litellm.callbacks = [customHandler_fallbacks]
+        litellm.set_verbose = True
         # with fallbacks
         model_list = [
             {
@@ -555,7 +556,13 @@ async def test_async_chat_azure_with_fallbacks():
                 "rpm": 1800,
             },
         ]
-        router = Router(model_list=model_list, fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}])  # type: ignore
+        router = Router(
+            model_list=model_list,
+            fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
+            retry_policy=litellm.router.RetryPolicy(
+                AuthenticationErrorRetries=0,
+            ),
+        )  # type: ignore
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],

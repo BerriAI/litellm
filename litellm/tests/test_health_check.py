@@ -133,3 +133,21 @@ async def test_fireworks_health_check():
     assert response == {}
 
     return response
+
+
+@pytest.mark.asyncio
+async def test_cohere_rerank_health_check():
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "cohere/rerank-english-v3.0",
+            "query": "Hey, how's it going",
+            "documents": ["my sample text"],
+            "api_key": os.getenv("COHERE_API_KEY"),
+        },
+        mode="rerank",
+        prompt="Hey, how's it going",
+    )
+
+    assert "error" not in response
+
+    print(response)

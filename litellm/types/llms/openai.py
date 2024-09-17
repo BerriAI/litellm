@@ -340,7 +340,7 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
 
 class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
-    image_url: ChatCompletionImageUrlObject
+    image_url: Union[str, ChatCompletionImageUrlObject]
 
 
 class OpenAIChatCompletionUserMessage(TypedDict):
@@ -368,14 +368,15 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
 
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str
+    content: Union[str, Iterable[ChatCompletionTextObject]]
     tool_call_id: str
 
 
 class ChatCompletionFunctionMessage(TypedDict):
     role: Literal["function"]
-    content: Optional[str]
+    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
     name: str
+    tool_call_id: Optional[str]
 
 
 class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
