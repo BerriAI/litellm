@@ -9,7 +9,7 @@ Use this to route requests between Teams
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from litellm._logging import verbose_logger
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -79,6 +79,11 @@ async def get_deployments_for_tag(
                         request_tags,
                     )
                     new_healthy_deployments.append(deployment)
+
+            if len(new_healthy_deployments) == 0:
+                raise ValueError(
+                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={request_kwargs.get('model')}"
+                )
 
             return new_healthy_deployments
 
