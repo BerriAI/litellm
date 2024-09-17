@@ -266,11 +266,14 @@ class DatabricksChatCompletion(BaseLLM):
                 from databricks.sdk import WorkspaceClient
 
                 databricks_client = WorkspaceClient()
-                api_base = databricks_client.config.host
-                headers = {
-                    **databricks_client.config.authenticate(),
-                    **(headers or {})
-                }
+                api_base = (
+                    api_base or f"{databricks_client.config.host}/serving-endpoints"
+                )
+                if api_key is None:
+                    headers = {
+                        **databricks_client.config.authenticate(),
+                        **(headers or {}),
+                    }
             except ImportError:
                 raise DatabricksError(
                     status_code=400,
@@ -388,8 +391,8 @@ class DatabricksChatCompletion(BaseLLM):
             additional_args={"complete_input_dict": data},
         )
         response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + response.model
+        if response.model is not None:
+            response.model = custom_llm_provider + "/" + response.model
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
@@ -529,8 +532,8 @@ class DatabricksChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                 )
             else:
+                response: httpx.Response = None
                 try:
-                    print(api_base, headers)
                     response = client.post(
                         api_base, headers=headers, data=json.dumps(data)
                     )
@@ -539,7 +542,8 @@ class DatabricksChatCompletion(BaseLLM):
                     response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise DatabricksError(
-                        status_code=e.response.status_code, message=response.text
+                        status_code=e.response.status_code,
+                        message=response.text if response else str(e),
                     )
                 except httpx.TimeoutException as e:
                     raise DatabricksError(
@@ -654,6 +658,7 @@ class DatabricksChatCompletion(BaseLLM):
             self.client = client
 
         ## EMBEDDING CALL
+        response: httpx.Response = None
         try:
             response = self.client.post(
                 api_base,
