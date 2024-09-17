@@ -323,17 +323,24 @@ async def test_dynamic_router_retry_policy(model_group):
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
+    data = {}
     if model_group == "bad-model":
         model = "bad-model"
         messages = [{"role": "user", "content": "Hello good morning"}]
+        data = {"model": model, "messages": messages}
 
     elif model_group == "gpt-3.5-turbo":
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
+        data = {
+            "model": model,
+            "messages": messages,
+            "mock_response": "Exception: content_filter_policy",
+        }
 
     try:
         litellm.set_verbose = True
-        response = await router.acompletion(model=model, messages=messages)
+        response = await router.acompletion(**data)
     except Exception as e:
         print("got an exception", e)
         pass
