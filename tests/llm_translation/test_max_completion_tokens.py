@@ -235,7 +235,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.bedrock.chat import AmazonConverseConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
     assert (
         "max_completion_tokens"
