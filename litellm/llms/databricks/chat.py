@@ -261,17 +261,26 @@ class DatabricksChatCompletion(BaseLLM):
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
-        if api_key is None and headers is None:
-            raise DatabricksError(
-                status_code=400,
-                message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
+        if api_key is None or api_base is None:
+            try:
+                from databricks.sdk import WorkspaceClient
 
-        if api_base is None:
-            raise DatabricksError(
-                status_code=400,
-                message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
+                databricks_client = WorkspaceClient()
+                api_base = databricks_client.config.host
+                headers = {
+                    **databricks_client.config.authenticate(),
+                    **headers
+                }
+            except ImportError:
+                raise DatabricksError(
+                    status_code=400,
+                    message=(
+                        "If the Databricks base URL and API key are not set, the databricks-sdk"
+                        " Python library must be installed. Please install the databricks-sdk, set"
+                        " set the {LLM_PROVIDER}_API_BASE} and {LLM_PROVIDER}_API_KEY environment"
+                        " variables, or provide the base URL and API key as arguments."
+                    ),
+                )
 
         if headers is None:
             headers = {
