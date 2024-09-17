@@ -21,9 +21,15 @@ else:
 
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
+    model: str,  # used to raise the correct error
     healthy_deployments: Union[List[Any], Dict[Any, Any]],
     request_kwargs: Optional[Dict[Any, Any]] = None,
 ):
+    """
+    Returns a list of deployments that match the requested model and tags in the request.
+
+    Executes tag based filtering based on the tags in request metadata and the tags on the deployments
+    """
     if llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
@@ -82,7 +88,7 @@ async def get_deployments_for_tag(
 
             if len(new_healthy_deployments) == 0:
                 raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={request_kwargs.get('model')}"
+                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
             return new_healthy_deployments
