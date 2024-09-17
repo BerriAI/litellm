@@ -572,7 +572,7 @@ def test_embeddings_with_async_http_handler(monkeypatch):
 
 
 @pytest.mark.skipif(not databricks_sdk_installed, reason="Databricks SDK not installed")
-def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(monkeypatch):
+def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkeypatch):
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.config import Config
 
