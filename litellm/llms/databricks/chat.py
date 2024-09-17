@@ -269,7 +269,7 @@ class DatabricksChatCompletion(BaseLLM):
                 api_base = databricks_client.config.host
                 headers = {
                     **databricks_client.config.authenticate(),
-                    **headers
+                    **(headers or {})
                 }
             except ImportError:
                 raise DatabricksError(
@@ -530,6 +530,7 @@ class DatabricksChatCompletion(BaseLLM):
                 )
             else:
                 try:
+                    print(api_base, headers)
                     response = client.post(
                         api_base, headers=headers, data=json.dumps(data)
                     )
