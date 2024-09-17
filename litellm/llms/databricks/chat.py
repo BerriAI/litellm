@@ -252,6 +252,7 @@ class DatabricksChatCompletion(BaseLLM):
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
+        headers = headers or {"Content-Type": "application/json"}
         if api_key is None or api_base is None:
             try:
                 from databricks.sdk import WorkspaceClient
@@ -260,30 +261,25 @@ class DatabricksChatCompletion(BaseLLM):
                 api_base = (
                     api_base or f"{databricks_client.config.host}/serving-endpoints"
                 )
+
                 if api_key is None:
                     headers = {
                         **databricks_client.config.authenticate(),
-                        **(headers or {}),
+                        **headers,
                     }
             except ImportError:
                 raise DatabricksError(
                     status_code=400,
                     message=(
-                        "If the Databricks base URL and API key are not set, the databricks-sdk"
-                        " Python library must be installed. Please install the databricks-sdk, set"
-                        " set the {LLM_PROVIDER}_API_BASE} and {LLM_PROVIDER}_API_KEY environment"
-                        " variables, or provide the base URL and API key as arguments."
+                        "If the Databricks base URL and API key are not set, the databricks-sdk "
+                        "Python library must be installed. Please install the databricks-sdk, set "
+                        "{LLM_PROVIDER}_API_BASE and {LLM_PROVIDER}_API_KEY environment variables, "
+                        "or provide the base URL and API key as arguments."
                     ),
                 )
 
-        if headers is None:
-            headers = {
-                "Authorization": "Bearer {}".format(api_key),
-                "Content-Type": "application/json",
-            }
-        else:
-            if api_key is not None:
-                headers.update({"Authorization": "Bearer {}".format(api_key)})
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = "{}/chat/completions".format(api_base)
