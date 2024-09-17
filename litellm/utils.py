@@ -6281,6 +6281,7 @@ def exception_type(
     ):
         return original_exception
     exception_mapping_worked = False
+    exception_provider = custom_llm_provider
     if litellm.suppress_debug_info is False:
         print()  # noqa
         print(  # noqa
