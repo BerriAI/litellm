@@ -468,7 +468,7 @@ class ProxyLogging:
 
                     # V1 implementation - backwards compatibility
                     if callback.event_hook is None:
-                        if callback.moderation_check == "pre_call":
+                        if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
                         # Main - V2 Guardrails implementation
@@ -982,6 +982,11 @@ class PrismaClient:
                 """
             )
             expected_total_views = len(expected_views)
+
+            # Deal with case when ret is None
+            if ret is None:
+                ret = [{"view_count": 0, "view_names": []}]
+
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
                 return
