@@ -684,8 +684,10 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
                 f"Missing KVUri or client_id or client_secret or tenant_id from environment"
             )
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`"
+        _error_str = str(e)
+        verbose_proxy_logger.exception(
+            "Error when loading keys from Azure Key Vault: %s .Ensure you run `pip install azure-identity azure-keyvault-secrets`",
+            _error_str,
         )
 
 

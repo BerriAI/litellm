@@ -97,7 +97,13 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         """
         - Calls Google's Text Moderation API

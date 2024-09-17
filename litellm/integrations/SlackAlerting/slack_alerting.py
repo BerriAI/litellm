@@ -41,6 +41,7 @@ from litellm.types.router import LiteLLM_Params
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
 from .types import *
+from .utils import process_slack_alerting_variables
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -70,7 +71,7 @@ class SlackAlerting(CustomBatchLogger):
             "outage_alerts",
         ],
         alert_to_webhook_url: Optional[
-            Dict
+            Dict[AlertType, Union[List[str], str]]
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: Optional[str] = None,
@@ -85,7 +86,9 @@ class SlackAlerting(CustomBatchLogger):
         self.async_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-        self.alert_to_webhook_url = alert_to_webhook_url
+        self.alert_to_webhook_url = process_slack_alerting_variables(
+            alert_to_webhook_url=alert_to_webhook_url
+        )
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
@@ -97,7 +100,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting: Optional[List] = None,
         alerting_threshold: Optional[float] = None,
         alert_types: Optional[List] = None,
-        alert_to_webhook_url: Optional[Dict] = None,
+        alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
         alerting_args: Optional[Dict] = None,
         llm_router: Optional[litellm.Router] = None,
     ):
@@ -113,9 +116,17 @@ class SlackAlerting(CustomBatchLogger):
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
-                self.alert_to_webhook_url = alert_to_webhook_url
+                self.alert_to_webhook_url = process_slack_alerting_variables(
+                    alert_to_webhook_url=alert_to_webhook_url
+                )
             else:
-                self.alert_to_webhook_url.update(alert_to_webhook_url)
+                _new_values = (
+                    process_slack_alerting_variables(
+                        alert_to_webhook_url=alert_to_webhook_url
+                    )
+                    or {}
+                )
+                self.alert_to_webhook_url.update(_new_values)
         if llm_router is not None:
             self.llm_router = llm_router
 
