@@ -414,6 +414,7 @@ class ProxyLogging:
                         is not True
                     ):
                         continue
+
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
@@ -468,7 +469,9 @@ class ProxyLogging:
                     ################################################################
 
                     # V1 implementation - backwards compatibility
-                    if callback.event_hook is None:
+                    if callback.event_hook is None and hasattr(
+                        callback, "moderation_check"
+                    ):
                         if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
