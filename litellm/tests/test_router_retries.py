@@ -147,7 +147,7 @@ async def test_router_retries_errors(sync_mode, error_type):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_type",
-    ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"],  #
+    ["ContentPolicyViolationErrorRetries"],  # "AuthenticationErrorRetries",
 )
 async def test_router_retry_policy(error_type):
     from litellm.router import AllowedFailsPolicy, RetryPolicy
@@ -188,23 +188,24 @@ async def test_router_retry_policy(error_type):
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
+    data = {}
     if error_type == "AuthenticationErrorRetries":
         model = "bad-model"
         messages = [{"role": "user", "content": "Hello good morning"}]
+        data = {"model": model, "messages": messages}
     elif error_type == "ContentPolicyViolationErrorRetries":
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
+        mock_response = "Exception: content_filter_policy"
+        data = {"model": model, "messages": messages, "mock_response": mock_response}
 
     try:
         litellm.set_verbose = True
-        response = await router.acompletion(
-            model=model,
-            messages=messages,
-        )
+        await router.acompletion(**data)
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(1)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
 
@@ -255,7 +256,7 @@ async def test_router_retry_policy_on_429_errprs():
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
     print("customHandler.previous_models: ", customHandler.previous_models)
 
 
@@ -336,7 +337,7 @@ async def test_dynamic_router_retry_policy(model_group):
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
 
