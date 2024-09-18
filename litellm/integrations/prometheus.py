@@ -32,6 +32,10 @@ class PrometheusLogger(CustomLogger):
                 verbose_logger.warning(
                     f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
                 )
+                self.litellm_not_a_premium_user_metric = Counter(
+                    name="litellm_not_a_premium_user_metric",
+                    documentation=f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise. 🚨 {CommonProxyErrors.not_premium_user.value}",
+                )
                 return
 
             self.litellm_llm_api_failed_requests_metric = Counter(
