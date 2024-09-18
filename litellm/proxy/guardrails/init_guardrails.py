@@ -189,6 +189,18 @@ def init_guardrails_v2(
                 litellm.callbacks.append(_success_callback)  # type: ignore
 
             litellm.callbacks.append(_presidio_callback)  # type: ignore
+        elif litellm_params["guardrail"] == "hide-secrets":
+            from enterprise.enterprise_hooks.secret_detection import (
+                _ENTERPRISE_SecretDetection,
+            )
+
+            _secret_detection_object = _ENTERPRISE_SecretDetection(
+                detect_secrets_config=litellm_params.get("detect_secrets_config"),
+                event_hook=litellm_params["mode"],
+                guardrail_name=guardrail["guardrail_name"],
+            )
+
+            litellm.callbacks.append(_secret_detection_object)  # type: ignore
         elif (
             isinstance(litellm_params["guardrail"], str)
             and "." in litellm_params["guardrail"]

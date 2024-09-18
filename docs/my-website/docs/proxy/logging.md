@@ -1432,7 +1432,8 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["datadog"]
+  success_callback: ["datadog"] # logs llm success logs on datadog
+  service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
 
 **Step 2**: Set Required env variables for datadog
