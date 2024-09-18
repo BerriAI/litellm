@@ -23,8 +23,10 @@ model_list:
 
 general_settings: 
  master_key: sk-1234 
+
+
+
 litellm_settings:
-  success_callback: ["datadog", "prometheus"]
-  service_callback: ["datadog"]
-  cache: True 
+  success_callback: ["gcs_bucket"]
+
 
