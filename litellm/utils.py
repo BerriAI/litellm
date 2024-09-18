@@ -7923,6 +7923,7 @@ def exception_type(
                     )
                     or "Your task failed as a result of our safety system" in error_str
                     or "The model produced invalid content" in error_str
+                    or "content_filter_policy" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
