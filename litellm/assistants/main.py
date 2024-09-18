@@ -658,6 +658,9 @@ def create_thread(
     elif timeout is None:
         timeout = 600.0
 
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
+
     response: Optional[Thread] = None
     if custom_llm_provider == "openai":
         api_base = (
@@ -691,22 +694,22 @@ def create_thread(
             acreate_thread=acreate_thread,
         )
     elif custom_llm_provider == "azure":
-        api_base: Optional[str] = (
+        api_base = (
             optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
         )  # type: ignore
 
         api_version: Optional[str] = (
             optional_params.api_version
             or litellm.api_version
             or get_secret("AZURE_API_VERSION")
-        )  # type: ignore
-
-        api_key: Optional[str] = (
-            optional_params.api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret("AZURE_OPENAI_API_KEY")
-            or get_secret("AZURE_API_KEY")
         )  # type: ignore
 
         extra_body = optional_params.get("extra_body", {})
@@ -810,7 +813,8 @@ def get_thread(
         timeout = float(timeout)  # type: ignore
     elif timeout is None:
         timeout = 600.0
-
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
     response: Optional[Thread] = None
     if custom_llm_provider == "openai":
         api_base = (
@@ -844,7 +848,7 @@ def get_thread(
             aget_thread=aget_thread,
         )
     elif custom_llm_provider == "azure":
-        api_base: Optional[str] = (
+        api_base = (
             optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
         )  # type: ignore
 
@@ -854,7 +858,7 @@ def get_thread(
             or get_secret("AZURE_API_VERSION")
         )  # type: ignore
 
-        api_key: Optional[str] = (
+        api_key = (
             optional_params.api_key
             or litellm.api_key
             or litellm.azure_key
@@ -995,7 +999,8 @@ def add_message(
         timeout = float(timeout)  # type: ignore
     elif timeout is None:
         timeout = 600.0
-
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
     response: Optional[OpenAIMessage] = None
     if custom_llm_provider == "openai":
         api_base = (
@@ -1029,7 +1034,7 @@ def add_message(
             a_add_message=a_add_message,
         )
     elif custom_llm_provider == "azure":
-        api_base: Optional[str] = (
+        api_base = (
             optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
         )  # type: ignore
 
@@ -1039,7 +1044,7 @@ def add_message(
             or get_secret("AZURE_API_VERSION")
         )  # type: ignore
 
-        api_key: Optional[str] = (
+        api_key = (
             optional_params.api_key
             or litellm.api_key
             or litellm.azure_key
@@ -1154,6 +1159,8 @@ def get_messages(
         timeout = 600.0
 
     response: Optional[SyncCursorPage[OpenAIMessage]] = None
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -1185,7 +1192,7 @@ def get_messages(
             aget_messages=aget_messages,
         )
     elif custom_llm_provider == "azure":
-        api_base: Optional[str] = (
+        api_base = (
             optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
         )  # type: ignore
 
@@ -1195,7 +1202,7 @@ def get_messages(
             or get_secret("AZURE_API_VERSION")
         )  # type: ignore
 
-        api_key: Optional[str] = (
+        api_key = (
             optional_params.api_key
             or litellm.api_key
             or litellm.azure_key
