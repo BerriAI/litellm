@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import time
 import traceback
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -100,7 +100,7 @@ def cost_per_token(
         "rerank",
         "arerank",
     ] = "completion",
-) -> Tuple[float, float]:
+) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -425,18 +425,22 @@ def get_model_params_and_category(model_name) -> str:
     return model_name
 
 
-def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public = (
         0.001400  # assume all calls sent to A100 80GB for now
     )
     if total_time == 0.0:  # total time is in ms
-        start_time = completion_response["created"]
+        start_time = completion_response.get("created", time.time())
         end_time = getattr(completion_response, "ended", time.time())
         total_time = end_time - start_time
 
     return a100_80gb_price_per_second_public * total_time / 1000
+
+
+def has_hidden_params(obj: Any) -> bool:
+    return hasattr(obj, "_hidden_params")
 
 
 def _select_model_name_for_cost_calc(
@@ -463,12 +467,14 @@ def _select_model_name_for_cost_calc(
 
     elif return_model is None:
         return_model = completion_response.get("model", "")  # type: ignore
-    if hasattr(completion_response, "_hidden_params"):
+    hidden_params = getattr(completion_response, "_hidden_params", None)
+
+    if hidden_params is not None:
         if (
-            completion_response._hidden_params.get("model", None) is not None
-            and len(completion_response._hidden_params["model"]) > 0
+            hidden_params.get("model", None) is not None
+            and len(hidden_params["model"]) > 0
         ):
-            return_model = completion_response._hidden_params.get("model", model)
+            return_model = hidden_params.get("model", model)
 
     return return_model
 
@@ -558,7 +564,7 @@ def completion_cost(
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
 
-            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(
+            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(  # type: ignore
                 "usage", {}
             )
             if isinstance(usage_obj, BaseModel) and not isinstance(
@@ -569,17 +575,17 @@ def completion_cost(
                     "usage",
                     litellm.Usage(**usage_obj.model_dump()),
                 )
+            if usage_obj is None:
+                _usage = {}
+            elif isinstance(usage_obj, BaseModel):
+                _usage = usage_obj.model_dump()
+            else:
+                _usage = usage_obj
             # get input/output tokens from completion_response
-            prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
-            completion_tokens = completion_response.get("usage", {}).get(
-                "completion_tokens", 0
-            )
-            cache_creation_input_tokens = completion_response.get("usage", {}).get(
-                "cache_creation_input_tokens", 0
-            )
-            cache_read_input_tokens = completion_response.get("usage", {}).get(
-                "cache_read_input_tokens", 0
-            )
+            prompt_tokens = _usage.get("prompt_tokens", 0)
+            completion_tokens = _usage.get("completion_tokens", 0)
+            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
+            cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
 
             total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(
@@ -588,24 +594,19 @@ def completion_cost(
             model = _select_model_name_for_cost_calc(
                 model=model, completion_response=completion_response
             )
-            if hasattr(completion_response, "_hidden_params"):
-                custom_llm_provider = completion_response._hidden_params.get(
+            hidden_params = getattr(completion_response, "_hidden_params", None)
+            if hidden_params is not None:
+                custom_llm_provider = hidden_params.get(
                     "custom_llm_provider", custom_llm_provider or None
                 )
-                region_name = completion_response._hidden_params.get(
-                    "region_name", region_name
-                )
-                size = completion_response._hidden_params.get(
-                    "optional_params", {}
-                ).get(
+                region_name = hidden_params.get("region_name", region_name)
+                size = hidden_params.get("optional_params", {}).get(
                     "size", "1024-x-1024"
                 )  # openai default
-                quality = completion_response._hidden_params.get(
-                    "optional_params", {}
-                ).get(
+                quality = hidden_params.get("optional_params", {}).get(
                     "quality", "standard"
                 )  # openai default
-                n = completion_response._hidden_params.get("optional_params", {}).get(
+                n = hidden_params.get("optional_params", {}).get(
                     "n", 1
                 )  # openai default
         else:
@@ -643,6 +644,8 @@ def completion_cost(
                 # Vertex Charges Flat $0.20 per image
                 return 0.020
 
+            if size is None:
+                size = "1024-x-1024"  # openai default
             # fix size to match naming convention
             if "x" in size and "-x-" not in size:
                 size = size.replace("x", "-x-")
@@ -697,7 +700,7 @@ def completion_cost(
             model in litellm.replicate_models or "replicate" in model
         ) and model not in litellm.model_cost:
             # for unmapped replicate model, default to replicate's time tracking logic
-            return get_replicate_completion_pricing(completion_response, total_time)
+            return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
 
         if model is None:
             raise ValueError(
@@ -847,7 +850,9 @@ def rerank_cost(
     Returns
     - float or None: cost of response OR none if error.
     """
-    _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
 
     try:
         if custom_llm_provider == "cohere":

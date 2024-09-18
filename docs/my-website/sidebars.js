@@ -81,6 +81,7 @@ const sidebars = {
             "proxy/guardrails/lakera_ai", 
             "proxy/guardrails/bedrock",  
             "proxy/guardrails/pii_masking_v2", 
+            "proxy/guardrails/secret_detection", 
             "proxy/guardrails/custom_guardrail", 
             "prompt_injection"
         ],
