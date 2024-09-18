@@ -13,17 +13,12 @@ from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
-from litellm import ImageResponse, OpenAIConfig
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.utils import FileTypes
 from litellm.utils import (
-    Choices,
     CustomStreamWrapper,
-    Message,
     ModelResponse,
-    TranscriptionResponse,
     UnsupportedParamsError,
     convert_to_model_response_object,
     get_secret,
@@ -673,7 +668,7 @@ class AzureChatCompletion(BaseLLM):
                         logging_obj=logging_obj,
                         convert_tool_call_to_json_mode=json_mode,
                     )
-            elif "stream" in optional_params and optional_params["stream"] == True:
+            elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
                     logging_obj=logging_obj,
                     api_base=api_base,
@@ -724,7 +719,11 @@ class AzureChatCompletion(BaseLLM):
                         azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                     azure_client_params["azure_ad_token"] = azure_ad_token
 
-                if client is None or dynamic_params:
+                if (
+                    client is None
+                    or not isinstance(client, AzureOpenAI)
+                    or dynamic_params
+                ):
                     azure_client = AzureOpenAI(**azure_client_params)
                 else:
                     azure_client = client
@@ -818,7 +817,10 @@ class AzureChatCompletion(BaseLLM):
                 input=data["messages"],
                 api_key=azure_client.api_key,
                 additional_args={
-                    "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
+                    "headers": {
+                        "api_key": api_key,
+                        "azure_ad_token": azure_ad_token,
+                    },
                     "api_base": azure_client._base_url._uri_reference,
                     "acompletion": True,
                     "complete_input_dict": data,
@@ -924,7 +926,10 @@ class AzureChatCompletion(BaseLLM):
             input=data["messages"],
             api_key=azure_client.api_key,
             additional_args={
-                "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
+                "headers": {
+                    "api_key": api_key,
+                    "azure_ad_token": azure_ad_token,
+                },
                 "api_base": azure_client._base_url._uri_reference,
                 "acompletion": True,
                 "complete_input_dict": data,
@@ -982,7 +987,10 @@ class AzureChatCompletion(BaseLLM):
                 input=data["messages"],
                 api_key=azure_client.api_key,
                 additional_args={
-                    "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
+                    "headers": {
+                        "api_key": api_key,
+                        "azure_ad_token": azure_ad_token,
+                    },
                     "api_base": azure_client._base_url._uri_reference,
                     "acompletion": True,
                     "complete_input_dict": data,
@@ -1015,12 +1023,12 @@ class AzureChatCompletion(BaseLLM):
     async def aembedding(
         self,
         data: dict,
-        model_response: ModelResponse,
+        model_response: litellm.EmbeddingResponse,
         azure_client_params: dict,
         api_key: str,
         input: list,
+        logging_obj: Any,
         client: Optional[AsyncAzureOpenAI] = None,
-        logging_obj=None,
         timeout=None,
     ):
         response = None
@@ -1067,9 +1075,9 @@ class AzureChatCompletion(BaseLLM):
         api_base: str,
         api_version: str,
         timeout: float,
-        logging_obj=None,
-        model_response=None,
-        optional_params=None,
+        logging_obj: Any,
+        model_response: litellm.EmbeddingResponse,
+        optional_params: dict,
         azure_ad_token: Optional[str] = None,
         client=None,
         aembedding=None,
@@ -1407,8 +1415,8 @@ class AzureChatCompletion(BaseLLM):
         azure_client_params: dict,
         api_key: str,
         input: list,
+        logging_obj: Any,
         client=None,
-        logging_obj=None,
         timeout=None,
     ):
         response: Optional[dict] = None
@@ -1471,14 +1479,14 @@ class AzureChatCompletion(BaseLLM):
         self,
         prompt: str,
         timeout: float,
+        logging_obj: Any,
+        optional_params: dict,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         api_version: Optional[str] = None,
         model_response: Optional[litellm.utils.ImageResponse] = None,
         azure_ad_token: Optional[str] = None,
-        logging_obj=None,
-        optional_params=None,
         client=None,
         aimg_generation=None,
     ):
@@ -1561,11 +1569,11 @@ class AzureChatCompletion(BaseLLM):
             # return response
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except AzureOpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
+            error_code = getattr(e, "status_code", None)
+            if error_code is not None:
+                raise AzureOpenAIError(status_code=error_code, message=str(e))
             else:
                 raise AzureOpenAIError(status_code=500, message=str(e))
 
