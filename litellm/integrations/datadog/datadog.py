@@ -6,7 +6,9 @@ DD Reference API: https://docs.datadoghq.com/api/latest/logs
 `async_log_success_event` - used by litellm proxy to send logs to datadog
 `log_success_event` - sync version of logging to DataDog, only used on litellm Python SDK, if user opts in to using sync functions
 
-async_log_success_event will store batch of DD_MAX_BATCH_SIZE in memory and flush to Datadog once it reaches DD_MAX_BATCH_SIZE or every 5 seconds
+async_log_success_event:  will store batch of DD_MAX_BATCH_SIZE in memory and flush to Datadog once it reaches DD_MAX_BATCH_SIZE or every 5 seconds
+
+async_service_failure_hook: Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
 
 For batching specific details see CustomBatchLogger class
 """
@@ -17,6 +19,7 @@ import os
 import sys
 import traceback
 import uuid
+from datetime import datetime as datetimeObj
 from typing import Any, Dict, List, Optional, Union
 
 from httpx import Response
@@ -29,8 +32,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.services import ServiceLoggerPayload
 
-from .types import DD_ERRORS, DatadogPayload
+from .types import DD_ERRORS, DatadogPayload, DataDogStatus
 from .utils import make_json_serializable
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
@@ -182,7 +186,7 @@ class DataDogLogger(CustomBatchLogger):
 
             response = self.sync_client.post(
                 url=self.intake_url,
-                json=dd_payload,
+                json=dd_payload,  # type: ignore
                 headers={
                     "DD-API-KEY": self.DD_API_KEY,
                 },
@@ -294,6 +298,7 @@ class DataDogLogger(CustomBatchLogger):
             hostname="",
             message=json_payload,
             service="litellm-server",
+            status=DataDogStatus.INFO,
         )
         return dd_payload
 
@@ -312,7 +317,7 @@ class DataDogLogger(CustomBatchLogger):
         compressed_data = gzip.compress(json.dumps(data).encode("utf-8"))
         response = await self.async_client.post(
             url=self.intake_url,
-            data=compressed_data,
+            data=compressed_data,  # type: ignore
             headers={
                 "DD-API-KEY": self.DD_API_KEY,
                 "Content-Encoding": "gzip",
@@ -320,3 +325,56 @@ class DataDogLogger(CustomBatchLogger):
             },
         )
         return response
+
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Any] = None,
+        start_time: Optional[Union[datetimeObj, float]] = None,
+        end_time: Optional[Union[float, datetimeObj]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """
+        Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
+
+        - example - Redis is failing / erroring, will be logged on DataDog
+        """
+
+        try:
+            import json
+
+            _payload_dict = payload.model_dump()
+            _dd_message_str = json.dumps(_payload_dict)
+            _dd_payload = DatadogPayload(
+                ddsource="litellm",
+                ddtags="",
+                hostname="",
+                message=_dd_message_str,
+                service="litellm-server",
+                status=DataDogStatus.WARN,
+            )
+
+            self.log_queue.append(_dd_payload)
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog: Logger - Exception in async_service_failure_hook: {e}"
+            )
+        pass
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Any] = None,
+        start_time: Optional[Union[datetimeObj, float]] = None,
+        end_time: Optional[Union[float, datetimeObj]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """
+        Logs success from Redis, Postgres (Adjacent systems), as 'INFO' on DataDog
+
+        No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
+        """
+        return
