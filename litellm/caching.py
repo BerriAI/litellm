@@ -17,7 +17,7 @@ import time
 import traceback
 from datetime import timedelta
 from enum import Enum
-from typing import Any, BinaryIO, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from openai._models import BaseModel as OpenAIObject
 
@@ -304,40 +304,25 @@ class RedisCache(BaseCache):
                 f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
             )
 
-    def increment_cache(self, key, value: int, **kwargs) -> int:
+    def increment_cache(
+        self, key, value: int, ttl: Optional[float] = None, **kwargs
+    ) -> int:
         _redis_client = self.redis_client
         start_time = time.time()
         try:
             result = _redis_client.incr(name=key, amount=value)
-            ## LOGGING ##
-            end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    call_type="increment_cache",
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                )
-            )
+
+            if ttl is not None:
+                # check if key already has ttl, if not -> set ttl
+                current_ttl = _redis_client.ttl(key)
+                if current_ttl == -1:
+                    # Key has no expiration
+                    _redis_client.expire(key, ttl)
             return result
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    error=e,
-                    call_type="increment_cache",
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                )
-            )
             verbose_logger.error(
                 "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s",
                 str(e),
@@ -606,12 +591,22 @@ class RedisCache(BaseCache):
         if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
             await self.flush_cache_buffer()  # logging done in here
 
-    async def async_increment(self, key, value: float, **kwargs) -> float:
+    async def async_increment(
+        self, key, value: float, ttl: Optional[float] = None, **kwargs
+    ) -> float:
         _redis_client = self.init_async_client()
         start_time = time.time()
         try:
             async with _redis_client as redis_client:
                 result = await redis_client.incrbyfloat(name=key, amount=value)
+
+                if ttl is not None:
+                    # check if key already has ttl, if not -> set ttl
+                    current_ttl = await redis_client.ttl(key)
+                    if current_ttl == -1:
+                        # Key has no expiration
+                        await redis_client.expire(key, ttl)
+
                 ## LOGGING ##
                 end_time = time.time()
                 _duration = end_time - start_time
@@ -1242,8 +1237,9 @@ class QdrantSemanticCache(BaseCache):
         import os
 
         from litellm.llms.custom_httpx.http_handler import (
-            _get_async_httpx_client,
             _get_httpx_client,
+            get_async_httpx_client,
+            httpxSpecialProvider,
         )
 
         if collection_name is None:
@@ -1290,7 +1286,9 @@ class QdrantSemanticCache(BaseCache):
         self.headers = headers
 
         self.sync_client = _get_httpx_client()
-        self.async_client = _get_async_httpx_client()
+        self.async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.Caching
+        )
 
         if quantization_config is None:
             print_verbose(
@@ -2039,10 +2037,7 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.exception(
-                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
-            )
-            raise e
+            raise e  # don't log if exception is raised
 
     async def async_set_cache_sadd(
         self, key, value: List, local_only: bool = False, **kwargs
@@ -2069,10 +2064,7 @@ class DualCache(BaseCache):
 
             return None
         except Exception as e:
-            verbose_logger.exception(
-                "LiteLLM Cache: Excepton async set_cache_sadd: {}".format(str(e))
-            )
-            raise e
+            raise e  # don't log, if exception is raised
 
     def flush_cache(self):
         if self.in_memory_cache is not None:
@@ -2543,7 +2535,6 @@ class Cache:
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            pass
 
     async def async_add_cache(self, result, *args, **kwargs):
         """

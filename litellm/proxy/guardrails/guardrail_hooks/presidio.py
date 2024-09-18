@@ -19,10 +19,10 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm  # noqa: E401
+from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.custom_httpx.http_handler import _get_async_httpx_client
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (
     EmbeddingResponse,
@@ -59,7 +59,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
-
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         if mock_testing is True:  # for testing purposes only
@@ -93,8 +92,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_anonymizer_api_base: Optional[str] = None,
     ):
         self.presidio_analyzer_api_base: Optional[str] = (
-            presidio_analyzer_api_base
-            or litellm.get_secret("PRESIDIO_ANALYZER_API_BASE", None)
+            presidio_analyzer_api_base or get_secret("PRESIDIO_ANALYZER_API_BASE", None)  # type: ignore
         )
         self.presidio_anonymizer_api_base: Optional[
             str
@@ -199,12 +197,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
-            verbose_proxy_logger.error(
-                "litellm.proxy.hooks.presidio_pii_masking.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
-            verbose_proxy_logger.debug(traceback.format_exc())
             raise e
 
     async def async_pre_call_hook(
@@ -255,9 +247,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
             return data
         except Exception as e:
-            verbose_proxy_logger.info(
-                f"An error occurred -",
-            )
             raise e
 
     async def async_logging_hook(
@@ -301,9 +290,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             kwargs["messages"] = messages
 
-        return kwargs, responses
+        return kwargs, result
 
-    async def async_post_call_success_hook(
+    async def async_post_call_success_hook(  # type: ignore
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -315,7 +304,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         verbose_proxy_logger.debug(
             f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
         )
-        if self.output_parse_pii == False:
+        if self.output_parse_pii is False:
             return response
 
         if isinstance(response, ModelResponse) and not isinstance(

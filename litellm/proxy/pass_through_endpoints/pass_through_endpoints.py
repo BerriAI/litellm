@@ -359,7 +359,7 @@ async def pass_through_request(
         start_time = datetime.now()
         logging_obj = Logging(
             model="unknown",
-            messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            messages=[{"role": "user", "content": json.dumps(_parsed_body)}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -414,7 +414,7 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         logging_obj.pre_call(
-            input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            input=[{"role": "user", "content": json.dumps(_parsed_body)}],
             api_key="",
             additional_args={
                 "complete_input_dict": _parsed_body,

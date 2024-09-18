@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,6 +28,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import _duration_in_seconds
+from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
 
@@ -103,7 +104,10 @@ async def generate_key_fn(
         verbose_proxy_logger.debug("entered /key/generate")
 
         if user_custom_key_generate is not None:
-            result = await user_custom_key_generate(data)
+            if asyncio.iscoroutinefunction(user_custom_key_generate):
+                result = await user_custom_key_generate(data)  # type: ignore
+            else:
+                raise ValueError("user_custom_key_generate must be a coroutine")
             decision = result.get("decision", True)
             message = result.get("message", "Authentication Failed - Custom Auth Rule")
             if not decision:
@@ -134,43 +138,42 @@ async def generate_key_fn(
         # check if user set default key/generate params on config.yaml
         if litellm.upperbound_key_generate_params is not None:
             for elem in data:
-                # if key in litellm.upperbound_key_generate_params, use the min of value and litellm.upperbound_key_generate_params[key]
                 key, value = elem
-                if (
-                    value is not None
-                    and getattr(litellm.upperbound_key_generate_params, key, None)
-                    is not None
-                ):
-                    # if value is float/int
-                    if key in [
-                        "max_budget",
-                        "max_parallel_requests",
-                        "tpm_limit",
-                        "rpm_limit",
-                    ]:
-                        if value > getattr(litellm.upperbound_key_generate_params, key):
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={getattr(litellm.upperbound_key_generate_params, key)}"
-                                },
+                upperbound_value = getattr(
+                    litellm.upperbound_key_generate_params, key, None
+                )
+                if upperbound_value is not None:
+                    if value is None:
+                        # Use the upperbound value if user didn't provide a value
+                        setattr(data, key, upperbound_value)
+                    else:
+                        # Compare with upperbound for numeric fields
+                        if key in [
+                            "max_budget",
+                            "max_parallel_requests",
+                            "tpm_limit",
+                            "rpm_limit",
+                        ]:
+                            if value > upperbound_value:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail={
+                                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                                    },
+                                )
+                        # Compare durations
+                        elif key in ["budget_duration", "duration"]:
+                            upperbound_duration = _duration_in_seconds(
+                                duration=upperbound_value
                             )
-                    elif key == "budget_duration":
-                        # budgets are in 1s, 1m, 1h, 1d, 1m (30s, 30m, 30h, 30d, 30m)
-                        # compare the duration in seconds and max duration in seconds
-                        upperbound_budget_duration = _duration_in_seconds(
-                            duration=getattr(
-                                litellm.upperbound_key_generate_params, key
-                            )
-                        )
-                        user_set_budget_duration = _duration_in_seconds(duration=value)
-                        if user_set_budget_duration > upperbound_budget_duration:
-                            raise HTTPException(
-                                status_code=400,
-                                detail={
-                                    "error": f"Budget duration is over max limit set in config - user_value={user_set_budget_duration}; max_value={upperbound_budget_duration}"
-                                },
-                            )
+                            user_duration = _duration_in_seconds(duration=value)
+                            if user_duration > upperbound_duration:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail={
+                                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                                    },
+                                )
 
         # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
         _budget_id = None
@@ -201,6 +204,15 @@ async def generate_key_fn(
 
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
+
+        # Set tags on the new key
+        if "tags" in data_json:
+            if data_json["metadata"] is None:
+                data_json["metadata"] = {"tags": data_json["tags"]}
+            else:
+                data_json["metadata"]["tags"] = data_json["tags"]
+
+            data_json.pop("tags")
 
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
@@ -257,12 +269,11 @@ async def generate_key_fn(
 
         return GenerateKeyResponse(**response)
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -278,6 +289,54 @@ async def generate_key_fn(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+async def prepare_key_update_data(
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
+):
+    data_json: dict = data.dict(exclude_unset=True)
+    key = data_json.pop("key", None)
+
+    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
+    non_default_values = {}
+    for k, v in data_json.items():
+        if k in _metadata_fields:
+            continue
+        if v is not None and v not in ([], {}, 0):
+            non_default_values[k] = v
+    if "duration" in non_default_values:
+        duration = non_default_values.pop("duration")
+        if duration and (isinstance(duration, str)) and len(duration) > 0:
+            duration_s = _duration_in_seconds(duration=duration)
+            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["expires"] = expires
+
+    if "budget_duration" in non_default_values:
+        duration_s = _duration_in_seconds(
+            duration=non_default_values["budget_duration"]
+        )
+        key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        non_default_values["budget_reset_at"] = key_reset_at
+
+    _metadata = existing_key_row.metadata or {}
+
+    if data.model_tpm_limit:
+        if "model_tpm_limit" not in _metadata:
+            _metadata["model_tpm_limit"] = {}
+        _metadata["model_tpm_limit"].update(data.model_tpm_limit)
+        non_default_values["metadata"] = _metadata
+
+    if data.model_rpm_limit:
+        if "model_rpm_limit" not in _metadata:
+            _metadata["model_rpm_limit"] = {}
+        _metadata["model_rpm_limit"].update(data.model_rpm_limit)
+        non_default_values["metadata"] = _metadata
+
+    if data.guardrails:
+        _metadata["guardrails"] = data.guardrails
+        non_default_values["metadata"] = _metadata
+
+    return non_default_values
 
 
 @router.post(
@@ -323,59 +382,9 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
-        _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
-        # get non default values for key
-        non_default_values = {}
-        for k, v in data_json.items():
-            # this field gets stored in metadata
-            if key in _metadata_fields:
-                continue
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
-
-        if "duration" in non_default_values:
-            duration = non_default_values.pop("duration")
-            duration_s = _duration_in_seconds(duration=duration)
-            expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["expires"] = expires
-
-        if "budget_duration" in non_default_values:
-            duration_s = _duration_in_seconds(
-                duration=non_default_values["budget_duration"]
-            )
-            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = key_reset_at
-
-        # Update metadata for virtual Key
-        if data.model_tpm_limit:
-            _metadata = existing_key_row.metadata or {}
-            if "model_tpm_limit" not in _metadata:
-                _metadata["model_tpm_limit"] = {}
-
-            _metadata["model_tpm_limit"].update(data.model_tpm_limit)
-            non_default_values["metadata"] = _metadata
-            non_default_values.pop("model_tpm_limit", None)
-
-        if data.model_rpm_limit:
-            _metadata = existing_key_row.metadata or {}
-            if "model_rpm_limit" not in _metadata:
-                _metadata["model_rpm_limit"] = {}
-
-            _metadata["model_rpm_limit"].update(data.model_rpm_limit)
-            non_default_values["metadata"] = _metadata
-            non_default_values.pop("model_rpm_limit", None)
-
-        if data.guardrails:
-            _metadata = existing_key_row.metadata or {}
-            _metadata["guardrails"] = data.guardrails
-
-            # update values that will be written to the DB
-            non_default_values["metadata"] = _metadata
-            non_default_values.pop("guardrails", None)
+        non_default_values = await prepare_key_update_data(
+            data=data, existing_key_row=existing_key_row
+        )
 
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
@@ -411,6 +420,9 @@ async def update_key_fn(
                     )
                 )
             )
+
+        if response is None:
+            raise ValueError("Failed to update key got response = None")
 
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
@@ -497,6 +509,14 @@ async def delete_key_fn(
                     token=key, table_name="key", query_type="find_unique"
                 )
 
+                if key_row is None:
+                    raise ProxyException(
+                        message=f"Key {key} not found",
+                        type=ProxyErrorTypes.bad_request_error,
+                        param="key",
+                        code=status.HTTP_404_NOT_FOUND,
+                    )
+
                 key_row = key_row.json(exclude_none=True)
                 _key_row = json.dumps(key_row, default=str)
 
@@ -521,6 +541,13 @@ async def delete_key_fn(
         number_deleted_keys = await delete_verification_token(
             tokens=keys, user_id=user_id
         )
+        if number_deleted_keys is None:
+            raise ProxyException(
+                message="Failed to delete keys got None response from delete_verification_token",
+                type=ProxyErrorTypes.internal_server_error,
+                param="keys",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         verbose_proxy_logger.debug(
             f"/key/delete - deleted_keys={number_deleted_keys['deleted_keys']}"
         )
@@ -611,6 +638,11 @@ async def info_key_fn_v2(
         key_info = await prisma_client.get_data(
             token=data.keys, table_name="key", query_type="find_all"
         )
+        if key_info is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "No keys found"},
+            )
         filtered_key_info = []
         for k in key_info:
             try:
@@ -685,6 +717,11 @@ async def info_key_fn(
         if key == None:
             key = user_api_key_dict.api_key
         key_info = await prisma_client.get_data(token=key)
+        if key_info is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "No keys found"},
+            )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
             key_info = key_info.model_dump()  # noqa
@@ -733,6 +770,7 @@ async def generate_key_helper_fn(
         str
     ] = None,  # dev-friendly alt param for 'token'. Exposed on `/key/generate` for setting key value yourself.
     user_id: Optional[str] = None,
+    user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
@@ -818,6 +856,7 @@ async def generate_key_helper_fn(
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "user_alias": user_alias,
             "team_id": team_id,
             "organization_id": organization_id,
             "user_role": user_role,
@@ -856,7 +895,7 @@ async def generate_key_helper_fn(
         }
 
         if (
-            litellm.get_secret("DISABLE_KEY_NAME", False) is True
+            get_secret("DISABLE_KEY_NAME", False) is True
         ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
             pass
         else:
@@ -896,9 +935,12 @@ async def generate_key_helper_fn(
                     user_row = await prisma_client.insert_data(
                         data=user_data, table_name="user"
                     )
+
+                    if user_row is None:
+                        raise Exception("Failed to create user")
                     ## use default user model list if no key-specific model list provided
                     if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
-                        key_data["models"] = user_row.models
+                        key_data["models"] = user_row.models  # type: ignore
                 elif query_type == "update_data":
                     user_row = await prisma_client.update_data(
                         data=user_data,
@@ -956,6 +998,10 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
                 deleted_tokens = await prisma_client.delete_data(
                     tokens=tokens, user_id=user_id
                 )
+                if deleted_tokens is None:
+                    raise Exception(
+                        "Failed to delete tokens got response None when deleting tokens"
+                    )
                 _num_deleted_tokens = deleted_tokens.get("deleted_keys", 0)
                 if _num_deleted_tokens != len(tokens):
                     raise Exception(
@@ -983,6 +1029,7 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
 @management_endpoint_wrapper
 async def regenerate_key_fn(
     key: str,
+    data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -1041,14 +1088,26 @@ async def regenerate_key_fn(
     new_token_hash = hash_token(new_token)
     new_token_key_name = f"sk-...{new_token[-4:]}"
 
-    # update new token in DB
+    # Prepare the update data
+    update_data = {
+        "token": new_token_hash,
+        "key_name": new_token_key_name,
+    }
+
+    non_default_values = {}
+    if data is not None:
+        # Update with any provided parameters from GenerateKeyRequest
+        non_default_values = await prepare_key_update_data(
+            data=data, existing_key_row=_key_in_db
+        )
+
+    update_data.update(non_default_values)
+    # Update the token in the database
     updated_token = await prisma_client.db.litellm_verificationtoken.update(
         where={"token": hashed_api_key},
-        data={
-            "token": new_token_hash,
-            "key_name": new_token_key_name,
-        },
+        data=update_data,  # type: ignore
     )
+
     updated_token_dict = {}
     if updated_token is not None:
         updated_token_dict = dict(updated_token)
@@ -1066,3 +1125,90 @@ async def regenerate_key_fn(
     return GenerateKeyResponse(
         **updated_token_dict,
     )
+
+
+@router.get(
+    "/key/list",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def list_keys(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    page: int = Query(1, description="Page number", ge=1),
+    size: int = Query(10, description="Page size", ge=1, le=100),
+    user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
+    team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
+    key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+):
+    try:
+        import logging
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        logging.debug("Entering list_keys function")
+
+        if prisma_client is None:
+            logging.error("Database not connected")
+            raise Exception("Database not connected")
+
+        # Prepare filter conditions
+        where = {}
+        if user_id:
+            where["user_id"] = user_id
+        if team_id:
+            where["team_id"] = team_id
+        if key_alias:
+            where["key_alias"] = key_alias
+
+        logging.debug(f"Filter conditions: {where}")
+
+        # Calculate skip for pagination
+        skip = (page - 1) * size
+
+        logging.debug(f"Pagination: skip={skip}, take={size}")
+
+        # Fetch keys with pagination
+        keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where=where,  # type: ignore
+            skip=skip,  # type: ignore
+            take=size,  # type: ignore
+        )
+
+        logging.debug(f"Fetched {len(keys)} keys")
+
+        # Get total count of keys
+        total_count = await prisma_client.db.litellm_verificationtoken.count(
+            where=where  # type: ignore
+        )
+
+        logging.debug(f"Total count of keys: {total_count}")
+
+        # Calculate total pages
+        total_pages = -(-total_count // size)  # Ceiling division
+
+        # Prepare response
+        key_list = []
+        for key in keys:
+            key_dict = key.dict()
+            _token = key_dict.get("token")
+            key_list.append(_token)
+
+        response = {
+            "keys": key_list,
+            "total_count": total_count,
+            "current_page": page,
+            "total_pages": total_pages,
+        }
+
+        logging.debug("Successfully prepared response")
+
+        return response
+
+    except Exception as e:
+        raise ProxyException(
+            message=f"Error listing keys: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,  # Use the enum value
+            param=None,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

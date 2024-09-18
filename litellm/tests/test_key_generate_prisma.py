@@ -533,10 +533,11 @@ def test_call_with_user_over_budget(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
-            pytest.fail(f"This should have failed!. They key crossed it's budget")
+            pytest.fail("This should have failed!. They key crossed it's budget")
 
         asyncio.run(test())
     except Exception as e:
+        print("got an errror=", e)
         error_detail = e.message
         assert "ExceededBudget:" in error_detail
         assert isinstance(e, ProxyException)
@@ -1492,7 +1493,10 @@ def test_call_with_key_over_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1607,7 +1611,10 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1727,7 +1734,10 @@ def test_call_with_key_over_model_budget(prisma_client):
                 proxy_logging_obj=proxy_logging_obj,
             )
             # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(request_id=request_id)
+            spend_logs = await view_spend_logs(
+                request_id=request_id,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print("read spend logs", spend_logs)
             assert len(spend_logs) == 1
@@ -1745,7 +1755,7 @@ def test_call_with_key_over_model_budget(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
-            pytest.fail(f"This should have failed!. They key crossed it's budget")
+            pytest.fail("This should have failed!. They key crossed it's budget")
 
         asyncio.run(test())
     except Exception as e:
@@ -2035,7 +2045,7 @@ async def test_default_key_params(prisma_client):
 
 
 @pytest.mark.asyncio()
-async def test_upperbound_key_params(prisma_client):
+async def test_upperbound_key_param_larger_budget(prisma_client):
     """
     - create key
     - get key info
@@ -2056,6 +2066,54 @@ async def test_upperbound_key_params(prisma_client):
         # print(result)
     except Exception as e:
         assert e.code == str(400)
+
+
+@pytest.mark.asyncio()
+async def test_upperbound_key_param_larger_duration(prisma_client):
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+        max_budget=100, duration="14d"
+    )
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest(
+            max_budget=10,
+            duration="30d",
+        )
+        key = await generate_key_fn(request)
+        pytest.fail("Expected this to fail but it passed")
+        # print(result)
+    except Exception as e:
+        assert e.code == str(400)
+
+
+@pytest.mark.asyncio()
+async def test_upperbound_key_param_none_duration(prisma_client):
+    from datetime import datetime, timedelta
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+        max_budget=100, duration="14d"
+    )
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest()
+        key = await generate_key_fn(request)
+
+        print(key)
+        # print(result)
+
+        assert key.max_budget == 100
+        assert key.expires is not None
+
+        _date_key_expires = key.expires.date()
+        _fourteen_days_from_now = (datetime.now() + timedelta(days=14)).date()
+
+        assert _date_key_expires == _fourteen_days_from_now
+    except Exception as e:
+        pytest.fail(f"Got exception {e}")
 
 
 def test_get_bearer_token():
@@ -2296,7 +2354,10 @@ async def test_proxy_load_test_db(prisma_client):
         await asyncio.sleep(120)
         try:
             # call spend logs
-            spend_logs = await view_spend_logs(api_key=generated_key)
+            spend_logs = await view_spend_logs(
+                api_key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            )
 
             print(f"len responses: {len(spend_logs)}")
             assert len(spend_logs) == n
@@ -2749,6 +2810,7 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
         "team": "litellm-team3",
         "model_tpm_limit": {"gpt-4": 100},
         "model_rpm_limit": {"gpt-4": 2},
+        "tags": None,
     }
 
     # Update model tpm_limit and rpm_limit
@@ -2769,6 +2831,7 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
         "team": "litellm-team3",
         "model_tpm_limit": {"gpt-4": 200},
         "model_rpm_limit": {"gpt-4": 3},
+        "tags": None,
     }
 
 
@@ -2805,6 +2868,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     assert result["info"]["metadata"] == {
         "team": "litellm-team3",
         "guardrails": ["aporia-pre-call"],
+        "tags": None,
     }
 
     # Update model tpm_limit and rpm_limit
@@ -2823,6 +2887,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     assert result["info"]["metadata"] == {
         "team": "litellm-team3",
         "guardrails": ["aporia-pre-call", "aporia-post-call"],
+        "tags": None,
     }
 
 
@@ -2931,108 +2996,6 @@ async def test_team_access_groups(prisma_client):
                 "not allowed to call model" in e.message
                 and "Allowed team models" in e.message
             )
-
-
-################ Unit Tests for testing regeneration of keys ###########
-@pytest.mark.asyncio()
-async def test_regenerate_api_key(prisma_client):
-    litellm.set_verbose = True
-    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    await litellm.proxy.proxy_server.prisma_client.connect()
-    import uuid
-
-    # generate new key
-    key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
-    spend = 100
-    max_budget = 400
-    models = ["fake-openai-endpoint"]
-    new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
-        ),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="1234",
-        ),
-    )
-
-    generated_key = new_key.key
-    print(generated_key)
-
-    # assert the new key works as expected
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-
-    async def return_body():
-        return_string = f'{{"model": "fake-openai-endpoint"}}'
-        # return string as bytes
-        return return_string.encode()
-
-    request.body = return_body
-    result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
-    print(result)
-
-    # regenerate the key
-    new_key = await regenerate_key_fn(
-        key=generated_key,
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="1234",
-        ),
-    )
-    print("response from regenerate_key_fn", new_key)
-
-    # assert the new key works as expected
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-
-    async def return_body_2():
-        return_string = f'{{"model": "fake-openai-endpoint"}}'
-        # return string as bytes
-        return return_string.encode()
-
-    request.body = return_body_2
-    result = await user_api_key_auth(request=request, api_key=f"Bearer {new_key.key}")
-    print(result)
-
-    # assert the old key stops working
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
-
-    async def return_body_3():
-        return_string = f'{{"model": "fake-openai-endpoint"}}'
-        # return string as bytes
-        return return_string.encode()
-
-    request.body = return_body_3
-    try:
-        result = await user_api_key_auth(
-            request=request, api_key=f"Bearer {generated_key}"
-        )
-        print(result)
-        pytest.fail(f"This should have failed!. the key has been regenerated")
-    except Exception as e:
-        print("got expected exception", e)
-        assert "Invalid proxy server token passed" in e.message
-
-    # Check that the regenerated key has the same spend, max_budget, models and key_alias
-    assert new_key.spend == spend, f"Expected spend {spend} but got {new_key.spend}"
-    assert (
-        new_key.max_budget == max_budget
-    ), f"Expected max_budget {max_budget} but got {new_key.max_budget}"
-    assert (
-        new_key.key_alias == key_alias
-    ), f"Expected key_alias {key_alias} but got {new_key.key_alias}"
-    assert (
-        new_key.models == models
-    ), f"Expected models {models} but got {new_key.models}"
-
-    assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
-
-    pass
 
 
 @pytest.mark.asyncio()

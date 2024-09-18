@@ -1219,3 +1219,39 @@ def test_completion_cost_anthropic_prompt_caching():
     cost_2 = completion_cost(model=model, completion_response=response_2)
 
     assert cost_1 > cost_2
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "databricks/databricks-meta-llama-3-1-70b-instruct",
+        "databricks/databricks-meta-llama-3-70b-instruct",
+        "databricks/databricks-dbrx-instruct",
+        "databricks/databricks-mixtral-8x7b-instruct",
+    ],
+)
+def test_completion_cost_databricks(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    model, messages = model, [{"role": "user", "content": "What is 2+2?"}]
+
+    resp = litellm.completion(model=model, messages=messages)  # works fine
+
+    print(resp)
+    cost = completion_cost(completion_response=resp)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "databricks/databricks-bge-large-en",
+        "databricks/databricks-gte-large-en",
+    ],
+)
+def test_completion_cost_databricks_embedding(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    resp = litellm.embedding(model=model, input=["hey, how's it going?"])  # works fine
+
+    print(resp)
+    cost = completion_cost(completion_response=resp)

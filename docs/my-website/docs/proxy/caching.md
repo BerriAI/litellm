@@ -54,6 +54,10 @@ litellm_caching:<hash>
 
 #### Redis Cluster 
 
+<Tabs>
+
+<TabItem value="redis-cluster-config" label="Set on config.yaml">
+
 ```yaml
 model_list:
   - model_name: "*"
@@ -67,6 +71,44 @@ litellm_settings:
     type: redis
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
 ```
+
+</TabItem>
+
+<TabItem value="redis-env" label="Set on .env">
+
+You can configure redis cluster in your .env by setting `REDIS_CLUSTER_NODES` in your .env
+
+**Example `REDIS_CLUSTER_NODES`** value
+
+```
+REDIS_CLUSTER_NODES = "[{"host": "127.0.0.1", "port": "7001"}, {"host": "127.0.0.1", "port": "7003"}, {"host": "127.0.0.1", "port": "7004"}, {"host": "127.0.0.1", "port": "7005"}, {"host": "127.0.0.1", "port": "7006"}, {"host": "127.0.0.1", "port": "7007"}]"
+```
+
+:::note
+
+Example python script for setting redis cluster nodes in .env:
+
+```python
+# List of startup nodes
+startup_nodes = [
+    {"host": "127.0.0.1", "port": "7001"},
+    {"host": "127.0.0.1", "port": "7003"},
+    {"host": "127.0.0.1", "port": "7004"},
+    {"host": "127.0.0.1", "port": "7005"},
+    {"host": "127.0.0.1", "port": "7006"},
+    {"host": "127.0.0.1", "port": "7007"},
+]
+
+# set startup nodes in environment variables
+os.environ["REDIS_CLUSTER_NODES"] = json.dumps(startup_nodes)
+print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
+```
+
+:::
+
+</TabItem>
+
+</Tabs>
 
 #### TTL
 

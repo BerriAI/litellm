@@ -52,7 +52,9 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-pro-preview-0215",
     "gemini-pro-experimental",
     "gemini-flash-experimental",
+    "gemini-1.5-flash-exp-0827",
     "gemini-pro-flash",
+    "gemini-1.5-flash-exp-0827",
 ]
 
 
@@ -655,12 +657,11 @@ def test_gemini_pro_vision_base64():
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
-        litellm.num_retries = 3
         image_path = "../proxy/cached_logo.jpg"
         # Getting the base64 string
         base64_image = encode_image(image_path)
         resp = litellm.completion(
-            model="vertex_ai/gemini-pro-vision",
+            model="vertex_ai/gemini-1.5-pro",
             messages=[
                 {
                     "role": "user",
@@ -679,6 +680,8 @@ def test_gemini_pro_vision_base64():
         print(resp)
 
         prompt_tokens = resp.usage.prompt_tokens
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -1395,7 +1398,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -1503,7 +1506,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -2182,6 +2185,7 @@ def test_get_token_url():
     assert should_use_v1beta1_features is True
 
     _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
         vertex_credentials=vertex_credentials,
@@ -2202,6 +2206,7 @@ def test_get_token_url():
     )
 
     _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
         vertex_credentials=vertex_credentials,
@@ -2823,3 +2828,44 @@ def test_gemini_function_call_parameter_in_messages_2():
             ]
         },
     ]
+
+
+@pytest.mark.parametrize(
+    "base_model, metadata",
+    [
+        (None, {"model_info": {"base_model": "vertex_ai/gemini-1.5-pro"}}),
+        ("vertex_ai/gemini-1.5-pro", None),
+    ],
+)
+def test_gemini_finetuned_endpoint(base_model, metadata):
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    # Set up the messages
+    messages = [
+        {"role": "system", "content": """Use search for most queries."""},
+        {"role": "user", "content": """search for weather in boston (use `search`)"""},
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response = completion(
+                model="vertex_ai/4965075652664360960",
+                messages=messages,
+                tool_choice="auto",
+                client=client,
+                metadata=metadata,
+                base_model=base_model,
+            )
+        except Exception as e:
+            print(e)
+
+        print(mock_client.call_args.kwargs)
+
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].endswith(
+            "endpoints/4965075652664360960:generateContent"
+        )

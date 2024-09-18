@@ -22,6 +22,10 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_cha
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
+from litellm.llms.databricks.cost_calculator import (
+    cost_per_token as databricks_cost_per_token,
+)
+from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import PassthroughCallTypes, Usage
@@ -93,6 +97,8 @@ def cost_per_token(
         "transcription",
         "aspeech",
         "speech",
+        "rerank",
+        "arerank",
     ] = "completion",
 ) -> Tuple[float, float]:
     """
@@ -156,7 +162,7 @@ def cost_per_token(
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
 
     model_without_prefix = model
-    model_parts = model.split("/")
+    model_parts = model.split("/", 1)
     if len(model_parts) > 1:
         model_without_prefix = model_parts[1]
     else:
@@ -209,6 +215,8 @@ def cost_per_token(
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "databricks":
+        return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
@@ -487,6 +495,8 @@ def completion_cost(
         "transcription",
         "aspeech",
         "speech",
+        "rerank",
+        "arerank",
     ] = "completion",
     ### REGION ###
     custom_llm_provider=None,
@@ -747,6 +757,7 @@ def response_cost_calculator(
         TranscriptionResponse,
         TextCompletionResponse,
         HttpxBinaryResponseContent,
+        RerankResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -765,6 +776,8 @@ def response_cost_calculator(
         "transcription",
         "aspeech",
         "speech",
+        "rerank",
+        "arerank",
     ],
     optional_params: dict,
     cache_hit: Optional[bool] = None,
@@ -789,6 +802,15 @@ def response_cost_calculator(
                     call_type=call_type,
                     custom_llm_provider=custom_llm_provider,
                 )
+            elif isinstance(response_object, RerankResponse) and (
+                call_type == "arerank" or call_type == "rerank"
+            ):
+                response_cost = rerank_cost(
+                    rerank_response=response_object,
+                    model=model,
+                    call_type=call_type,
+                    custom_llm_provider=custom_llm_provider,
+                )
             else:
                 if custom_pricing is True:  # override defaults if custom pricing is set
                     base_model = model
@@ -807,16 +829,34 @@ def response_cost_calculator(
         )
         return None
     except Exception as e:
-        if litellm.suppress_debug_info:  # allow cli tools to suppress this information.
-            verbose_logger.debug(
-                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                    str(e), traceback.format_exc()
-                )
+        verbose_logger.debug(
+            "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
+                str(e), traceback.format_exc()
             )
-        else:
-            verbose_logger.warning(
-                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                    str(e), traceback.format_exc()
-                )
-            )
+        )
         return None
+
+
+def rerank_cost(
+    rerank_response: RerankResponse,
+    model: str,
+    call_type: Literal["rerank", "arerank"],
+    custom_llm_provider: Optional[str],
+) -> float:
+    """
+    Returns
+    - float or None: cost of response OR none if error.
+    """
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+
+    try:
+        if custom_llm_provider == "cohere":
+            return 0.002
+        raise ValueError(
+            f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
+        )
+    except Exception as e:
+        verbose_logger.exception(
+            f"litellm.cost_calculator.py::rerank_cost - Exception occurred - {str(e)}"
+        )
+        raise e

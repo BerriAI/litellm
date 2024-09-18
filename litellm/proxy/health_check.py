@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import random
-from typing import Optional
+from typing import List, Optional
 
 import litellm
 from litellm._logging import print_verbose
@@ -11,7 +11,15 @@ from litellm._logging import print_verbose
 logger = logging.getLogger(__name__)
 
 
-ILLEGAL_DISPLAY_PARAMS = ["messages", "api_key", "prompt", "input"]
+ILLEGAL_DISPLAY_PARAMS = [
+    "messages",
+    "api_key",
+    "prompt",
+    "input",
+    "vertex_credentials",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+]
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 
@@ -34,6 +42,25 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
         if details is not False
         else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
     )
+
+
+def filter_deployments_by_id(
+    model_list: List,
+) -> List:
+    seen_ids = set()
+    filtered_deployments = []
+
+    for deployment in model_list:
+        _model_info = deployment.get("model_info") or {}
+        _id = _model_info.get("id") or None
+        if _id is None:
+            continue
+
+        if _id not in seen_ids:
+            seen_ids.add(_id)
+            filtered_deployments.append(deployment)
+
+    return filtered_deployments
 
 
 async def _perform_health_check(model_list: list, details: Optional[bool] = True):
@@ -105,6 +132,9 @@ async def perform_health_check(
             _new_model_list = [x for x in model_list if x["model_name"] == model]
         model_list = _new_model_list
 
+    model_list = filter_deployments_by_id(
+        model_list=model_list
+    )  # filter duplicate deployments (e.g. when model alias'es are used)
     healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
         model_list, details
     )

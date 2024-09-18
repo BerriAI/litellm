@@ -1,6 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.4.0 # openai + http req.
-openai==1.40.0 # openai req. 
+openai==1.45.0 # openai req. 
 fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.0 # server dep
@@ -9,7 +9,6 @@ gunicorn==22.0.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
 numpy==1.24.3 # semantic caching
-pandas==2.1.1 # for viewing clickhouse spend analytics
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
@@ -18,7 +17,6 @@ anthropic[vertex]==0.21.3
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.45.0 # for langfuse self-hosted logging
-datadog-api-client==2.23.0 # for datadog logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 orjson==3.9.15 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 

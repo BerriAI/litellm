@@ -8,11 +8,16 @@ import time
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 PROMETHEUS_URL = litellm.get_secret("PROMETHEUS_URL")
 PROMETHEUS_SELECTED_INSTANCE = litellm.get_secret("PROMETHEUS_SELECTED_INSTANCE")
-async_http_handler = AsyncHTTPHandler()
+async_http_handler = get_async_httpx_client(
+    llm_provider=httpxSpecialProvider.LoggingCallback
+)
 
 
 async def get_metric_from_prometheus(

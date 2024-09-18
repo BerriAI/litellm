@@ -1,7 +1,7 @@
 import json
 import types  # type: ignore
 import uuid
-from typing import Any, BinaryIO, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import httpx
 import requests
@@ -19,8 +19,8 @@ from litellm.utils import (
     convert_to_model_response_object,
 )
 
-from ..llms.openai import OpenAITextCompletion, OpenAITextCompletionConfig
 from .base import BaseLLM
+from .OpenAI.openai import OpenAITextCompletion, OpenAITextCompletionConfig
 from .prompt_templates.factory import custom_prompt, prompt_factory
 
 openai_text_completion_config = OpenAITextCompletionConfig()
@@ -94,16 +94,16 @@ class AzureOpenAIConfig(OpenAIConfig):
         top_p: Optional[int] = None,
     ) -> None:
         super().__init__(
-            frequency_penalty,
-            function_call,
-            functions,
-            logit_bias,
-            max_tokens,
-            n,
-            presence_penalty,
-            stop,
-            temperature,
-            top_p,
+            frequency_penalty=frequency_penalty,
+            function_call=function_call,
+            functions=functions,
+            logit_bias=logit_bias,
+            max_tokens=max_tokens,
+            n=n,
+            presence_penalty=presence_penalty,
+            stop=stop,
+            temperature=temperature,
+            top_p=top_p,
         )
 
 
@@ -162,11 +162,10 @@ class AzureTextCompletion(BaseLLM):
         client=None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(
-                    status_code=422, message=f"Missing model or messages"
+                    status_code=422, message="Missing model or messages"
                 )
 
             max_retries = optional_params.pop("max_retries", 2)
@@ -293,7 +292,10 @@ class AzureTextCompletion(BaseLLM):
                             "api-version", api_version
                         )
 
-                response = azure_client.completions.create(**data, timeout=timeout)  # type: ignore
+                raw_response = azure_client.completions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
+                response = raw_response.parse()
                 stringified_response = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
@@ -380,13 +382,15 @@ class AzureTextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.completions.create(**data, timeout=timeout)
+            raw_response = await azure_client.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
+            response = raw_response.parse()
             return openai_text_completion_config.convert_to_chat_model_response_object(
                 response_object=response.model_dump(),
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
             status_code = getattr(e, "status_code", 500)

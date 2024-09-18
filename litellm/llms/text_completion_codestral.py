@@ -141,6 +141,7 @@ class MistralTextCompletionConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "seed",
             "stop",
@@ -154,7 +155,7 @@ class MistralTextCompletionConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "stream" and value == True:
                 optional_params["stream"] = value
@@ -491,14 +492,9 @@ class CodestralTextCompletion(BaseLLM):
                 message="HTTPStatusError - {}".format(e.response.text),
             )
         except Exception as e:
-            verbose_logger.exception(
-                "litellm.llms.text_completion_codestral.py::async_completion() - Exception occurred - {}".format(
-                    str(e)
-                )
-            )
             raise TextCompletionCodestralError(
                 status_code=500, message="{}".format(str(e))
-            )
+            )  # don't use verbose_logger.exception, if exception is raised
         return self.process_text_completion_response(
             model=model,
             response=response,

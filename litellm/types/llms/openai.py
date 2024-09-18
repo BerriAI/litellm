@@ -1,16 +1,5 @@
 from os import PathLike
-from typing import (
-    IO,
-    Any,
-    BinaryIO,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.lib.streaming._assistants import (
@@ -351,17 +340,21 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
 
 class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
-    image_url: ChatCompletionImageUrlObject
+    image_url: Union[str, ChatCompletionImageUrlObject]
 
 
-class ChatCompletionUserMessage(TypedDict):
+class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
     content: Union[
         str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
     ]
 
 
-class ChatCompletionAssistantMessage(TypedDict, total=False):
+class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
+    cache_control: ChatCompletionCachedContent
+
+
+class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
     content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
     name: Optional[str]
@@ -369,22 +362,31 @@ class ChatCompletionAssistantMessage(TypedDict, total=False):
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
 
 
+class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
+    cache_control: ChatCompletionCachedContent
+
+
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str
+    content: Union[str, Iterable[ChatCompletionTextObject]]
     tool_call_id: str
 
 
 class ChatCompletionFunctionMessage(TypedDict):
     role: Literal["function"]
-    content: Optional[str]
+    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
     name: str
+    tool_call_id: Optional[str]
 
 
-class ChatCompletionSystemMessage(TypedDict, total=False):
+class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
     role: Required[Literal["system"]]
     content: Required[Union[str, List]]
     name: str
+
+
+class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
+    cache_control: ChatCompletionCachedContent
 
 
 AllMessageValues = Union[

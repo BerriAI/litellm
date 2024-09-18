@@ -89,9 +89,20 @@ async def test_router_retries_errors(sync_mode, error_type):
             "tpm": 240000,
             "rpm": 1800,
         },
+        {
+            "model_name": "azure/gpt-3.5-turbo",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "azure/chatgpt-functioncalling",
+                "api_key": _api_key,
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+            },
+            "tpm": 240000,
+            "rpm": 1800,
+        },
     ]
 
-    router = Router(model_list=model_list, allowed_fails=3)
+    router = Router(model_list=model_list, set_verbose=True, debug_level="DEBUG")
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -107,6 +118,12 @@ async def test_router_retries_errors(sync_mode, error_type):
             else Exception("Invalid Request")
         ),
     }
+    for _ in range(4):
+        response = await router.acompletion(
+            model="azure/gpt-3.5-turbo",
+            messages=messages,
+            mock_response="1st success to ensure deployment is healthy",
+        )
 
     try:
         if sync_mode:

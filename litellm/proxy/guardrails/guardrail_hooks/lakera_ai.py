@@ -21,7 +21,11 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.secret_managers.main import get_secret
@@ -50,8 +54,8 @@ class lakeraAI_Moderation(CustomGuardrail):
         api_key: Optional[str] = None,
         **kwargs,
     ):
-        self.async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
         )
         self.lakera_api_key = api_key or os.environ["LAKERA_API_KEY"]
         self.moderation_check = moderation_check
@@ -139,6 +143,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         ):
             return
         text = ""
+        _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
             prompt_injection_obj: Optional[GuardrailItem] = (
                 litellm.guardrail_name_config_map.get("prompt_injection")
@@ -184,6 +189,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             # Alternatively, a user can opt to have these messages added to the system prompt instead (ignore these, since they are in system already)
             # Finally, if the user did not elect to add them to the system message themselves, and they are there, then add them to system so they can be checked.
             # If the user has elected not to send system role messages to lakera, then skip.
+
             if system_message is not None:
                 if not litellm.add_function_to_prompt:
                     content = system_message.get("content")
@@ -316,7 +322,13 @@ class lakeraAI_Moderation(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         if self.event_hook is None:
             if self.moderation_check == "pre_call":
