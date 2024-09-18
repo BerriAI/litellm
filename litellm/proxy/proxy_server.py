@@ -139,6 +139,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.admin_ui_utils import (
+    admin_ui_disabled,
     html_form,
     show_missing_vars_in_env,
 )
@@ -226,7 +227,6 @@ from litellm.proxy.utils import (
     hash_token,
     log_to_opentelemetry,
     reset_budget,
-    send_email,
     update_spend,
 )
 from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
@@ -251,7 +251,7 @@ from litellm.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.secret_managers.google_kms import load_google_kms
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, str_to_bool
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -653,7 +653,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         return
 
     try:
-        from azure.identity import ClientSecretCredential
+        from azure.identity import ClientSecretCredential, DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
 
         # Set your Azure Key Vault URI
@@ -671,9 +671,10 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
             and tenant_id is not None
         ):
             # Initialize the ClientSecretCredential
-            credential = ClientSecretCredential(
-                client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-            )
+            # credential = ClientSecretCredential(
+            #     client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
+            # )
+            credential = DefaultAzureCredential()
 
             # Create the SecretClient using the credential
             client = SecretClient(vault_url=KVUri, credential=credential)
@@ -685,8 +686,10 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
                 f"Missing KVUri or client_id or client_secret or tenant_id from environment"
             )
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`"
+        _error_str = str(e)
+        verbose_proxy_logger.exception(
+            "Error when loading keys from Azure Key Vault: %s .Ensure you run `pip install azure-identity azure-keyvault-secrets`",
+            _error_str,
         )
 
 
@@ -8020,6 +8023,13 @@ async def google_login(request: Request):
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+
+    ####### Check if UI is disabled #######
+    _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
+    if _disable_ui_flag is not None:
+        is_disabled = str_to_bool(value=_disable_ui_flag)
+        if is_disabled:
+            return admin_ui_disabled()
 
     ####### Check if user is a Enterprise / Premium User #######
     if (

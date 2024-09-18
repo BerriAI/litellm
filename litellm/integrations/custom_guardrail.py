@@ -11,7 +11,7 @@ class CustomGuardrail(CustomLogger):
         self,
         guardrail_name: Optional[str] = None,
         event_hook: Optional[GuardrailEventHooks] = None,
-        **kwargs
+        **kwargs,
     ):
         self.guardrail_name = guardrail_name
         self.event_hook: Optional[GuardrailEventHooks] = event_hook
@@ -28,10 +28,14 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
         )
 
-        if self.guardrail_name not in requested_guardrails:
+        if (
+            self.event_hook
+            and self.guardrail_name not in requested_guardrails
+            and event_type.value != "logging_only"
+        ):
             return False
 
-        if self.event_hook != event_type:
+        if self.event_hook and self.event_hook != event_type.value:
             return False
 
         return True

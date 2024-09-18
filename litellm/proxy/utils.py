@@ -92,7 +92,9 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
+    litellm_parent_otel_span: Optional[Any] = None
     # Step 1: Remove the litellm_parent_otel_span
+    litellm_parent_otel_span = None
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
@@ -100,7 +102,7 @@ def safe_deep_copy(data):
     new_data = copy.deepcopy(data)
 
     # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict):
+    if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
@@ -416,6 +418,7 @@ class ProxyLogging:
                         is not True
                     ):
                         continue
+
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
@@ -470,8 +473,10 @@ class ProxyLogging:
                     ################################################################
 
                     # V1 implementation - backwards compatibility
-                    if callback.event_hook is None:
-                        if callback.moderation_check == "pre_call":
+                    if callback.event_hook is None and hasattr(
+                        callback, "moderation_check"
+                    ):
+                        if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
                         # Main - V2 Guardrails implementation
@@ -523,13 +528,7 @@ class ProxyLogging:
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
-        alert_type: Literal[
-            "llm_exceptions",
-            "llm_too_slow",
-            "llm_requests_hanging",
-            "budget_alerts",
-            "db_exceptions",
-        ],
+        alert_type: AlertType,
         request_data: Optional[dict] = None,
     ):
         """
@@ -909,7 +908,12 @@ class PrismaClient:
     org_list_transactons: dict = {}
     spend_log_transactions: List = []
 
-    def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
+    def __init__(
+        self,
+        database_url: str,
+        proxy_logging_obj: ProxyLogging,
+        http_client: Optional[Any] = None,
+    ):
         verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
@@ -940,7 +944,10 @@ class PrismaClient:
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
-        self.db = Prisma()  # Client to connect to Prisma db
+        if http_client is not None:
+            self.db = Prisma(http=http_client)
+        else:
+            self.db = Prisma()  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
@@ -994,12 +1001,13 @@ class PrismaClient:
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
+            pg_schema = os.getenv("DATABASE_SCHEMA", "public")
             ret = await self.db.query_raw(
                 f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
-                    WHERE schemaname = 'public' AND viewname IN (
+                    WHERE schemaname = '{pg_schema}' AND viewname IN (
                         {expected_views_str}
                     )
                 )
@@ -1015,7 +1023,7 @@ class PrismaClient:
                 return
             else:
                 ## check if required view exists ##
-                if required_view not in ret[0]["view_names"]:
+                if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
                     await self.db.execute_raw(
                         """
@@ -1037,7 +1045,9 @@ class PrismaClient:
                 else:
                     # don't block execution if these views are missing
                     # Convert lists to sets for efficient difference calculation
-                    ret_view_names_set = set(ret[0]["view_names"])
+                    ret_view_names_set = (
+                        set(ret[0]["view_names"]) if ret[0]["view_names"] else set()
+                    )
                     expected_views_set = set(expected_views)
                     # Find missing views
                     missing_views = expected_views_set - ret_view_names_set
@@ -1319,6 +1329,7 @@ class PrismaClient:
         verbose_proxy_logger.debug(
             f"PrismaClient: get_data - args_passed_in: {args_passed_in}"
         )
+        hashed_token: Optional[str] = None
         try:
             response: Any = None
             if (token is not None and table_name is None) or (
@@ -1333,14 +1344,14 @@ class PrismaClient:
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
-                if query_type == "find_unique":
+                if query_type == "find_unique" and hashed_token is not None:
                     if token is None:
                         raise HTTPException(
                             status_code=400,
                             detail={"error": f"No token passed in. Token={token}"},
                         )
                     response = await self.db.litellm_verificationtoken.find_unique(
-                        where={"token": hashed_token},
+                        where={"token": hashed_token},  # type: ignore
                         include={"litellm_budget_table": True},
                     )
                     if response is not None:
@@ -1733,9 +1744,9 @@ class PrismaClient:
                     updated_data = v
                     updated_data = json.dumps(updated_data)
                     updated_table_row = self.db.litellm_config.upsert(
-                        where={"param_name": k},
+                        where={"param_name": k},  # type: ignore
                         data={
-                            "create": {"param_name": k, "param_value": updated_data},
+                            "create": {"param_name": k, "param_value": updated_data},  # type: ignore
                             "update": {"param_value": updated_data},
                         },
                     )
@@ -2288,11 +2299,15 @@ class DBClient:
         """
         For closing connection on server shutdown
         """
-        return await self.db.disconnect()
+        if self.db is not None:
+            return await self.db.disconnect()  # type: ignore
+        return asyncio.sleep(0)  # Return a dummy coroutine if self.db is None
 
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
+    module_name = value
+    instance_name = None
     try:
         print_verbose(f"value: {value}")
         # Split the path by dots to separate module from instance
@@ -2325,7 +2340,12 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         return instance
     except ImportError as e:
         # Re-raise the exception with a user-friendly message
-        raise ImportError(f"Could not import {instance_name} from {module_name}") from e
+        if instance_name and module_name:
+            raise ImportError(
+                f"Could not import {instance_name} from {module_name}"
+            ) from e
+        else:
+            raise e
     except Exception as e:
         raise e
 
@@ -2386,17 +2406,26 @@ async def send_email(receiver_email, subject, html):
         "sending email from %s to %s", sender_email, receiver_email
     )
 
+    if smtp_host is None:
+        raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
+
+    if smtp_username is None:
+        raise ValueError("Trying to use SMTP, but SMTP_USERNAME is not set")
+
+    if smtp_password is None:
+        raise ValueError("Trying to use SMTP, but SMTP_PASSWORD is not set")
+
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
 
     try:
         # Establish a secure connection with the SMTP server
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:  # type: ignore
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account
-            server.login(smtp_username, smtp_password)
+            server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
             server.send_message(email_message)
@@ -2578,6 +2607,7 @@ async def update_spend(
     spend_logs: list,
     """
     n_retry_times = 3
+    i = None
     ### UPDATE USER TABLE ###
     if len(prisma_client.user_list_transactons.keys()) > 0:
         for i in range(n_retry_times + 1):
@@ -2953,10 +2983,12 @@ async def update_spend(
                     )
                 break
             except httpx.ReadTimeout:
+                if i is None:
+                    i = 0
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
+                await asyncio.sleep(2**i)  # type: ignore
             except Exception as e:
                 import traceback
 
@@ -3067,10 +3099,11 @@ def get_error_message_str(e: Exception) -> str:
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
         elif hasattr(e, "message"):
-            if isinstance(e.message, "str"):
-                error_message = e.message
-            elif isinstance(e.message, dict):
-                error_message = json.dumps(e.message)
+            _error = getattr(e, "message", None)
+            if isinstance(_error, str):
+                error_message = _error
+            elif isinstance(_error, dict):
+                error_message = json.dumps(_error)
         else:
             error_message = str(e)
     else:

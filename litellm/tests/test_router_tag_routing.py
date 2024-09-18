@@ -160,3 +160,60 @@ async def test_default_tagged_deployments():
         print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "default-model"
+
+
+@pytest.mark.asyncio()
+async def test_error_from_tag_routing():
+    """
+    Tests the correct error raised when no deployments found for tag
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+                "model_info": {"id": "default-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+                "model_info": {"id": "default-model-2"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["teamA"],
+                },
+                "model_info": {"id": "very-expensive-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    try:
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            metadata={"tags": ["paid"]},
+        )
+
+        pytest.fail("this should have failed - expected it to fail")
+    except Exception as e:
+        from litellm.types.router import RouterErrors
+
+        assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
+        print("got expected exception = ", e)
+        pass

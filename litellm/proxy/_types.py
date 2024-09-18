@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
-from litellm.types.router import UpdateRouterConfig
+from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
 if TYPE_CHECKING:
@@ -123,6 +123,7 @@ AlertType = Literal[
     "outage_alerts",
     "region_outage_alerts",
     "fallback_reports",
+    "failed_tracking_spend",
 ]
 
 
@@ -160,10 +161,19 @@ class LiteLLMBase(BaseModel):
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
     """
     Set default upperbound to max budget a key called via `/key/generate` can be.
+
+    Args:
+        max_budget (Optional[float], optional): Max budget a key can be. Defaults to None.
+        budget_duration (Optional[str], optional): Duration of the budget. Defaults to None.
+        duration (Optional[str], optional): Duration of the key. Defaults to None.
+        max_parallel_requests (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+        tpm_limit (Optional[int], optional): Tpm limit. Defaults to None.
+        rpm_limit (Optional[int], optional): Rpm limit. Defaults to None.
     """
 
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
+    duration: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1817,6 +1827,8 @@ class ProxyException(Exception):
             or "No deployments available" in self.message
         ):
             self.code = "429"
+        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
+            self.code = "401"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
