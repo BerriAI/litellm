@@ -19,8 +19,12 @@ model_list:
       model: openai/429
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app
-      tags: ["fake"]
 
 
 general_settings: 
  master_key: sk-1234 
+
+litellm_settings:
+  success_callback: ["gcs_bucket"]
+  
+
