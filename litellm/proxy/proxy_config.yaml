@@ -19,18 +19,12 @@ model_list:
       model: openai/429
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app
-      tags: ["fake"]
 
 
 general_settings: 
  master_key: sk-1234 
-
-
 litellm_settings:
-  callbacks: ["gcs_bucket"]
-
-
-router_settings:
-  enable_tag_filtering: true
-
+  success_callback: ["datadog"]
+  service_callback: ["datadog"]
+  cache: True 
 
