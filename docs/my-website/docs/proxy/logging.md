@@ -61,7 +61,7 @@ litellm_settings:
 
 Removes any field with `user_api_key_*` from metadata.
 
-## What gets logged?
+## What gets logged? StandardLoggingPayload
 
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 

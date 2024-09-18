@@ -89,6 +89,7 @@ async def test_basic_gcs_logger():
             "user_api_key_team_alias": None,
             "user_api_key_metadata": {},
             "requester_ip_address": "127.0.0.1",
+            "requester_metadata": {"foo": "bar"},
             "spend_logs_metadata": {"hello": "world"},
             "headers": {
                 "content-type": "application/json",
@@ -158,6 +159,8 @@ async def test_basic_gcs_logger():
         gcs_payload["spend_log_metadata"]["user_api_key_user_id"]
         == "116544810872468347480"
     )
+
+    assert gcs_payload["metadata"]["requester_metadata"] == {"foo": "bar"}
 
     # Delete Object from GCS
     print("deleting object from GCS")
