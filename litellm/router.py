@@ -4632,24 +4632,25 @@ class Router:
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
-            for model_alias, model_value in self.model_group_alias.items():
+            if hasattr(self, "model_group_alias"):
+                for model_alias, model_value in self.model_group_alias.items():
 
-                if isinstance(model_value, str):
-                    _router_model_name: str = model_value
-                elif isinstance(model_value, dict):
-                    _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                    if _model_value["hidden"] is True:
-                        continue
+                    if isinstance(model_value, str):
+                        _router_model_name: str = model_value
+                    elif isinstance(model_value, dict):
+                        _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
+                        if _model_value["hidden"] is True:
+                            continue
+                        else:
+                            _router_model_name = _model_value["model"]
                     else:
-                        _router_model_name = _model_value["model"]
-                else:
-                    continue
+                        continue
 
-                returned_models.extend(
-                    self._get_all_deployments(
-                        model_name=_router_model_name, model_alias=model_alias
+                    returned_models.extend(
+                        self._get_all_deployments(
+                            model_name=_router_model_name, model_alias=model_alias
+                        )
                     )
-                )
 
             if model_name is None:
                 returned_models += self.model_list

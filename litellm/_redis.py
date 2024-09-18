@@ -12,12 +12,13 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 import litellm
+from litellm import get_secret
 
 from ._logging import verbose_logger
 
@@ -83,7 +84,7 @@ def _redis_kwargs_from_environment():
 
     return_dict = {}
     for k, v in mapping.items():
-        value = litellm.get_secret(k, default_value=None)  # check os.environ/key vault
+        value = get_secret(k, default_value=None)  # type: ignore
         if value is not None:
             return_dict[v] = value
     return return_dict
@@ -116,7 +117,7 @@ def _get_redis_client_logic(**env_overrides):
     for k, v in env_overrides.items():
         if isinstance(v, str) and v.startswith("os.environ/"):
             v = v.replace("os.environ/", "")
-            value = litellm.get_secret(v)
+            value = get_secret(v)  # type: ignore
             env_overrides[k] = value
 
     redis_kwargs = {
@@ -124,11 +125,11 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
-    _startup_nodes = redis_kwargs.get("startup_nodes", None) or litellm.get_secret(
+    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
         "REDIS_CLUSTER_NODES"
     )
 
-    if _startup_nodes is not None:
+    if _startup_nodes is not None and isinstance(_startup_nodes, str):
         redis_kwargs["startup_nodes"] = json.loads(_startup_nodes)
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
@@ -138,6 +139,10 @@ def _get_redis_client_logic(**env_overrides):
         redis_kwargs.pop("password", None)
     elif "startup_nodes" in redis_kwargs and redis_kwargs["startup_nodes"] is not None:
         pass
+    elif (
+        "sentinel_nodes" in redis_kwargs and redis_kwargs["sentinel_nodes"] is not None
+    ):
+        pass
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
     # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
@@ -145,7 +150,7 @@ def _get_redis_client_logic(**env_overrides):
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
-    _redis_cluster_nodes_in_env = litellm.get_secret("REDIS_CLUSTER_NODES")
+    _redis_cluster_nodes_in_env: Optional[str] = get_secret("REDIS_CLUSTER_NODES")  # type: ignore
     if _redis_cluster_nodes_in_env is not None:
         try:
             redis_kwargs["startup_nodes"] = json.loads(_redis_cluster_nodes_in_env)
@@ -174,6 +179,44 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
 
 
+def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
+    sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    service_name = redis_kwargs.get("service_name")
+
+    if not sentinel_nodes or not service_name:
+        raise ValueError(
+            "Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel."
+        )
+
+    verbose_logger.debug("init_redis_sentinel: sentinel nodes: ", sentinel_nodes)
+
+    # Set up the Sentinel client
+    sentinel = redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+
+    # Return the master instance for the given service
+
+    return sentinel.master_for(service_name)
+
+
+def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
+    sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    service_name = redis_kwargs.get("service_name")
+
+    if not sentinel_nodes or not service_name:
+        raise ValueError(
+            "Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel."
+        )
+
+    verbose_logger.debug("init_redis_sentinel: sentinel nodes: ", sentinel_nodes)
+
+    # Set up the Sentinel client
+    sentinel = async_redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+
+    # Return the master instance for the given service
+
+    return sentinel.master_for(service_name)
+
+
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
@@ -185,11 +228,12 @@ def get_redis_client(**env_overrides):
 
         return redis.Redis.from_url(**url_kwargs)
 
-    if (
-        "startup_nodes" in redis_kwargs
-        or litellm.get_secret("REDIS_CLUSTER_NODES") is not None
-    ):
+    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
         return init_redis_cluster(redis_kwargs)
+
+    # Check for Redis Sentinel
+    if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
+        return _init_redis_sentinel(redis_kwargs)
 
     return redis.Redis(**redis_kwargs)
 
@@ -203,7 +247,7 @@ def get_redis_async_client(**env_overrides):
             if arg in args:
                 url_kwargs[arg] = redis_kwargs[arg]
             else:
-                litellm.print_verbose(
+                verbose_logger.debug(
                     "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
                         arg
                     )
@@ -225,8 +269,12 @@ def get_redis_async_client(**env_overrides):
             new_startup_nodes.append(ClusterNode(**item))
         redis_kwargs.pop("startup_nodes")
         return async_redis.RedisCluster(
-            startup_nodes=new_startup_nodes, **cluster_kwargs
+            startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
         )
+
+    # Check for Redis Sentinel
+    if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
+        return _init_async_redis_sentinel(redis_kwargs)
 
     return async_redis.Redis(
         socket_timeout=5,
