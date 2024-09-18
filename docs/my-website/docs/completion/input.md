@@ -126,7 +126,7 @@ def completion(
 
 - `role`: *string* - The role of the message's author. Roles can be: system, user, assistant, or function.
 
-- `content`: *string or null* - The contents of the message. It is required for all messages, but may be null for assistant messages with function calls.
+- `content`: *string or list[dict] or null* - The contents of the message. It is required for all messages, but may be null for assistant messages with function calls.
 
 - `name`: *string (optional)* - The name of the author of the message. It is required if the role is "function". The name should match the name of the function represented in the content. It can contain characters (a-z, A-Z, 0-9), and underscores, with a maximum length of 64 characters.
 
