@@ -115,7 +115,7 @@ def rerank(
                 "preset_cache_key": None,
                 "stream_response": {},
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=_custom_llm_provider,
         )
 
         # Implement rerank logic here based on the custom_llm_provider
