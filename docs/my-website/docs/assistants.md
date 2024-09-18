@@ -14,6 +14,12 @@ LiteLLM currently covers:
 - Get Messages
 - Run Thread
 
+
+## **Supported Providers**:
+- [OpenAI](#quick-start)
+- [Azure OpenAI](#azure-openai)
+- [OpenAI-Compatible APIs](#openai-compatible-apis)
+
 ## Quick Start 
 
 Call an existing Assistant. 
