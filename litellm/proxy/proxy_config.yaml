@@ -24,13 +24,3 @@ model_list:
 
 general_settings: 
  master_key: sk-1234 
-
-
-litellm_settings:
-  callbacks: ["gcs_bucket"]
-
-
-router_settings:
-  enable_tag_filtering: true
-
-
