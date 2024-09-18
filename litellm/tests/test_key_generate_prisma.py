@@ -3123,3 +3123,31 @@ async def test_admin_only_routes(prisma_client):
         pass
 
     setattr(proxy_server, "general_settings", initial_general_settings)
+
+
+@pytest.mark.asyncio
+async def test_auth_vertex_ai_route(prisma_client):
+    """
+    If user is premium user and vertex-ai route is used. Assert Virtual Key checks are run
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "premium_user", True)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    route = "/vertex-ai/publishers/google/models/gemini-1.5-flash-001:generateContent"
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+    request._headers = {"Authorization": "Bearer sk-12345"}
+    try:
+        await user_api_key_auth(request=request, api_key="Bearer " + "sk-12345")
+        pytest.fail("Expected this call to fail. User is over limit.")
+    except Exception as e:
+        print(vars(e))
+        print("error str=", str(e.message))
+        error_str = str(e.message)
+        assert e.code == "401"
+        assert "Invalid proxy server token passed" in error_str
+
+        pass
