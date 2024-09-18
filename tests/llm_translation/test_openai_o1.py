@@ -99,3 +99,24 @@ async def test_o1_max_completion_tokens(respx_mock: MockRouter, model: str):
 
     print(f"response: {response}")
     assert isinstance(response, ModelResponse)
+
+
+def test_litellm_responses():
+    """
+    ensures that type of completion_tokens_details is correctly handled / returned
+    """
+    from litellm import ModelResponse
+    from litellm.types.utils import CompletionTokensDetails
+
+    response = ModelResponse(
+        usage={
+            "completion_tokens": 436,
+            "prompt_tokens": 14,
+            "total_tokens": 450,
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        }
+    )
+
+    print("response: ", response)
+
+    assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
