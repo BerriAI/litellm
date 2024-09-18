@@ -89,7 +89,7 @@ class AsyncHTTPHandler:
         )
 
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects
+            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
         )
         return response
 
@@ -329,7 +329,7 @@ class HTTPHandler:
         )
 
         response = self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects
+            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
         )
         return response
 
