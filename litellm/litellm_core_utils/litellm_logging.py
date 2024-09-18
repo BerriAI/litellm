@@ -1633,17 +1633,6 @@ class Logging:
         self.model_call_details.setdefault("original_response", None)
         self.model_call_details["response_cost"] = 0
 
-        ## STANDARDIZED LOGGING PAYLOAD
-        self.model_call_details["standard_logging_object"] = (
-            get_standard_logging_object_payload(
-                kwargs=self.model_call_details,
-                init_response_obj={},
-                start_time=start_time,
-                end_time=end_time,
-                logging_obj=self,
-            )
-        )
-
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):
             self.model_call_details.setdefault("litellm_params", {})
             metadata = (
