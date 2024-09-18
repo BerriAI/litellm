@@ -1,28 +1,165 @@
-# +-------------------------------------------------------------+
-#
-#           Use SecretDetection /moderations for your LLM calls
-#
-# +-------------------------------------------------------------+
-#  Thank you users! We ❤️ you! - Krrish & Ishaan
+# ✨ Secret Detection/Redaction (Enterprise-only)
+❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 
 
-import sys
-import os
+Example if you want to redact the value of `OPENAI_API_KEY` in the following request
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-from typing import Optional
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm._logging import verbose_proxy_logger
-import tempfile
-from litellm.integrations.custom_guardrail import CustomGuardrail
+#### Incoming Request 
 
-GUARDRAIL_NAME = "hide_secrets"
+```json
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef'",
+        }
+    ]
+}
+```
 
-_custom_plugins_path = "file://" + os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
-)
+#### Request after Moderation
+
+```json
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how's it going, API_KEY = '[REDACTED]'",
+        }
+    ]
+}
+```
+
+**Usage**
+
+**Step 1** Add this to your config.yaml 
+
+```yaml
+guardrails:
+  - guardrail_name: "my-custom-name"
+    litellm_params:
+      guardrail: "hide-secrets"  # supported values: "aporia", "lakera", .. 
+      mode: "pre_call"
+```
+
+**Step 2** Run litellm proxy with `--detailed_debug` to see the server logs
+
+```
+litellm --config config.yaml --detailed_debug
+```
+
+**Step 3** Test it with request
+
+Send this request
+```shell
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "fake-claude-endpoint",
+    "messages": [
+      {
+        "role": "user",
+        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+      }
+    ],
+    "guardrails": ["my-custom-name"]
+}'
+```
+
+
+Expect to see the following warning on your litellm server logs
+
+```shell
+LiteLLM Proxy:WARNING: secret_detection.py:88 - Detected and redacted secrets in message: ['Secret Keyword']
+```
+
+
+You can also see the raw request sent from litellm to the API Provider with (`--detailed_debug`).
+```json
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.groq.com/openai/v1/ \
+-H 'Authorization: Bearer gsk_mySVchjY********************************************' \
+-d {
+  "model": "llama3-8b-8192",
+  "messages": [
+    {
+      "role": "user",
+      "content": "what is the time today, openai_api_key=[REDACTED]"
+    }
+  ],
+  "stream": false,
+  "extra_body": {}
+}
+```
+
+## Turn on/off per project (API KEY/Team)
+
+[**See Here**](./quick_start.md#-control-guardrails-per-project-api-key)
+
+## Control secret detectors
+
+LiteLLM uses the [`detect-secrets`](https://github.com/Yelp/detect-secrets) library for secret detection. See [all plugins run by default](#default-config-used)
+
+
+### Usage
+
+Here's how to control which plugins are run per request. This is useful if developers complain about secret detection impacting response quality.
+
+**1. Set-up config.yaml**
+
+```yaml
+guardrails:
+  - guardrail_name: "hide-secrets"
+    litellm_params:
+      guardrail: "hide-secrets"  # supported values: "aporia", "lakera"
+      mode: "pre_call"
+      detect_secrets_config: {
+         "plugins_used": [
+          {"name": "SoftlayerDetector"},
+          {"name": "StripeDetector"},
+          {"name": "NpmDetector"}
+        ]
+      }
+```
+
+**2. Start proxy**
+
+Run with `--detailed_debug` for more detailed logs. Use in dev only. 
+
+```bash
+litellm --config /path/to/config.yaml --detailed_debug
+```
+
+**3. Test it!**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "fake-claude-endpoint",
+    "messages": [
+      {
+        "role": "user",
+        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+      }
+    ],
+    "guardrails": ["hide-secrets"]
+}'
+```
+
+**Expected Logs**
+
+Look for this in your logs, to confirm your changes worked as expected.
+
+```
+No secrets detected on input.
+```
+
+### Default Config Used 
+
+```
 _default_detect_secrets_config = {
     "plugins_used": [
         {"name": "SoftlayerDetector"},
@@ -417,139 +554,4 @@ _default_detect_secrets_config = {
         {"name": "HexHighEntropyString", "limit": 3.0},
     ]
 }
-
-
-class _ENTERPRISE_SecretDetection(CustomGuardrail):
-    def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
-        self.user_defined_detect_secrets_config = detect_secrets_config
-        super().__init__(**kwargs)
-
-    def scan_message_for_secrets(self, message_content: str):
-        from detect_secrets import SecretsCollection
-        from detect_secrets.settings import transient_settings
-
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
-        temp_file.write(message_content.encode("utf-8"))
-        temp_file.close()
-
-        secrets = SecretsCollection()
-
-        detect_secrets_config = (
-            self.user_defined_detect_secrets_config or _default_detect_secrets_config
-        )
-        with transient_settings(detect_secrets_config):
-            secrets.scan_file(temp_file.name)
-
-        os.remove(temp_file.name)
-
-        detected_secrets = []
-        for file in secrets.files:
-
-            for found_secret in secrets[file]:
-
-                if found_secret.secret_value is None:
-                    continue
-                detected_secrets.append(
-                    {"type": found_secret.type, "value": found_secret.secret_value}
-                )
-
-        return detected_secrets
-
-    async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        if user_api_key_dict.permissions is not None:
-            if GUARDRAIL_NAME in user_api_key_dict.permissions:
-                if user_api_key_dict.permissions[GUARDRAIL_NAME] is False:
-                    return False
-
-        return True
-
-    #### CALL HOOKS - proxy only ####
-    async def async_pre_call_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
-        data: dict,
-        call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
-    ):
-        from detect_secrets import SecretsCollection
-        from detect_secrets.settings import default_settings
-
-        print("INSIDE SECRET DETECTION PRE-CALL HOOK!")
-
-        if await self.should_run_check(user_api_key_dict) is False:
-            return
-
-        print("RUNNING CHECK!")
-        if "messages" in data and isinstance(data["messages"], list):
-            for message in data["messages"]:
-                if "content" in message and isinstance(message["content"], str):
-
-                    detected_secrets = self.scan_message_for_secrets(message["content"])
-
-                    for secret in detected_secrets:
-                        message["content"] = message["content"].replace(
-                            secret["value"], "[REDACTED]"
-                        )
-
-                    if len(detected_secrets) > 0:
-                        secret_types = [secret["type"] for secret in detected_secrets]
-                        verbose_proxy_logger.warning(
-                            f"Detected and redacted secrets in message: {secret_types}"
-                        )
-                    else:
-                        verbose_proxy_logger.debug("No secrets detected on input.")
-
-        if "prompt" in data:
-            if isinstance(data["prompt"], str):
-                detected_secrets = self.scan_message_for_secrets(data["prompt"])
-                for secret in detected_secrets:
-                    data["prompt"] = data["prompt"].replace(
-                        secret["value"], "[REDACTED]"
-                    )
-                if len(detected_secrets) > 0:
-                    secret_types = [secret["type"] for secret in detected_secrets]
-                    verbose_proxy_logger.warning(
-                        f"Detected and redacted secrets in prompt: {secret_types}"
-                    )
-            elif isinstance(data["prompt"], list):
-                for item in data["prompt"]:
-                    if isinstance(item, str):
-                        detected_secrets = self.scan_message_for_secrets(item)
-                        for secret in detected_secrets:
-                            item = item.replace(secret["value"], "[REDACTED]")
-                        if len(detected_secrets) > 0:
-                            secret_types = [
-                                secret["type"] for secret in detected_secrets
-                            ]
-                            verbose_proxy_logger.warning(
-                                f"Detected and redacted secrets in prompt: {secret_types}"
-                            )
-
-        if "input" in data:
-            if isinstance(data["input"], str):
-                detected_secrets = self.scan_message_for_secrets(data["input"])
-                for secret in detected_secrets:
-                    data["input"] = data["input"].replace(secret["value"], "[REDACTED]")
-                if len(detected_secrets) > 0:
-                    secret_types = [secret["type"] for secret in detected_secrets]
-                    verbose_proxy_logger.warning(
-                        f"Detected and redacted secrets in input: {secret_types}"
-                    )
-            elif isinstance(data["input"], list):
-                _input_in_request = data["input"]
-                for idx, item in enumerate(_input_in_request):
-                    if isinstance(item, str):
-                        detected_secrets = self.scan_message_for_secrets(item)
-                        for secret in detected_secrets:
-                            _input_in_request[idx] = item.replace(
-                                secret["value"], "[REDACTED]"
-                            )
-                        if len(detected_secrets) > 0:
-                            secret_types = [
-                                secret["type"] for secret in detected_secrets
-                            ]
-                            verbose_proxy_logger.warning(
-                                f"Detected and redacted secrets in input: {secret_types}"
-                            )
-                verbose_proxy_logger.debug("Data after redacting input %s", data)
-        return
+```

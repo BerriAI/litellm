@@ -1278,10 +1278,14 @@ class StandardLoggingModelInformation(TypedDict):
     model_map_value: Optional[ModelInfo]
 
 
+StandardLoggingPayloadStatus = Literal["success", "failure"]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
     response_cost: float
+    status: StandardLoggingPayloadStatus
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -1302,6 +1306,7 @@ class StandardLoggingPayload(TypedDict):
     requester_ip_address: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
+    error_str: Optional[str]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
 

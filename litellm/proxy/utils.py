@@ -414,6 +414,7 @@ class ProxyLogging:
                         is not True
                     ):
                         continue
+
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
@@ -468,7 +469,9 @@ class ProxyLogging:
                     ################################################################
 
                     # V1 implementation - backwards compatibility
-                    if callback.event_hook is None:
+                    if callback.event_hook is None and hasattr(
+                        callback, "moderation_check"
+                    ):
                         if callback.moderation_check == "pre_call":  # type: ignore
                             return
                     else:
@@ -975,12 +978,13 @@ class PrismaClient:
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
+            pg_schema = os.getenv("DATABASE_SCHEMA", "public")
             ret = await self.db.query_raw(
                 f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
-                    WHERE schemaname = 'public' AND viewname IN (
+                    WHERE schemaname = '{pg_schema}' AND viewname IN (
                         {expected_views_str}
                     )
                 )
