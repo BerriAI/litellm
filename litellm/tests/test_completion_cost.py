@@ -1257,14 +1257,7 @@ def test_completion_cost_databricks_embedding(model):
     cost = completion_cost(completion_response=resp)
 
 
-@pytest.mark.parametrize(
-    "model",
-    [
-        "fireworks_ai/mixtral-8x7b-instruct",
-        "fireworks_ai/firefunction-v1",
-    ],
-)
-def test_completion_cost_fireworks_ai():
+def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
