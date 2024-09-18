@@ -507,6 +507,46 @@ def delete_assistant(
             client=client,
             async_delete_assistants=async_delete_assistants,
         )
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token: Optional[str] = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        if isinstance(client, OpenAI):
+            client = None  # only pass client if it's AzureOpenAI
+
+        response = azure_assistants_api.delete_assistant(
+            assistant_id=assistant_id,
+            api_base=api_base,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            api_version=api_version,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            client=client,
+            async_delete_assistants=async_delete_assistants,
+        )
     else:
         raise litellm.exceptions.BadRequestError(
             message="LiteLLM doesn't support {} for 'delete_assistant'. Only 'openai' is supported.".format(

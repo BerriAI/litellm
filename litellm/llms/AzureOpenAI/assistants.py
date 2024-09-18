@@ -910,3 +910,66 @@ class AzureAssistantsAPI(BaseLLM):
 
         response = azure_openai_client.beta.assistants.create(**create_assistant_data)
         return response
+
+    # Delete Assistant
+    async def async_delete_assistant(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        assistant_id: str,
+    ):
+        azure_openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = await azure_openai_client.beta.assistants.delete(
+            assistant_id=assistant_id
+        )
+        return response
+
+    def delete_assistant(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        assistant_id: str,
+        async_delete_assistants: Optional[bool] = None,
+        client=None,
+    ):
+        if async_delete_assistants is not None and async_delete_assistants == True:
+            return self.async_delete_assistant(
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+                assistant_id=assistant_id,
+            )
+        azure_openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = azure_openai_client.beta.assistants.delete(assistant_id=assistant_id)
+        return response
