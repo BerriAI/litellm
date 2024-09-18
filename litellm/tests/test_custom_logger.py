@@ -156,7 +156,10 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/chatgpt-v-2", messages=messages, stream=True
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                mock_response="Exception: content_filter_policy",
+                stream=True,
             )
             for chunk in response:
                 print(f"chunk: {chunk}")
