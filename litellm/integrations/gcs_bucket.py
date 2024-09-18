@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.logging_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CommonProxyErrors, SpendLogsMetadata, SpendLogsPayload
+from litellm.types.utils import StandardLoggingMetadata, StandardLoggingPayload
 
 
 class RequestKwargs(TypedDict):
@@ -30,6 +31,7 @@ class GCSBucketPayload(TypedDict):
     start_time: str
     end_time: str
     response_cost: Optional[float]
+    metadata: Optional[StandardLoggingMetadata]
     spend_log_metadata: str
     exception: Optional[str]
     log_event_type: Optional[str]
@@ -183,13 +185,22 @@ class GCSBucketLogger(GCSBucketBase):
             end_user_id=kwargs.get("end_user_id", None),
         )
 
+        # Ensure everything in the payload is converted to str
+        payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+
+        if payload is None:
+            raise ValueError("standard_logging_object not found in kwargs")
+
         gcs_payload: GCSBucketPayload = GCSBucketPayload(
             request_kwargs=request_kwargs,
             response_obj=response_dict,
             start_time=start_time,
             end_time=end_time,
+            metadata=payload["metadata"],
             spend_log_metadata=_spend_log_payload.get("metadata", ""),
-            response_cost=kwargs.get("response_cost", None),
+            response_cost=payload["response_cost"],
             exception=exception_str,
             log_event_type=None,
         )
