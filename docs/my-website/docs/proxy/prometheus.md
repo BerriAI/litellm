@@ -4,7 +4,8 @@ import TabItem from '@theme/TabItem';
 # 📈 [BETA] Prometheus metrics
 
 :::info
-🚨 Prometheus metrics will be out of Beta on September 15, 2024 - as part of this release it will be on LiteLLM Enterprise starting at $250/mo
+
+✨ Prometheus metrics is on LiteLLM Enterprise starting at $250/mo
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
