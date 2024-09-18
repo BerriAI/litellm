@@ -59,25 +59,28 @@ async def test_get_assistants(provider, sync_mode):
         assert isinstance(assistants, AsyncCursorPage)
 
 
-@pytest.mark.parametrize("provider", ["openai"])
+@pytest.mark.parametrize("provider", ["azure", "openai"])
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
 )
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_create_delete_assistants(provider, sync_mode):
-    data = {
-        "custom_llm_provider": provider,
-    }
+    model = "gpt-4-turbo"
+    if provider == "azure":
+        os.environ["AZURE_API_VERSION"] = "2024-05-01-preview"
+        model = "chatgpt-v-2"
 
     if sync_mode == True:
         assistant = litellm.create_assistants(
-            custom_llm_provider="openai",
-            model="gpt-4-turbo",
+            custom_llm_provider=provider,
+            model=model,
             instructions="You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
             name="Math Tutor",
             tools=[{"type": "code_interpreter"}],
         )
+
         print("New assistants", assistant)
         assert isinstance(assistant, Assistant)
         assert (
@@ -88,14 +91,14 @@ async def test_create_delete_assistants(provider, sync_mode):
 
         # delete the created assistant
         response = litellm.delete_assistant(
-            custom_llm_provider="openai", assistant_id=assistant.id
+            custom_llm_provider=provider, assistant_id=assistant.id
         )
         print("Response deleting assistant", response)
         assert response.id == assistant.id
     else:
         assistant = await litellm.acreate_assistants(
-            custom_llm_provider="openai",
-            model="gpt-4-turbo",
+            custom_llm_provider=provider,
+            model=model,
             instructions="You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
             name="Math Tutor",
             tools=[{"type": "code_interpreter"}],
@@ -109,7 +112,7 @@ async def test_create_delete_assistants(provider, sync_mode):
         assert assistant.id is not None
 
         response = await litellm.adelete_assistant(
-            custom_llm_provider="openai", assistant_id=assistant.id
+            custom_llm_provider=provider, assistant_id=assistant.id
         )
         print("Response deleting assistant", response)
         assert response.id == assistant.id
