@@ -653,38 +653,19 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         return
 
     try:
-        from azure.identity import ClientSecretCredential, DefaultAzureCredential
+        from azure.identity import DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
 
         # Set your Azure Key Vault URI
         KVUri = os.getenv("AZURE_KEY_VAULT_URI", None)
 
-        # Set your Azure AD application/client ID, client secret, and tenant ID
-        client_id = os.getenv("AZURE_CLIENT_ID", None)
-        client_secret = os.getenv("AZURE_CLIENT_SECRET", None)
-        tenant_id = os.getenv("AZURE_TENANT_ID", None)
+        credential = DefaultAzureCredential()
 
-        if (
-            KVUri is not None
-            and client_id is not None
-            and client_secret is not None
-            and tenant_id is not None
-        ):
-            # Initialize the ClientSecretCredential
-            # credential = ClientSecretCredential(
-            #     client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-            # )
-            credential = DefaultAzureCredential()
+        # Create the SecretClient using the credential
+        client = SecretClient(vault_url=KVUri, credential=credential)
 
-            # Create the SecretClient using the credential
-            client = SecretClient(vault_url=KVUri, credential=credential)
-
-            litellm.secret_manager_client = client
-            litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
-        else:
-            raise Exception(
-                f"Missing KVUri or client_id or client_secret or tenant_id from environment"
-            )
+        litellm.secret_manager_client = client
+        litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
     except Exception as e:
         _error_str = str(e)
         verbose_proxy_logger.exception(
