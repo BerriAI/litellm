@@ -478,6 +478,7 @@ def function_setup(
                     inspect.iscoroutinefunction(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
+                    or callback == "cloudwatch"
                 ):
                     if dynamic_async_success_callbacks is not None and isinstance(
                         dynamic_async_success_callbacks, list
@@ -602,6 +603,8 @@ def function_setup(
         litellm_params = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
+        elif "litellm_metadata" in kwargs:
+            litellm_params["metadata"] = kwargs["litellm_metadata"]
         logging_obj.update_environment_variables(
             model=model,
             user="",
