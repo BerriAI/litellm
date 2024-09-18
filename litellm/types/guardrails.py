@@ -89,6 +89,9 @@ class LitellmParams(TypedDict):
     presidio_ad_hoc_recognizers: Optional[str]
     mock_redacted_text: Optional[dict]
 
+    # hide secrets params
+    detect_secrets_config: Optional[dict]
+
 
 class Guardrail(TypedDict):
     guardrail_name: str

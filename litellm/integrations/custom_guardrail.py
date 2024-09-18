@@ -29,12 +29,13 @@ class CustomGuardrail(CustomLogger):
         )
 
         if (
-            self.guardrail_name not in requested_guardrails
+            self.event_hook
+            and self.guardrail_name not in requested_guardrails
             and event_type.value != "logging_only"
         ):
             return False
 
-        if self.event_hook != event_type.value:
+        if self.event_hook and self.event_hook != event_type.value:
             return False
 
         return True
