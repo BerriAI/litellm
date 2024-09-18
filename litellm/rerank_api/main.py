@@ -136,7 +136,7 @@ def rerank(
                     "Cohere API key is required, please set 'COHERE_API_KEY' in your environment"
                 )
 
-            api_base = (
+            api_base: Optional[str] = (
                 optional_params.api_base
                 or litellm.api_base
                 or get_secret("COHERE_API_BASE")  # type: ignore
@@ -166,7 +166,7 @@ def rerank(
             )
             pass
         elif _custom_llm_provider == "azure_ai":
-            api_base: Optional[str] = (
+            api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret("AZURE_AI_API_BASE")  # type: ignore

@@ -2476,7 +2476,7 @@ def get_standard_logging_object_payload(
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
         model_cost_name = _select_model_name_for_cost_calc(
             model=None,
-            completion_response=init_response_obj,
+            completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
         )
@@ -2527,7 +2527,7 @@ def get_standard_logging_object_payload(
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
             response=(  # type: ignore
-                response_obj if len(response_obj.keys()) > 0 else init_response_obj
+                response_obj if len(response_obj.keys()) > 0 else init_response_obj  # type: ignore
             ),
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
