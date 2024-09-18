@@ -1641,6 +1641,7 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=self,
+                status="failure",
             )
         )
 
