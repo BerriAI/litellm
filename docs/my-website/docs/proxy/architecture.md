@@ -14,6 +14,8 @@ import TabItem from '@theme/TabItem';
 1. **User Sends Request**: The process begins when a user sends a request to the LiteLLM Proxy Server (Gateway).
 
 2. [**Virtual Keys**](../virtual_keys): At this stage the `Bearer` token in the request is checked to ensure it is valid and under it's budget. [Here is the list of checks that run for each request](https://github.com/BerriAI/litellm/blob/ba41a72f92a9abf1d659a87ec880e8e319f87481/litellm/proxy/auth/auth_checks.py#L43)
+    - 2.1 Check if the Virtual Key exists in Redis Cache or In Memory Cache
+    - 2.2 **If not in Cache**, Lookup Virtual Key in DB
 
 3. **Rate Limiting**: The [MaxParallelRequestsHandler](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py) checks the **rate limit (rpm/tpm)** for the the following components:
     - Global Server Rate Limit
