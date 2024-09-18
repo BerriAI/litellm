@@ -490,6 +490,19 @@ class Usage(CompletionUsage):
             completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=reasoning_tokens
             )
+
+        # Ensure completion_tokens_details is properly handled
+        if "completion_tokens_details" in params:
+            if isinstance(params["completion_tokens_details"], dict):
+                completion_tokens_details = CompletionTokensDetails(
+                    **params["completion_tokens_details"]
+                )
+            elif isinstance(
+                params["completion_tokens_details"], CompletionTokensDetails
+            ):
+                completion_tokens_details = params["completion_tokens_details"]
+            del params["completion_tokens_details"]
+
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,

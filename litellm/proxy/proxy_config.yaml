@@ -19,20 +19,18 @@ model_list:
       model: openai/429
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app
+      tags: ["fake"]
 
 
 general_settings: 
  master_key: sk-1234 
- alerting: ["slack"]
- alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
- alert_to_webhook_url: {
-    "llm_too_slow": [
-      "os.environ/SLACK_WEBHOOK_URL",
-      "os.environ/SLACK_WEBHOOK_URL_2",
-    ],
-  }
 
 
 litellm_settings:
   callbacks: ["gcs_bucket"]
+
+
+router_settings:
+  enable_tag_filtering: true
+
 
