@@ -85,9 +85,10 @@ class StandardLoggingPayload(TypedDict):
     cache_hit: Optional[bool]
     cache_key: Optional[str]
     saved_cache_cost: Optional[float]
-    request_tags: list
+    request_tags: list                         
     end_user: Optional[str]
-    requester_ip_address: Optional[str]
+    requester_ip_address: Optional[str]         # IP address of requester
+    requester_metadata: Optional[dict]          # metadata passed in request in the "metadata" field
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     model_parameters: dict
