@@ -123,6 +123,7 @@ AlertType = Literal[
     "outage_alerts",
     "region_outage_alerts",
     "fallback_reports",
+    "failed_tracking_spend",
 ]
 
 
