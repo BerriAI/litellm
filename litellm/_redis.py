@@ -132,6 +132,20 @@ def _get_redis_client_logic(**env_overrides):
     if _startup_nodes is not None and isinstance(_startup_nodes, str):
         redis_kwargs["startup_nodes"] = json.loads(_startup_nodes)
 
+    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
+        "REDIS_SENTINEL_NODES"
+    )
+
+    if _sentinel_nodes is not None and isinstance(_sentinel_nodes, str):
+        redis_kwargs["sentinel_nodes"] = json.loads(_sentinel_nodes)
+
+    _service_name: Optional[str] = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
+        "REDIS_SERVICE_NAME"
+    )
+
+    if _service_name is not None:
+        redis_kwargs["service_name"] = _service_name
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         redis_kwargs.pop("host", None)
         redis_kwargs.pop("port", None)
@@ -145,6 +159,7 @@ def _get_redis_client_logic(**env_overrides):
         pass
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
+
     # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
     return redis_kwargs
 
