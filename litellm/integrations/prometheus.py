@@ -193,17 +193,17 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = Counter(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=_logged_llm_labels,
+                labelnames=["requested_model"] + _logged_llm_labels,
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=_logged_llm_labels + ["exception_status"],
+                labelnames=["requested_model", "exception_status"] + _logged_llm_labels,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=_logged_llm_labels,
+                labelnames=["requested_model"] + _logged_llm_labels,
             )
 
             # Deployment Latency tracking
@@ -440,6 +440,7 @@ class PrometheusLogger(CustomLogger):
             _metadata = _litellm_params.get("metadata", {})
             litellm_model_name = request_kwargs.get("model", None)
             api_base = _metadata.get("api_base", None)
+            model_group = _metadata.get("model_group", None)
             if api_base is None:
                 api_base = _litellm_params.get("api_base", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
@@ -465,6 +466,7 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 exception_status=exception_status_code,
+                requested_model=model_group,
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -472,6 +474,7 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
+                requested_model=model_group,
             ).inc()
 
             pass
@@ -534,7 +537,7 @@ class PrometheusLogger(CustomLogger):
 
             """
             log these labels
-            ["litellm_model_name", "model_id", "api_base", "api_provider"]
+            ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
             self.set_deployment_healthy(
                 litellm_model_name=litellm_model_name,
@@ -548,6 +551,7 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
+                requested_model=model_group,
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -555,6 +559,7 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
+                requested_model=model_group,
             ).inc()
 
             # Track deployment Latency
