@@ -4019,7 +4019,9 @@ class Router:
                     _model_info=_model_info,
                 )
 
-        verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
+        verbose_router_logger.debug(
+            f"\nInitialized Model List {self.get_model_names()}"
+        )
         self.model_names = [m["model_name"] for m in model_list]
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
@@ -5030,7 +5032,7 @@ class Router:
                     # return the first deployment where the `model` matches the specificed deployment name
                     return deployment_model, deployment
             raise ValueError(
-                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
+                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.get_model_names()}"
             )
         elif model in self.get_model_ids():
             deployment = self.get_model_info(id=model)
