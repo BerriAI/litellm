@@ -7,6 +7,7 @@ Covers Threads, Messages, Assistants.
 
 LiteLLM currently covers: 
 - Create Assistants 
+- Delete Assistants
 - Get Assistants
 - Create Thread
 - Get Thread
