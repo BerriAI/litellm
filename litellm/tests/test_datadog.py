@@ -146,6 +146,88 @@ async def test_datadog_logging_http_request():
 
 
 @pytest.mark.asyncio
+async def test_datadog_log_redis_failures():
+    """
+    Test that poorly configured Redis is logged as Warning on DataDog
+    """
+    try:
+        from litellm.caching import Cache
+        from litellm.integrations.datadog.datadog import DataDogLogger
+
+        litellm.cache = Cache(
+            type="redis", host="badhost", port="6379", password="badpassword"
+        )
+
+        os.environ["DD_SITE"] = "https://fake.datadoghq.com"
+        os.environ["DD_API_KEY"] = "anything"
+        dd_logger = DataDogLogger()
+
+        litellm.callbacks = [dd_logger]
+        litellm.service_callback = ["datadog"]
+
+        litellm.set_verbose = True
+
+        # Create a mock for the async_client's post method
+        mock_post = AsyncMock()
+        mock_post.return_value.status_code = 202
+        mock_post.return_value.text = "Accepted"
+        dd_logger.async_client.post = mock_post
+
+        # Make the completion call
+        for _ in range(3):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "what llm are u"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="Accepted",
+            )
+            print(response)
+
+        # Wait for 5 seconds
+        await asyncio.sleep(6)
+
+        # Assert that the mock was called
+        assert mock_post.called, "HTTP request was not made"
+
+        # Get the arguments of the last call
+        args, kwargs = mock_post.call_args
+        print("CAll args and kwargs", args, kwargs)
+
+        # For example, checking if the URL is correct
+        assert kwargs["url"].endswith("/api/v2/logs"), "Incorrect DataDog endpoint"
+
+        body = kwargs["data"]
+
+        # use gzip to unzip the body
+        with gzip.open(io.BytesIO(body), "rb") as f:
+            body = f.read().decode("utf-8")
+        print(body)
+
+        # body is string parse it to dict
+        body = json.loads(body)
+        print(body)
+
+        failure_events = [log for log in body if log["status"] == "warning"]
+        assert len(failure_events) > 0, "No failure events logged"
+
+        print("ALL FAILURE/WARN EVENTS", failure_events)
+
+        for event in failure_events:
+            message = json.loads(event["message"])
+            assert (
+                event["status"] == "warning"
+            ), f"Event status is not 'warning': {event['status']}"
+            assert (
+                message["service"] == "redis"
+            ), f"Service is not 'redis': {message['service']}"
+            assert "error" in message, "No 'error' field in the message"
+            assert message["error"], "Error field is empty"
+    except Exception as e:
+        pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
 @pytest.mark.skip(reason="local-only test, to test if everything works fine.")
 async def test_datadog_logging():
     try:
