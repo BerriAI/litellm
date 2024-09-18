@@ -414,6 +414,9 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+    no_deployments_with_tag_routing = (
+        "Not allowed to access model due to tags configuration"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
