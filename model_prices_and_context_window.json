@@ -5443,6 +5443,26 @@
         "supports_function_calling": true,
         "source": "https://fireworks.ai/pricing"
     },
+    "fireworks-ai-up-to-16b": {
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-16.1b-80b": {
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-moe-up-to-56b": {
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000005,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-56b-to-176b": {
+        "input_cost_per_token": 0.0000012,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "fireworks_ai"
+    },
       "anyscale/mistralai/Mistral-7B-Instruct-v0.1": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
