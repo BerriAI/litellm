@@ -638,7 +638,16 @@ class Logging:
                             logging_obj=self,
                         )
                     )
-            else:  # streaming chunks + image gen.
+            else:  # streaming chunks, image gen., assistants
+                self.model_call_details["standard_logging_object"] = (
+                    get_standard_logging_object_payload(
+                        kwargs=self.model_call_details,
+                        init_response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        logging_obj=self,
+                    )
+                )
                 self.model_call_details["response_cost"] = None
 
             if (
@@ -2421,35 +2430,38 @@ def get_standard_logging_object_payload(
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
-        custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
-        model_cost_name = _select_model_name_for_cost_calc(
-            model=None,
-            completion_response=init_response_obj,
-            base_model=base_model,
-            custom_pricing=custom_pricing,
-        )
-        if model_cost_name is None:
-            model_cost_information = StandardLoggingModelInformation(
-                model_map_key="", model_map_value=None
-            )
+        if base_model is None:
+            model_cost_information = None
         else:
-            custom_llm_provider = kwargs.get("custom_llm_provider", None)
+            custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
+            model_cost_name = _select_model_name_for_cost_calc(
+                model=None,
+                completion_response=init_response_obj,
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+            )
+            if model_cost_name is None:
+                model_cost_information = StandardLoggingModelInformation(
+                    model_map_key="", model_map_value=None
+                )
+            else:
+                custom_llm_provider = kwargs.get("custom_llm_provider", None)
 
-            try:
-                _model_cost_information = litellm.get_model_info(
-                    model=model_cost_name, custom_llm_provider=custom_llm_provider
-                )
-                model_cost_information = StandardLoggingModelInformation(
-                    model_map_key=model_cost_name,
-                    model_map_value=_model_cost_information,
-                )
-            except Exception:
-                verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
-                    "Model is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload"
-                )
-                model_cost_information = StandardLoggingModelInformation(
-                    model_map_key=model_cost_name, model_map_value=None
-                )
+                try:
+                    _model_cost_information = litellm.get_model_info(
+                        model=model_cost_name, custom_llm_provider=custom_llm_provider
+                    )
+                    model_cost_information = StandardLoggingModelInformation(
+                        model_map_key=model_cost_name,
+                        model_map_value=_model_cost_information,
+                    )
+                except Exception:
+                    verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
+                        "Model is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload"
+                    )
+                    model_cost_information = StandardLoggingModelInformation(
+                        model_map_key=model_cost_name, model_map_value=None
+                    )
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
@@ -2478,7 +2490,7 @@ def get_standard_logging_object_payload(
             ),
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
-            model_map_information=model_cost_information,
+            model_map_information=model_cost_information
         )
 
         verbose_logger.debug(
