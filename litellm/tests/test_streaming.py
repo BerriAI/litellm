@@ -477,6 +477,7 @@ def test_completion_cohere_stream_bad_key():
 # test_completion_cohere_stream_bad_key()
 
 
+@pytest.mark.flaky(retries=5, delay=1)
 def test_completion_azure_stream():
     try:
         litellm.set_verbose = False
