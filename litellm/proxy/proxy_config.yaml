@@ -6,16 +6,6 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app
 
 
-assistant_settings:
-  custom_llm_provider: azure
-  litellm_params: 
-    api_key: os.environ/AZURE_API_KEY
-    api_base: os.environ/AZURE_API_BASE
-
-
-general_settings: 
- master_key: sk-1234 
-
 
 
 litellm_settings:
