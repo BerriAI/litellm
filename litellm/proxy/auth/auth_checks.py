@@ -607,11 +607,17 @@ async def can_key_call_model(
 
     filtered_models += models_in_current_access_groups
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
+
+    all_model_access: bool = False
+
     if (
-        model is not None
-        and model not in filtered_models
-        and "*" not in filtered_models
+        len(filtered_models) == 0
+        or "*" in filtered_models
+        or "openai/*" in filtered_models
     ):
+        all_model_access = True
+
+    if model is not None and model not in filtered_models and all_model_access is False:
         raise ValueError(
             f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
         )

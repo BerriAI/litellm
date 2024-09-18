@@ -69,6 +69,7 @@ class SlackAlerting(CustomBatchLogger):
             "cooldown_deployment",
             "new_model_added",
             "outage_alerts",
+            "failed_tracking_spend",
         ],
         alert_to_webhook_url: Optional[
             Dict[AlertType, Union[List[str], str]]
@@ -598,6 +599,12 @@ class SlackAlerting(CustomBatchLogger):
 
     async def failed_tracking_alert(self, error_message: str):
         """Raise alert when tracking failed for specific model"""
+        if self.alerting is None or self.alert_types is None:
+            # do nothing if alerting is not switched on
+            return
+        if "failed_tracking_spend" not in self.alert_types:
+            return
+
         _cache: DualCache = self.internal_usage_cache
         message = "Failed Tracking Cost for " + error_message
         _cache_key = "budget_alerts:failed_tracking:{}".format(message)
