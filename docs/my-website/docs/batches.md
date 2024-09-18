@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 Covers Batches, Files
 
-Supported Providers:
+## **Supported Providers**:
 - Azure OpenAI
 - OpenAI
 

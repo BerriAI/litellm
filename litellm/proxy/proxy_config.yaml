@@ -1,24 +1,16 @@
 model_list:
-  - model_name: gemini-vision
-    litellm_params:
-      model: vertex_ai/gemini-1.5-pro
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
-  - model_name: gemini-vision
-    litellm_params:
-      model: vertex_ai/gemini-1.0-pro-vision-001
-      api_base: https://exampleopenaiendpoint-production-c715.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
-
   - model_name: fake-azure-endpoint
     litellm_params:
       model: openai/429
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app
+
+
+assistant_settings:
+  custom_llm_provider: azure
+  litellm_params: 
+    api_key: os.environ/AZURE_API_KEY
+    api_base: os.environ/AZURE_API_BASE
 
 
 general_settings: 
