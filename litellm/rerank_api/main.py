@@ -89,13 +89,12 @@ def rerank(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
-    client = kwargs.get("client", None)
     user = kwargs.get("user", None)
     try:
         _is_async = kwargs.pop("arerank", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
 
-        model, _custom_llm_provider, dynamic_api_key, api_base = (
+        model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             litellm.get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -137,7 +136,8 @@ def rerank(
                 )
 
             api_base: Optional[str] = (
-                optional_params.api_base
+                dynamic_api_base
+                or optional_params.api_base
                 or litellm.api_base
                 or get_secret("COHERE_API_BASE")  # type: ignore
                 or "https://api.cohere.com/v1/rerank"
@@ -164,10 +164,10 @@ def rerank(
                 headers=headers,
                 litellm_logging_obj=litellm_logging_obj,
             )
-            pass
         elif _custom_llm_provider == "azure_ai":
             api_base = (
-                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                dynamic_api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                or optional_params.api_base
                 or litellm.api_base
                 or get_secret("AZURE_AI_API_BASE")  # type: ignore
             )
