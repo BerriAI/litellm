@@ -35,7 +35,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
     // Non-Admin SSO users should only see their own team - they should not see "Default Team"
     updatedTeams = teams;
   } else if (proxySettings && proxySettings.DEFAULT_TEAM_DISABLED === true) {
-    updatedTeams = teams;
+    updatedTeams = teams ? [...teams] : [defaultTeam];
   } else {
     updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
   }
