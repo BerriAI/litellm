@@ -32,7 +32,7 @@ async def test_router_init():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "gpt-3.5-turbo-0613",
+                "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
             "model_info": {"id": "1234"},
