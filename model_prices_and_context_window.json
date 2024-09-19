@@ -744,6 +744,17 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true
     },
+    "azure/gpt-35-turbo-0301": {
+        "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "azure/gpt-35-turbo-0125": {
         "max_tokens": 4096,
         "max_input_tokens": 16384,
