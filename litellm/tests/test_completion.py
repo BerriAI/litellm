@@ -302,12 +302,14 @@ async def test_completion_predibase():
             model="predibase/llama-3-8b-instruct",
             tenant_id="c4768f95",
             api_key=os.getenv("PREDIBASE_API_KEY"),
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            messages=[{"role": "user", "content": "who are u?"}],
             max_tokens=10,
+            timeout=5,
         )
 
         print(response)
     except litellm.Timeout as e:
+        print("got a timeout error from predibase")
         pass
     except litellm.ServiceUnavailableError as e:
         pass

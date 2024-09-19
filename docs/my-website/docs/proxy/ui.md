@@ -239,6 +239,10 @@ If you don't see all your keys this could be due to a cached token. So just re-l
 
 :::
 
+### Sign in with Username, Password when SSO is on
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
 ### Restrict UI Access
 
 You can restrict UI Access to just admins - includes you (proxy_admin) and people you give view only access to (proxy_admin_viewer) for seeing global spend.
