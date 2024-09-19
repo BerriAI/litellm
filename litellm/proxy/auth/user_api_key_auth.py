@@ -1121,6 +1121,7 @@ async def user_api_key_auth(
         if open_telemetry_logger is not None:
             await open_telemetry_logger.async_post_call_failure_hook(  # type: ignore
                 original_exception=e,
+                request_data={},
                 user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
             )
 
