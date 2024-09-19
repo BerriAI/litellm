@@ -1038,7 +1038,7 @@ async def user_api_key_auth(
             # this token is only used for managing the ui
             allowed_routes = [
                 "/sso",
-                "/sso/get/logout_url",
+                "/sso/get/ui_settings",
                 "/login",
                 "/key/generate",
                 "/key/update",
