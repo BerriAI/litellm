@@ -1942,7 +1942,7 @@ async def global_spend_for_internal_user(
 
         user_id = user_api_key_dict.user_id
         if user_id is None:
-            raise ValueError(f"/global/spend/logs Error: User ID is None")
+            raise ValueError("/global/spend/logs Error: User ID is None")
         if api_key is not None:
             sql_query = """
                 SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"
@@ -1971,7 +1971,7 @@ async def global_spend_for_internal_user(
     include_in_schema=False,
 )
 async def global_spend_logs(
-    api_key: str = fastapi.Query(
+    api_key: Optional[str] = fastapi.Query(
         default=None,
         description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
     ),
@@ -1986,6 +1986,10 @@ async def global_spend_logs(
     """
     import traceback
 
+    from litellm.integrations.prometheus_helpers.prometheus_api import (
+        get_daily_spend_from_prometheus,
+        is_prometheus_connected,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -2007,22 +2011,28 @@ async def global_spend_logs(
 
             return response
 
-        if api_key is None:
-            sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
+        prometheus_api_enabled = is_prometheus_connected()
 
-            response = await prisma_client.db.query_raw(query=sql_query)
-
+        if prometheus_api_enabled:
+            response = await get_daily_spend_from_prometheus(api_key=api_key)
             return response
         else:
-            sql_query = """
-                SELECT * FROM "MonthlyGlobalSpendPerKey"
-                WHERE "api_key" = $1
-                ORDER BY "date";
-                """
+            if api_key is None:
+                sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
 
-            response = await prisma_client.db.query_raw(sql_query, api_key)
+                response = await prisma_client.db.query_raw(query=sql_query)
 
-            return response
+                return response
+            else:
+                sql_query = """
+                    SELECT * FROM "MonthlyGlobalSpendPerKey"
+                    WHERE "api_key" = $1
+                    ORDER BY "date";
+                    """
+
+                response = await prisma_client.db.query_raw(sql_query, api_key)
+
+                return response
 
     except Exception as e:
         error_trace = traceback.format_exc()
