@@ -1257,7 +1257,7 @@ def test_completion_cost_databricks_embedding(model):
     cost = completion_cost(completion_response=resp)
 
 
-def test_completion_cost_fireworks_ai(model):
+def test_completion_cost_fireworks_ai():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
