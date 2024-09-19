@@ -244,6 +244,34 @@ class DatabricksChatCompletion(BaseLLM):
 
     # makes headers for API call
 
+    def _get_databricks_credentials(
+        self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
+    ) -> Tuple[str, dict]:
+        headers = headers or {"Content-Type": "application/json"}
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            databricks_client = WorkspaceClient()
+            api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
+
+            if api_key is None:
+                databricks_auth_headers: dict[str, str] = (
+                    databricks_client.config.authenticate()
+                )
+                headers = {**databricks_auth_headers, **headers}
+
+            return api_base, headers
+        except ImportError:
+            raise DatabricksError(
+                status_code=400,
+                message=(
+                    "If the Databricks base URL and API key are not set, the databricks-sdk "
+                    "Python library must be installed. Please install the databricks-sdk, set "
+                    "{LLM_PROVIDER}_API_BASE and {LLM_PROVIDER}_API_KEY environment variables, "
+                    "or provide the base URL and API key as arguments."
+                ),
+            )
+
     def _validate_environment(
         self,
         api_key: Optional[str],
@@ -253,16 +281,26 @@ class DatabricksChatCompletion(BaseLLM):
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
         if api_key is None and headers is None:
-            raise DatabricksError(
-                status_code=400,
-                message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
+            if custom_endpoint:
+                raise DatabricksError(
+                    status_code=400,
+                    message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                )
+            else:
+                api_base, headers = self._get_databricks_credentials(
+                    api_base=api_base, api_key=api_key, headers=headers
+                )
 
         if api_base is None:
-            raise DatabricksError(
-                status_code=400,
-                message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
+            if custom_endpoint:
+                raise DatabricksError(
+                    status_code=400,
+                    message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                )
+            else:
+                api_base, headers = self._get_databricks_credentials(
+                    api_base=api_base, api_key=api_key, headers=headers
+                )
 
         if headers is None:
             headers = {
@@ -272,6 +310,9 @@ class DatabricksChatCompletion(BaseLLM):
         else:
             if api_key is not None:
                 headers.update({"Authorization": "Bearer {}".format(api_key)})
+
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = "{}/chat/completions".format(api_base)
@@ -520,7 +561,8 @@ class DatabricksChatCompletion(BaseLLM):
                     response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise DatabricksError(
-                        status_code=e.response.status_code, message=e.response.text
+                        status_code=e.response.status_code,
+                        message=e.response.text,
                     )
                 except httpx.TimeoutException as e:
                     raise DatabricksError(

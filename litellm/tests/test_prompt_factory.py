@@ -432,3 +432,7 @@ def test_vertex_only_image_user_message():
         ), "Invalid gemini input. Got={}, Expected={}".format(
             content, expected_response[idx]
         )
+
+
+def test_convert_url():
+    convert_url_to_base64("https://picsum.photos/id/237/200/300")
