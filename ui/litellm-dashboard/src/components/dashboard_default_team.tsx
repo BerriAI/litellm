@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { Select, SelectItem, Text, Title } from "@tremor/react";
+import { ProxySettings } from "./user_dashboard";
 
 interface DashboardTeamProps {
   teams: Object[] | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   userRole: string | null;
+  proxySettings: ProxySettings | null;
 }
 
 type TeamInterface = {
@@ -17,6 +19,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   teams,
   setSelectedTeam,
   userRole,
+  proxySettings,
 }) => {
   const defaultTeam: TeamInterface = {
     models: [],
@@ -30,6 +33,8 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   let updatedTeams;
   if (userRole === "App User") {
     // Non-Admin SSO users should only see their own team - they should not see "Default Team"
+    updatedTeams = teams;
+  } else if (proxySettings && proxySettings.DEFAULT_TEAM_DISABLED === true) {
     updatedTeams = teams;
   } else {
     updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
