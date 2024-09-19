@@ -424,7 +424,7 @@ $ litellm --model huggingface/bigcode/starcoder
 <TabItem label="Docker container" value="docker">
 
 
-### Step 1. CREATE config.yaml 
+Step 1. CREATE config.yaml 
 
 Example `litellm_config.yaml` 
 
@@ -438,7 +438,7 @@ model_list:
       api_version: "2023-07-01-preview"
 ```
 
-### Step 2. RUN Docker Image
+Step 2. RUN Docker Image
 
 ```shell
 docker run \
