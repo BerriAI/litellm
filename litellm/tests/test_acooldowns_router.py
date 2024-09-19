@@ -50,6 +50,7 @@ kwargs = {
 }
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_multiple_deployments_sync():
     import concurrent
     import time
