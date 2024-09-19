@@ -1,8 +1,6 @@
 import types
 from typing import Literal, Optional, Union
 
-import litellm
-
 
 class FireworksAIConfig:
     """

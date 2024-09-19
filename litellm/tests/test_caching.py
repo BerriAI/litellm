@@ -2045,3 +2045,57 @@ async def test_proxy_logging_setup():
 
     pl_obj = ProxyLogging(user_api_key_cache=DualCache())
     assert pl_obj.internal_usage_cache.always_read_redis is True
+
+
+@pytest.mark.skip(reason="local test. Requires sentinel setup.")
+@pytest.mark.asyncio
+async def test_redis_sentinel_caching():
+    """
+    Init redis client
+    - write to client
+    - read from client
+    """
+    litellm.set_verbose = False
+
+    random_number = random.randint(
+        1, 100000
+    )  # add a random number to ensure it's always adding / reading from cache
+    messages = [
+        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
+    ]
+
+    litellm.cache = Cache(
+        type="redis",
+        # host=os.environ["REDIS_HOST"],
+        # port=os.environ["REDIS_PORT"],
+        # password=os.environ["REDIS_PASSWORD"],
+        service_name="mymaster",
+        sentinel_nodes=[("localhost", 26379)],
+    )
+    response1 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    cache_key = litellm.cache.get_cache_key(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    print(f"cache_key: {cache_key}")
+    litellm.cache.add_cache(result=response1, cache_key=cache_key)
+    print(f"cache key pre async get: {cache_key}")
+    stored_val = litellm.cache.get_cache(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    print(f"stored_val: {stored_val}")
+    assert stored_val["id"] == response1.id
+
+    stored_val_2 = await litellm.cache.async_get_cache(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+
+    print(f"stored_val: {stored_val}")
+    assert stored_val_2["id"] == response1.id
