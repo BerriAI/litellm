@@ -31,6 +31,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
             pip install "google-generativeai==0.3.2"
@@ -41,21 +42,21 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.27.1"
+            pip install "langfuse==2.45.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.40.0
+            pip install openai==1.45.0
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "anyio==4.2.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "apscheduler==3.10.4"
@@ -104,7 +105,154 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py"
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+  ui_endpoint_testing:
+    docker:
+      - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./entrypoint.sh
+          command: |
+            set +e
+            chmod +x entrypoint.sh
+            ./entrypoint.sh
+            set -e
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/proxy_admin_ui_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+  litellm_router_testing: # Runs all tests with the "router" keyword
+    docker:
+        - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest litellm/tests/ -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      # Store test results
+      - store_test_results:
+          path: test-results
+  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
+    docker:
+        - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest litellm/tests/ -vv -k "assistants" -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      # Store test results
+      - store_test_results:
+          path: test-results
+  load_testing:
+    docker:
+      - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/load_tests -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+  llm_translation_testing:
+    docker:
+      - image: cimg/python:3.11
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/llm_translation -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
@@ -126,11 +274,11 @@ jobs:
             pip install pytest
             pip install tiktoken
             pip install aiohttp
+            pip install openai
             pip install click
             pip install "boto3==1.34.34"
             pip install jinja2
             pip install tokenizers
-            pip install openai
             pip install jsonschema
       - run:
           name: Run tests
@@ -171,6 +319,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
@@ -192,7 +341,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.40.0"
+            pip install "openai==1.45.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -249,7 +398,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests
+            python -m pytest -s -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation
           no_output_timeout: 120m
 
       # Store test results
@@ -282,9 +431,10 @@ jobs:
           name: Install Dependencies
           command: |
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.40.0"
+            pip install "openai==1.45.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -354,6 +504,100 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/otel_tests/test_otel.py -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+  proxy_pass_through_endpoint_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install aiohttp
+            pip install "openai==1.45.0"
+            python -m pip install --upgrade pip
+            pip install "pydantic==2.7.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "boto3==1.34.34"
+            pip install mypy
+            pip install pyarrow
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "anyio==3.7.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/custom_auth_basic.py:/app/custom_auth_basic.py \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
@@ -442,6 +686,24 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_assistants_api_testing:
+          filters:
+              branches:
+                only:
+                  - main
+                  - /litellm_.*/
+      - litellm_router_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - ui_endpoint_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
           filters:
             branches:
@@ -454,7 +716,25 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - proxy_pass_through_endpoint_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - llm_translation_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - installing_litellm_on_python:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - load_testing:
           filters:
             branches:
               only:
@@ -464,7 +744,14 @@ workflows:
           requires:
             - local_testing
             - build_and_test
+            - load_testing
+            - llm_translation_testing
+            - litellm_router_testing
+            - litellm_assistants_api_testing
+            - ui_endpoint_testing
+            - installing_litellm_on_python
             - proxy_log_to_otel_tests
+            - proxy_pass_through_endpoint_tests
           filters:
             branches:
               only:

@@ -10,6 +10,9 @@ import traceback
 import openai
 import pytest
 
+import litellm.types
+import litellm.types.router
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -25,6 +28,10 @@ from pydantic import BaseModel
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router_utils.cooldown_handlers import (
+    _async_get_cooldown_deployments,
+    _get_cooldown_deployments,
+)
 from litellm.types.router import DeploymentTypedDict
 
 load_dotenv()
@@ -2118,7 +2125,7 @@ def test_router_cooldown_api_connection_error():
     except litellm.APIConnectionError as e:
         assert (
             Router()._is_cooldown_required(
-                exception_status=e.code, exception_str=str(e)
+                model_id="", exception_status=e.code, exception_str=str(e)
             )
             is False
         )
@@ -2184,3 +2191,332 @@ def test_router_correctly_reraise_error():
         )
     except litellm.RateLimitError:
         pass
+
+
+def test_router_dynamic_cooldown_correct_retry_after_time():
+    """
+    User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
+    but Azure says to retry in at most 9s
+
+    ```
+    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
+    ```
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            }
+        ]
+    )
+
+    openai_client = openai.OpenAI(api_key="")
+
+    cooldown_time = 30.0
+
+    def _return_exception(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=429,
+            detail="Rate Limited!",
+            headers={"retry-after": cooldown_time},  # type: ignore
+        )
+
+    with patch.object(
+        openai_client.embeddings.with_raw_response,
+        "create",
+        side_effect=_return_exception,
+    ):
+        new_retry_after_mock_client = MagicMock(return_value=-1)
+
+        litellm.utils._get_retry_after_from_exception_header = (
+            new_retry_after_mock_client
+        )
+
+        try:
+            router.embedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                client=openai_client,
+            )
+        except litellm.RateLimitError:
+            pass
+
+        new_retry_after_mock_client.assert_called()
+        print(
+            f"new_retry_after_mock_client.call_args.kwargs: {new_retry_after_mock_client.call_args.kwargs}"
+        )
+
+        response_headers: httpx.Headers = new_retry_after_mock_client.call_args.kwargs[
+            "response_headers"
+        ]
+        assert "retry-after" in response_headers
+        assert response_headers["retry-after"] == cooldown_time
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
+    """
+    User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
+    but Azure says to retry in at most 9s
+
+    ```
+    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
+    ```
+    """
+    litellm.set_verbose = True
+    router = Router(
+        model_list=[
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            },
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
+    )
+
+    openai_client = openai.OpenAI(api_key="")
+
+    cooldown_time = 30.0
+
+    def _return_exception(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=429,
+            detail="Rate Limited!",
+            headers={"retry-after": cooldown_time},
+        )
+
+    with patch.object(
+        openai_client.embeddings.with_raw_response,
+        "create",
+        side_effect=_return_exception,
+    ):
+        for _ in range(1):
+            try:
+                if sync_mode:
+                    router.embedding(
+                        model="text-embedding-ada-002",
+                        input="Hello world!",
+                        client=openai_client,
+                    )
+                else:
+                    await router.aembedding(
+                        model="text-embedding-ada-002",
+                        input="Hello world!",
+                        client=openai_client,
+                    )
+            except litellm.RateLimitError:
+                pass
+
+        if sync_mode:
+            cooldown_deployments = _get_cooldown_deployments(
+                litellm_router_instance=router
+            )
+        else:
+            cooldown_deployments = await _async_get_cooldown_deployments(
+                litellm_router_instance=router
+            )
+        print(
+            "Cooldown deployments - {}\n{}".format(
+                cooldown_deployments, len(cooldown_deployments)
+            )
+        )
+
+        assert len(cooldown_deployments) > 0
+        exception_raised = False
+        try:
+            if sync_mode:
+                router.embedding(
+                    model="text-embedding-ada-002",
+                    input="Hello world!",
+                    client=openai_client,
+                )
+            else:
+                await router.aembedding(
+                    model="text-embedding-ada-002",
+                    input="Hello world!",
+                    client=openai_client,
+                )
+        except litellm.types.router.RouterRateLimitError as e:
+            print(e)
+            exception_raised = True
+            assert e.cooldown_time == cooldown_time
+
+        assert exception_raised
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio()
+async def test_router_weighted_pick(sync_mode):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "weight": 2,
+                    "mock_response": "Hello world 1!",
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "weight": 1,
+                    "mock_response": "Hello world 2!",
+                },
+                "model_info": {"id": "2"},
+            },
+        ]
+    )
+
+    model_id_1_count = 0
+    model_id_2_count = 0
+    for _ in range(50):
+        # make 50 calls. expect model id 1 to be picked more than model id 2
+        if sync_mode:
+            response = router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world!"}],
+            )
+        else:
+            response = await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world!"}],
+            )
+
+        model_id = int(response._hidden_params["model_id"])
+
+        if model_id == 1:
+            model_id_1_count += 1
+        elif model_id == 2:
+            model_id_2_count += 1
+        else:
+            raise Exception("invalid model id returned!")
+    assert model_id_1_count > model_id_2_count
+
+
+@pytest.mark.skip(reason="Hit azure batch quota limits")
+@pytest.mark.parametrize("provider", ["azure"])
+@pytest.mark.asyncio
+async def test_router_batch_endpoints(provider):
+    """
+    1. Create File for Batch completion
+    2. Create Batch Request
+    3. Retrieve the specific batch
+    """
+    print("Testing async create batch")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-custom-name",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                },
+            },
+        ]
+    )
+
+    file_name = "openai_batch_completions_router.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
+    file_obj = await router.acreate_file(
+        model="my-custom-name",
+        file=open(file_path, "rb"),
+        purpose="batch",
+        custom_llm_provider=provider,
+    )
+    print("Response from creating file=", file_obj)
+
+    await asyncio.sleep(10)
+    batch_input_file_id = file_obj.id
+    assert (
+        batch_input_file_id is not None
+    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+
+    create_batch_response = await router.acreate_batch(
+        model="my-custom-name",
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider=provider,
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+
+    print("response from router.create_batch=", create_batch_response)
+
+    assert (
+        create_batch_response.id is not None
+    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    assert (
+        create_batch_response.endpoint == "/v1/chat/completions"
+        or create_batch_response.endpoint == "/chat/completions"
+    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
+    assert (
+        create_batch_response.input_file_id == batch_input_file_id
+    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+
+    await asyncio.sleep(1)
+
+    retrieved_batch = await router.aretrieve_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider=provider,
+    )
+    print("retrieved batch=", retrieved_batch)
+    # just assert that we retrieved a non None batch
+
+    assert retrieved_batch.id == create_batch_response.id
+
+    # list all batches
+    list_batches = await router.alist_batches(
+        model="my-custom-name", custom_llm_provider=provider, limit=2
+    )
+    print("list_batches=", list_batches)
+
+
+@pytest.mark.parametrize("hidden", [True, False])
+def test_model_group_alias(hidden):
+    _model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        },
+        {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}},
+    ]
+    router = Router(
+        model_list=_model_list,
+        model_group_alias={
+            "gpt-4.5-turbo": {"model": "gpt-3.5-turbo", "hidden": hidden}
+        },
+    )
+
+    models = router.get_model_list()
+
+    model_names = router.get_model_names()
+
+    if hidden:
+        assert len(models) == len(_model_list)
+        assert len(model_names) == len(_model_list)
+    else:
+        assert len(models) == len(_model_list) + 1
+        assert len(model_names) == len(_model_list) + 1

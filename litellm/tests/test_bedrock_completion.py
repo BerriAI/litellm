@@ -5,6 +5,8 @@ import traceback
 
 from dotenv import load_dotenv
 
+import litellm.types
+
 load_dotenv()
 import io
 import os
@@ -25,7 +27,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.bedrock_httpx import BedrockLLM, ToolBlock
+from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
 
@@ -616,8 +618,8 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
             aws_region_name=aws_region_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-            aws_sts_endpoint="https://sts-fips.us-west-2.amazonaws.com",
+            aws_session_name="cross-region-test",
+            aws_sts_endpoint="https://sts-fips.us-east-2.amazonaws.com",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime-fips.us-west-2.amazonaws.com",
         )
         # Add any assertions here to check the response
@@ -945,7 +947,8 @@ async def test_bedrock_extra_headers():
     """
     Check if a url with 'modelId' passed in, is created correctly
 
-    Reference: https://github.com/BerriAI/litellm/issues/3805
+    Reference: https://github.com/BerriAI/litellm/issues/3805, https://github.com/BerriAI/litellm/issues/5389#issuecomment-2313677977
+
     """
     client = AsyncHTTPHandler()
 
@@ -958,14 +961,23 @@ async def test_bedrock_extra_headers():
                 model="anthropic.claude-3-sonnet-20240229-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 client=client,
-                extra_headers={"test": "hello world"},
+                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+                api_base="https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1",
             )
         except Exception as e:
             pass
 
-        print(f"mock_client_post.call_args: {mock_client_post.call_args}")
+        print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
+        assert (
+            mock_client_post.call_args.kwargs["url"]
+            == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
+        )
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        assert (
+            mock_client_post.call_args.kwargs["headers"]["Authorization"]
+            == "my-test-key"
+        )
         mock_client_post.assert_called_once()
 
 
@@ -1212,3 +1224,104 @@ def test_not_found_error():
                 }
             ],
         )
+
+
+def test_bedrock_cross_region_inference():
+    litellm.set_verbose = True
+    response = completion(
+        model="bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        max_tokens=10,
+        temperature=0.1,
+    )
+
+
+from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+
+
+def test_bedrock_converse_translation_tool_message():
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+    litellm.set_verbose = True
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        {
+            "tool_call_id": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": [
+                {
+                    "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+                    "type": "text",
+                }
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    print(translated_msg)
+    assert translated_msg == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
+                },
+                {
+                    "toolResult": {
+                        "content": [
+                            {
+                                "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
+                            }
+                        ],
+                        "toolUseId": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
+                    }
+                },
+            ],
+        }
+    ]
+
+
+def test_base_aws_llm_get_credentials():
+    import time
+
+    import boto3
+
+    from litellm.llms.base_aws_llm import BaseAWSLLM
+
+    start_time = time.time()
+    session = boto3.Session(
+        aws_access_key_id="test",
+        aws_secret_access_key="test2",
+        region_name="test3",
+    )
+    credentials = session.get_credentials().get_frozen_credentials()
+    end_time = time.time()
+
+    print(
+        "Total time for credentials - {}. Credentials - {}".format(
+            end_time - start_time, credentials
+        )
+    )
+
+    start_time = time.time()
+    credentials = BaseAWSLLM().get_credentials(
+        aws_access_key_id="test",
+        aws_secret_access_key="test2",
+        aws_region_name="test3",
+    )
+
+    end_time = time.time()
+
+    print(
+        "Total time for credentials - {}. Credentials - {}".format(
+            end_time - start_time, credentials.get_frozen_credentials()
+        )
+    )

@@ -20,8 +20,9 @@ import httpx
 
 import litellm
 from litellm import client
-from litellm.llms.azure import AzureBatchesAPI
-from litellm.llms.openai import OpenAIBatchesAPI
+from litellm.llms.AzureOpenAI.azure import AzureBatchesAPI
+from litellm.llms.OpenAI.openai import OpenAIBatchesAPI
+from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     Batch,
     CancelBatchRequest,
@@ -34,7 +35,7 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import get_secret, supports_httpx_timeout
+from litellm.utils import supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
@@ -240,7 +241,6 @@ async def aretrieve_batch(
             extra_body,
             **kwargs,
         )
-
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)

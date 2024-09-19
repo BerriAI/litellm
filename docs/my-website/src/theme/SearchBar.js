@@ -6,7 +6,7 @@ import { usePluginData } from "@docusaurus/useGlobalData";
 
 export default function SearchBarWrapper(props) {
   const { siteConfig } = useDocusaurusContext();
-  const { options } = usePluginData("docusaurus-plugin-pagefind-canary");
+  const { options } = usePluginData("docusaurus-theme-search-pagefind");
 
   const [path, setPath] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
@@ -24,10 +24,7 @@ export default function SearchBarWrapper(props) {
       import("@getcanary/web/components/canary-content"),
       import("@getcanary/web/components/canary-search"),
       import("@getcanary/web/components/canary-search-input"),
-      import("@getcanary/web/components/canary-search-results-group"),
-      import("@getcanary/web/components/canary-footer"),
-      import("@getcanary/web/components/canary-callout-calendly"),
-      import("@getcanary/web/components/canary-callout-discord"),
+      import("@getcanary/web/components/canary-search-results-tabs"),
     ])
       .then(() => setLoaded(true))
       .catch(console.error);
@@ -57,32 +54,18 @@ export default function SearchBarWrapper(props) {
         </button>
       ) : (
         <canary-root framework="docusaurus">
-          <canary-provider-pagefind
-            options={JSON.stringify({ ...options, path })}
-          >
+          <canary-provider-pagefind options={JSON.stringify(options)}>
             <canary-modal>
               <canary-trigger-logo slot="trigger"></canary-trigger-logo>
               <canary-content slot="content">
-                <canary-search slot="search">
+                <canary-search slot="mode">
                   <canary-search-input slot="input"></canary-search-input>
-                  <canary-search-results-group
-                    slot="results"
-                    groups="SDK:*;Proxy:/docs/(simple_proxy|proxy/.*)"
-                  ></canary-search-results-group>
-                  <canary-callout-discord
-                    slot="callout"
-                    message="👋 Looking for help?"
-                    url="https://discord.com/invite/wuPM9dRgDw"
-                    keywords="discord,help,support,community"
-                  ></canary-callout-discord>
-                  <canary-callout-calendly
-                    slot="callout"
-                    message="🚅 Interested in enterprise features?"
-                    keywords="sso,enterprise,security,audit"
-                    url="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
-                  ></canary-callout-calendly>
+                  <canary-search-results-tabs
+                    slot="body"
+                    tabs={JSON.stringify(options.tabs)}
+                    group
+                  ></canary-search-results-tabs>
                 </canary-search>
-                <canary-footer slot="footer"></canary-footer>
               </canary-content>
             </canary-modal>
           </canary-provider-pagefind>

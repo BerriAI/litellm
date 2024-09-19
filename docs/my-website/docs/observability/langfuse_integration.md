@@ -258,6 +258,10 @@ Setting `mask_output` to `True` will make the output from being logged for this 
 
 Be aware that if you are continuing an existing trace, and you set `update_trace_keys` to include either `input` or `output` and you set the corresponding `mask_input` or `mask_output`, then that trace will have its existing input and/or output replaced with a redacted message.
 
+## **Use with LiteLLM Proxy (LLM Gateway) **
+
+👉 [**Follow this link to start sending logs to langfuse with LiteLLM Proxy server**](../proxy/logging)
+
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 
 - Ensure you're on the latest version of langfuse `pip install langfuse -U`. The latest version allows litellm to log JSON input/outputs to langfuse

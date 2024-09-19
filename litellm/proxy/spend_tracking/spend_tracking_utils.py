@@ -84,6 +84,7 @@ def get_logging_payload(
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
         requester_ip_address=None,
+        additional_usage_values=None,
     )
     if isinstance(metadata, dict):
         verbose_proxy_logger.debug(
@@ -99,6 +100,13 @@ def get_logging_payload(
                 if key in metadata
             }
         )
+
+    special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
+    additional_usage_values = {}
+    for k, v in usage.items():
+        if k not in special_usage_fields:
+            additional_usage_values.update({k: v})
+    clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:
         cache_key = litellm.cache.get_cache_key(**kwargs)

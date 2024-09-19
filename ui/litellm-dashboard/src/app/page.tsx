@@ -141,6 +141,7 @@ const CreateKeyPage = () => {
           <UserDashboard
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}
@@ -156,8 +157,7 @@ const CreateKeyPage = () => {
         <Navbar
           userID={userID}
           userRole={userRole}
-          userEmail={userEmail}
-          showSSOBanner={showSSOBanner}
+          userEmail={userEmail} 
           premiumUser={premiumUser}
           setProxySettings={setProxySettings}
           proxySettings={proxySettings}
@@ -175,6 +175,7 @@ const CreateKeyPage = () => {
             <UserDashboard
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}

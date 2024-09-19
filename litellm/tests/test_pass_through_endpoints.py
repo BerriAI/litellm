@@ -25,8 +25,17 @@ async def mock_request(*args, **kwargs):
     return mock_response
 
 
+def remove_rerank_route():
+    for route in app.routes:
+        if route.path == "/v1/rerank" and "POST" in route.methods:
+            app.routes.remove(route)
+            print("Rerank route removed successfully")
+    print("ALL Routes on app=", app.routes)
+
+
 @pytest.fixture
 def client():
+    remove_rerank_route()  # remove the native rerank route on the litellm proxy - since we're testing the pass through endpoints
     return TestClient(app)
 
 

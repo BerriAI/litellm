@@ -140,6 +140,7 @@ class OllamaChatConfig:
     ):
         return [
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "top_p",
             "temperature",
@@ -156,7 +157,7 @@ class OllamaChatConfig:
         self, model: str, non_default_params: dict, optional_params: dict
     ):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
             if param == "stream":
                 optional_params["stream"] = value
@@ -583,8 +584,4 @@ async def ollama_acompletion(
             )
             return model_response
     except Exception as e:
-        verbose_logger.exception(
-            "LiteLLM.ollama_acompletion(): Exception occured - {}".format(str(e))
-        )
-
-        raise e
+        raise e  # don't use verbose_logger.exception, if exception is raised

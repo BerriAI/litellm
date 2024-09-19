@@ -71,7 +71,7 @@ litellm --config config.yaml --detailed_debug
 
 ## 4. Test request 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys##request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">

@@ -222,6 +222,231 @@ async def test_anthropic_api_prompt_caching_basic():
     )
 
 
+@pytest.mark.asyncio()
+async def test_anthropic_api_prompt_caching_with_content_str():
+    from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+
+    system_message = [
+        {
+            "role": "system",
+            "content": "Here is the full text of a complex legal agreement",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(
+        messages=system_message
+    )
+
+    assert translated_system_message == [
+        # System Message
+        {
+            "type": "text",
+            "text": "Here is the full text of a complex legal agreement",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    user_messages = [
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions in this agreement?",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions in this agreement?",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(
+        messages=user_messages,
+        model="claude-3-5-sonnet-20240620",
+        llm_provider="anthropic",
+    )
+
+    expected_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+                }
+            ],
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    assert len(translated_messages) == len(expected_messages)
+    for idx, i in enumerate(translated_messages):
+        assert (
+            i == expected_messages[idx]
+        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
+
+
+@pytest.mark.asyncio()
+async def test_anthropic_api_prompt_caching_no_headers():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="anthropic/claude-3-5-sonnet-20240620",
+        messages=[
+            # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement"
+                        * 400,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            # The final turn is marked with cache-control, for continuing in followups.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ],
+        temperature=0.2,
+        max_tokens=10,
+    )
+
+    print("response=", response)
+
+    assert "cache_read_input_tokens" in response.usage
+    assert "cache_creation_input_tokens" in response.usage
+
+    # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
+    assert (response.usage.cache_read_input_tokens > 0) or (
+        response.usage.cache_creation_input_tokens > 0
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_anthropic_api_prompt_caching_streaming():
+    from litellm.tests.test_streaming import streaming_format_tests
+
+    response = await litellm.acompletion(
+        model="anthropic/claude-3-5-sonnet-20240620",
+        messages=[
+            # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement"
+                        * 400,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            # The final turn is marked with cache-control, for continuing in followups.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ],
+        temperature=0.2,
+        max_tokens=10,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    idx = 0
+    is_cache_read_input_tokens_in_usage = False
+    is_cache_creation_input_tokens_in_usage = False
+    async for chunk in response:
+        streaming_format_tests(idx=idx, chunk=chunk)
+        # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
+        if hasattr(chunk, "usage"):
+            print("Received final usage - {}".format(chunk.usage))
+        if hasattr(chunk, "usage") and hasattr(chunk.usage, "cache_read_input_tokens"):
+            is_cache_read_input_tokens_in_usage = True
+        if hasattr(chunk, "usage") and hasattr(
+            chunk.usage, "cache_creation_input_tokens"
+        ):
+            is_cache_creation_input_tokens_in_usage = True
+
+        idx += 1
+
+    print("response=", response)
+
+    assert (
+        is_cache_read_input_tokens_in_usage and is_cache_creation_input_tokens_in_usage
+    )
+
+
 @pytest.mark.asyncio
 async def test_litellm_anthropic_prompt_caching_system():
     # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#prompt-caching-examples

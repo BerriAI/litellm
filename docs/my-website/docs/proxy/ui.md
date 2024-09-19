@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] UI - Admin 
+# Quick Start
 
 Create keys, track spend, add models without worrying about the config / CRUD endpoints.
 
@@ -72,8 +72,13 @@ Control the upperbound that users can use for `max_budget`, `budget_duration` or
 ```yaml
 litellm_settings:
   upperbound_key_generate_params:
-    max_budget: 100 # upperbound of $100, for all /key/generate requests
-    duration: "30d" # upperbound of 30 days for all /key/generate requests
+    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
+    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
+    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
+    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
+    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
+
 ```
 
 ** Expected Behavior **
@@ -100,6 +105,7 @@ GENERIC_CLIENT_SECRET = "<your-okta-client-secret>"
 GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/authorize
 GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
 GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
+GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
 ```
 
 You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
@@ -233,6 +239,10 @@ If you don't see all your keys this could be due to a cached token. So just re-l
 
 :::
 
+### Sign in with Username, Password when SSO is on
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
 ### Restrict UI Access
 
 You can restrict UI Access to just admins - includes you (proxy_admin) and people you give view only access to (proxy_admin_viewer) for seeing global spend.
@@ -291,3 +301,14 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 - Deploy LiteLLM Proxy Server
 
 
+
+## Disable Admin UI
+
+Set `DISABLE_ADMIN_UI="True"` in your environment to disable the Admin UI. 
+
+Useful, if your security team has additional restrictions on UI usage. 
+
+
+**Expected Response**
+
+<Image img={require('../../img/admin_ui_disabled.png')}/>

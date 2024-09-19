@@ -90,7 +90,7 @@ class Schema(TypedDict, total=False):
 class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
-    parameters: Schema
+    parameters: Union[Schema, dict]
     response: Schema
 
 
@@ -171,9 +171,26 @@ class TTL(TypedDict, total=False):
     nano: float
 
 
+class UsageMetadata(TypedDict, total=False):
+    promptTokenCount: int
+    totalTokenCount: int
+    candidatesTokenCount: int
+
+
 class CachedContent(TypedDict, total=False):
     ttl: TTL
     expire_time: str
+    contents: List[ContentType]
+    tools: List[Tools]
+    createTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    updateTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    usageMetadata: UsageMetadata
+    expireTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    name: str
+    displayName: str
+    model: str
+    systemInstruction: ContentType
+    toolConfig: ToolConfig
 
 
 class RequestBody(TypedDict, total=False):
@@ -184,6 +201,21 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+
+
+class CachedContentRequestBody(TypedDict, total=False):
+    contents: Required[List[ContentType]]
+    system_instruction: SystemInstructions
+    tools: Tools
+    toolConfig: ToolConfig
+    model: Required[str]  # Format: models/{model}
+    ttl: str  # ending in 's' - Example: "3.5s".
+    displayName: str
+
+
+class CachedContentListAllResponseBody(TypedDict, total=False):
+    cachedContents: List[CachedContent]
+    nextPageToken: str
 
 
 class SafetyRatings(TypedDict):
@@ -250,12 +282,6 @@ class PromptFeedback(TypedDict):
     blockReasonMessage: str
 
 
-class UsageMetadata(TypedDict, total=False):
-    promptTokenCount: int
-    totalTokenCount: int
-    candidatesTokenCount: int
-
-
 class GenerateContentResponseBody(TypedDict, total=False):
     candidates: Required[List[Candidates]]
     promptFeedback: PromptFeedback
@@ -320,3 +346,46 @@ class Instance(TypedDict, total=False):
 
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: List[Instance]
+
+
+class VertexAICachedContentResponseObject(TypedDict):
+    name: str
+    model: str
+
+
+class TaskTypeEnum(Enum):
+    TASK_TYPE_UNSPECIFIED = "TASK_TYPE_UNSPECIFIED"
+    RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
+    RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT"
+    SEMANTIC_SIMILARITY = "SEMANTIC_SIMILARITY"
+    CLASSIFICATION = "CLASSIFICATION"
+    CLUSTERING = "CLUSTERING"
+    QUESTION_ANSWERING = "QUESTION_ANSWERING"
+    FACT_VERIFICATION = "FACT_VERIFICATION"
+
+
+class VertexAITextEmbeddingsRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class ContentEmbeddings(TypedDict):
+    values: List[int]
+
+
+class VertexAITextEmbeddingsResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
+class EmbedContentRequest(VertexAITextEmbeddingsRequestBody):
+    model: Required[str]
+
+
+class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
+    requests: List[EmbedContentRequest]
+
+
+class VertexAIBatchEmbeddingsResponseObject(TypedDict):
+    embeddings: List[ContentEmbeddings]

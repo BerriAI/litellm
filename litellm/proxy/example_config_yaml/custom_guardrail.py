@@ -32,6 +32,7 @@ class myCustomGuardrail(CustomGuardrail):
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
@@ -60,7 +61,13 @@ class myCustomGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         """
         Runs in parallel to LLM API call

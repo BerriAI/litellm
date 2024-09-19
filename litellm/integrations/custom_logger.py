@@ -2,6 +2,7 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
+from datetime import datetime as datetimeObj
 from typing import Any, Literal, Optional, Tuple, Union
 
 import dotenv
@@ -10,12 +11,14 @@ from pydantic import BaseModel
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self) -> None:
+    def __init__(self, message_logging: bool = True) -> None:
+        self.message_logging = message_logging
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):
@@ -59,6 +62,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     #### Fallback Events - router/proxy only ####
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: Optional[str], kwargs: dict
+    ):
+        pass
+
     async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
         pass
 
@@ -109,6 +117,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
@@ -144,7 +153,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         pass
 

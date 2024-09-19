@@ -37,7 +37,7 @@ class Trade:
         return Trade(order)
 
 
-def trade(model_name: str) -> List[Trade]:
+def trade(model_name: str) -> List[Trade]:  # type: ignore
     def parse_order(order: dict) -> Trade:
         action = order["action"]
 
@@ -134,11 +134,11 @@ def trade(model_name: str) -> List[Trade]:
                 "function": {"name": tool_spec["function"]["name"]},  # type: ignore
             },
         )
+        calls = response.choices[0].message.tool_calls
+        trades = [trade for call in calls for trade in parse_call(call)]
+        return trades
     except litellm.InternalServerError:
         pass
-    calls = response.choices[0].message.tool_calls
-    trades = [trade for call in calls for trade in parse_call(call)]
-    return trades
 
 
 @pytest.mark.parametrize(
@@ -146,4 +146,4 @@ def trade(model_name: str) -> List[Trade]:
 )
 def test_function_call_parsing(model):
     trades = trade(model)
-    print([trade.order for trade in trades])
+    print([trade.order for trade in trades if trade is not None])

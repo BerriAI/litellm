@@ -60,7 +60,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.openai import HttpxBinaryResponseContent
+        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
     else:
@@ -78,7 +78,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.openai import HttpxBinaryResponseContent
+        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
 
@@ -115,7 +115,7 @@ async def test_audio_speech_router(mode):
         optional_params={},
     )
 
-    from litellm.llms.openai import HttpxBinaryResponseContent
+    from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 
     assert isinstance(response, HttpxBinaryResponseContent)
 
@@ -146,7 +146,7 @@ async def test_audio_speech_litellm_vertex(sync_mode):
 
         from types import SimpleNamespace
 
-        from litellm.llms.openai import HttpxBinaryResponseContent
+        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
 
         response.stream_to_file(speech_file_path)
 
@@ -240,6 +240,64 @@ async def test_speech_litellm_vertex_async_with_voice():
 
         assert kwargs["json"] == {
             "input": {"text": "async hello what llm guardrail do you have"},
+            "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
+            "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
+        }
+
+
+@pytest.mark.asyncio
+async def test_speech_litellm_vertex_async_with_voice_ssml():
+    # Mock the response
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "audioContent": "dGVzdCByZXNwb25zZQ==",
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    ssml = """
+    <speak>
+        <p>Hello, world!</p>
+        <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+    </speak>
+    """
+
+    # Set up the mock for asynchronous calls
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_async_post:
+        mock_async_post.return_value = mock_response
+        model = "vertex_ai/test"
+
+        response = await litellm.aspeech(
+            input=ssml,
+            model=model,
+            voice={
+                "languageCode": "en-UK",
+                "name": "en-UK-Studio-O",
+            },
+            audioConfig={
+                "audioEncoding": "LINEAR22",
+                "speakingRate": "10",
+            },
+        )
+
+        # Assert asynchronous call
+        mock_async_post.assert_called_once()
+        _, kwargs = mock_async_post.call_args
+        print("call args", kwargs)
+
+        assert kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+
+        assert "x-goog-user-project" in kwargs["headers"]
+        assert kwargs["headers"]["Authorization"] is not None
+
+        assert kwargs["json"] == {
+            "input": {"ssml": ssml},
             "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
             "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
         }

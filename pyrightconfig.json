@@ -1,0 +1,6 @@
+{
+    "ignore": [],
+    "exclude": ["**/node_modules", "**/__pycache__",  "litellm/tests", "litellm/main.py", "litellm/utils.py", "litellm/types/utils.py"],
+    "reportMissingImports": false
+}
+  

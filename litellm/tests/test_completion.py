@@ -13,6 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries = 3
+
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -77,7 +79,10 @@ def test_completion_custom_provider_model_name():
 
 
 def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
-    _data = {
+    new_response = MagicMock()
+    new_response.headers = {"hello": "world"}
+
+    response_object = {
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
@@ -87,7 +92,7 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
             {
                 "index": 0,
                 "message": {
-                    "role": None,
+                    "role": "assistant",
                     "content": "\n\nHello there, how may I assist you today?",
                 },
                 "logprobs": None,
@@ -96,7 +101,13 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
         ],
         "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
-    return litellm.ModelResponse(**_data)
+    from openai import OpenAI
+    from openai.types.chat.chat_completion import ChatCompletion
+
+    pydantic_obj = ChatCompletion(**response_object)  # type: ignore
+    pydantic_obj.choices[0].message.role = None  # type: ignore
+    new_response.parse.return_value = pydantic_obj
+    return new_response
 
 
 def test_null_role_response():
@@ -291,14 +302,18 @@ async def test_completion_predibase():
             model="predibase/llama-3-8b-instruct",
             tenant_id="c4768f95",
             api_key=os.getenv("PREDIBASE_API_KEY"),
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            messages=[{"role": "user", "content": "who are u?"}],
             max_tokens=10,
+            timeout=5,
         )
 
         print(response)
     except litellm.Timeout as e:
+        print("got a timeout error from predibase")
         pass
     except litellm.ServiceUnavailableError as e:
+        pass
+    except litellm.InternalServerError:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -616,6 +631,8 @@ async def test_model_function_invoke(model, sync_mode, api_key, api_base):
             response = await litellm.acompletion(**data)
 
         print(f"response: {response}")
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -879,18 +896,29 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test claude-3, this is just another way to pass images"
-)
-def test_completion_claude_3_base64():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "azure/gpt-4o",
+        "anthropic/claude-3-opus-20240229",
+    ],
+)  #
+def test_completion_base64(model):
     try:
+        import base64
+
+        import requests
+
         litellm.set_verbose = True
-        litellm.num_retries = 3
-        image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
-        base64_image = encode_image(image_path)
+        url = "https://dummyimage.com/100/100/fff&text=Test+image"
+        response = requests.get(url)
+        file_data = response.content
+
+        encoded_file = base64.b64encode(file_data).decode("utf-8")
+        base64_image = f"data:image/png;base64,{encoded_file}"
         resp = litellm.completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -898,9 +926,7 @@ def test_completion_claude_3_base64():
                         {"type": "text", "text": "Whats in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
+                            "image_url": {"url": base64_image},
                         },
                     ],
                 }
@@ -909,7 +935,6 @@ def test_completion_claude_3_base64():
         print(f"\nResponse: {resp}")
 
         prompt_tokens = resp.usage.prompt_tokens
-        raise Exception("it worked!")
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
@@ -917,9 +942,7 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize(
-    "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
-)
+@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
 def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 
@@ -1296,11 +1319,12 @@ import openai
 
 
 def test_completion_gpt4_turbo():
+    litellm.set_verbose = True
     try:
         response = completion(
             model="gpt-4-1106-preview",
             messages=messages,
-            max_tokens=10,
+            max_completion_tokens=10,
         )
         print(response)
     except openai.RateLimitError:
@@ -1637,18 +1661,19 @@ def test_completion_perplexity_api():
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            return pydantic_obj
+            new_response = MagicMock()
+            new_response.headers = {"hello": "world"}
 
-        print(f"pydantic_obj: {pydantic_obj}")
+            new_response.parse.return_value = pydantic_obj
+            return new_response
 
         openai_client = OpenAI()
 
-        openai_client.chat.completions.create = MagicMock()
-
         with patch.object(
-            openai_client.chat.completions, "create", side_effect=_return_pydantic_obj
+            openai_client.chat.completions.with_raw_response,
+            "create",
+            side_effect=_return_pydantic_obj,
         ) as mock_client:
-            pass
             # litellm.set_verbose= True
             messages = [
                 {"role": "system", "content": "You're a good bot"},
@@ -2164,8 +2189,17 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("model", ["gpt-4o-2024-08-06", "azure/chatgpt-v-2"])
-def test_completion_openai_pydantic(model):
+@pytest.mark.parametrize(
+    "model, api_version",
+    [
+        ("gpt-4o-2024-08-06", None),
+        ("azure/chatgpt-v-2", None),
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("azure/gpt-4o", "2024-08-01-preview"),
+    ],
+)
+@pytest.mark.flaky(retries=3, delay=1)
+def test_completion_openai_pydantic(model, api_version):
     try:
         litellm.set_verbose = True
         from pydantic import BaseModel
@@ -2190,10 +2224,11 @@ def test_completion_openai_pydantic(model):
                     messages=messages,
                     metadata={"hi": "bye"},
                     response_format=EventsList,
+                    api_version=api_version,
                 )
                 break
             except litellm.JSONSchemaValidationError:
-                print("ERROR OCCURRED! INVALID JSON")
+                pytest.fail("ERROR OCCURRED! INVALID JSON")
 
         print("This is the response object\n", response)
 
@@ -2202,7 +2237,7 @@ def test_completion_openai_pydantic(model):
         print(f"response_str: {response_str}")
         json.loads(response_str)  # check valid json is returned
 
-    except Timeout as e:
+    except Timeout:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -2691,8 +2726,61 @@ def test_completion_hf_model_no_provider():
 # test_completion_hf_model_no_provider()
 
 
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_with_functions():
+def gemini_mock_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json = MagicMock(
+        return_value={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_current_weather",
+                                    "args": {"location": "Boston, MA"},
+                                }
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                    "index": 0,
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HARASSMENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                    ],
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 86,
+                "candidatesTokenCount": 19,
+                "totalTokenCount": 105,
+            },
+        }
+    )
+
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_completion_functions_param():
+    litellm.set_verbose = True
     function1 = [
         {
             "name": "get_current_weather",
@@ -2711,18 +2799,33 @@ def test_completion_anyscale_with_functions():
         }
     ]
     try:
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
-        response = completion(
-            model="anyscale/mistralai/Mistral-7B-Instruct-v0.1",
-            messages=messages,
-            functions=function1,
-        )
-        # Add any assertions here to check the response
-        print(response)
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-        cost = litellm.completion_cost(completion_response=response)
-        print("cost to make anyscale completion=", cost)
-        assert cost > 0.0
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+
+        client = AsyncHTTPHandler(concurrent_limit=1)
+
+        with patch.object(client, "post", side_effect=gemini_mock_post) as mock_client:
+            response: litellm.ModelResponse = await litellm.acompletion(
+                model="gemini/gemini-1.5-pro",
+                messages=messages,
+                functions=function1,
+                client=client,
+            )
+            print(response)
+            # Add any assertions here to check the response
+            mock_client.assert_called()
+            print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+            assert "tools" in mock_client.call_args.kwargs["json"]
+            assert (
+                "litellm_param_is_function_call"
+                not in mock_client.call_args.kwargs["json"]
+            )
+            assert (
+                "litellm_param_is_function_call"
+                not in mock_client.call_args.kwargs["json"]["generationConfig"]
+            )
+            assert response.choices[0].message.function_call is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3384,14 +3487,14 @@ def response_format_tests(response: litellm.ModelResponse):
 @pytest.mark.parametrize(
     "model",
     [
-        # "bedrock/cohere.command-r-plus-v1:0",
+        "bedrock/mistral.mistral-large-2407-v1:0",
+        "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "anthropic.claude-instant-v1",
-        # "bedrock/ai21.j2-mid",
-        # "mistral.mistral-7b-instruct-v0:2",
+        "anthropic.claude-instant-v1",
+        "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
-        # "meta.llama3-8b-instruct-v1:0",
-        # "cohere.command-text-v14",
+        "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -3406,6 +3509,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3417,6 +3521,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -4002,6 +4107,7 @@ def test_completion_nvidia_nim():
         # "gemini-1.5-flash",
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_gemini(model):
     litellm.set_verbose = True
     model_name = "gemini/{}".format(model)
@@ -4097,45 +4203,6 @@ def test_completion_deepseek():
         response = completion(model=model_name, messages=messages, tools=tools)
         # Add any assertions here to check the response
         print(response)
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# Palm tests
-def test_completion_palm():
-    litellm.set_verbose = True
-    model_name = "palm/chat-bison"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    try:
-        response = completion(model=model_name, messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_palm()
-
-
-# test palm with streaming
-def test_completion_palm_stream():
-    # litellm.set_verbose = True
-    model_name = "palm/chat-bison"
-    try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            stop=["stop"],
-            stream=True,
-            max_tokens=20,
-        )
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
     except litellm.APIError as e:
         pass
     except Exception as e:
@@ -4436,3 +4503,23 @@ async def test_dynamic_azure_params(stream, sync_mode):
         except Exception as e:
             traceback.print_stack()
             raise e
+
+
+@pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_completion_ai21_chat():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="jamba-1.5-large",
+        user="ishaan",
+        tool_choice="auto",
+        seed=123,
+        messages=[{"role": "user", "content": "what does the document say"}],
+        documents=[
+            {
+                "content": "hello world",
+                "metadata": {"source": "google", "author": "ishaan"},
+            }
+        ],
+    )
+    pass

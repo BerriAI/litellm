@@ -770,6 +770,37 @@ export const claimOnboardingToken = async (
     throw error;
   }
 };
+
+export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/key/${keyToRegenerate}/regenerate`
+      : `/key/${keyToRegenerate}/regenerate`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Regenerate key Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to regenerate key:", error);
+    throw error;
+  }
+};
+
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 

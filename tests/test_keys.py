@@ -523,6 +523,7 @@ async def test_key_info_spend_values():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_key_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.

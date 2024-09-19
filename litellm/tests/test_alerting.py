@@ -27,7 +27,10 @@ from openai import APIError
 
 import litellm
 from litellm.caching import DualCache, RedisCache
-from litellm.integrations.slack_alerting import DeploymentMetrics, SlackAlerting
+from litellm.integrations.SlackAlerting.slack_alerting import (
+    DeploymentMetrics,
+    SlackAlerting,
+)
 from litellm.proxy._types import CallInfo
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import AlertingConfig, Router
@@ -150,6 +153,7 @@ async def test_response_taking_too_long_hanging(slack_alerting):
         await slack_alerting.response_taking_too_long(
             type="hanging_request", request_data=request_data
         )
+
         mock_send_alert.assert_awaited_once()
 
 
@@ -230,6 +234,12 @@ async def test_budget_alerts_crossed_again(slack_alerting):
 # Test for send_alert - should be called once
 @pytest.mark.asyncio
 async def test_send_alert(slack_alerting):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    asyncio.create_task(slack_alerting.periodic_flush())
+    verbose_logger.setLevel(level=logging.DEBUG)
     with patch.object(
         slack_alerting.async_http_handler, "post", new=AsyncMock()
     ) as mock_post:
@@ -237,6 +247,8 @@ async def test_send_alert(slack_alerting):
         await slack_alerting.send_alert(
             "Test message", "Low", "budget_alerts", alerting_metadata={}
         )
+
+        await asyncio.sleep(6)
         mock_post.assert_awaited_once()
 
 

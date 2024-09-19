@@ -25,6 +25,11 @@ If you want a server to load balance across different LLM APIs, use our [LiteLLM
 
 ### Quick Start
 
+Loadbalance across multiple [azure](./providers/azure.md)/[bedrock](./providers/bedrock.md)/[provider](./providers/) deployments. LiteLLM will handle retrying in different regions if a call fails.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router
 
@@ -84,6 +89,57 @@ response = await router.acompletion(model="gpt-4",
 
 print(response)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+:::info
+
+See detailed proxy loadbalancing/fallback docs [here](./proxy/reliability.md)
+
+:::
+
+1. Setup model_list with multiple deployments
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-large
+      api_base: https://openai-france-1234.openai.azure.com/
+      api_key: <your-azure-api-key>
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml 
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+        {"role": "user", "content": "Hi there!"}
+    ],
+    "mock_testing_rate_limit_error": true
+}'
+```
+</TabItem>
+</Tabs>
 
 ### Available Endpoints
 - `router.completion()` - chat completions endpoint to call 100+ LLMs
@@ -315,6 +371,33 @@ router_settings:
 
 If `rpm` or `tpm` is not provided, it randomly picks a deployment
 
+You can also set a `weight` param, to specify which model should get picked when.
+
+<Tabs>
+<TabItem value="rpm" label="RPM-based shuffling">
+
+##### **LiteLLM Proxy Config.yaml**
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-v-2
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		rpm: 900 
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-functioncalling
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		rpm: 10 
+```
+
+##### **Python SDK**
+
 ```python
 from litellm import Router 
 import asyncio
@@ -337,12 +420,68 @@ model_list = [{ # list of model deployments
 		"api_base": os.getenv("AZURE_API_BASE"),
 		"rpm": 10,
 	}
+},]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="simple-shuffle")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+	return response
+
+asyncio.run(router_acompletion())
+```
+
+</TabItem>
+<TabItem value="weight" label="Weight-based shuffling">
+
+##### **LiteLLM Proxy Config.yaml**
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-v-2
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		weight: 9
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-functioncalling
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		weight: 1 
+```
+
+
+##### **Python SDK**
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list = [{
+	"model_name": "gpt-3.5-turbo", # model alias 
+	"litellm_params": { 
+		"model": "azure/chatgpt-v-2", # actual model name
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"weight": 9, # pick this 90% of the time
+	}
 }, {
     "model_name": "gpt-3.5-turbo", 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "gpt-3.5-turbo", 
-		"api_key": os.getenv("OPENAI_API_KEY"),
-		"rpm": 10,
+	"litellm_params": { 
+		"model": "azure/chatgpt-functioncalling", 
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"weight": 1,
 	}
 }]
 
@@ -358,6 +497,10 @@ async def router_acompletion():
 
 asyncio.run(router_acompletion())
 ```
+
+</TabItem>
+</Tabs>
+
 </TabItem>
 <TabItem value="usage-based" label="Rate-Limit Aware">
 
@@ -895,6 +1038,12 @@ print(f"response: {response}")
 - Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
 - Use `AllowedFailsPolicy` to set a custom number of `allowed_fails`/minute before cooling down a deployment
 
+[**See All Exception Types**](https://github.com/BerriAI/litellm/blob/ccda616f2f881375d4e8586c76fe4662909a7d22/litellm/types/router.py#L436)
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 Example:
 
 ```python
@@ -957,6 +1106,24 @@ response = await router.acompletion(
 	messages=messages,
 )
 ```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+router_settings: 
+  retry_policy: {
+    "BadRequestErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4
+  }
+  allowed_fails_policy: {
+	"ContentPolicyViolationErrorAllowedFails": 1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+	"RateLimitErrorAllowedFails": 100 # Allow 100 RateLimitErrors before cooling down a deployment
+  }
+```
+
+</TabItem>
+</Tabs>
 
 
 ### Fallbacks 

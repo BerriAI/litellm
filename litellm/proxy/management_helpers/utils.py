@@ -109,8 +109,8 @@ async def add_new_member(
                 where={"user_id": user_info.user_id},  # type: ignore
                 data={"teams": {"push": [team_id]}},
             )
-
-            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+            if _returned_user is not None:
+                returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
                 status_code=400,
@@ -120,7 +120,11 @@ async def add_new_member(
             )
 
     # Check if trying to set a budget for team member
-    if max_budget_in_team is not None and new_member.user_id is not None:
+    if (
+        max_budget_in_team is not None
+        and returned_user is not None
+        and returned_user.user_id is not None
+    ):
         # create a new budget item for this member
         response = await prisma_client.db.litellm_budgettable.create(
             data={
@@ -135,7 +139,7 @@ async def add_new_member(
             await prisma_client.db.litellm_teammembership.create(
                 data={
                     "team_id": team_id,
-                    "user_id": new_member.user_id,
+                    "user_id": returned_user.user_id,
                     "budget_id": _budget_id,
                 },
                 include={"litellm_budget_table": True},

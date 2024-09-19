@@ -43,7 +43,13 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         if "messages" in data and isinstance(data["messages"], list):
             text = ""

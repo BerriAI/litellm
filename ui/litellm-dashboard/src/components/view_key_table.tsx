@@ -1,12 +1,15 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall, modelAvailableCall } from "./networking";
-import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
-import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall } from "./networking";
+import { add } from 'date-fns';
+import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon, RefreshIcon } from "@heroicons/react/outline";
+import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall, regenerateKeyCall } from "./networking";
 import {
   Badge,
   Card,
   Table,
+  Grid,
+  Col,
   Button,
   TableBody,
   TableCell,
@@ -20,6 +23,7 @@ import {
   Subtitle,
   Icon,
   BarChart,
+  TextInput,
 } from "@tremor/react";
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
@@ -31,7 +35,11 @@ import {
   InputNumber,
   message,
   Select,
+  Tooltip,
+  DatePicker,
 } from "antd";
+
+import { CopyToClipboard } from "react-copy-to-clipboard";
 
 const { Option } = Select;
 const isLocal = process.env.NODE_ENV === "development";
@@ -65,6 +73,7 @@ interface ViewKeyTableProps {
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
 interface ItemData {
@@ -82,6 +91,8 @@ interface ItemData {
   metadata: any;
   user_id: string | null;
   expires: any;
+  budget_duration: string | null;
+  budget_reset_at: string | null;
   // Add any other properties that exist in the item data
 }
 
@@ -92,7 +103,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   selectedTeam,
   data,
   setData,
-  teams
+  teams,
+  premiumUser
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -109,8 +121,64 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [userModels, setUserModels] = useState([]);
   const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
+  const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
+  const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
+  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
+  const [regenerateForm] = Form.useForm();
+  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
+
+
+  useEffect(() => {
+    const calculateNewExpiryTime = (duration: string | undefined) => {
+      if (!duration) {
+        return null;
+      }
+  
+      try {
+        const now = new Date();
+        let newExpiry: Date;
+  
+        if (duration.endsWith('s')) {
+          newExpiry = add(now, { seconds: parseInt(duration) });
+        } else if (duration.endsWith('h')) {
+          newExpiry = add(now, { hours: parseInt(duration) });
+        } else if (duration.endsWith('d')) {
+          newExpiry = add(now, { days: parseInt(duration) });
+        } else {
+          throw new Error('Invalid duration format');
+        }
+  
+        return newExpiry.toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          second: 'numeric',
+          hour12: true
+        });
+      } catch (error) {
+        return null;
+      }
+    };
+
+    console.log("in calculateNewExpiryTime for selectedToken", selectedToken);
+        
+  
+    // When a new duration is entered
+    if (regenerateFormData?.duration) {
+      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
+    } else {
+      setNewExpiryTime(null);
+    }
+
+    console.log("calculateNewExpiryTime:", newExpiryTime);
+  }, [selectedToken, regenerateFormData?.duration]);
+  
+
+  
 
   useEffect(() => {
     const fetchUserModels = async () => {
@@ -134,6 +202,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
     fetchUserModels();
   }, [accessToken, userID, userRole]);
+
 
   const handleModelLimitClick = (token: ItemData) => {
     setSelectedToken(token);
@@ -215,7 +284,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={token} // Pass initial values here
+          initialValues={{...token, budget_duration: token.budget_duration}} // Pass initial values here
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -289,6 +358,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               >
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
+
+              <Form.Item 
+                className="mt-8"
+                label="Reset Budget"
+                name="budget_duration"
+                help={`Current Reset Budget: ${
+                  token.budget_duration
+                }, budget will be reset: ${token.budget_reset_at ? new Date(token.budget_reset_at).toLocaleString() : 'Never'}`}
+              >
+                <Select placeholder="n/a">
+                  <Select.Option value="daily">daily</Select.Option>
+                  <Select.Option value="weekly">weekly</Select.Option>
+                  <Select.Option value="monthly">monthly</Select.Option>
+                </Select>
+              </Form.Item>
+              
               <Form.Item
                   label="token"
                   name="token"
@@ -297,6 +382,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               <Form.Item 
                 label="Team" 
                 name="team_id"
+                className="mt-8"
                 help="the team this key belongs to"
               >
                 <Select3 value={token.team_alias}>
@@ -528,7 +614,30 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       }
     }
 
-    setSelectedToken(token);
+    // Convert the budget_duration to the corresponding select option
+    let budgetDuration = null;
+    if (token.budget_duration) {
+      switch (token.budget_duration) {
+        case "24h":
+          budgetDuration = "daily";
+          break;
+        case "7d":
+          budgetDuration = "weekly";
+          break;
+        case "30d":
+          budgetDuration = "monthly";
+          break;
+        default:
+          budgetDuration = "None";
+      }
+    }
+
+    setSelectedToken({
+      ...token,
+      budget_duration: budgetDuration
+    });
+
+    //setSelectedToken(token);
     setEditModalVisible(true);
   };
 
@@ -549,6 +658,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const currentKey = formValues.token; 
   formValues.key = currentKey;
+
+  // Convert the budget_duration back to the API expected format
+  if (formValues.budget_duration) {
+    switch (formValues.budget_duration) {
+      case "daily":
+        formValues.budget_duration = "24h";
+        break;
+      case "weekly":
+        formValues.budget_duration = "7d";
+        break;
+      case "monthly":
+        formValues.budget_duration = "30d";
+        break;
+    }
+  }
 
   console.log("handleEditSubmit:", formValues);
 
@@ -612,6 +736,60 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setKeyToDelete(null);
   };
 
+  const handleRegenerateClick = (token: any) => {
+    setSelectedToken(token);
+    setNewExpiryTime(null);
+    regenerateForm.setFieldsValue({
+      key_alias: token.key_alias,
+      max_budget: token.max_budget,
+      tpm_limit: token.tpm_limit,
+      rpm_limit: token.rpm_limit,
+      duration: token.duration || '',
+    });
+    setRegenerateDialogVisible(true);
+  };
+
+  const handleRegenerateFormChange = (field: string, value: any) => {
+    setRegenerateFormData((prev: any) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleRegenerateKey = async () => {
+    if (!premiumUser) {
+      message.error("Regenerate API Key is an Enterprise feature. Please upgrade to use this feature.");
+      return;
+    }
+
+    if (selectedToken == null) {
+      return;
+    }
+
+    try {
+      const formValues = await regenerateForm.validateFields();
+      const response = await regenerateKeyCall(accessToken, selectedToken.token, formValues);
+      setRegeneratedKey(response.key);
+
+      // Update the data state with the new key_name
+      if (data) {
+        const updatedData = data.map(item => 
+          item.token === selectedToken?.token 
+            ? { ...item, key_name: response.key_name, ...formValues } 
+            : item
+        );
+        setData(updatedData);
+      }
+
+      setRegenerateDialogVisible(false);
+      regenerateForm.resetFields();
+      message.success("API Key regenerated successfully");
+    } catch (error) {
+      console.error("Error regenerating key:", error);
+      message.error("Failed to regenerate API Key");
+    }
+  };
+
   if (data == null) {
     return;
   }
@@ -624,8 +802,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
+            <TableHeaderCell>Expires</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
+            <TableHeaderCell>Budget Reset</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>Rate Limits</TableHeaderCell>
             <TableHeaderCell>Rate Limits per model</TableHeaderCell>
@@ -664,6 +844,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Text>{item.key_name}</Text>
                 </TableCell>
                 <TableCell>
+                {item.expires != null ? (
+                  <div>
+                    <p style={{ fontSize: '0.70rem' }}>{new Date(item.expires).toLocaleString()}</p>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '0.70rem' }}>Never</p>
+                )}
+              </TableCell>
+                <TableCell>
                   <Text>
                     {(() => {
                       try {
@@ -680,6 +869,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>{item.max_budget}</Text>
                   ) : (
                     <Text>Unlimited</Text>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {item.budget_reset_at != null ? (
+                    <div>
+                      <p style={{ fontSize: '0.70rem' }}>{new Date(item.budget_reset_at).toLocaleString()}</p>
+
+                    </div>
+                    
+                  ) : (
+                    <p style={{ fontSize: '0.70rem' }}>Never</p>
                   )}
                 </TableCell>
                 {/* <TableCell style={{ maxWidth: '2px' }}>
@@ -756,7 +956,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   </Text>
                 </TableCell>
                 <TableCell>
-                <Button onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
+                <Button size="xs" onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
                 </TableCell>
                 <TableCell>
                     <Icon
@@ -767,6 +967,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       icon={InformationCircleIcon}
                       size="sm"
                     />
+                    
                     
                 
     <Modal
@@ -806,7 +1007,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <div className="mt-2 flex items-baseline space-x-2.5">
               <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
               {selectedToken.max_budget != null ? (
-                  <>{selectedToken.max_budget}</>
+                  <>
+                    {selectedToken.max_budget}
+                    {selectedToken.budget_duration && (
+                      <>
+                        <br />
+                        Budget will be reset at {selectedToken.budget_reset_at ? new Date(selectedToken.budget_reset_at).toLocaleString() : 'Never'}
+                      </>
+                    )}
+                  </>
                 ) : (
                   <>Unlimited</>
                 )}
@@ -867,6 +1076,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     size="sm"
                     onClick={() => handleEditClick(item)}
                   />
+                  <Icon
+                      onClick={() => handleRegenerateClick(item)}
+                      icon={RefreshIcon}
+                      size="sm"
+                    />
                   <Icon
                     onClick={() => handleDelete(item)}
                     icon={TrashIcon}
@@ -942,6 +1156,142 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           accessToken={accessToken}
         />
       )}
+
+    {/* Regenerate Key Form Modal */}
+    <Modal
+      title="Regenerate API Key"
+      visible={regenerateDialogVisible}
+      onCancel={() => {
+        setRegenerateDialogVisible(false);
+        regenerateForm.resetFields();
+      }}
+      footer={[
+        <Button key="cancel" onClick={() => {
+          setRegenerateDialogVisible(false);
+          regenerateForm.resetFields();
+        }} className="mr-2">
+          Cancel
+        </Button>,
+        <Button
+          key="regenerate"
+          onClick={handleRegenerateKey}
+          disabled={!premiumUser}
+        >
+          {premiumUser ? "Regenerate" : "Upgrade to Regenerate"}
+        </Button>
+      ]}
+    >
+      {premiumUser ? (
+        <Form 
+        form={regenerateForm} 
+        layout="vertical"
+        onValuesChange={(changedValues, allValues) => {
+          if ('duration' in changedValues) {
+            handleRegenerateFormChange('duration', changedValues.duration);
+          }
+        }}
+      >
+          <Form.Item name="key_alias" label="Key Alias">
+            <TextInput disabled={true} />
+          </Form.Item>
+          <Form.Item name="max_budget" label="Max Budget (USD)">
+            <InputNumber step={0.01} precision={2} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="tpm_limit" label="TPM Limit">
+            <InputNumber style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="rpm_limit" label="RPM Limit">
+            <InputNumber style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name="duration"
+            label="Expire Key (eg: 30s, 30h, 30d)"
+            className="mt-8"
+          >
+            <TextInput placeholder="" />
+          </Form.Item>
+          <div className="mt-2 text-sm text-gray-500">
+            Current expiry: {
+              selectedToken?.expires != null ? (
+                new Date(selectedToken.expires).toLocaleString()
+              ) : (
+                'Never'
+              )
+            }
+          </div>
+          {newExpiryTime && (
+            <div className="mt-2 text-sm text-green-600">
+              New expiry: {newExpiryTime}
+            </div>
+          )}
+        </Form>
+      ) : (
+        <div>
+          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
+          <Button variant="primary" className="mb-2">
+            <a href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat" target="_blank">
+              Get Free Trial
+            </a>
+          </Button>
+        </div>
+      )}
+    </Modal>
+
+    {/* Regenerated Key Display Modal */}
+    {regeneratedKey && (
+      <Modal
+        visible={!!regeneratedKey}
+        onCancel={() => setRegeneratedKey(null)}
+        footer={[
+          <Button key="close" onClick={() => setRegeneratedKey(null)}>
+            Close
+          </Button>
+        ]}
+      >
+        <Grid numItems={1} className="gap-2 w-full">
+          <Title>Regenerated Key</Title>
+          <Col numColSpan={1}>
+            <p>
+              Please replace your old key with the new key generated. For
+              security reasons, <b>you will not be able to view it again</b> through
+              your LiteLLM account. If you lose this secret key, you will need to
+              generate a new one.
+            </p>
+          </Col>
+          <Col numColSpan={1}>
+            <Text className="mt-3">Key Alias:</Text>
+            <div
+              style={{
+                background: "#f8f8f8",
+                padding: "10px",
+                borderRadius: "5px",
+                marginBottom: "10px",
+              }}
+            >
+              <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>
+                {selectedToken?.key_alias || 'No alias set'}
+              </pre>
+            </div>
+            <Text className="mt-3">New API Key:</Text>
+            <div
+              style={{
+                background: "#f8f8f8",
+                padding: "10px",
+                borderRadius: "5px",
+                marginBottom: "10px",
+              }}
+            >
+              <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>
+                {regeneratedKey}
+              </pre>
+            </div>
+            <CopyToClipboard text={regeneratedKey} onCopy={() => message.success("API Key copied to clipboard")}>
+              <Button className="mt-3">Copy API Key</Button>
+            </CopyToClipboard>
+          </Col>
+        </Grid>
+      </Modal>
+    )}
     </div>
   );
 };

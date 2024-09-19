@@ -4199,7 +4199,7 @@ def mock_post(*args, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
-    mock_response.model_dump.return_value = {
+    mock_response.parse.return_value.model_dump.return_value = {
         "id": "cmpl-7a59383dd4234092b9e5d652a7ab8143",
         "object": "text_completion",
         "created": 1718824735,
@@ -4226,14 +4226,27 @@ def test_completion_vllm():
 
     client = OpenAI(api_key="my-fake-key")
 
-    with patch.object(client.completions, "create", side_effect=mock_post) as mock_call:
+    with patch.object(
+        client.completions.with_raw_response, "create", side_effect=mock_post
+    ) as mock_call:
         response = text_completion(
             model="openai/gemini-1.5-flash", prompt="ping", client=client, hello="world"
         )
-        print(response)
+        print("raw response", response)
 
         assert response.usage.prompt_tokens == 2
 
         mock_call.assert_called_once()
 
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
+
+def test_completion_fireworks_ai_multiple_choices():
+    litellm.set_verbose = True
+    response = litellm.text_completion(
+        model="fireworks_ai/llama-v3p1-8b-instruct",
+        prompt=["halo", "hi", "halo", "hi"],
+    )
+    print(response.choices)
+
+    assert len(response.choices) == 4

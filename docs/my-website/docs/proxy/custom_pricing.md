@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Custom LLM Pricing - Sagemaker, Azure, etc
+# Custom LLM Pricing
 
 Use this to register custom pricing for models. 
 

@@ -24,7 +24,6 @@ import httpx
 from fastapi import HTTPException
 
 import litellm
-from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -34,10 +33,12 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.llms.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    _get_async_httpx_client,
+    get_async_httpx_client,
+    httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     BedrockContentItem,
     BedrockRequest,
@@ -55,7 +56,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrailVersion: Optional[str] = None,
         **kwargs,
     ):
-        self.async_handler = _get_async_httpx_client()
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
 
@@ -182,6 +185,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             method="POST", url=api_base, data=encoded_data, headers=headers
         )
         sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
+
         prepped_request = request.prepare()
 
         return prepped_request
@@ -210,7 +218,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response = await self.async_handler.post(
             url=prepared_request.url,
             json=request_data,  # type: ignore
-            headers=prepared_request.headers,
+            headers=prepared_request.headers,  # type: ignore
         )
         verbose_proxy_logger.debug("Bedrock AI response: %s", response.text)
         if response.status_code == 200:
@@ -235,12 +243,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.types.guardrails import GuardrailEventHooks
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:

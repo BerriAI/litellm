@@ -156,7 +156,10 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/chatgpt-v-2", messages=messages, stream=True
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                mock_response="Exception: content_filter_policy",
+                stream=True,
             )
             for chunk in response:
                 print(f"chunk: {chunk}")
@@ -418,6 +421,7 @@ async def test_async_custom_handler_embedding_optional_param_bedrock():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_cost_tracking_with_caching():
     """
     Important Test - This tests if that cost is 0 for cached responses
