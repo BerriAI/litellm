@@ -39,6 +39,8 @@ class PrometheusLogger(CustomLogger):
                 )
                 return
 
+            REQUESTED_MODEL = "requested_model"
+
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
                 documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
@@ -46,7 +48,7 @@ class PrometheusLogger(CustomLogger):
                     "end_user",
                     "hashed_api_key",
                     "api_key_alias",
-                    "model",
+                    REQUESTED_MODEL,
                     "team",
                     "team_alias",
                     "user",
@@ -60,7 +62,7 @@ class PrometheusLogger(CustomLogger):
                     "end_user",
                     "hashed_api_key",
                     "api_key_alias",
-                    "model",
+                    REQUESTED_MODEL,
                     "team",
                     "team_alias",
                     "user",
@@ -202,17 +204,17 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = Counter(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=["requested_model"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=["requested_model", "exception_status"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL, "exception_status"] + _logged_llm_labels,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=["requested_model"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
             )
 
             # Deployment Latency tracking
