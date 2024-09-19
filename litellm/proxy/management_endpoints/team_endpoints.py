@@ -985,12 +985,8 @@ async def team_info(
     get info on team + related keys
 
     ```
-    curl --location 'http://localhost:4000/team/info' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "teams": ["<team-id>",..]
-    }'
+    curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
+    --header 'Authorization: Bearer your_api_key_here'
     ```
     """
     from litellm.proxy.proxy_server import (

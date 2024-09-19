@@ -744,6 +744,28 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true
     },
+    "azure/gpt-35-turbo-0613": {
+        "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
+    "azure/gpt-35-turbo-0301": {
+        "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "azure/gpt-35-turbo-0125": {
         "max_tokens": 4096,
         "max_input_tokens": 16384,
@@ -783,6 +805,14 @@
         "mode": "completion"
     },
     "azure/gpt-35-turbo-instruct": {
+        "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "text-completion-openai",
+        "mode": "completion"
+    },
+    "azure/gpt-35-turbo-instruct-0914": {
         "max_tokens": 4097,
         "max_input_tokens": 4097,
         "input_cost_per_token": 0.0000015,
@@ -1348,6 +1378,16 @@
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.00000007,
         "output_cost_per_token": 0.00000007,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "groq/gemma2-9b-it": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000020,
+        "output_cost_per_token": 0.00000020,
         "litellm_provider": "groq",
         "mode": "chat",
         "supports_function_calling": true
@@ -5442,6 +5482,26 @@
         "mode": "chat",
         "supports_function_calling": true,
         "source": "https://fireworks.ai/pricing"
+    },
+    "fireworks-ai-up-to-16b": {
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-16.1b-to-80b": {
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-moe-up-to-56b": {
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000005,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-56b-to-176b": {
+        "input_cost_per_token": 0.0000012,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "fireworks_ai"
     },
       "anyscale/mistralai/Mistral-7B-Instruct-v0.1": {
         "max_tokens": 16384,
