@@ -113,6 +113,33 @@ class PrometheusLogger(CustomLogger):
                 ],
             )
 
+            self.litellm_input_tokens_metric = Counter(
+                "litellm_input_tokens",
+                "Total number of input tokens from LLM requests",
+                labelnames=[
+                    "end_user",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "model",
+                    "team",
+                    "team_alias",
+                    "user",
+                ],
+            )
+            self.litellm_output_tokens_metric = Counter(
+                "litellm_output_tokens",
+                "Total number of output tokens from LLM requests",
+                labelnames=[
+                    "end_user",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "model",
+                    "team",
+                    "team_alias",
+                    "user",
+                ],
+            )
+
             # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = Gauge(
                 "litellm_remaining_team_budget_metric",
@@ -241,30 +268,31 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
+        from litellm.types.utils import StandardLoggingPayload
 
         verbose_logger.debug(
             f"prometheus Logging - Enters success logging function for kwargs {kwargs}"
         )
 
         # unpack kwargs
+        standard_logging_payload: StandardLoggingPayload = kwargs.get(
+            "standard_logging_object", {}
+        )
         model = kwargs.get("model", "")
-        response_cost = kwargs.get("response_cost", 0.0) or 0
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
-        user_id = litellm_params.get("metadata", {}).get("user_api_key_user_id", None)
-        user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)
-        user_api_key_alias = litellm_params.get("metadata", {}).get(
-            "user_api_key_alias", None
-        )
-        user_api_team = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_id", None
-        )
-        user_api_team_alias = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_alias", None
-        )
-
+        user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
+        user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
+        user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
+        user_api_team = standard_logging_payload["metadata"]["user_api_key_team_id"]
+        user_api_team_alias = standard_logging_payload["metadata"][
+            "user_api_key_team_alias"
+        ]
+        output_tokens = standard_logging_payload["completion_tokens"]
+        tokens_used = standard_logging_payload["total_tokens"]
+        response_cost = standard_logging_payload["response_cost"]
         _team_spend = litellm_params.get("metadata", {}).get(
             "user_api_key_team_spend", None
         )
@@ -284,12 +312,6 @@ class PrometheusLogger(CustomLogger):
         _remaining_api_key_budget = safe_get_remaining_budget(
             max_budget=_api_key_max_budget, spend=_api_key_spend
         )
-        output_tokens = 1.0
-        if response_obj is not None:
-            tokens_used = response_obj.get("usage", {}).get("total_tokens", 0)
-            output_tokens = response_obj.get("usage", {}).get("completion_tokens", 0)
-        else:
-            tokens_used = 0
 
         print_verbose(
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
@@ -330,7 +352,27 @@ class PrometheusLogger(CustomLogger):
             user_api_team,
             user_api_team_alias,
             user_id,
-        ).inc(tokens_used)
+        ).inc(standard_logging_payload["total_tokens"])
+
+        self.litellm_input_tokens_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(standard_logging_payload["prompt_tokens"])
+
+        self.litellm_output_tokens_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(standard_logging_payload["completion_tokens"])
 
         self.litellm_remaining_team_budget_metric.labels(
             user_api_team, user_api_team_alias
@@ -389,6 +431,7 @@ class PrometheusLogger(CustomLogger):
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        from litellm.types.utils import StandardLoggingPayload
 
         verbose_logger.debug(
             f"prometheus Logging - Enters failure logging function for kwargs {kwargs}"
@@ -397,19 +440,18 @@ class PrometheusLogger(CustomLogger):
         # unpack kwargs
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
+        standard_logging_payload: StandardLoggingPayload = kwargs.get(
+            "standard_logging_object", {}
+        )
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
-        user_id = litellm_params.get("metadata", {}).get("user_api_key_user_id", None)
-        user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)
-        user_api_key_alias = litellm_params.get("metadata", {}).get(
-            "user_api_key_alias", None
-        )
-        user_api_team = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_id", None
-        )
-        user_api_team_alias = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_alias", None
-        )
+        user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
+        user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
+        user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
+        user_api_team = standard_logging_payload["metadata"]["user_api_key_team_id"]
+        user_api_team_alias = standard_logging_payload["metadata"][
+            "user_api_key_team_alias"
+        ]
         exception = kwargs.get("exception", None)
 
         try:
