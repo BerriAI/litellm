@@ -1166,11 +1166,11 @@ async def list_keys(
 
         # Prepare filter conditions
         where = {}
-        if user_id:
+        if user_id and isinstance(user_id, str):
             where["user_id"] = user_id
-        if team_id:
+        if team_id and isinstance(team_id, str):
             where["team_id"] = team_id
-        if key_alias:
+        if key_alias and isinstance(key_alias, str):
             where["key_alias"] = key_alias
 
         logging.debug(f"Filter conditions: {where}")
