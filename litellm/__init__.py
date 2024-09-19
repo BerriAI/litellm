@@ -917,8 +917,10 @@ from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
-    BEDROCK_CONVERSE_MODELS,
     bedrock_tool_name_mappings,
+)
+from .llms.bedrock.chat.converse_handler import (
+    BEDROCK_CONVERSE_MODELS,
 )
 from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
