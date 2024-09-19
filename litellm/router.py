@@ -1290,7 +1290,7 @@ class Router:
             raise e
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
-        model_name = ""
+        model_name = model
         try:
             verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
@@ -5180,6 +5180,7 @@ class Router:
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(  # type: ignore
                 llm_router_instance=self,
+                model=model,
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )

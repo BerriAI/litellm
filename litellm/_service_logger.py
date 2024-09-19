@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
@@ -77,11 +78,29 @@ class ServiceLogging(CustomLogger):
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
+            elif callback == "datadog":
+                from litellm.integrations.datadog.datadog import DataDogLogger
+
+                await self.init_datadog_logger_if_none()
+                await self.dd_logger.async_service_success_hook(
+                    payload=payload,
+                    parent_otel_span=parent_otel_span,
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata=event_metadata,
+                )
             elif callback == "otel":
+                from litellm.integrations.opentelemetry import OpenTelemetry
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
-                if parent_otel_span is not None and open_telemetry_logger is not None:
-                    await open_telemetry_logger.async_service_success_hook(
+                await self.init_otel_logger_if_none()
+
+                if (
+                    parent_otel_span is not None
+                    and open_telemetry_logger is not None
+                    and isinstance(open_telemetry_logger, OpenTelemetry)
+                ):
+                    await self.otel_logger.async_service_success_hook(
                         payload=payload,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
@@ -98,6 +117,37 @@ class ServiceLogging(CustomLogger):
             self.prometheusServicesLogger = PrometheusServicesLogger()
         elif self.prometheusServicesLogger is None:
             self.prometheusServicesLogger = self.prometheusServicesLogger()
+        return
+
+    async def init_datadog_logger_if_none(self):
+        """
+        initializes dd_logger if it is None or no attribute exists on ServiceLogging Object
+
+        """
+        from litellm.integrations.datadog.datadog import DataDogLogger
+
+        if not hasattr(self, "dd_logger"):
+            self.dd_logger: DataDogLogger = DataDogLogger()
+
+        return
+
+    async def init_otel_logger_if_none(self):
+        """
+        initializes otel_logger if it is None or no attribute exists on ServiceLogging Object
+
+        """
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.proxy.proxy_server import open_telemetry_logger
+
+        if not hasattr(self, "otel_logger"):
+            if open_telemetry_logger is not None and isinstance(
+                open_telemetry_logger, OpenTelemetry
+            ):
+                self.otel_logger: OpenTelemetry = open_telemetry_logger
+            else:
+                verbose_logger.warning(
+                    "ServiceLogger: open_telemetry_logger is None or not an instance of OpenTelemetry"
+                )
         return
 
     async def async_service_failure_hook(
@@ -136,13 +186,23 @@ class ServiceLogging(CustomLogger):
                 await self.prometheusServicesLogger.async_service_failure_hook(
                     payload=payload
                 )
+            elif callback == "datadog":
+                await self.init_datadog_logger_if_none()
+                await self.dd_logger.async_service_failure_hook(
+                    payload=payload,
+                    error=error_message,
+                    parent_otel_span=parent_otel_span,
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata=event_metadata,
+                )
 
         from litellm.proxy.proxy_server import open_telemetry_logger
 
         if not isinstance(error, str):
             error = str(error)
         if open_telemetry_logger is not None:
-            await open_telemetry_logger.async_service_failure_hook(
+            await self.otel_logger.async_service_failure_hook(
                 payload=payload,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,

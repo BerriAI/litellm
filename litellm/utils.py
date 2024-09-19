@@ -120,11 +120,26 @@ with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") 
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
+from concurrent.futures import ThreadPoolExecutor
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+    get_args,
+)
 
 from openai import OpenAIError as OriginalError
 
 from ._logging import verbose_logger
-from .caching import QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
+from .caching import Cache, QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -149,31 +164,6 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
-
-try:
-    from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
-except Exception as e:
-    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
-
-from concurrent.futures import ThreadPoolExecutor
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-    cast,
-    get_args,
-)
-
-from .caching import Cache
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -6291,6 +6281,7 @@ def exception_type(
     ):
         return original_exception
     exception_mapping_worked = False
+    exception_provider = custom_llm_provider
     if litellm.suppress_debug_info is False:
         print()  # noqa
         print(  # noqa
@@ -6332,7 +6323,6 @@ def exception_type(
                 _deployment = _metadata.get("deployment")
                 extra_information = f"\nModel: {model}"
 
-                exception_provider = "Unknown"
                 if (
                     isinstance(custom_llm_provider, str)
                     and len(custom_llm_provider) > 0
@@ -7933,6 +7923,7 @@ def exception_type(
                     )
                     or "Your task failed as a result of our safety system" in error_str
                     or "The model produced invalid content" in error_str
+                    or "content_filter_policy" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(

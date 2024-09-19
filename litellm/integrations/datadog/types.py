@@ -2,12 +2,19 @@ from enum import Enum
 from typing import TypedDict
 
 
+class DataDogStatus(str, Enum):
+    INFO = "info"
+    WARN = "warning"
+    ERROR = "error"
+
+
 class DatadogPayload(TypedDict, total=False):
     ddsource: str
     ddtags: str
     hostname: str
     message: str
     service: str
+    status: str
 
 
 class DD_ERRORS(Enum):

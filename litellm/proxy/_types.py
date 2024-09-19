@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
-from litellm.types.router import UpdateRouterConfig
+from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
 if TYPE_CHECKING:
@@ -123,6 +123,7 @@ AlertType = Literal[
     "outage_alerts",
     "region_outage_alerts",
     "fallback_reports",
+    "failed_tracking_spend",
 ]
 
 
@@ -1826,6 +1827,8 @@ class ProxyException(Exception):
             or "No deployments available" in self.message
         ):
             self.code = "429"
+        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
+            self.code = "401"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
@@ -1841,7 +1844,7 @@ class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = "DB not connected"
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat. \nPricing: https://www.litellm.ai/#pricing"
 
 
 class SpendCalculateRequest(LiteLLMBase):

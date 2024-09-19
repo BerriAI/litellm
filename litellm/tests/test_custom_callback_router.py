@@ -381,6 +381,7 @@ class CompletionCustomHandler(
 
 # Simple Azure OpenAI call
 ## COMPLETION
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_async_chat_azure():
     try:

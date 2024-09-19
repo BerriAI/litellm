@@ -130,6 +130,47 @@ async def test_basic_rerank_together_ai(sync_mode):
 
 
 @pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_basic_rerank_azure_ai(sync_mode):
+    import os
+
+    litellm.set_verbose = True
+
+    if sync_mode is True:
+        response = litellm.rerank(
+            model="azure_ai/Cohere-rerank-v3-multilingual-ko",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+            api_key=os.getenv("AZURE_AI_COHERE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_COHERE_API_BASE"),
+        )
+
+        print("re rank response: ", response)
+
+        assert response.id is not None
+        assert response.results is not None
+
+        assert_response_shape(response, custom_llm_provider="together_ai")
+    else:
+        response = await litellm.arerank(
+            model="azure_ai/Cohere-rerank-v3-multilingual-ko",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+            api_key=os.getenv("AZURE_AI_COHERE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_COHERE_API_BASE"),
+        )
+
+        print("async re rank response: ", response)
+
+        assert response.id is not None
+        assert response.results is not None
+
+        assert_response_shape(response, custom_llm_provider="together_ai")
+
+
+@pytest.mark.asyncio()
 async def test_rerank_custom_api_base():
     mock_response = AsyncMock()
 
