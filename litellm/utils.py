@@ -6830,7 +6830,10 @@ def exception_type(
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
-                    elif original_exception.status_code == 401:
+                    elif (
+                        original_exception.status_code == 401
+                        or original_exception.status_code == 403
+                    ):
                         exception_mapping_worked = True
                         raise AuthenticationError(
                             message=f"{custom_llm_provider}Exception - {original_exception.message}",
