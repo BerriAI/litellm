@@ -2350,6 +2350,26 @@
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
     },
+    "vertex_ai/meta/llama3-70b-instruct-maas": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
+    },
+    "vertex_ai/meta/llama3-8b-instruct-maas": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
+    },
     "vertex_ai/mistral-large@latest": {
         "max_tokens": 8191,
         "max_input_tokens": 128000,
