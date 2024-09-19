@@ -203,7 +203,7 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
             "Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel."
         )
 
-    verbose_logger.debug("init_redis_sentinel: sentinel nodes: ", sentinel_nodes)
+    verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
     sentinel = redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
@@ -222,7 +222,7 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
             "Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel."
         )
 
-    verbose_logger.debug("init_redis_sentinel: sentinel nodes: ", sentinel_nodes)
+    verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
     sentinel = async_redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
