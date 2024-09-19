@@ -5448,7 +5448,7 @@
         "output_cost_per_token": 0.0000002,
         "litellm_provider": "fireworks_ai"
     },
-    "fireworks-ai-16.1b-80b": {
+    "fireworks-ai-16.1b-to-80b": {
         "input_cost_per_token": 0.0000009,
         "output_cost_per_token": 0.0000009,
         "litellm_provider": "fireworks_ai"
