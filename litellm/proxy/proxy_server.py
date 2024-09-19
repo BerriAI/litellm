@@ -653,38 +653,19 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         return
 
     try:
-        from azure.identity import ClientSecretCredential, DefaultAzureCredential
+        from azure.identity import DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
 
         # Set your Azure Key Vault URI
         KVUri = os.getenv("AZURE_KEY_VAULT_URI", None)
 
-        # Set your Azure AD application/client ID, client secret, and tenant ID
-        client_id = os.getenv("AZURE_CLIENT_ID", None)
-        client_secret = os.getenv("AZURE_CLIENT_SECRET", None)
-        tenant_id = os.getenv("AZURE_TENANT_ID", None)
+        credential = DefaultAzureCredential()
 
-        if (
-            KVUri is not None
-            and client_id is not None
-            and client_secret is not None
-            and tenant_id is not None
-        ):
-            # Initialize the ClientSecretCredential
-            # credential = ClientSecretCredential(
-            #     client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-            # )
-            credential = DefaultAzureCredential()
+        # Create the SecretClient using the credential
+        client = SecretClient(vault_url=KVUri, credential=credential)
 
-            # Create the SecretClient using the credential
-            client = SecretClient(vault_url=KVUri, credential=credential)
-
-            litellm.secret_manager_client = client
-            litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
-        else:
-            raise Exception(
-                f"Missing KVUri or client_id or client_secret or tenant_id from environment"
-            )
+        litellm.secret_manager_client = client
+        litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
     except Exception as e:
         _error_str = str(e)
         verbose_proxy_logger.exception(
@@ -1626,8 +1607,8 @@ class ProxyConfig:
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     self._init_cache(cache_params=cache_params)
                     if litellm.cache is not None:
-                        verbose_proxy_logger.debug(  # noqa
-                            f"{blue_color_code}Set Cache on LiteLLM Proxy= {vars(litellm.cache.cache)}{vars(litellm.cache)}{reset_color_code}"
+                        verbose_proxy_logger.debug(
+                            f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
                         )
                 elif key == "cache" and value is False:
                     pass
