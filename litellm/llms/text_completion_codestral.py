@@ -15,6 +15,7 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.databricks import GenericStreamingChunk
@@ -140,6 +141,7 @@ class MistralTextCompletionConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "seed",
             "stop",
@@ -153,7 +155,7 @@ class MistralTextCompletionConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "stream" and value == True:
                 optional_params["stream"] = value
@@ -364,6 +366,7 @@ class CodestralTextCompletion(BaseLLM):
         stream = optional_params.pop("stream", False)
 
         data = {
+            "model": model,
             "prompt": prompt,
             **optional_params,
         }
@@ -490,8 +493,8 @@ class CodestralTextCompletion(BaseLLM):
             )
         except Exception as e:
             raise TextCompletionCodestralError(
-                status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
-            )
+                status_code=500, message="{}".format(str(e))
+            )  # don't use verbose_logger.exception, if exception is raised
         return self.process_text_completion_response(
             model=model,
             response=response,

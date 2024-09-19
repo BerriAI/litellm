@@ -8,7 +8,9 @@ from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparamet
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_httpx import VertexLLM
+from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexLLM,
+)
 from litellm.types.llms.openai import FineTuningJobCreate
 from litellm.types.llms.vertex_ai import (
     FineTuneJobCreate,
@@ -182,9 +184,15 @@ class VertexFineTuningAPI(VertexLLM):
         verbose_logger.debug(
             "creating fine tuning job, args= %s", create_fine_tuning_job_data
         )
+        _auth_header, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
 
         auth_header, _ = self._get_token_and_url(
             model="",
+            auth_header=_auth_header,
             gemini_api_key=None,
             vertex_credentials=vertex_credentials,
             vertex_project=vertex_project,
@@ -249,8 +257,14 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: str,
         request_route: str,
     ):
+        _auth_header, vertex_project = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
         auth_header, _ = self._get_token_and_url(
             model="",
+            auth_header=_auth_header,
             gemini_api_key=None,
             vertex_credentials=vertex_credentials,
             vertex_project=vertex_project,

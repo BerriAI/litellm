@@ -9,6 +9,7 @@ import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
+import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import ModelHub from "@/components/model_hub";
 import APIRef from "@/components/api_ref";
@@ -140,6 +141,7 @@ const CreateKeyPage = () => {
           <UserDashboard
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}
@@ -155,8 +157,7 @@ const CreateKeyPage = () => {
         <Navbar
           userID={userID}
           userRole={userRole}
-          userEmail={userEmail}
-          showSSOBanner={showSSOBanner}
+          userEmail={userEmail} 
           premiumUser={premiumUser}
           setProxySettings={setProxySettings}
           proxySettings={proxySettings}
@@ -174,6 +175,7 @@ const CreateKeyPage = () => {
             <UserDashboard
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}
@@ -262,6 +264,13 @@ const CreateKeyPage = () => {
               token={token}
               accessToken={accessToken}
               premiumUser={premiumUser}
+            />
+          ) : page == "pass-through-settings" ? (
+            <PassThroughSettings
+              userID={userID}
+              userRole={userRole}
+              accessToken={accessToken}
+              modelData={modelData}
             />
           ) : (
             <Usage

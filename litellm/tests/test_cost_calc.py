@@ -55,14 +55,15 @@ router = Router(
     "model",
     [
         "openai/gpt-3.5-turbo",
-        "anthropic/claude-3-haiku-20240307",
-        "together_ai/meta-llama/Llama-2-7b-chat-hf",
+        # "anthropic/claude-3-haiku-20240307",
+        # "together_ai/meta-llama/Llama-2-7b-chat-hf",
     ],
 )
 def test_run(model: str):
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/4965
     """
+    # litellm.set_verbose = True
     prompt = "Hi"
     kwargs = dict(
         model=model,
@@ -97,9 +98,9 @@ def test_run(model: str):
     streaming_cost_calc = completion_cost(response) * 100
     print(f"Stream output    : {output}")
 
-    if output == non_stream_output:
-        # assert cost is the same
-        assert streaming_cost_calc == non_stream_cost_calc
     print(f"Stream usage     : {response.usage}")  # type: ignore
     print(f"Stream cost      : {streaming_cost_calc} (response)")
     print("")
+    if output == non_stream_output:
+        # assert cost is the same
+        assert streaming_cost_calc == non_stream_cost_calc

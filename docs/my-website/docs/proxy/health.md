@@ -10,7 +10,12 @@ The proxy exposes:
 
 ## `/health`
 #### Request
-Make a GET Request to `/health` on the proxy
+Make a GET Request to `/health` on the proxy 
+
+:::info
+**This endpoint makes an LLM API call to each model to check if it is healthy.**
+:::
+
 ```shell
 curl --location 'http://0.0.0.0:4000/health' -H "Authorization: Bearer sk-1234"
 ```
@@ -115,9 +120,48 @@ model_list:
       mode: audio_speech
 ```
 
+### Batch Models (Azure Only)
+
+For Azure models deployed as 'batch' models, set `mode: batch`. 
+
+```yaml
+model_list:
+  - model_name: "batch-gpt-4o-mini"
+    litellm_params:
+      model: "azure/batch-gpt-4o-mini"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+    model_info:
+      mode: batch
+```
+
+Expected Response 
+
+
+```bash
+{
+    "healthy_endpoints": [
+        {
+            "api_base": "https://...",
+            "model": "azure/gpt-4o-mini",
+            "x-ms-region": "East US"
+        }
+    ],
+    "unhealthy_endpoints": [],
+    "healthy_count": 1,
+    "unhealthy_count": 0
+}
+```
+
 ## Background Health Checks 
 
-You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`.
+You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`. 
+
+:::info
+
+**This makes an LLM API call to each model to check if it is healthy.**
+
+:::
 
 Here's how to use it: 
 1. in the config.yaml add:
@@ -244,3 +288,4 @@ curl -X POST 'http://localhost:4000/chat/completions' \
 }
 '
 ```
+

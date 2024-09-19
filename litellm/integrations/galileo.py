@@ -8,7 +8,10 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 # from here: https://docs.rungalileo.io/galileo/gen-ai-studio-products/galileo-observe/how-to/logging-data-via-restful-apis#structuring-your-records
@@ -39,8 +42,8 @@ class GalileoObserve(CustomLogger):
         self.base_url = os.getenv("GALILEO_BASE_URL", None)
         self.project_id = os.getenv("GALILEO_PROJECT_ID", None)
         self.headers = None
-        self.async_httpx_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        self.async_httpx_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
         pass
 

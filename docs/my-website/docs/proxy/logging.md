@@ -1,4 +1,4 @@
-# 🪢 Logging
+# Logging
 
 Log Proxy input, output, and exceptions using:
 
@@ -60,6 +60,52 @@ litellm_settings:
 ```
 
 Removes any field with `user_api_key_*` from metadata.
+
+## What gets logged? StandardLoggingPayload
+
+Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
+
+```python
+class StandardLoggingPayload(TypedDict):
+    id: str
+    call_type: str
+    response_cost: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: float
+    endTime: float
+    completionStartTime: float
+    model_map_information: StandardLoggingModelInformation
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    metadata: StandardLoggingMetadata
+    cache_hit: Optional[bool]
+    cache_key: Optional[str]
+    saved_cache_cost: Optional[float]
+    request_tags: list                         
+    end_user: Optional[str]
+    requester_ip_address: Optional[str]         # IP address of requester
+    requester_metadata: Optional[dict]          # metadata passed in request in the "metadata" field
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
+    model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
+
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[dict]
+
+
+class StandardLoggingModelInformation(TypedDict):
+    model_map_key: str
+    model_map_value: Optional[ModelInfo]
+```
 
 ## Logging Proxy Input/Output - Langfuse
 
@@ -276,6 +322,42 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         }
     ]
 }'
+```
+
+
+### LiteLLM-specific Tags on Langfuse - `cache_hit`, `cache_key`
+
+Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields
+
+| LiteLLM specific field               | Description                                           | Example Value                                       |
+|------------------------|-------------------------------------------------------|------------------------------------------------|
+| `cache_hit`            | Indicates whether a cache hit occured (True) or not (False)   | `true`, `false`                                |
+| `cache_key`            | The Cache key used for this request                | `d2b758c****`|
+| `proxy_base_url`       | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server                | `https://proxy.example.com`|
+| `user_api_key_alias`   | An alias for the LiteLLM Virtual Key.| `prod-app1`        |
+| `user_api_key_user_id` | The unique ID associated with a user's API key.       | `user_123`, `user_456`                         |
+| `user_api_key_user_email` | The email associated with a user's API key.        | `user@example.com`, `admin@example.com`        |
+| `user_api_key_team_alias` | An alias for a team associated with an API key.    | `team_alpha`, `dev_team`                       |
+
+
+**Usage**
+
+Specify `langfuse_default_tags` to control what litellm fields get logged on Langfuse
+
+Example config.yaml 
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  success_callback: ["langfuse"]
+
+  # 👇 Key Change
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
 ```
 
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
@@ -519,6 +601,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 
+<TabItem value="traceloop" label="Log to Traceloop Cloud">
+
+#### Quick Start - Log to Traceloop
+
+**Step 1:**
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="https://api.traceloop.com"
+OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
+```
+
+**Step 2:** Add `otel` as a callbacks
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
 <TabItem value="otel-col" label="Log to OTEL HTTP Collector">
 
 #### Quick Start - Log to OTEL Collector
@@ -613,55 +741,23 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 
-<TabItem value="traceloop" label="Log to Traceloop Cloud">
-
-#### Quick Start - Log to Traceloop
-
-**Step 1:** Install the `traceloop-sdk` SDK
-
-```shell
-pip install traceloop-sdk==0.21.2
-```
-
-**Step 2:** Add `traceloop` as a success_callback
-
-```shell
-litellm_settings:
-  success_callback: ["traceloop"]
-
-environment_variables:
-  TRACELOOP_API_KEY: "XXXXX"
-```
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --detailed_debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-```
-
-</TabItem>
-
 </Tabs>
 
 ** 🎉 Expect to see this trace logged in your OTEL collector**
+
+### Redacting Messages, Response Content from OTEL Logging
+
+Set `message_logging=False` for `otel`, no messages / response will be logged
+
+```yaml
+litellm_settings:
+  callbacks: ["otel"]
+
+## 👇 Key Change
+callback_settings:
+  otel:
+    message_logging: False
+```
 
 ### Context propagation across Services `Traceparent HTTP Header`
 
@@ -1337,7 +1433,8 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["datadog"]
+  success_callback: ["datadog"] # logs llm success logs on datadog
+  service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
 
 **Step 2**: Set Required env variables for datadog
@@ -1345,6 +1442,7 @@ litellm_settings:
 ```shell
 DD_API_KEY="5f2d0f310***********" # your datadog API Key
 DD_SITE="us5.datadoghq.com"       # your datadog base url
+DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
 ```
 
 **Step 3**: Start the proxy, make a test request

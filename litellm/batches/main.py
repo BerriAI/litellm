@@ -20,7 +20,9 @@ import httpx
 
 import litellm
 from litellm import client
-from litellm.llms.openai import OpenAIBatchesAPI, OpenAIFilesAPI
+from litellm.llms.AzureOpenAI.azure import AzureBatchesAPI
+from litellm.llms.OpenAI.openai import OpenAIBatchesAPI
+from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     Batch,
     CancelBatchRequest,
@@ -37,6 +39,7 @@ from litellm.utils import supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
+azure_batches_instance = AzureBatchesAPI()
 #################################################
 
 
@@ -44,7 +47,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -90,7 +93,7 @@ def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -103,6 +106,32 @@ def create_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        _is_async = kwargs.pop("acreate_batch", False) is True
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _create_batch_request = CreateBatchRequest(
+            completion_window=completion_window,
+            endpoint=endpoint,
+            input_file_id=input_file_id,
+            metadata=metadata,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+        )
+
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -125,34 +154,6 @@ def create_batch(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("acreate_batch", False) is True
-
-            _create_batch_request = CreateBatchRequest(
-                completion_window=completion_window,
-                endpoint=endpoint,
-                input_file_id=input_file_id,
-                metadata=metadata,
-                extra_headers=extra_headers,
-                extra_body=extra_body,
-            )
 
             response = openai_batches_instance.create_batch(
                 api_base=api_base,
@@ -162,6 +163,38 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_batches_instance.create_batch(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                create_batch_data=_create_batch_request,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -183,7 +216,7 @@ def create_batch(
 
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -208,7 +241,6 @@ async def aretrieve_batch(
             extra_body,
             **kwargs,
         )
-
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
@@ -225,7 +257,7 @@ async def aretrieve_batch(
 
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -238,6 +270,30 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _retrieve_batch_request = RetrieveBatchRequest(
+            batch_id=batch_id,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+        )
+
+        _is_async = kwargs.pop("aretrieve_batch", False) is True
+
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -260,31 +316,6 @@ def retrieve_batch(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _retrieve_batch_request = RetrieveBatchRequest(
-                batch_id=batch_id,
-                extra_headers=extra_headers,
-                extra_body=extra_body,
-            )
-
-            _is_async = kwargs.pop("aretrieve_batch", False) is True
 
             response = openai_batches_instance.retrieve_batch(
                 _is_async=_is_async,
@@ -294,6 +325,38 @@ def retrieve_batch(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_batches_instance.retrieve_batch(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                retrieve_batch_data=_retrieve_batch_request,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -316,7 +379,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -357,7 +420,7 @@ async def alist_batches(
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -368,7 +431,31 @@ def list_batches(
     List your organization's batches.
     """
     try:
+        # set API KEY
         optional_params = GenericLiteLLMParams(**kwargs)
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or litellm.openai_key
+            or os.getenv("OPENAI_API_KEY")
+        )
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("alist_batches", False) is True
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -383,32 +470,6 @@ def list_batches(
                 or os.getenv("OPENAI_ORGANIZATION", None)
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("alist_batches", False) is True
 
             response = openai_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -420,9 +481,40 @@ def list_batches(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_batches_instance.list_batches(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'list_batch'. Only 'openai' is supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

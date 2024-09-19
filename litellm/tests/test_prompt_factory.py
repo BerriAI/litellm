@@ -22,6 +22,9 @@ from litellm.llms.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    _gemini_convert_messages_with_history,
+)
 
 
 def test_llama_3_prompt():
@@ -260,3 +263,172 @@ def test_anthropic_messages_tool_call():
         translated_messages[-1]["content"][0]["tool_use_id"]
         == "bc8cb4b6-88c4-4138-8993-3a9d9cd51656"
     )
+
+
+def test_anthropic_cache_controls_pt():
+    "see anthropic docs for this: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#continuing-a-multi-turn-conversation"
+    messages = [
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(
+        messages, model="claude-3-5-sonnet-20240620", llm_provider="anthropic"
+    )
+
+    for i, msg in enumerate(translated_messages):
+        if i == 0:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+        elif i == 1:
+            assert "cache_controls" not in msg["content"][0]
+        elif i == 2:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+        elif i == 3:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    print("translated_messages: ", translated_messages)
+
+
+@pytest.mark.parametrize("provider", ["bedrock", "anthropic"])
+def test_bedrock_parallel_tool_calling_pt(provider):
+    """
+    Make sure parallel tool call blocks are merged correctly - https://github.com/BerriAI/litellm/issues/5277
+    """
+    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        Message(
+            content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    index=1,
+                    function=Function(
+                        arguments='{"city": "New York"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_XcqEBfm8R-2YVaPhDUHsPQ",
+                    type="function",
+                ),
+                ChatCompletionMessageToolCall(
+                    index=2,
+                    function=Function(
+                        arguments='{"city": "London"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_VB9nk7UGRniVzGcaj6xrAQ",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "tooluse_XcqEBfm8R-2YVaPhDUHsPQ",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": "25 degrees celsius.",
+        },
+        {
+            "tool_call_id": "tooluse_VB9nk7UGRniVzGcaj6xrAQ",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": "28 degrees celsius.",
+        },
+    ]
+
+    if provider == "bedrock":
+        translated_messages = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+    else:
+        translated_messages = anthropic_messages_pt(
+            messages=messages,
+            model="claude-3-sonnet-20240229-v1:0",
+            llm_provider=provider,
+        )
+    print(translated_messages)
+
+    number_of_messages = len(translated_messages)
+
+    # assert last 2 messages are not the same role
+    assert (
+        translated_messages[number_of_messages - 1]["role"]
+        != translated_messages[number_of_messages - 2]["role"]
+    )
+
+
+def test_vertex_only_image_user_message():
+    base64_image = "/9j/2wCEAAgGBgcGBQ"
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                },
+            ],
+        },
+    ]
+
+    response = _gemini_convert_messages_with_history(messages=messages)
+
+    expected_response = [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "inline_data": {
+                        "data": "/9j/2wCEAAgGBgcGBQ",
+                        "mime_type": "image/jpeg",
+                    }
+                },
+                {"text": " "},
+            ],
+        }
+    ]
+
+    assert len(response) == len(expected_response)
+    for idx, content in enumerate(response):
+        assert (
+            content == expected_response[idx]
+        ), "Invalid gemini input. Got={}, Expected={}".format(
+            content, expected_response[idx]
+        )

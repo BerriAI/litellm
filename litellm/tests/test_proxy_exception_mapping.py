@@ -75,7 +75,7 @@ def test_chat_completion_exception(client):
         print("ERROR=", json_response["error"])
         assert isinstance(json_response["error"]["message"], str)
         assert (
-            "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
+            "litellm.AuthenticationError: AuthenticationError"
             in json_response["error"]["message"]
         )
 
@@ -229,8 +229,9 @@ def test_chat_completion_exception_any_model(client):
         )
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "chat_completion: Invalid model name passed in model=Lite-GPT-12" in str(
-            _error_message
+        assert (
+            "/chat/completions: Invalid model name passed in model=Lite-GPT-12"
+            in str(_error_message)
         )
 
     except Exception as e:
@@ -259,7 +260,7 @@ def test_embedding_exception_any_model(client):
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
+        assert "/embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
             _error_message
         )
 

@@ -78,6 +78,7 @@ class NvidiaNimConfig:
                 "temperature",
                 "top_p",
                 "max_tokens",
+                "max_completion_tokens",
             ]
         elif model == "nvidia/nemotron-4-340b-reward":
             return [
@@ -92,6 +93,7 @@ class NvidiaNimConfig:
                 "frequency_penalty",
                 "presence_penalty",
                 "max_tokens",
+                "max_completion_tokens",
                 "stop",
             ]
         else:
@@ -124,6 +126,7 @@ class NvidiaNimConfig:
                 "frequency_penalty",
                 "presence_penalty",
                 "max_tokens",
+                "max_completion_tokens",
                 "stop",
                 "seed",
             ]
@@ -133,6 +136,8 @@ class NvidiaNimConfig:
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param in supported_openai_params:
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params

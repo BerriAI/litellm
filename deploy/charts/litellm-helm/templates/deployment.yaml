@@ -13,10 +13,11 @@ spec:
       {{- include "litellm.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
@@ -66,7 +67,7 @@ spec:
             - name: DATABASE_HOST
               value: {{ .Values.db.endpoint }}
             - name: DATABASE_NAME
-              value: litellm
+              value: {{ .Values.db.database }}
             {{- end }}
           command:
             - sh
@@ -88,6 +89,8 @@ spec:
               else
                 echo "Database failed to become ready before we gave up waiting."
               fi
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           {{ if .Values.securityContext.readOnlyRootFilesystem }}
           volumeMounts:
             - name: tmp
@@ -101,7 +104,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: HOST
-              value: "0.0.0.0"
+              value: "{{ .Values.listen | default "0.0.0.0" }}"
             - name: PORT
               value: {{ .Values.service.port | quote}}
             {{- if .Values.db.deployStandalone }}
@@ -134,9 +137,9 @@ spec:
               value: {{ .Values.db.endpoint }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
-            {{- end }}
             - name: DATABASE_URL
-              value: "postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)"
+              value: {{ .Values.db.url | quote }}
+            {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:

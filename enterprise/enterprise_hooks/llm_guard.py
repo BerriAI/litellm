@@ -92,7 +92,11 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         },
                     )
         except Exception as e:
-            verbose_proxy_logger.error(traceback.format_exc())
+            verbose_proxy_logger.exception(
+                "litellm.enterprise.enterprise_hooks.llm_guard::moderation_check - Exception occurred - {}".format(
+                    str(e)
+                )
+            )
             raise e
 
     def should_proceed(self, user_api_key_dict: UserAPIKeyAuth, data: dict) -> bool:
@@ -123,7 +127,13 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         """
         - Calls the LLM Guard Endpoint

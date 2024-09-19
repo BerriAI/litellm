@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -63,3 +63,60 @@ class GuardrailItem(BaseModel):
             enabled_roles=enabled_roles,
             callback_args=callback_args,
         )
+
+
+# Define the TypedDicts
+class LakeraCategoryThresholds(TypedDict, total=False):
+    prompt_injection: float
+    jailbreak: float
+
+
+class LitellmParams(TypedDict):
+    guardrail: str
+    mode: str
+    api_key: str
+    api_base: Optional[str]
+
+    # Lakera specific params
+    category_thresholds: Optional[LakeraCategoryThresholds]
+
+    # Bedrock specific params
+    guardrailIdentifier: Optional[str]
+    guardrailVersion: Optional[str]
+
+    # Presidio params
+    output_parse_pii: Optional[bool]
+    presidio_ad_hoc_recognizers: Optional[str]
+    mock_redacted_text: Optional[dict]
+
+    # hide secrets params
+    detect_secrets_config: Optional[dict]
+
+
+class Guardrail(TypedDict):
+    guardrail_name: str
+    litellm_params: LitellmParams
+
+
+class guardrailConfig(TypedDict):
+    guardrails: List[Guardrail]
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"
+    logging_only = "logging_only"
+
+
+class BedrockTextContent(TypedDict, total=False):
+    text: str
+
+
+class BedrockContentItem(TypedDict, total=False):
+    text: BedrockTextContent
+
+
+class BedrockRequest(TypedDict, total=False):
+    source: Literal["INPUT", "OUTPUT"]
+    content: List[BedrockContentItem]

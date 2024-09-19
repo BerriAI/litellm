@@ -1,11 +1,17 @@
 ### What this tests ####
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion, embedding
 import litellm
+from litellm import completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
 
 
@@ -150,7 +156,10 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/chatgpt-v-2", messages=messages, stream=True
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                mock_response="Exception: content_filter_policy",
+                stream=True,
             )
             for chunk in response:
                 print(f"chunk: {chunk}")
@@ -201,7 +210,7 @@ def test_async_custom_handler_stream():
         print("complete_streaming_response: ", complete_streaming_response)
         assert response_in_success_handler == complete_streaming_response
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        pytest.fail(f"Error occurred: {e}\n{traceback.format_exc()}")
 
 
 # test_async_custom_handler_stream()
@@ -412,6 +421,7 @@ async def test_async_custom_handler_embedding_optional_param_bedrock():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_cost_tracking_with_caching():
     """
     Important Test - This tests if that cost is 0 for cached responses
@@ -457,10 +467,10 @@ async def test_cost_tracking_with_caching():
 
 
 def test_redis_cache_completion_stream():
-    from litellm import Cache
-
     # Important Test - This tests if we can add to streaming cache, when custom callbacks are set
     import random
+
+    from litellm import Cache
 
     try:
         print("\nrunning test_redis_cache_completion_stream")

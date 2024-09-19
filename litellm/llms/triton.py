@@ -240,10 +240,10 @@ class TritonChatCompletion(BaseLLM):
             handler = HTTPHandler()
         if stream:
             return self._handle_stream(
-                handler, api_base, data_for_triton, model, logging_obj
+                handler, api_base, json_data_for_triton, model, logging_obj
             )
         else:
-            response = handler.post(url=api_base, data=data_for_triton, headers=headers)
+            response = handler.post(url=api_base, data=json_data_for_triton, headers=headers)
             return self._handle_response(
                 response, model_response, logging_obj, type_of_model=type_of_model
             )

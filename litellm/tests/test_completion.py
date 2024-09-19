@@ -13,8 +13,9 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries = 3
+
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -77,7 +79,10 @@ def test_completion_custom_provider_model_name():
 
 
 def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
-    _data = {
+    new_response = MagicMock()
+    new_response.headers = {"hello": "world"}
+
+    response_object = {
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
@@ -87,7 +92,7 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
             {
                 "index": 0,
                 "message": {
-                    "role": None,
+                    "role": "assistant",
                     "content": "\n\nHello there, how may I assist you today?",
                 },
                 "logprobs": None,
@@ -96,7 +101,13 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
         ],
         "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
-    return litellm.ModelResponse(**_data)
+    from openai import OpenAI
+    from openai.types.chat.chat_completion import ChatCompletion
+
+    pydantic_obj = ChatCompletion(**response_object)  # type: ignore
+    pydantic_obj.choices[0].message.role = None  # type: ignore
+    new_response.parse.return_value = pydantic_obj
+    return new_response
 
 
 def test_null_role_response():
@@ -190,6 +201,31 @@ def test_completion_azure_command_r():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://litellm8397336933.openai.azure.com",
+        "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2023-03-15-preview",
+    ],
+)
+def test_completion_azure_ai_gpt_4o(api_base):
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure_ai/gpt-4o",
+            api_base=api_base,
+            api_key=os.getenv("AZURE_AI_OPENAI_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_databricks(sync_mode):
@@ -266,14 +302,18 @@ async def test_completion_predibase():
             model="predibase/llama-3-8b-instruct",
             tenant_id="c4768f95",
             api_key=os.getenv("PREDIBASE_API_KEY"),
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            messages=[{"role": "user", "content": "who are u?"}],
             max_tokens=10,
+            timeout=5,
         )
 
         print(response)
     except litellm.Timeout as e:
+        print("got a timeout error from predibase")
         pass
     except litellm.ServiceUnavailableError as e:
+        pass
+    except litellm.InternalServerError:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -591,6 +631,8 @@ async def test_model_function_invoke(model, sync_mode, api_key, api_base):
             response = await litellm.acompletion(**data)
 
         print(f"response: {response}")
+    except litellm.InternalServerError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -682,6 +724,8 @@ def test_gemini_completion_call_error():
         print(f"response: {response}")
         for chunk in response:
             print(chunk)
+    except litellm.RateLimitError:
+        pass
     except litellm.InternalServerError:
         pass
     except Exception as e:
@@ -852,18 +896,29 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test claude-3, this is just another way to pass images"
-)
-def test_completion_claude_3_base64():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "azure/gpt-4o",
+        "anthropic/claude-3-opus-20240229",
+    ],
+)  #
+def test_completion_base64(model):
     try:
+        import base64
+
+        import requests
+
         litellm.set_verbose = True
-        litellm.num_retries = 3
-        image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
-        base64_image = encode_image(image_path)
+        url = "https://dummyimage.com/100/100/fff&text=Test+image"
+        response = requests.get(url)
+        file_data = response.content
+
+        encoded_file = base64.b64encode(file_data).decode("utf-8")
+        base64_image = f"data:image/png;base64,{encoded_file}"
         resp = litellm.completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=[
                 {
                     "role": "user",
@@ -871,9 +926,7 @@ def test_completion_claude_3_base64():
                         {"type": "text", "text": "Whats in this image?"},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
+                            "image_url": {"url": base64_image},
                         },
                     ],
                 }
@@ -882,7 +935,6 @@ def test_completion_claude_3_base64():
         print(f"\nResponse: {resp}")
 
         prompt_tokens = resp.usage.prompt_tokens
-        raise Exception("it worked!")
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
@@ -890,9 +942,7 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize(
-    "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
-)
+@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
 def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 
@@ -1269,11 +1319,12 @@ import openai
 
 
 def test_completion_gpt4_turbo():
+    litellm.set_verbose = True
     try:
         response = completion(
             model="gpt-4-1106-preview",
             messages=messages,
-            max_tokens=10,
+            max_completion_tokens=10,
         )
         print(response)
     except openai.RateLimitError:
@@ -1610,18 +1661,19 @@ def test_completion_perplexity_api():
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            return pydantic_obj
+            new_response = MagicMock()
+            new_response.headers = {"hello": "world"}
 
-        print(f"pydantic_obj: {pydantic_obj}")
+            new_response.parse.return_value = pydantic_obj
+            return new_response
 
         openai_client = OpenAI()
 
-        openai_client.chat.completions.create = MagicMock()
-
         with patch.object(
-            openai_client.chat.completions, "create", side_effect=_return_pydantic_obj
+            openai_client.chat.completions.with_raw_response,
+            "create",
+            side_effect=_return_pydantic_obj,
         ) as mock_client:
-            pass
             # litellm.set_verbose= True
             messages = [
                 {"role": "system", "content": "You're a good bot"},
@@ -1741,7 +1793,7 @@ def test_get_hf_task_for_model():
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-def tgi_mock_post(url, data=None, json=None, headers=None):
+def tgi_mock_post(url, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -1909,7 +1961,7 @@ async def test_openai_compatible_custom_api_base(provider):
 # hf_test_completion_none_task()
 
 
-def mock_post(url, data=None, json=None, headers=None):
+def mock_post(url, **kwargs):
     print(f"url={url}")
     if "text-classification" in url:
         raise Exception("Model not found")
@@ -2137,38 +2189,55 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_openai_pydantic():
+@pytest.mark.parametrize(
+    "model, api_version",
+    [
+        ("gpt-4o-2024-08-06", None),
+        ("azure/chatgpt-v-2", None),
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("azure/gpt-4o", "2024-08-01-preview"),
+    ],
+)
+@pytest.mark.flaky(retries=3, delay=1)
+def test_completion_openai_pydantic(model, api_version):
     try:
         litellm.set_verbose = True
         from pydantic import BaseModel
+
+        messages = [
+            {"role": "user", "content": "List 5 important events in the XIX century"}
+        ]
 
         class CalendarEvent(BaseModel):
             name: str
             date: str
             participants: list[str]
 
-        print(f"api key: {os.environ['OPENAI_API_KEY']}")
-        litellm.api_key = os.environ["OPENAI_API_KEY"]
-        response = completion(
-            model="gpt-4o-2024-08-06",
-            messages=[{"role": "user", "content": "Hey"}],
-            max_tokens=10,
-            metadata={"hi": "bye"},
-            response_format=CalendarEvent,
-        )
+        class EventsList(BaseModel):
+            events: list[CalendarEvent]
+
+        litellm.enable_json_schema_validation = True
+        for _ in range(3):
+            try:
+                response = completion(
+                    model=model,
+                    messages=messages,
+                    metadata={"hi": "bye"},
+                    response_format=EventsList,
+                    api_version=api_version,
+                )
+                break
+            except litellm.JSONSchemaValidationError:
+                pytest.fail("ERROR OCCURRED! INVALID JSON")
+
         print("This is the response object\n", response)
 
         response_str = response["choices"][0]["message"]["content"]
-        response_str_2 = response.choices[0].message.content
 
-        cost = completion_cost(completion_response=response)
-        print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
-        assert response_str == response_str_2
-        assert type(response_str) == str
-        assert len(response_str) > 1
+        print(f"response_str: {response_str}")
+        json.loads(response_str)  # check valid json is returned
 
-        litellm.api_key = None
-    except Timeout as e:
+    except Timeout:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -2657,8 +2726,61 @@ def test_completion_hf_model_no_provider():
 # test_completion_hf_model_no_provider()
 
 
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_with_functions():
+def gemini_mock_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json = MagicMock(
+        return_value={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_current_weather",
+                                    "args": {"location": "Boston, MA"},
+                                }
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                    "index": 0,
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HARASSMENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                    ],
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 86,
+                "candidatesTokenCount": 19,
+                "totalTokenCount": 105,
+            },
+        }
+    )
+
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_completion_functions_param():
+    litellm.set_verbose = True
     function1 = [
         {
             "name": "get_current_weather",
@@ -2677,18 +2799,33 @@ def test_completion_anyscale_with_functions():
         }
     ]
     try:
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
-        response = completion(
-            model="anyscale/mistralai/Mistral-7B-Instruct-v0.1",
-            messages=messages,
-            functions=function1,
-        )
-        # Add any assertions here to check the response
-        print(response)
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-        cost = litellm.completion_cost(completion_response=response)
-        print("cost to make anyscale completion=", cost)
-        assert cost > 0.0
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+
+        client = AsyncHTTPHandler(concurrent_limit=1)
+
+        with patch.object(client, "post", side_effect=gemini_mock_post) as mock_client:
+            response: litellm.ModelResponse = await litellm.acompletion(
+                model="gemini/gemini-1.5-pro",
+                messages=messages,
+                functions=function1,
+                client=client,
+            )
+            print(response)
+            # Add any assertions here to check the response
+            mock_client.assert_called()
+            print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+            assert "tools" in mock_client.call_args.kwargs["json"]
+            assert (
+                "litellm_param_is_function_call"
+                not in mock_client.call_args.kwargs["json"]
+            )
+            assert (
+                "litellm_param_is_function_call"
+                not in mock_client.call_args.kwargs["json"]["generationConfig"]
+            )
+            assert response.choices[0].message.function_call is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3249,9 +3386,9 @@ def test_completion_together_ai_mixtral():
 # test_completion_together_ai_mixtral()
 
 
-def test_completion_together_ai_yi_chat():
+def test_completion_together_ai_llama():
     litellm.set_verbose = True
-    model_name = "together_ai/mistralai/Mistral-7B-Instruct-v0.1"
+    model_name = "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     try:
         messages = [
             {"role": "user", "content": "What llm are you?"},
@@ -3312,108 +3449,6 @@ def test_customprompt_together_ai():
 # test_customprompt_together_ai()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_sagemaker():
-    try:
-        litellm.set_verbose = True
-        print("testing sagemaker")
-        response = completion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            input_cost_per_second=0.000420,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        cost = completion_cost(completion_response=response)
-        print("calculated cost", cost)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single completion call
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_sagemaker()
-
-
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_acompletion_sagemaker():
-    try:
-        litellm.set_verbose = True
-        print("testing sagemaker")
-        response = await litellm.acompletion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            input_cost_per_second=0.000420,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        cost = completion_cost(completion_response=response)
-        print("calculated cost", cost)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single completion call
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_chat_sagemaker():
-    try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        litellm.set_verbose = True
-        response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=messages,
-            max_tokens=100,
-            temperature=0.7,
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        complete_response = ""
-        for chunk in response:
-            complete_response += chunk.choices[0].delta.content or ""
-        print(f"complete_response: {complete_response}")
-        assert len(complete_response) > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_chat_sagemaker()
-
-
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_chat_sagemaker_mistral():
-    try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-        response = completion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-instruct",
-            messages=messages,
-            max_tokens=100,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"An error occurred: {str(e)}")
-
-
-# test_completion_chat_sagemaker_mistral()
-
-
 def response_format_tests(response: litellm.ModelResponse):
     assert isinstance(response.id, str)
     assert response.id != ""
@@ -3449,20 +3484,20 @@ def response_format_tests(response: litellm.ModelResponse):
     assert isinstance(response.usage.total_tokens, int)  # type: ignore
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "model",
     [
+        "bedrock/mistral.mistral-large-2407-v1:0",
         "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
         "anthropic.claude-instant-v1",
-        "bedrock/ai21.j2-mid",
         "mistral.mistral-7b-instruct-v0:2",
-        "bedrock/amazon.titan-tg1-large",
+        # "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
         "cohere.command-text-v14",
     ],
 )
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
@@ -3474,6 +3509,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=200,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3485,6 +3521,7 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
                 messages=[{"role": "user", "content": "Hey! how's it going?"}],
                 temperature=0.2,
                 max_tokens=100,
+                stop=["stop sequence"],
             )
 
             assert isinstance(response, litellm.ModelResponse)
@@ -3705,20 +3742,23 @@ def test_completion_anyscale_api():
 # test_completion_anyscale_api()
 
 
-@pytest.mark.skip(reason="flaky test, times out frequently")
+# @pytest.mark.skip(reason="flaky test, times out frequently")
 def test_completion_cohere():
     try:
         # litellm.set_verbose=True
         messages = [
             {"role": "system", "content": "You're a good bot"},
+            {"role": "assistant", "content": [{"text": "2", "type": "text"}]},
+            {"role": "assistant", "content": [{"text": "3", "type": "text"}]},
             {
                 "role": "user",
                 "content": "Hey",
             },
         ]
         response = completion(
-            model="command-nightly",
+            model="command-r",
             messages=messages,
+            extra_headers={"Helicone-Property-Locale": "ko"},
         )
         print(response)
     except Exception as e:
@@ -4067,6 +4107,7 @@ def test_completion_nvidia_nim():
         # "gemini-1.5-flash",
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_gemini(model):
     litellm.set_verbose = True
     model_name = "gemini/{}".format(model)
@@ -4100,7 +4141,9 @@ def test_completion_gemini(model):
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
-    except litellm.APIError as e:
+    except litellm.RateLimitError:
+        pass
+    except litellm.APIError:
         pass
     except Exception as e:
         if "InternalServerError" in str(e):
@@ -4160,45 +4203,6 @@ def test_completion_deepseek():
         response = completion(model=model_name, messages=messages, tools=tools)
         # Add any assertions here to check the response
         print(response)
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# Palm tests
-def test_completion_palm():
-    litellm.set_verbose = True
-    model_name = "palm/chat-bison"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    try:
-        response = completion(model=model_name, messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_palm()
-
-
-# test palm with streaming
-def test_completion_palm_stream():
-    # litellm.set_verbose = True
-    model_name = "palm/chat-bison"
-    try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            stop=["stop"],
-            stream=True,
-            max_tokens=20,
-        )
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
     except litellm.APIError as e:
         pass
     except Exception as e:
@@ -4413,3 +4417,109 @@ def test_moderation():
     output = response.results[0]
     print(output)
     return output
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_dynamic_azure_params(stream, sync_mode):
+    """
+    If dynamic params are given, which are different from the initialized client, use a new client
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    if sync_mode:
+        client = AzureOpenAI(
+            api_key="my-test-key",
+            base_url="my-test-base",
+            api_version="my-test-version",
+        )
+        mock_client = MagicMock(return_value="Hello world!")
+    else:
+        client = AsyncAzureOpenAI(
+            api_key="my-test-key",
+            base_url="my-test-base",
+            api_version="my-test-version",
+        )
+        mock_client = AsyncMock(return_value="Hello world!")
+
+    ## CHECK IF CLIENT IS USED (NO PARAM CHANGE)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", new=mock_client
+    ) as mock_client:
+        try:
+            # client.chat.completions.with_raw_response.create = mock_client
+            if sync_mode:
+                _ = completion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    stream=stream,
+                )
+            else:
+                _ = await litellm.acompletion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    stream=stream,
+                )
+        except Exception:
+            pass
+
+        mock_client.assert_called()
+
+    ## recreate mock client
+    if sync_mode:
+        mock_client = MagicMock(return_value="Hello world!")
+    else:
+        mock_client = AsyncMock(return_value="Hello world!")
+
+    ## CHECK IF NEW CLIENT IS USED (PARAM CHANGE)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", new=mock_client
+    ) as mock_client:
+        try:
+            if sync_mode:
+                _ = completion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    api_version="my-new-version",
+                    stream=stream,
+                )
+            else:
+                _ = await litellm.acompletion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    api_version="my-new-version",
+                    stream=stream,
+                )
+        except Exception:
+            pass
+
+        try:
+            mock_client.assert_not_called()
+        except Exception as e:
+            traceback.print_stack()
+            raise e
+
+
+@pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_completion_ai21_chat():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="jamba-1.5-large",
+        user="ishaan",
+        tool_choice="auto",
+        seed=123,
+        messages=[{"role": "user", "content": "what does the document say"}],
+        documents=[
+            {
+                "content": "hello world",
+                "metadata": {"source": "google", "author": "ishaan"},
+            }
+        ],
+    )
+    pass

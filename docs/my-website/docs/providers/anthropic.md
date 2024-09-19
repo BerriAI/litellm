@@ -225,22 +225,352 @@ print(response)
 | claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 
-## Passing Extra Headers to Anthropic API 
+## **Prompt Caching**
 
-Pass `extra_headers: dict` to `litellm.completion`
+Use Anthropic Prompt Caching
 
-```python
-from litellm import completion
-messages = [{"role": "user", "content": "What is Anthropic?"}]
-response = completion(
-    model="claude-3-5-sonnet-20240620", 
-    messages=messages, 
-    extra_headers={"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
+
+[Relevant Anthropic API Docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
+
+:::note
+
+Here's what a sample Raw Request from LiteLLM for Anthropic Context Caching looks like: 
+
+```bash
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.anthropic.com/v1/messages \
+-H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' -H 'anthropic-beta: prompt-caching-2024-07-31' \
+-d '{'model': 'claude-3-5-sonnet-20240620', [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What are the key terms and conditions in this agreement?",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Certainly! The key terms and conditions are the following: the contract is 1 year long for $10/mo"
+        }
+      ]
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 10
+}'
+```
+::: 
+
+### Caching - Large Context Caching 
+
+
+This example demonstrates basic Prompt Caching usage, caching the full text of the legal agreement as a prefix while keeping the user instruction uncached.
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python 
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+:::info
+
+LiteLLM Proxy is OpenAI compatible
+
+This is an example using the OpenAI Python SDK sending a request to LiteLLM Proxy
+
+Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm proxy config.yaml](#usage-with-litellm-proxy)
+
+:::
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # litellm proxy api key
+    base_url="http://0.0.0.0:4000" # litellm proxy base url
+)
+
+
+response = await client.chat.completions.create(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+```
+
+</TabItem>
+</Tabs>
+
+### Caching - Tools definitions
+
+In this example, we demonstrate caching tool definitions.
+
+The cache_control parameter is placed on the final tool
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python 
+import litellm
+
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+                "cache_control": {"type": "ephemeral"}
+            },
+        }
+    ]
 )
 ```
-## Advanced
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
 
-## Usage - Function Calling 
+:::info
+
+LiteLLM Proxy is OpenAI compatible
+
+This is an example using the OpenAI Python SDK sending a request to LiteLLM Proxy
+
+Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm proxy config.yaml](#usage-with-litellm-proxy)
+
+:::
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # litellm proxy api key
+    base_url="http://0.0.0.0:4000" # litellm proxy base url
+)
+
+response = await client.chat.completions.create(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+                "cache_control": {"type": "ephemeral"}
+            },
+        }
+    ]
+)
+```
+
+</TabItem>
+</Tabs>
+
+
+### Caching - Continuing Multi-Turn Convo
+
+In this example, we demonstrate how to use Prompt Caching in a multi-turn conversation.
+
+The cache_control parameter is placed on the system message to designate it as part of the static prefix.
+
+The conversation history (previous messages) is included in the messages array. The final turn is marked with cache-control, for continuing in followups. The second-to-last user message is marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python 
+import litellm
+
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages=[
+        # System Message
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement"
+                    * 400,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+)
+```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+:::info
+
+LiteLLM Proxy is OpenAI compatible
+
+This is an example using the OpenAI Python SDK sending a request to LiteLLM Proxy
+
+Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm proxy config.yaml](#usage-with-litellm-proxy)
+
+:::
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # litellm proxy api key
+    base_url="http://0.0.0.0:4000" # litellm proxy base url
+)
+
+response = await client.chat.completions.create(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages=[
+        # System Message
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement"
+                    * 400,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+)
+```
+
+</TabItem>
+</Tabs>
+
+## **Function/Tool Calling**
 
 :::info 
 
@@ -427,6 +757,20 @@ resp = litellm.completion(
     ],
 )
 print(f"\nResponse: {resp}")
+```
+
+## **Passing Extra Headers to Anthropic API**
+
+Pass `extra_headers: dict` to `litellm.completion`
+
+```python
+from litellm import completion
+messages = [{"role": "user", "content": "What is Anthropic?"}]
+response = completion(
+    model="claude-3-5-sonnet-20240620", 
+    messages=messages, 
+    extra_headers={"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
+)
 ```
 
 ## Usage - "Assistant Pre-fill"

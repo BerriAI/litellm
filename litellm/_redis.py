@@ -7,12 +7,19 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import inspect
+import json
+
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-import inspect
-import redis, litellm  # type: ignore
-import redis.asyncio as async_redis  # type: ignore
 from typing import List, Optional
+
+import redis  # type: ignore
+import redis.asyncio as async_redis  # type: ignore
+
+import litellm
+
+from ._logging import verbose_logger
 
 
 def _get_redis_kwargs():
@@ -47,6 +54,20 @@ def _get_redis_url_kwargs(client=None):
     include_args = ["url"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+
+    return available_args
+
+
+def _get_redis_cluster_kwargs(client=None):
+    if client is None:
+        client = redis.Redis.from_url
+    arg_spec = inspect.getfullargspec(redis.RedisCluster)
+
+    # Only allow primitive arguments
+    exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
+
+    available_args = [x for x in arg_spec.args if x not in exclude_args]
+    available_args.append("password")
 
     return available_args
 
@@ -103,15 +124,54 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
+    _startup_nodes = redis_kwargs.get("startup_nodes", None) or litellm.get_secret(
+        "REDIS_CLUSTER_NODES"
+    )
+
+    if _startup_nodes is not None:
+        redis_kwargs["startup_nodes"] = json.loads(_startup_nodes)
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         redis_kwargs.pop("host", None)
         redis_kwargs.pop("port", None)
         redis_kwargs.pop("db", None)
         redis_kwargs.pop("password", None)
+    elif "startup_nodes" in redis_kwargs and redis_kwargs["startup_nodes"] is not None:
+        pass
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
     # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
     return redis_kwargs
+
+
+def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
+    _redis_cluster_nodes_in_env = litellm.get_secret("REDIS_CLUSTER_NODES")
+    if _redis_cluster_nodes_in_env is not None:
+        try:
+            redis_kwargs["startup_nodes"] = json.loads(_redis_cluster_nodes_in_env)
+        except json.JSONDecodeError:
+            raise ValueError(
+                "REDIS_CLUSTER_NODES environment variable is not valid JSON. Please ensure it's properly formatted."
+            )
+
+    verbose_logger.debug(
+        "init_redis_cluster: startup nodes: ", redis_kwargs["startup_nodes"]
+    )
+    from redis.cluster import ClusterNode
+
+    args = _get_redis_cluster_kwargs()
+    cluster_kwargs = {}
+    for arg in redis_kwargs:
+        if arg in args:
+            cluster_kwargs[arg] = redis_kwargs[arg]
+
+    new_startup_nodes: List[ClusterNode] = []
+
+    for item in redis_kwargs["startup_nodes"]:
+        new_startup_nodes.append(ClusterNode(**item))
+
+    redis_kwargs.pop("startup_nodes")
+    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
 
 
 def get_redis_client(**env_overrides):
@@ -124,6 +184,13 @@ def get_redis_client(**env_overrides):
                 url_kwargs[arg] = redis_kwargs[arg]
 
         return redis.Redis.from_url(**url_kwargs)
+
+    if (
+        "startup_nodes" in redis_kwargs
+        or litellm.get_secret("REDIS_CLUSTER_NODES") is not None
+    ):
+        return init_redis_cluster(redis_kwargs)
+
     return redis.Redis(**redis_kwargs)
 
 
@@ -143,6 +210,24 @@ def get_redis_async_client(**env_overrides):
                 )
         return async_redis.Redis.from_url(**url_kwargs)
 
+    if "startup_nodes" in redis_kwargs:
+        from redis.cluster import ClusterNode
+
+        args = _get_redis_cluster_kwargs()
+        cluster_kwargs = {}
+        for arg in redis_kwargs:
+            if arg in args:
+                cluster_kwargs[arg] = redis_kwargs[arg]
+
+        new_startup_nodes: List[ClusterNode] = []
+
+        for item in redis_kwargs["startup_nodes"]:
+            new_startup_nodes.append(ClusterNode(**item))
+        redis_kwargs.pop("startup_nodes")
+        return async_redis.RedisCluster(
+            startup_nodes=new_startup_nodes, **cluster_kwargs
+        )
+
     return async_redis.Redis(
         socket_timeout=5,
         **redis_kwargs,
@@ -160,4 +245,5 @@ def get_redis_connection_pool(**env_overrides):
         connection_class = async_redis.SSLConnection
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
+    redis_kwargs.pop("startup_nodes", None)
     return async_redis.BlockingConnectionPool(timeout=5, **redis_kwargs)

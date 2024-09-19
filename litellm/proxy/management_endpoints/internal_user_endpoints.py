@@ -47,6 +47,7 @@ router = APIRouter()
 @management_endpoint_wrapper
 async def new_user(
     data: NewUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Use this to create a new INTERNAL user with a budget.
@@ -118,6 +119,7 @@ async def new_user(
             http_request=Request(
                 scope={"type": "http", "path": "/user/new"},
             ),
+            user_api_key_dict=user_api_key_dict,
         )
 
     if data.send_invite_email is True:
@@ -154,6 +156,7 @@ async def new_user(
         user_id=response["user_id"],
         user_role=response.get("user_role", None),
         user_email=response.get("user_email", None),
+        user_alias=response.get("user_alias", None),
         teams=response.get("teams", None),
         team_id=response.get("team_id", None),
         metadata=response.get("metadata", None),
@@ -192,7 +195,8 @@ async def user_auth(request: Request):
     - os.environ["SMTP_PASSWORD"]
     - os.environ["SMTP_SENDER_EMAIL"]
     """
-    from litellm.proxy.proxy_server import prisma_client, send_email
+    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.utils import send_email
 
     data = await request.json()  # type: ignore
     user_email = data["user_email"]
@@ -209,7 +213,7 @@ async def user_auth(request: Request):
     )
     ### if so - generate a 24 hr key with that user id
     if response is not None:
-        user_id = response.user_id
+        user_id = response.user_id  # type: ignore
         response = await generate_key_helper_fn(
             request_type="key",
             **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id},  # type: ignore
@@ -311,7 +315,7 @@ async def user_info(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         ## GET USER ROW ##
         if user_id is not None:
@@ -342,6 +346,7 @@ async def user_info(
             for team in teams_1:
                 team_id_list.append(team.team_id)
 
+        teams_2: Optional[Any] = None
         if user_info is not None:
             # *NEW* get all teams in user 'teams' field
             teams_2 = await prisma_client.get_data(
@@ -364,8 +369,15 @@ async def user_info(
                 getattr(caller_user_info, "user_role", None)
                 == LitellmUserRoles.PROXY_ADMIN
             ):
-                teams_2 = await prisma_client.db.litellm_teamtable.find_many()
-            else:
+                from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+                teams_2 = await list_team(
+                    http_request=Request(
+                        scope={"type": "http", "path": "/user/info"},
+                    ),
+                    user_api_key_dict=user_api_key_dict,
+                )
+            elif caller_user_info is not None:
                 teams_2 = await prisma_client.get_data(
                     team_id_list=caller_user_info.teams,
                     table_name="team",
@@ -383,10 +395,9 @@ async def user_info(
             user_id=user_id,
             table_name="key",
             query_type="find_all",
-            expires=datetime.now(),
         )
 
-        if user_info is None:
+        if user_info is None and keys is not None:
             ## make sure we still return a total spend ##
             spend = 0
             for k in keys:
@@ -395,32 +406,35 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = []
-        for key in keys:
-            if (
-                key.token == litellm_master_key_hash
-                and general_settings.get("disable_master_key_return", False)
-                == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
-            ):
-                continue
+        if keys is None:
+            pass
+        else:
+            for key in keys:
+                if (
+                    key.token == litellm_master_key_hash
+                    and general_settings.get("disable_master_key_return", False)
+                    == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+                ):
+                    continue
 
-            try:
-                key = key.model_dump()  # noqa
-            except:
-                # if using pydantic v1
-                key = key.dict()
-            if (
-                "team_id" in key
-                and key["team_id"] is not None
-                and key["team_id"] != "litellm-dashboard"
-            ):
-                team_info = await prisma_client.get_data(
-                    team_id=key["team_id"], table_name="team"
-                )
-                team_alias = getattr(team_info, "team_alias", None)
-                key["team_alias"] = team_alias
-            else:
-                key["team_alias"] = "None"
-            returned_keys.append(key)
+                try:
+                    key = key.model_dump()  # noqa
+                except:
+                    # if using pydantic v1
+                    key = key.dict()
+                if (
+                    "team_id" in key
+                    and key["team_id"] is not None
+                    and key["team_id"] != "litellm-dashboard"
+                ):
+                    team_info = await prisma_client.get_data(
+                        team_id=key["team_id"], table_name="team"
+                    )
+                    team_alias = getattr(team_info, "team_alias", None)
+                    key["team_alias"] = team_alias
+                else:
+                    key["team_alias"] = "None"
+                returned_keys.append(key)
 
         response_data = {
             "user_id": user_id,
@@ -461,6 +475,7 @@ async def user_info(
 @management_endpoint_wrapper
 async def user_update(
     data: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Example curl 
@@ -495,6 +510,10 @@ async def user_update(
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
 
+        is_internal_user = False
+        if data.user_role == LitellmUserRoles.INTERNAL_USER:
+            is_internal_user = True
+
         if "budget_duration" in non_default_values:
             duration_s = _duration_in_seconds(
                 duration=non_default_values["budget_duration"]
@@ -502,8 +521,30 @@ async def user_update(
             user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = user_reset_at
 
+        if "max_budget" not in non_default_values:
+            if (
+                is_internal_user and litellm.max_internal_user_budget is not None
+            ):  # applies internal user limits, if user role updated
+                non_default_values["max_budget"] = litellm.max_internal_user_budget
+
+        if (
+            "budget_duration" not in non_default_values
+        ):  # applies internal user limits, if user role updated
+            if is_internal_user and litellm.internal_user_budget_duration is not None:
+                non_default_values["budget_duration"] = (
+                    litellm.internal_user_budget_duration
+                )
+                duration_s = _duration_in_seconds(
+                    duration=non_default_values["budget_duration"]
+                )
+                user_reset_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=duration_s
+                )
+                non_default_values["budget_reset_at"] = user_reset_at
+
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
+        response: Optional[Any] = None
         if data.user_id is not None and len(data.user_id) > 0:
             non_default_values["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update user, user_id condition block.")
@@ -538,7 +579,7 @@ async def user_update(
                         data=non_default_values,
                         table_name="user",
                     )
-        return response
+        return response  # type: ignore
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.error(
@@ -723,7 +764,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/delete' \
+    curl --location 'http://0.0.0.0:8000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 

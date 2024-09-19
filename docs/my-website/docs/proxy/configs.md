@@ -55,7 +55,8 @@ model_list:
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:4000
+      api_base: http://0.0.0.0:4000/v1
+      api_key: none
       rpm: 1440
     model_info: 
       version: 2
@@ -408,12 +409,12 @@ You can view your cost once you set up [Virtual keys](https://docs.litellm.ai/do
 
 ## Load API Keys
 
-### Load API Keys from Environment 
+### Load API Keys / config values from Environment 
 
-If you have secrets saved in your environment, and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. 
+If you have secrets saved in your environment, and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. **This works for ANY value on the config.yaml**
 
-```python
-os.environ["AZURE_NORTH_AMERICA_API_KEY"] = "your-azure-api-key"
+```yaml
+os.environ/<YOUR-ENV-VAR> # runs os.getenv("YOUR-ENV-VAR")
 ```
 
 ```yaml 
@@ -423,7 +424,7 @@ model_list:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
-      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY
+      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY # 👈 KEY CHANGE
 ```
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/litellm/utils.py#L2366)
@@ -726,7 +727,9 @@ general_settings:
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
     "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
+    "disable_retry_on_max_parallel_request_limit_error": "boolean", # turn off retries when max parallel request limit is reached
     "disable_reset_budget": "boolean", # turn off reset budget scheduled task
+    "disable_adding_master_key_hash_to_db": "boolean", # turn off storing master key hash in db, for spend tracking
     "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
     "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
     "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
@@ -749,7 +752,8 @@ general_settings:
     },
     "otel": true,
     "custom_auth": "string",
-    "max_parallel_requests": 0,
+    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
+    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
     "infer_model_from_keys": true,
     "background_health_checks": true,
     "health_check_interval": 300,

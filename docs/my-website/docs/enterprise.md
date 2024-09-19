@@ -22,8 +22,8 @@ This covers:
         - ✅ [SSO for Admin UI](./proxy/ui#✨-enterprise-features)
         - ✅ [Audit Logs with retention policy](./proxy/enterprise#audit-logs)
         - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
-        - ✅ [Control available public, private routes](./proxy/enterprise#control-available-public-private-routes)
-        - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](./proxy/enterprise#beta-aws-key-manager---key-decryption)
+        - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](./proxy/enterprise#control-available-public-private-routes)
+        - ✅ [**Secret Managers** AWS Key Manager, Google Secret Manager, Azure Key](./secret)
         - ✅ IP address‑based access control lists
         - ✅ Track Request IP Address
         - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
@@ -32,6 +32,7 @@ This covers:
     - **Customize Logging, Guardrails, Caching per project**
         - ✅ [Team Based Logging](./proxy/team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
         - ✅ [Disable Logging for a Team](./proxy/team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
+    - **Controlling Guardrails by Virtual Keys**
     - **Spend Tracking & Data Exports**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
         - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
@@ -39,11 +40,6 @@ This covers:
     - **Prometheus Metrics**
         - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](./proxy/prometheus)
         - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](./proxy/prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
-    - **Guardrails, PII Masking, Content Moderation**
-        - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](./proxy/enterprise#content-moderation)
-        - ✅ [Prompt Injection Detection (with LakeraAI API)](./proxy/enterprise#prompt-injection-detection---lakeraai)
-        - ✅ Reject calls from Blocked User list 
-        - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
     - **Custom Branding**
         - ✅ [Custom Branding + Routes on Swagger Docs](./proxy/enterprise#swagger-docs---custom-routes--branding)
         - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
@@ -69,3 +65,14 @@ Professional Support can assist with LLM/Provider integrations, deployment, upgr
 ### What’s the cost of the Self-Managed Enterprise edition?
 
 Self-Managed Enterprise deployments require our team to understand your exact needs. [Get in touch with us to learn more](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+
+### How does deployment with Enterprise License work? 
+
+You just deploy [our docker image](https://docs.litellm.ai/docs/proxy/deploy) and get an enterprise license key to add to your environment to unlock additional functionality (SSO, Prometheus metrics, etc.). 
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
+
+No data leaves your environment. 

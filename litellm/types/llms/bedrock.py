@@ -208,3 +208,62 @@ class ServerSentEvent:
     @override
     def __repr__(self) -> str:
         return f"ServerSentEvent(event={self.event}, data={self.data}, id={self.id}, retry={self.retry})"
+
+
+class CohereEmbeddingRequest(TypedDict, total=False):
+    texts: Required[List[str]]
+    input_type: Required[
+        Literal["search_document", "search_query", "classification", "clustering"]
+    ]
+    truncate: Literal["NONE", "START", "END"]
+    embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+
+
+class CohereEmbeddingResponse(TypedDict):
+    embeddings: List[List[float]]
+    id: str
+    response_type: Literal["embedding_floats"]
+    texts: List[str]
+
+
+class AmazonTitanV2EmbeddingRequest(TypedDict):
+    inputText: str
+    dimensions: int
+    normalize: bool
+
+
+class AmazonTitanV2EmbeddingResponse(TypedDict):
+    embedding: List[float]
+    inputTextTokenCount: int
+
+
+class AmazonTitanG1EmbeddingRequest(TypedDict):
+    inputText: str
+
+
+class AmazonTitanG1EmbeddingResponse(TypedDict):
+    embedding: List[float]
+    inputTextTokenCount: int
+
+
+class AmazonTitanMultimodalEmbeddingConfig(TypedDict):
+    outputEmbeddingLength: Literal[256, 384, 1024]
+
+
+class AmazonTitanMultimodalEmbeddingRequest(TypedDict, total=False):
+    inputText: str
+    inputImage: str
+    embeddingConfig: AmazonTitanMultimodalEmbeddingConfig
+
+
+class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
+    embedding: List[float]
+    inputTextTokenCount: int
+    message: str  # Specifies any errors that occur during generation.
+
+
+AmazonEmbeddingRequest = Union[
+    AmazonTitanMultimodalEmbeddingRequest,
+    AmazonTitanV2EmbeddingRequest,
+    AmazonTitanG1EmbeddingRequest,
+]

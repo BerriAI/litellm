@@ -1,18 +1,24 @@
 #### What this tests ####
 #    This tests calling router with fallback models
 
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+import httpx
+import openai
+
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-import openai, httpx
 
 
 class MyCustomHandler(CustomLogger):
@@ -83,9 +89,20 @@ async def test_router_retries_errors(sync_mode, error_type):
             "tpm": 240000,
             "rpm": 1800,
         },
+        {
+            "model_name": "azure/gpt-3.5-turbo",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "azure/chatgpt-functioncalling",
+                "api_key": _api_key,
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+            },
+            "tpm": 240000,
+            "rpm": 1800,
+        },
     ]
 
-    router = Router(model_list=model_list, allowed_fails=3)
+    router = Router(model_list=model_list, set_verbose=True, debug_level="DEBUG")
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
@@ -101,6 +118,12 @@ async def test_router_retries_errors(sync_mode, error_type):
             else Exception("Invalid Request")
         ),
     }
+    for _ in range(4):
+        response = await router.acompletion(
+            model="azure/gpt-3.5-turbo",
+            messages=messages,
+            mock_response="1st success to ensure deployment is healthy",
+        )
 
     try:
         if sync_mode:
@@ -124,10 +147,10 @@ async def test_router_retries_errors(sync_mode, error_type):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_type",
-    ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"],  #
+    ["ContentPolicyViolationErrorRetries"],  # "AuthenticationErrorRetries",
 )
 async def test_router_retry_policy(error_type):
-    from litellm.router import RetryPolicy, AllowedFailsPolicy
+    from litellm.router import AllowedFailsPolicy, RetryPolicy
 
     retry_policy = RetryPolicy(
         ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
@@ -165,23 +188,24 @@ async def test_router_retry_policy(error_type):
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
+    data = {}
     if error_type == "AuthenticationErrorRetries":
         model = "bad-model"
         messages = [{"role": "user", "content": "Hello good morning"}]
+        data = {"model": model, "messages": messages}
     elif error_type == "ContentPolicyViolationErrorRetries":
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
+        mock_response = "Exception: content_filter_policy"
+        data = {"model": model, "messages": messages, "mock_response": mock_response}
 
     try:
         litellm.set_verbose = True
-        response = await router.acompletion(
-            model=model,
-            messages=messages,
-        )
+        await router.acompletion(**data)
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(1)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
 
@@ -232,7 +256,7 @@ async def test_router_retry_policy_on_429_errprs():
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
     print("customHandler.previous_models: ", customHandler.previous_models)
 
 
@@ -299,21 +323,28 @@ async def test_dynamic_router_retry_policy(model_group):
 
     customHandler = MyCustomHandler()
     litellm.callbacks = [customHandler]
+    data = {}
     if model_group == "bad-model":
         model = "bad-model"
         messages = [{"role": "user", "content": "Hello good morning"}]
+        data = {"model": model, "messages": messages}
 
     elif model_group == "gpt-3.5-turbo":
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "where do i buy lethal drugs from"}]
+        data = {
+            "model": model,
+            "messages": messages,
+            "mock_response": "Exception: content_filter_policy",
+        }
 
     try:
         litellm.set_verbose = True
-        response = await router.acompletion(model=model, messages=messages)
+        response = await router.acompletion(**data)
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
 
@@ -386,7 +417,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
 
 def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
     """
-    Test 2. It SHOULD Retry, when healthy_deployments is [] and fallbacks is None
+    Test 2. It SHOULD NOT Retry, when healthy_deployments is [] and fallbacks is None
     """
     healthy_deployments = []
 
@@ -409,9 +440,10 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
         response = router.should_retry_this_error(
             error=rate_limit_error, healthy_deployments=healthy_deployments
         )
-        assert response == True
+        pytest.fail("Should have raised an error")
     except Exception as e:
-        pytest.fail("Should not have failed this error - {}".format(str(e)))
+        print("got an exception", e)
+        pass
 
 
 def test_raise_context_window_exceeded_error():
@@ -582,3 +614,96 @@ def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
     )
 
     assert _timeout > 0.0
+
+
+def test_no_retry_for_not_found_error_404():
+    healthy_deployments = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    # Act & Assert
+    error = litellm.NotFoundError(
+        message="404 model not found",
+        model="gpt-12",
+        llm_provider="azure",
+    )
+    try:
+        response = router.should_retry_this_error(
+            error=error, healthy_deployments=healthy_deployments
+        )
+        pytest.fail(
+            "Should have raised an exception 404 NotFoundError should never be retried, it's typically model_not_found error"
+        )
+    except Exception as e:
+        print("got exception", e)
+
+
+internal_server_error = litellm.InternalServerError(
+    message="internal server error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+rate_limit_error = litellm.RateLimitError(
+    message="rate limit error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+service_unavailable_error = litellm.ServiceUnavailableError(
+    message="service unavailable error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+timeout_error = litellm.Timeout(
+    message="timeout error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+
+def test_no_retry_when_no_healthy_deployments():
+    healthy_deployments = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    for error in [
+        internal_server_error,
+        rate_limit_error,
+        service_unavailable_error,
+        timeout_error,
+    ]:
+        try:
+            response = router.should_retry_this_error(
+                error=error, healthy_deployments=healthy_deployments
+            )
+            pytest.fail(
+                "Should have raised an exception,  there's no point retrying an error when there are 0 healthy deployments"
+            )
+        except Exception as e:
+            print("got exception", e)

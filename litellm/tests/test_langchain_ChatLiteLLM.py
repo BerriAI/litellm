@@ -55,22 +55,6 @@
 
 # # test_claude()
 
-# def test_palm():
-#     try:
-#         chat = ChatLiteLLM(model="palm/chat-bison", max_tokens=10)
-#         messages = [
-#             HumanMessage(
-#                 content="what model are you"
-#             )
-#         ]
-#         resp = chat(messages)
-
-#         print(resp)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# # test_palm()
-
 
 # # def test_openai_with_params():
 # #     try:

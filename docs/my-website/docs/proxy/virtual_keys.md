@@ -34,6 +34,7 @@ You can then generate keys by hitting the `/key/generate` endpoint.
 
 [**See code**](https://github.com/BerriAI/litellm/blob/7a669a36d2689c7f7890bc9c93e04ff3c2641299/litellm/proxy/proxy_server.py#L672)
 
+## **Quick Start - Generate a Key**
 **Step 1: Save postgres db url**
 
 ```yaml
@@ -65,7 +66,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
-## Advanced - Spend Tracking 
+## Spend Tracking 
 
 Get spend per:
 - key - via `/key/info` [Swagger](https://litellm-api.up.railway.app/#/key%20management/info_key_fn_key_info_get)
@@ -223,9 +224,70 @@ Expected Response
 </TabItem>
 </Tabs>
 
-## Advanced - Model Access
+## **Model Access**
 
-### Restrict models by `team_id`
+### **Restrict models by Virtual Key**
+
+Set allowed models for a key using the `models` param
+
+
+```shell
+curl 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"]}'
+```
+
+:::info
+
+This key can only make requests to `models` that are `gpt-3.5-turbo` or `gpt-4`
+
+:::
+
+Verify this is set correctly by 
+
+<Tabs>
+<TabItem label="Allowed Access" value = "allowed">
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+</TabItem>
+
+<TabItem label="Disallowed Access" value = "not-allowed">
+
+:::info
+
+Expect this to fail since gpt-4o is not in the `models` for the key generated
+
+:::
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+### **Restrict models by `team_id`**
 `litellm-dev` can only access `azure-gpt-3.5`
 
 **1. Create a team via `/team/new`**
@@ -268,6 +330,157 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```shell
 {"error":{"message":"Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n\nTraceback (most recent call last):\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/proxy_server.py\", line 2298, in chat_completion\n    _is_valid_team_configs(\n  File \"/Users/ishaanjaffer/Github/litellm/litellm/proxy/utils.py\", line 1296, in _is_valid_team_configs\n    raise Exception(\nException: Invalid model for team litellm-dev: BEDROCK_GROUP.  Valid models for team are: ['azure-gpt-3.5']\n\n","type":"None","param":"None","code":500}}%            
 ```         
+
+### **Grant Access to new model (Access Groups)**
+
+Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
+
+**Step 1. Assign model, access group in config.yaml**
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    model_info:
+      access_groups: ["beta-models"] # 👈 Model Access Group
+  - model_name: fireworks-llama-v3-70b-instruct
+    litellm_params:
+      model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
+      api_key: "os.environ/FIREWORKS"
+    model_info:
+      access_groups: ["beta-models"] # 👈 Model Access Group
+```
+
+<Tabs>
+
+<TabItem value="key" label="Key Access Groups">
+
+**Create key with access group**
+
+```bash
+curl --location 'http://localhost:4000/key/generate' \
+-H 'Authorization: Bearer <your-master-key>' \
+-H 'Content-Type: application/json' \
+-d '{"models": ["beta-models"], # 👈 Model Access Group
+			"max_budget": 0,}'
+```
+
+Test Key 
+
+<Tabs>
+<TabItem label="Allowed Access" value = "allowed">
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-<key-from-previous-step>" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+</TabItem>
+
+<TabItem label="Disallowed Access" value = "not-allowed">
+
+:::info
+
+Expect this to fail since gpt-4o is not in the `beta-models` access group
+
+:::
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-<key-from-previous-step>" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+
+<TabItem value="team" label="Team Access Groups">
+
+Create Team
+
+```shell
+curl --location 'http://localhost:4000/team/new' \
+-H 'Authorization: Bearer sk-<key-from-previous-step>' \
+-H 'Content-Type: application/json' \
+-d '{"models": ["beta-models"]}'
+```
+
+Create Key for Team 
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer sk-<key-from-previous-step>' \
+--header 'Content-Type: application/json' \
+--data '{"team_id": "0ac97648-c194-4c90-8cd6-40af7b0d2d2a"}
+```
+
+
+Test Key
+
+<Tabs>
+<TabItem label="Allowed Access" value = "allowed">
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-<key-from-previous-step>" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+</TabItem>
+
+<TabItem label="Disallowed Access" value = "not-allowed">
+
+:::info
+
+Expect this to fail since gpt-4o is not in the `beta-models` access group
+
+:::
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-<key-from-previous-step>" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+
+</Tabs>
+
 
 ### Model Aliases
 
@@ -319,35 +532,9 @@ curl -X POST "https://0.0.0.0:4000/key/generate" \
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 
-### Grant Access to new model 
+## Advanced
 
-Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
-
-**Step 1. Assign model, access group in config.yaml**
-
-```yaml
-model_list:
-  - model_name: text-embedding-ada-002
-    litellm_params:
-      model: azure/azure-embedding-model
-      api_base: "os.environ/AZURE_API_BASE"
-      api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2023-07-01-preview"
-    model_info:
-      access_groups: ["beta-models"] # 👈 Model Access Group
-```
-
-**Step 2. Create key with access group**
-
-```bash
-curl --location 'http://localhost:4000/key/generate' \
--H 'Authorization: Bearer <your-master-key>' \
--H 'Content-Type: application/json' \
--d '{"models": ["beta-models"], # 👈 Model Access Group
-			"max_budget": 0,}'
-```
-
-## Advanced - Pass LiteLLM Key in custom header
+### Pass LiteLLM Key in custom header
 
 Use this to make LiteLLM proxy look for the virtual key in a custom header instead of the default `"Authorization"` header
 
@@ -411,7 +598,7 @@ client = openai.OpenAI(
 </TabItem>
 </Tabs>
 
-## Advanced - Custom Auth 
+### Custom Auth 
 
 You can now override the default api key auth.
 
@@ -550,15 +737,19 @@ general_settings:
 ```
 
 
-## Upperbound /key/generate params
+### Upperbound /key/generate params
 Use this, if you need to set default upperbounds for `max_budget`, `budget_duration` or any `key/generate` param per key. 
 
 Set `litellm_settings:upperbound_key_generate_params`:
 ```yaml
 litellm_settings:
   upperbound_key_generate_params:
-    max_budget: 100 # upperbound of $100, for all /key/generate requests
-    duration: "30d" # upperbound of 30 days for all /key/generate requests
+    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
+    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
+    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
+    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
+    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
 ```
 
 ** Expected Behavior **
@@ -566,7 +757,7 @@ litellm_settings:
 - Send a `/key/generate` request with `max_budget=200`
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
-## Default /key/generate params
+### Default /key/generate params
 Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
 
 When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
@@ -582,7 +773,11 @@ litellm_settings:
     team_id: "core-infra"
 ```
 
-## Endpoints
+## **Next Steps - Set Budgets, Rate Limits per Virtual Key**
+
+[Follow this doc to set budgets, rate limiters per virtual key with LiteLLM](users)
+
+## Endpoint Reference (Spec)
 
 ### Keys 
 

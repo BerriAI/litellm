@@ -1,13 +1,21 @@
 ### What this tests ####
 ## This test asserts the type of data passed into each method of the custom callback handler
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
 from datetime import datetime
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-from typing import Optional, Literal, List
-from litellm import Router, Cache
+from typing import List, Literal, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import litellm
+from litellm import Cache, Router
 from litellm.integrations.custom_logger import CustomLogger
 
 # Test Scenarios (test across completion, streaming, embedding)
@@ -29,6 +37,8 @@ from litellm.integrations.custom_logger import CustomLogger
 # Test interfaces
 ## 1. router.completion() + router.embeddings()
 ## 2. proxy.completions + proxy.embeddings
+
+litellm.num_retries = 0
 
 
 class CompletionCustomHandler(
@@ -371,6 +381,7 @@ class CompletionCustomHandler(
 
 # Simple Azure OpenAI call
 ## COMPLETION
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_async_chat_azure():
     try:
@@ -393,7 +404,7 @@ async def test_async_chat_azure():
                 "rpm": 1800,
             },
         ]
-        router = Router(model_list=model_list)  # type: ignore
+        router = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
@@ -405,7 +416,7 @@ async def test_async_chat_azure():
         )  # pre, post, success
         # streaming
         litellm.callbacks = [customHandler_streaming_azure_router]
-        router2 = Router(model_list=model_list)  # type: ignore
+        router2 = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router2.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
@@ -435,7 +446,7 @@ async def test_async_chat_azure():
             },
         ]
         litellm.callbacks = [customHandler_failure]
-        router3 = Router(model_list=model_list)  # type: ignore
+        router3 = Router(model_list=model_list, num_retries=0)  # type: ignore
         try:
             response = await router3.acompletion(
                 model="gpt-3.5-turbo",
@@ -497,7 +508,7 @@ async def test_async_embedding_azure():
             },
         ]
         litellm.callbacks = [customHandler_failure]
-        router3 = Router(model_list=model_list)  # type: ignore
+        router3 = Router(model_list=model_list, num_retries=0)  # type: ignore
         try:
             response = await router3.aembedding(
                 model="azure-embedding-model", input=["hello from litellm!"]
@@ -523,6 +534,7 @@ async def test_async_chat_azure_with_fallbacks():
     try:
         customHandler_fallbacks = CompletionCustomHandler()
         litellm.callbacks = [customHandler_fallbacks]
+        litellm.set_verbose = True
         # with fallbacks
         model_list = [
             {
@@ -545,7 +557,13 @@ async def test_async_chat_azure_with_fallbacks():
                 "rpm": 1800,
             },
         ]
-        router = Router(model_list=model_list, fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}])  # type: ignore
+        router = Router(
+            model_list=model_list,
+            fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
+            retry_policy=litellm.router.RetryPolicy(
+                AuthenticationErrorRetries=0,
+            ),
+        )  # type: ignore
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
@@ -602,14 +620,18 @@ async def test_async_completion_azure_caching():
     router = Router(model_list=model_list)  # type: ignore
     response1 = await router.acompletion(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel
@@ -618,3 +640,72 @@ async def test_async_completion_azure_caching():
     )
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4  # pre, post, success, success
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_callback():
+    """
+    Assert a callback is hit, if a model group starts hitting rate limit errors
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/4096
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+    litellm.success_callback = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-test-gpt",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            }
+        ],
+        allowed_fails=2,
+        num_retries=0,
+    )
+
+    litellm_logging_obj = LiteLLMLogging(
+        model="my-test-gpt",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    try:
+        _ = await router.acompletion(
+            model="my-test-gpt",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    except Exception:
+        pass
+
+    with patch.object(
+        customHandler, "log_model_group_rate_limit_error", new=AsyncMock()
+    ) as mock_client:
+
+        print(
+            f"customHandler.log_model_group_rate_limit_error: {customHandler.log_model_group_rate_limit_error}"
+        )
+
+        try:
+            _ = await router.acompletion(
+                model="my-test-gpt",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                litellm_logging_obj=litellm_logging_obj,
+            )
+        except (litellm.RateLimitError, ValueError):
+            pass
+
+        await asyncio.sleep(3)
+        mock_client.assert_called_once()
+
+        assert "original_model_group" in mock_client.call_args.kwargs
+        assert mock_client.call_args.kwargs["original_model_group"] == "my-test-gpt"

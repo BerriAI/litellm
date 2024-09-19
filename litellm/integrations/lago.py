@@ -13,7 +13,11 @@ import httpx
 import litellm
 from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    HTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 def get_utc_datetime():
@@ -30,7 +34,9 @@ class LagoLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.validate_environment()
-        self.async_http_handler = AsyncHTTPHandler()
+        self.async_http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.sync_http_handler = HTTPHandler()
 
     def validate_environment(self):
@@ -105,16 +111,25 @@ class LagoLogger(CustomLogger):
             external_customer_id = user_id
 
         if external_customer_id is None:
-            raise Exception("External Customer ID is not set")
+            raise Exception(
+                "External Customer ID is not set. Charge_by={}. User_id={}. End_user_id={}. Team_id={}".format(
+                    charge_by, user_id, end_user_id, team_id
+                )
+            )
 
-        return {
+        returned_val = {
             "event": {
                 "transaction_id": str(uuid.uuid4()),
-                "external_customer_id": external_customer_id,
+                "external_subscription_id": external_customer_id,
                 "code": os.getenv("LAGO_API_EVENT_CODE"),
                 "properties": {"model": model, "response_cost": cost, **usage},
             }
         }
+
+        verbose_logger.debug(
+            "\033[91mLogged Lago Object:\n{}\033[0m\n".format(returned_val)
+        )
+        return returned_val
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("LAGO_API_BASE")
@@ -180,6 +195,8 @@ class LagoLogger(CustomLogger):
             )
 
             response.raise_for_status()
+
+            verbose_logger.debug(f"Logged Lago Object: {response.text}")
         except Exception as e:
             if response is not None and hasattr(response, "text"):
                 litellm.print_verbose(f"\nError Message: {response.text}")

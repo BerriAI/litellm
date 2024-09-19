@@ -3,6 +3,8 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
+from .openai import ChatCompletionCachedContent
+
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
     type: Required[Literal["auto", "any", "tool"]]
@@ -15,9 +17,10 @@ class AnthropicMessagesTool(TypedDict, total=False):
     input_schema: Required[dict]
 
 
-class AnthropicMessagesTextParam(TypedDict):
+class AnthropicMessagesTextParam(TypedDict, total=False):
     type: Literal["text"]
     text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolUseParam(TypedDict):
@@ -54,9 +57,10 @@ class AnthropicImageParamSource(TypedDict):
     data: str
 
 
-class AnthropicMessagesImageParam(TypedDict):
+class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Literal["image"]
     source: AnthropicImageParamSource
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultContent(TypedDict):
@@ -92,6 +96,12 @@ class AnthropicMetadata(TypedDict, total=False):
     user_id: str
 
 
+class AnthropicSystemMessageContent(TypedDict, total=False):
+    type: str
+    text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class AnthropicMessagesRequest(TypedDict, total=False):
     model: Required[str]
     messages: Required[
@@ -106,7 +116,7 @@ class AnthropicMessagesRequest(TypedDict, total=False):
     metadata: AnthropicMetadata
     stop_sequences: List[str]
     stream: bool
-    system: str
+    system: Union[str, List]
     temperature: float
     tool_choice: AnthropicMessagesToolChoice
     tools: List[AnthropicMessagesTool]
@@ -279,3 +289,11 @@ class AnthropicResponse(BaseModel):
 
     usage: AnthropicResponseUsageBlock
     """Billing and rate-limit usage."""
+
+
+class AnthropicChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int

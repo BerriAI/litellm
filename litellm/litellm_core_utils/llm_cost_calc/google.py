@@ -48,6 +48,7 @@ def cost_router(
         "claude" in model
         or "llama" in model
         or "mistral" in model
+        or "jamba" in model
         or "codestral" in model
     ):
         return "cost_per_token"
@@ -118,10 +119,9 @@ def cost_per_character(
             )
             prompt_cost = prompt_characters * model_info["input_cost_per_character"]
     except Exception as e:
-        verbose_logger.error(
-            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occured - {}\n{}\n\
-                Defaulting to (cost_per_token * 4) calculation for prompt_cost".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Defaulting to (cost_per_token * 4) calculation for prompt_cost. Exception occured - {}".format(
+                str(e)
             )
         )
         initial_prompt_cost, _ = cost_per_token(
@@ -161,10 +161,10 @@ def cost_per_character(
                 completion_tokens * model_info["output_cost_per_character"]
             )
     except Exception as e:
-        verbose_logger.error(
-            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occured - {}\n{}\n\
-                Defaulting to (cost_per_token * 4) calculation for completion_cost".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): \
+                Defaulting to (cost_per_token * 4) calculation for completion_cost\nException occured - {}".format(
+                str(e)
             )
         )
         _, initial_completion_cost = cost_per_token(

@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🪣 Google Cloud Storage Buckets - Logging LLM Input/Output
+# Google Cloud Storage Buckets
 
 Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?hl=en)
 
@@ -63,52 +63,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ### Fields Logged on GCS Buckets
 
-Example payload of a `/chat/completion` request logged on GCS
-```json
-{
-  "request_kwargs": {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-      {
-        "role": "user",
-        "content": "This is a test"
-      }
-    ],
-    "optional_params": {
-      "temperature": 0.7,
-      "max_tokens": 10,
-      "user": "ishaan-2",
-      "extra_body": {}
-    }
-  },
-  "response_obj": {
-    "id": "chatcmpl-bd836a8c-89bc-4abd-bee5-e3f1ebfdb541",
-    "choices": [
-      {
-        "finish_reason": "stop",
-        "index": 0,
-        "message": {
-          "content": "Hi!",
-          "role": "assistant",
-          "tool_calls": null,
-          "function_call": null
-        }
-      }
-    ],
-    "created": 1722868456,
-    "model": "gpt-3.5-turbo",
-    "object": "chat.completion",
-    "system_fingerprint": null,
-    "usage": {
-      "prompt_tokens": 10,
-      "completion_tokens": 20,
-      "total_tokens": 30
-    }
-  },
-  "start_time": "2024-08-05 07:34:16",
-  "end_time": "2024-08-05 07:34:16"
-}
-```
+[**The standard logging object is logged on GCS Bucket**](../proxy/logging)
+
 
 ## Getting `service_account.json` from Google Cloud Console
 

@@ -16,7 +16,7 @@ import httpx
 import litellm
 from litellm import client, get_secret
 from litellm.llms.files_apis.azure import AzureOpenAIFilesAPI
-from litellm.llms.openai import FileDeleted, FileObject, OpenAIFilesAPI
+from litellm.llms.OpenAI.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.types.llms.openai import (
     Batch,
     CreateFileRequest,
@@ -87,6 +87,24 @@ def file_retrieve(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("is_async", False) is True
+
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -108,25 +126,6 @@ def file_retrieve(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("is_async", False) is True
 
             response = openai_files_instance.retrieve_file(
                 file_id=file_id,
@@ -137,9 +136,41 @@ def file_retrieve(
                 max_retries=optional_params.max_retries,
                 organization=organization,
             )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.retrieve_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                file_id=file_id,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'file_retrieve'. Only 'openai' and 'azure' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -361,6 +392,23 @@ def file_list(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) == False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("is_async", False) is True
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -382,25 +430,6 @@ def file_list(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("is_async", False) is True
 
             response = openai_files_instance.list_files(
                 purpose=purpose,
@@ -411,9 +440,41 @@ def file_list(
                 max_retries=optional_params.max_retries,
                 organization=organization,
             )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.list_files(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                purpose=purpose,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'file_list'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'file_list'. Only 'openai' and 'azure' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -645,6 +706,29 @@ def file_content(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) == False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _file_content_request = FileContentRequest(
+            file_id=file_id,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+        )
+
+        _is_async = kwargs.pop("afile_content", False) is True
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -666,31 +750,6 @@ def file_content(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _file_content_request = FileContentRequest(
-                file_id=file_id,
-                extra_headers=extra_headers,
-                extra_body=extra_body,
-            )
-
-            _is_async = kwargs.pop("afile_content", False) is True
 
             response = openai_files_instance.file_content(
                 _is_async=_is_async,
@@ -701,9 +760,41 @@ def file_content(
                 max_retries=optional_params.max_retries,
                 organization=organization,
             )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.file_content(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                file_content_request=_file_content_request,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'file_content'. Only 'openai' and 'azure' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

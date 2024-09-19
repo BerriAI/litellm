@@ -17,6 +17,7 @@ import {
   Select as Select2,
   InputNumber,
   message,
+  Tooltip
 } from "antd";
 import { Select, SelectItem } from "@tremor/react";
 import {
@@ -421,6 +422,7 @@ const Team: React.FC<TeamProps> = ({
               <TableHead>
                 <TableRow>
                   <TableHeaderCell>Team Name</TableHeaderCell>
+                  <TableHeaderCell>Team ID</TableHeaderCell>
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
                   <TableHeaderCell>Models</TableHeaderCell>
@@ -441,6 +443,19 @@ const Team: React.FC<TeamProps> = ({
                           }}
                         >
                           {team["team_alias"]}
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "4px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            fontSize: "0.75em", // or any smaller size as needed
+                          }}
+                        >
+                          <Tooltip title={team.team_id}>
+                          {team.team_id}
+                          </Tooltip>
                         </TableCell>
                         <TableCell
                           style={{

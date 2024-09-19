@@ -29,6 +29,7 @@ class MyCustomHandler(
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ):
         return data
@@ -40,6 +41,7 @@ class MyCustomHandler(
 
     async def async_post_call_success_hook(
         self,
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
@@ -50,7 +52,13 @@ class MyCustomHandler(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         pass
 

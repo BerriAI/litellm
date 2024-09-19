@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🤗 UI - Self-Serve
+# Self-Serve
 
 ## Allow users to create their own keys on [Proxy UI](./ui.md).
 
@@ -175,7 +175,7 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 
 ### Set max budget for internal users 
 
-Automatically apply budget per internal user when they sign up
+Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
 
 ```yaml
 litellm_settings:

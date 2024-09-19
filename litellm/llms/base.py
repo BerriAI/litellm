@@ -1,11 +1,14 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
+from typing import Any, Optional, Union
+
+import httpx
+import requests
+
 import litellm
-import httpx, requests
-from typing import Optional, Union
-from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class BaseLLM:
+
     _client_session: Optional[httpx.Client] = None
 
     def process_response(
@@ -14,7 +17,7 @@ class BaseLLM:
         response: Union[requests.Response, httpx.Response],
         model_response: litellm.utils.ModelResponse,
         stream: bool,
-        logging_obj: Logging,
+        logging_obj: Any,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -33,7 +36,7 @@ class BaseLLM:
         response: Union[requests.Response, httpx.Response],
         model_response: litellm.utils.TextCompletionResponse,
         stream: bool,
-        logging_obj: Logging,
+        logging_obj: Any,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -63,22 +66,24 @@ class BaseLLM:
         return _aclient_session
 
     def __exit__(self):
-        if hasattr(self, "_client_session"):
+        if hasattr(self, "_client_session") and self._client_session is not None:
             self._client_session.close()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if hasattr(self, "_aclient_session"):
-            await self._aclient_session.aclose()
+            await self._aclient_session.aclose()  # type: ignore
 
-    def validate_environment(self):  # set up the environment required to run the model
-        pass
+    def validate_environment(
+        self, *args, **kwargs
+    ) -> Optional[Any]:  # set up the environment required to run the model
+        return None
 
     def completion(
         self, *args, **kwargs
-    ):  # logic for parsing in - calling - parsing out model completion calls
-        pass
+    ) -> Any:  # logic for parsing in - calling - parsing out model completion calls
+        return None
 
     def embedding(
         self, *args, **kwargs
-    ):  # logic for parsing in - calling - parsing out model embedding calls
-        pass
+    ) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
+        return None

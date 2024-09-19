@@ -192,6 +192,8 @@ model LiteLLM_SpendLogs {
   team_id             String? 
   end_user            String?
   requester_ip_address String?
+  @@index([startTime])
+  @@index([end_user])
 }
 
 // View spend, model, api_key per request

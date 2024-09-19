@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Streaming + Async
 
 - [Streaming Responses](#streaming-responses)
@@ -74,3 +77,72 @@ async def completion_call():
 
 asyncio.run(completion_call())
 ```
+
+## Error Handling - Infinite Loops
+
+Sometimes a model might enter an infinite loop, and keep repeating the same chunks - [e.g. issue](https://github.com/BerriAI/litellm/issues/5158)
+
+Break out of it with: 
+
+```python
+litellm.REPEATED_STREAMING_CHUNK_LIMIT = 100 # # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
+```
+
+LiteLLM provides error handling for this, by checking if a chunk is repeated 'n' times (Default is 100). If it exceeds that limit, it will raise a `litellm.InternalServerError`, to allow retry logic to happen. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm 
+import os 
+
+litellm.set_verbose = False
+loop_amount = litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
+chunks = [
+    litellm.ModelResponse(**{
+    "id": "chatcmpl-123",
+    "object": "chat.completion.chunk",
+    "created": 1694268190,
+    "model": "gpt-3.5-turbo-0125",
+    "system_fingerprint": "fp_44709d6fcb",
+    "choices": [
+        {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
+    ],
+}, stream=True)
+] * loop_amount
+completion_stream = litellm.ModelResponseListIterator(model_responses=chunks)
+
+response = litellm.CustomStreamWrapper(
+    completion_stream=completion_stream,
+    model="gpt-3.5-turbo",
+    custom_llm_provider="cached_response",
+    logging_obj=litellm.Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    ),
+)
+
+for chunk in response:
+    continue # expect to raise InternalServerError 
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+Define this on your config.yaml on the proxy. 
+
+```yaml
+litellm_settings:
+    REPEATED_STREAMING_CHUNK_LIMIT: 100 # this overrides the litellm default
+```
+
+The proxy uses the litellm SDK. To validate this works, try the 'SDK' code snippet. 
+
+</TabItem>
+</Tabs>

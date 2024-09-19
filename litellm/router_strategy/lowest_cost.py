@@ -1,16 +1,16 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-from pydantic import BaseModel
-from typing import Optional, Union, List, Dict
-from datetime import datetime, timedelta
-from litellm import verbose_logger
 import traceback
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Union
+
+from pydantic import BaseModel
+
+import litellm
+from litellm import ModelResponse, token_counter, verbose_logger
+from litellm._logging import verbose_router_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_router_logger
-from litellm import ModelResponse
-from litellm import token_counter
-import litellm
 
 
 class LiteLLMBase(BaseModel):
@@ -117,12 +117,11 @@ class LowestCostLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            verbose_logger.debug(traceback.format_exc())
             pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -204,12 +203,11 @@ class LowestCostLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            verbose_logger.debug(traceback.format_exc())
             pass
 
     async def async_get_available_deployments(

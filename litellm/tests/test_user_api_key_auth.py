@@ -7,18 +7,21 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import List, Optional
+from typing import Dict, List, Optional
 from unittest.mock import MagicMock
 
 import pytest
+from starlette.datastructures import URL
 
 import litellm
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 class Request:
-    def __init__(self, client_ip: Optional[str] = None):
+    def __init__(self, client_ip: Optional[str] = None, headers: Optional[dict] = None):
         self.client = MagicMock()
         self.client.host = client_ip
+        self.headers: Dict[str, str] = {}
 
 
 @pytest.mark.parametrize(
@@ -39,11 +42,39 @@ class Request:
 def test_check_valid_ip(
     allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool
 ):
-    from litellm.proxy.auth.user_api_key_auth import _check_valid_ip
+    from litellm.proxy.auth.auth_utils import _check_valid_ip
 
     request = Request(client_ip)
 
-    assert _check_valid_ip(allowed_ips, request) == expected_result  # type: ignore
+    assert _check_valid_ip(allowed_ips, request)[0] == expected_result  # type: ignore
+
+
+# test x-forwarder for is used when user has opted in
+
+
+@pytest.mark.parametrize(
+    "allowed_ips, client_ip, expected_result",
+    [
+        (None, "127.0.0.1", True),  # No IP restrictions, should be allowed
+        (["127.0.0.1"], "127.0.0.1", True),  # IP in allowed list
+        (["192.168.1.1"], "127.0.0.1", False),  # IP not in allowed list
+        ([], "127.0.0.1", False),  # Empty allowed list, no IP should be allowed
+        (["192.168.1.1", "10.0.0.1"], "10.0.0.1", True),  # IP in allowed list
+        (
+            ["192.168.1.1"],
+            None,
+            False,
+        ),  # Request with no client IP should not be allowed
+    ],
+)
+def test_check_valid_ip_sent_with_x_forwarded_for(
+    allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool
+):
+    from litellm.proxy.auth.auth_utils import _check_valid_ip
+
+    request = Request(client_ip, headers={"X-Forwarded-For": client_ip})
+
+    assert _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True)[0] == expected_result  # type: ignore
 
 
 @pytest.mark.asyncio
@@ -180,3 +211,81 @@ async def test_user_personal_budgets(key_ownership):
     except Exception:
         if key_ownership == "team_key":
             pytest.fail("Expected this call to work. Key is below team budget.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prohibited_param", ["api_base", "base_url"])
+async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
+    """
+    Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
+    """
+    import json
+
+    from fastapi import Request
+
+    # Setup
+    user_key = "sk-1234"
+
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    # Create request with prohibited parameter in body
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        body = {prohibited_param: "https://custom-api.com"}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+    try:
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + user_key
+        )
+    except Exception as e:
+        print("error str=", str(e))
+        error_message = str(e.message)
+        print("error message=", error_message)
+        assert "is not allowed in request body" in error_message
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "route, should_raise_error",
+    [
+        ("/embeddings", False),
+        ("/chat/completions", True),
+        ("/completions", True),
+        ("/models", True),
+        ("/v1/embeddings", True),
+    ],
+)
+async def test_auth_with_allowed_routes(route, should_raise_error):
+    # Setup
+    user_key = "sk-1234"
+
+    general_settings = {"allowed_routes": ["/embeddings"]}
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+
+    initial_general_settings = getattr(proxy_server, "general_settings")
+
+    setattr(proxy_server, "master_key", "sk-1234")
+    setattr(proxy_server, "general_settings", general_settings)
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+
+    if should_raise_error:
+        try:
+            await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+            pytest.fail("Expected this call to fail. User is over limit.")
+        except Exception as e:
+            print("error str=", str(e.message))
+            error_str = str(e.message)
+            assert "Route" in error_str and "not allowed" in error_str
+            pass
+    else:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+    setattr(proxy_server, "general_settings", initial_general_settings)

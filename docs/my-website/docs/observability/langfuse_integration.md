@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🔥 Langfuse - Logging LLM Input/Output
+# 🪢 Langfuse - Logging LLM Input/Output
 
 LangFuse is open Source Observability & Analytics for LLM Apps
 Detailed production traces and a granular view on quality, cost and latency
@@ -200,6 +200,13 @@ The following parameters can be updated on a continuation of a trace by passing 
 
 Any other key value pairs passed into the metadata not listed in the above spec for a `litellm` completion will be added as a metadata key value pair for the generation.
 
+#### Disable Logging - Specific Calls
+
+To disable logging for specific calls use the `no-log` flag. 
+
+`completion(messages = ..., model = ...,  **{"no-log": True})`
+
+
 ### Use LangChain ChatLiteLLM + Langfuse
 Pass `trace_user_id`, `session_id` in model_kwargs
 ```python
@@ -250,6 +257,10 @@ Setting `mask_input` to `True` will mask the input from being logged for this ca
 Setting `mask_output` to `True` will make the output from being logged for this call.
 
 Be aware that if you are continuing an existing trace, and you set `update_trace_keys` to include either `input` or `output` and you set the corresponding `mask_input` or `mask_output`, then that trace will have its existing input and/or output replaced with a redacted message.
+
+## **Use with LiteLLM Proxy (LLM Gateway) **
+
+👉 [**Follow this link to start sending logs to langfuse with LiteLLM Proxy server**](../proxy/logging)
 
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 

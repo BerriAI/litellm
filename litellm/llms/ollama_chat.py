@@ -4,14 +4,17 @@ import traceback
 import types
 import uuid
 from itertools import chain
-from typing import Optional
+from typing import List, Optional
 
 import aiohttp
 import httpx
 import requests
+from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
+from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 
 
 class OllamaError(Exception):
@@ -137,6 +140,7 @@ class OllamaChatConfig:
     ):
         return [
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "top_p",
             "temperature",
@@ -153,7 +157,7 @@ class OllamaChatConfig:
         self, model: str, non_default_params: dict, optional_params: dict
     ):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
             if param == "stream":
                 optional_params["stream"] = value
@@ -175,7 +179,7 @@ class OllamaChatConfig:
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
                 try:
                     model_info = litellm.get_model_info(
-                        model=model, custom_llm_provider="ollama_chat"
+                        model=model, custom_llm_provider="ollama"
                     )
                     if model_info.get("supports_function_calling") is True:
                         optional_params["tools"] = value
@@ -237,13 +241,30 @@ def get_ollama_response(
     function_name = optional_params.pop("function_name", None)
     tools = optional_params.pop("tools", None)
 
+    new_messages = []
     for m in messages:
-        if "role" in m and m["role"] == "tool":
-            m["role"] = "assistant"
+        if isinstance(
+            m, BaseModel
+        ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
+            m = m.model_dump(exclude_none=True)
+        if m.get("tool_calls") is not None and isinstance(m["tool_calls"], list):
+            new_tools: List[OllamaToolCall] = []
+            for tool in m["tool_calls"]:
+                typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
+                if typed_tool["type"] == "function":
+                    ollama_tool_call = OllamaToolCall(
+                        function=OllamaToolCallFunction(
+                            name=typed_tool["function"]["name"],
+                            arguments=json.loads(typed_tool["function"]["arguments"]),
+                        )
+                    )
+                    new_tools.append(ollama_tool_call)
+            m["tool_calls"] = new_tools
+        new_messages.append(m)
 
     data = {
         "model": model,
-        "messages": messages,
+        "messages": new_messages,
         "options": optional_params,
         "stream": stream,
     }
@@ -263,7 +284,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if stream == True:
+        if stream is True:
             response = ollama_async_streaming(
                 url=url,
                 api_key=api_key,
@@ -283,7 +304,7 @@ def get_ollama_response(
                 function_name=function_name,
             )
         return response
-    elif stream == True:
+    elif stream is True:
         return ollama_completion_stream(
             url=url, api_key=api_key, data=data, logging_obj=logging_obj
         )
@@ -313,7 +334,7 @@ def get_ollama_response(
 
     ## RESPONSE OBJECT
     model_response.choices[0].finish_reason = "stop"
-    if data.get("format", "") == "json":
+    if data.get("format", "") == "json" and function_name is not None:
         function_call = json.loads(response_json["message"]["content"])
         message = litellm.Message(
             content=None,
@@ -321,8 +342,10 @@ def get_ollama_response(
                 {
                     "id": f"call_{str(uuid.uuid4())}",
                     "function": {
-                        "name": function_call["name"],
-                        "arguments": json.dumps(function_call["arguments"]),
+                        "name": function_call.get("name", function_name),
+                        "arguments": json.dumps(
+                            function_call.get("arguments", function_call)
+                        ),
                     },
                     "type": "function",
                 }
@@ -331,9 +354,10 @@ def get_ollama_response(
         model_response.choices[0].message = message  # type: ignore
         model_response.choices[0].finish_reason = "tool_calls"
     else:
-        model_response.choices[0].message.content = response_json["message"]["content"]  # type: ignore
+        _message = litellm.Message(**response_json["message"])
+        model_response.choices[0].message = _message  # type: ignore
     model_response.created = int(time.time())
-    model_response.model = "ollama/" + model
+    model_response.model = "ollama_chat/" + model
     prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
     completion_tokens = response_json.get(
         "eval_count", litellm.token_counter(text=response_json["message"]["content"])
@@ -356,6 +380,7 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
         "json": data,
         "method": "POST",
         "timeout": litellm.request_timeout,
+        "follow_redirects": True,
     }
     if api_key is not None:
         _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
@@ -470,8 +495,9 @@ async def ollama_async_streaming(
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        verbose_logger.error("LiteLLM.gemini(): Exception occured - {}".format(str(e)))
-        verbose_logger.debug(traceback.format_exc())
+        verbose_logger.exception(
+            "LiteLLM.ollama(): Exception occured - {}".format(str(e))
+        )
 
 
 async def ollama_acompletion(
@@ -558,9 +584,4 @@ async def ollama_acompletion(
             )
             return model_response
     except Exception as e:
-        verbose_logger.error(
-            "LiteLLM.ollama_acompletion(): Exception occured - {}".format(str(e))
-        )
-        verbose_logger.debug(traceback.format_exc())
-
-        raise e
+        raise e  # don't use verbose_logger.exception, if exception is raised

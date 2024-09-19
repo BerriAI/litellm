@@ -78,7 +78,7 @@ def is_port_in_use(port):
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
-    default="2024-02-01",
+    default="2024-07-01-preview",
     help="For azure - pass in the api version.",
 )
 @click.option(
@@ -464,6 +464,7 @@ def run_server(
             db_port = os.getenv("DATABASE_PORT")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
+            db_schema = os.getenv("DATABASE_SCHEMA")
 
             token = generate_iam_auth_token(
                 db_host=db_host, db_port=db_port, db_user=db_user
@@ -471,11 +472,14 @@ def run_server(
 
             # print(f"token: {token}")
             _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+            if db_schema:
+                _db_url += f"?schema={db_schema}"
+
             os.environ["DATABASE_URL"] = _db_url
 
         ### DECRYPT ENV VAR ###
 
-        from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
+        from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
         if (
             os.getenv("USE_AWS_KMS", None) is not None
@@ -544,6 +548,15 @@ def run_server(
                         load_aws_secret_manager(use_aws_secret_manager=True)
                     elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                         load_aws_kms(use_aws_kms=True)
+                    elif (
+                        key_management_system
+                        == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
+                    ):
+                        from litellm.secret_managers.google_secret_manager import (
+                            GoogleSecretManager,
+                        )
+
+                        GoogleSecretManager()
                     else:
                         raise ValueError("Invalid Key Management System selected")
             key_management_settings = general_settings.get(
@@ -556,6 +569,22 @@ def run_server(
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
+            if database_url is None:
+                # Check if all required variables are provided
+                database_host = os.getenv("DATABASE_HOST")
+                database_username = os.getenv("DATABASE_USERNAME")
+                database_password = os.getenv("DATABASE_PASSWORD")
+                database_name = os.getenv("DATABASE_NAME")
+
+                if (
+                    database_host
+                    and database_username
+                    and database_password
+                    and database_name
+                ):
+                    # Construct DATABASE_URL from the provided variables
+                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
@@ -582,7 +611,7 @@ def run_server(
             or os.getenv("DIRECT_URL", None) is not None
         ):
             try:
-                from litellm import get_secret
+                from litellm.secret_managers.main import get_secret
 
                 if os.getenv("DATABASE_URL", None) is not None:
                     ### add connection pool + pool timeout args

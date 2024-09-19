@@ -48,6 +48,7 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
+  premiumUser: boolean;
 }
 
 type TeamInterface = {
@@ -68,6 +69,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setKeys,
   setProxySettings,
   proxySettings,
+  premiumUser,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
@@ -180,13 +182,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
                 response
               )}; team values: ${Object.entries(response.teams)}`
             );
-            if (userRole == "Admin") {
-              const globalSpend = await getTotalSpendCall(accessToken);
-              setUserSpendData(globalSpend);
-              console.log("globalSpend:", globalSpend);
-            } else {
-              setUserSpendData(response["user_info"]);
-            }
+            // if (userRole == "Admin") {
+            //   const globalSpend = await getTotalSpendCall(accessToken);
+            //   setUserSpendData(globalSpend);
+            //   console.log("globalSpend:", globalSpend);
+            // } else {
+            //   );
+            // }
+            setUserSpendData(response["user_info"]);
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
             const teamsArray = [...response["teams"]];
@@ -328,6 +331,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             selectedTeam={selectedTeam ? selectedTeam : null}
             data={keys}
             setData={setKeys}
+            premiumUser={premiumUser}
             teams={teams}
           />
           <CreateKey

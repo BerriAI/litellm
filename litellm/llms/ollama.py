@@ -4,8 +4,9 @@ import time
 import traceback
 import types
 import uuid
+from copy import deepcopy
 from itertools import chain
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 import httpx  # type: ignore
@@ -422,14 +423,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        verbose_logger.error(
-            "LiteLLM.ollama.py::ollama_async_streaming(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_logger.debug(traceback.format_exc())
-
-        raise e
+        raise e  # don't use verbose_logger.exception, if exception is raised
 
 
 async def ollama_acompletion(
@@ -498,28 +492,22 @@ async def ollama_acompletion(
             )
             return model_response
     except Exception as e:
-        verbose_logger.error(
-            "LiteLLM.ollama.py::ollama_acompletion(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_logger.debug(traceback.format_exc())
-        raise e
+        raise e  # don't use verbose_logger.exception, if exception is raised
 
 
 async def ollama_aembeddings(
     api_base: str,
     model: str,
-    prompts: list,
+    prompts: List[str],
     model_response: litellm.EmbeddingResponse,
-    optional_params=None,
+    optional_params: dict,
     logging_obj=None,
     encoding=None,
 ):
-    if api_base.endswith("/api/embeddings"):
+    if api_base.endswith("/api/embed"):
         url = api_base
     else:
-        url = f"{api_base}/api/embeddings"
+        url = f"{api_base}/api/embed"
 
     ## Load Config
     config = litellm.OllamaConfig.get_config()
@@ -529,54 +517,53 @@ async def ollama_aembeddings(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
+    data: Dict[str, Any] = {"model": model, "input": prompts}
+    special_optional_params = ["truncate", "options", "keep_alive"]
+
+    for k, v in optional_params.items():
+        if k in special_optional_params:
+            data[k] = v
+        else:
+            # Ensure "options" is a dictionary before updating it
+            data.setdefault("options", {})
+            if isinstance(data["options"], dict):
+                data["options"].update({k: v})
     total_input_tokens = 0
     output_data = []
+
     timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        for idx, prompt in enumerate(prompts):
-            data = {
-                "model": model,
-                "prompt": prompt,
-            }
-            ## LOGGING
-            logging_obj.pre_call(
-                input=None,
-                api_key=None,
-                additional_args={
-                    "api_base": url,
-                    "complete_input_dict": data,
-                    "headers": {},
-                },
-            )
+        ## LOGGING
+        logging_obj.pre_call(
+            input=None,
+            api_key=None,
+            additional_args={
+                "api_base": url,
+                "complete_input_dict": data,
+                "headers": {},
+            },
+        )
 
-            response = await session.post(url, json=data)
-            if response.status != 200:
-                text = await response.text()
-                raise OllamaError(status_code=response.status, message=text)
+        response = await session.post(url, json=data)
 
-            ## LOGGING
-            logging_obj.post_call(
-                input=prompt,
-                api_key="",
-                original_response=response.text,
-                additional_args={
-                    "headers": None,
-                    "api_base": api_base,
-                },
-            )
+        if response.status != 200:
+            text = await response.text()
+            raise OllamaError(status_code=response.status, message=text)
 
-            response_json = await response.json()
-            embeddings: list[float] = response_json["embedding"]
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embeddings}
-            )
+        response_json = await response.json()
 
-            input_tokens = len(encoding.encode(prompt))
-            total_input_tokens += input_tokens
+        embeddings: List[List[float]] = response_json["embeddings"]
+        for idx, emb in enumerate(embeddings):
+            output_data.append({"object": "embedding", "index": idx, "embedding": emb})
+
+        input_tokens = response_json.get("prompt_eval_count") or len(
+            encoding.encode("".join(prompt for prompt in prompts))
+        )
+        total_input_tokens += input_tokens
 
     model_response.object = "list"
     model_response.data = output_data
-    model_response.model = model
+    model_response.model = "ollama/" + model
     setattr(
         model_response,
         "usage",
@@ -601,12 +588,12 @@ def ollama_embeddings(
 ):
     return asyncio.run(
         ollama_aembeddings(
-            api_base,
-            model,
-            prompts,
-            optional_params,
-            logging_obj,
-            model_response,
-            encoding,
+            api_base=api_base,
+            model=model,
+            prompts=prompts,
+            model_response=model_response,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            encoding=encoding,
         )
     )

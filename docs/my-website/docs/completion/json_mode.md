@@ -71,8 +71,10 @@ response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 
 Works for:
 - OpenAI models 
+- Azure OpenAI models
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
+- Bedrock Models
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -80,21 +82,25 @@ Works for:
 ```python
 import os
 from litellm import completion 
+from pydantic import BaseModel
 
 # add to env var 
 os.environ["OPENAI_API_KEY"] = ""
 
-messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+messages = [{"role": "user", "content": "List 5 important events in the XIX century"}]
 
 class CalendarEvent(BaseModel):
   name: str
   date: str
   participants: list[str]
 
+class EventsList(BaseModel):
+    events: list[CalendarEvent]
+
 resp = completion(
     model="gpt-4o-2024-08-06",
     messages=messages,
-    response_format=CalendarEvent
+    response_format=EventsList
 )
 
 print("Received={}".format(resp))

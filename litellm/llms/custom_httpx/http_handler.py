@@ -1,11 +1,18 @@
 import asyncio
 import os
 import traceback
-from typing import Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import httpx
 
 import litellm
+
+from .types import httpxSpecialProvider
+
+if TYPE_CHECKING:
+    from litellm import LlmProviders
+else:
+    LlmProviders = Any
 
 try:
     from litellm._version import version
@@ -35,11 +42,12 @@ class AsyncHTTPHandler:
         self, timeout: Optional[Union[float, httpx.Timeout]], concurrent_limit: int
     ) -> httpx.AsyncClient:
 
-        # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
-        cert = os.getenv(
-            "SSL_CERTIFICATE", litellm.ssl_certificate
-        )  # /path/to/client.pem
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        # /path/to/certificate.pem
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        # An SSL certificate used by the requested host to authenticate the client.
+        # /path/to/client.pem
+        cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -88,6 +96,62 @@ class AsyncHTTPHandler:
                 timeout = self.timeout
             req = self.client.build_request(
                 "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+            )
+            response = await self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
+            # Retry the request with a new session if there is a connection error
+            new_client = self.create_client(timeout=timeout, concurrent_limit=1)
+            try:
+                return await self.single_connection_post_request(
+                    url=url,
+                    client=new_client,
+                    data=data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    stream=stream,
+                )
+            finally:
+                await new_client.aclose()
+        except httpx.TimeoutException as e:
+            headers = {}
+            if hasattr(e, "response") and e.response is not None:
+                for key, value in e.response.headers.items():
+                    headers["response_headers-{}".format(key)] = value
+
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+                headers=headers,
+            )
+        except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", await e.response.aread())
+            else:
+                setattr(e, "message", e.response.text)
+            raise e
+        except Exception as e:
+            raise e
+
+    async def put(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        stream: bool = False,
+    ):
+        try:
+            if timeout is None:
+                timeout = self.timeout
+            req = self.client.build_request(
+                "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -212,11 +276,12 @@ class HTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
 
-        # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
-        cert = os.getenv(
-            "SSL_CERTIFICATE", litellm.ssl_certificate
-        )  # /path/to/client.pem
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        # /path/to/certificate.pem
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        # An SSL certificate used by the requested host to authenticate the client.
+        # /path/to/client.pem
+        cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
             # Create a client with a connection pool
@@ -264,6 +329,45 @@ class HTTPHandler:
                     "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except httpx.TimeoutException:
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            )
+        except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", e.response.read())
+            else:
+                setattr(e, "message", e.response.text)
+            raise e
+        except Exception as e:
+            raise e
+
+    def put(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,
+        json: Optional[Union[dict, str]] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ):
+        try:
+
+            if timeout is not None:
+                req = self.client.build_request(
+                    "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                )
+            else:
+                req = self.client.build_request(
+                    "PUT", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                )
+            response = self.client.send(req, stream=stream)
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
@@ -281,7 +385,10 @@ class HTTPHandler:
             pass
 
 
-def _get_async_httpx_client(params: Optional[dict] = None) -> AsyncHTTPHandler:
+def get_async_httpx_client(
+    llm_provider: Union[LlmProviders, httpxSpecialProvider],
+    params: Optional[dict] = None,
+) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
     If not present, creates a new client
@@ -296,7 +403,7 @@ def _get_async_httpx_client(params: Optional[dict] = None) -> AsyncHTTPHandler:
             except Exception:
                 pass
 
-    _cache_key_name = "async_httpx_client" + _params_key_name
+    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
     if _cache_key_name in litellm.in_memory_llm_clients_cache:
         return litellm.in_memory_llm_clients_cache[_cache_key_name]
 

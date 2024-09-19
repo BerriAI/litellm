@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 https://github.com/BerriAI/litellm
 
-## **Call 100+ LLMs using the same Input/Output Format**
+## **Call 100+ LLMs using the OpenAI Input/Output Format**
 
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
@@ -14,14 +14,14 @@ https://github.com/BerriAI/litellm
 
 ## How to use LiteLLM
 You can use litellm through either:
-1. [LiteLLM Proxy Server](#openai-proxy) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
+1. [LiteLLM Proxy Server](#litellm-proxy-server-llm-gateway) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
 2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
-### When to use LiteLLM Proxy Server
+### **When to use LiteLLM Proxy Server (LLM Gateway)**
 
 :::tip
 
-Use LiteLLM Proxy Server if you want a **central service to access multiple LLMs**
+Use LiteLLM Proxy Server if you want a **central service (LLM Gateway) to access multiple LLMs**
 
 Typically used by Gen AI Enablement /  ML PLatform Teams
 
@@ -31,7 +31,7 @@ Typically used by Gen AI Enablement /  ML PLatform Teams
   - Track LLM Usage and setup guardrails
   - Customize Logging, Guardrails, Caching per project
 
-### When to use LiteLLM Python SDK
+### **When to use LiteLLM Python SDK**
 
 :::tip
 
@@ -44,6 +44,7 @@ Typically used by developers building llm projects
   - LiteLLM SDK gives you a unified interface to access multiple LLMs (100+ LLMs) 
   - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 
+## **LiteLLM Python SDK**
 
 ### Basic usage 
 
@@ -383,7 +384,7 @@ response = completion(
 )
 ```
 
-## OpenAI Proxy
+## **LiteLLM Proxy Server (LLM Gateway)**
 
 Track spend across multiple projects/people
 
@@ -397,6 +398,8 @@ The proxy provides:
 4. [Rate Limiting](https://docs.litellm.ai/docs/proxy/users#set-rate-limits)
 
 ### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
+
+Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/docker_quick_start.md)
 
 ### Quick Start Proxy - CLI
 
@@ -432,4 +435,5 @@ print(response)
 
 - [exception mapping](./exception_mapping.md)
 - [retries + model fallbacks for completion()](./completion/reliable_completions.md)
-- [proxy virtual keys & spend management](./tutorials/fallbacks.md)
+- [proxy virtual keys & spend management](./proxy/virtual_keys.md)
+- [E2E Tutorial for LiteLLM Proxy Server](./proxy/docker_quick_start.md)
