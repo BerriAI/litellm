@@ -67,32 +67,6 @@ from ...prompt_templates.factory import (
 from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
 from .converse_transformation import AmazonConverseConfig
 
-BEDROCK_CONVERSE_MODELS = [
-    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "anthropic.claude-3-opus-20240229-v1:0",
-    "us.anthropic.claude-3-opus-20240229-v1:0",
-    "eu.anthropic.claude-3-opus-20240229-v1:0",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
-    "us.anthropic.claude-3-sonnet-20240229-v1:0",
-    "eu.anthropic.claude-3-sonnet-20240229-v1:0",
-    "anthropic.claude-3-haiku-20240307-v1:0",
-    "us.anthropic.claude-3-haiku-20240307-v1:0",
-    "eu.anthropic.claude-3-haiku-20240307-v1:0",
-    "anthropic.claude-v2",
-    "anthropic.claude-v2:1",
-    "anthropic.claude-v1",
-    "anthropic.claude-instant-v1",
-    "ai21.jamba-instruct-v1:0",
-    "meta.llama3-1-8b-instruct-v1:0",
-    "meta.llama3-1-70b-instruct-v1:0",
-    "meta.llama3-1-405b-instruct-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-]
-
-
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
