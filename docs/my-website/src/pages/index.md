@@ -472,7 +472,6 @@ print(response)
 
 ## More details
 
-- [exception mapping](./exception_mapping.md)
-- [retries + model fallbacks for completion()](./completion/reliable_completions.md)
-- [proxy virtual keys & spend management](./proxy/virtual_keys.md)
-- [E2E Tutorial for LiteLLM Proxy Server](./proxy/docker_quick_start.md)
+- [exception mapping](../../docs/exception_mapping)
+- [E2E Tutorial for LiteLLM Proxy Server](../../docs/proxy/docker_quick_start)
+- [proxy virtual keys & spend management](../../docs/proxy/virtual_keys)
