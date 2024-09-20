@@ -40,6 +40,8 @@ class PrometheusLogger(CustomLogger):
                 return
 
             REQUESTED_MODEL = "requested_model"
+            EXCEPTION_STATUS = "exception_status"
+            EXCEPTION_CLASS = "exception_class"
 
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
@@ -52,6 +54,8 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                     "user",
+                    EXCEPTION_STATUS,
+                    EXCEPTION_CLASS,
                 ],
             )
 
@@ -198,7 +202,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_cooled_down = Counter(
                 "litellm_deployment_cooled_down",
                 "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down",
-                labelnames=_logged_llm_labels + ["exception_status"],
+                labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
             )
 
             self.litellm_deployment_success_responses = Counter(
@@ -209,7 +213,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=[REQUESTED_MODEL, "exception_status"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL, EXCEPTION_STATUS] + _logged_llm_labels,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
@@ -490,6 +494,9 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                     "user",
+                    EXCEPTION_STATUS,
+                    EXCEPTION_CLASS,
+
                 ],
         """
         try:
@@ -501,6 +508,8 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_dict.team_id,
                 user_api_key_dict.team_alias,
                 user_api_key_dict.user_id,
+                getattr(original_exception, "status_code", None),
+                str(original_exception.__class__),
             ).inc()
 
             self.litellm_proxy_total_requests_metric.labels(
