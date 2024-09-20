@@ -351,15 +351,8 @@ async def add_litellm_data_to_request(
 
     # Enterprise Only - Check if using tag based routing
     if llm_router and llm_router.enable_tag_filtering is True:
-        if premium_user is not True:
-            verbose_proxy_logger.warning(
-                "router.enable_tag_filtering is on %s \n switched off router.enable_tag_filtering",
-                CommonProxyErrors.not_premium_user.value,
-            )
-            llm_router.enable_tag_filtering = False
-        else:
-            if "tags" in data:
-                data[_metadata_variable_name]["tags"] = data["tags"]
+        if "tags" in data:
+            data[_metadata_variable_name]["tags"] = data["tags"]
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:
