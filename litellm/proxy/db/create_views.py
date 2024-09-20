@@ -1,23 +1,20 @@
-"""
-python script to pre-create all views required by LiteLLM Proxy Server
-"""
+from typing import TYPE_CHECKING, Any
 
-import asyncio
-import os
+from litellm import verbose_logger
 
-# Enter your DATABASE_URL here
+if TYPE_CHECKING:
+    from prisma import Prisma
 
-from prisma import Prisma
-
-db = Prisma(
-    http={
-        "timeout": 60000,
-    },
-)
+    _db = Prisma
+else:
+    _db = Any
 
 
-async def check_view_exists():
+async def create_missing_views(db: _db):
     """
+    --------------------------------------------------
+    NOTE: Copy of `litellm/db_scripts/create_views.py`.
+    --------------------------------------------------
     Checks if the LiteLLM_VerificationTokenView and MonthlyGlobalSpend exists in the user's db.
 
     LiteLLM_VerificationTokenView: This view is used for getting the token + team data in user_api_key_auth
@@ -26,9 +23,6 @@ async def check_view_exists():
 
     If the view doesn't exist, one will be created.
     """
-
-    # connect to dB
-    await db.connect()
     try:
         # Try to select one row from the view
         await db.query_raw("""SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1""")
@@ -207,4 +201,32 @@ async def check_view_exists():
     return
 
 
-asyncio.run(check_view_exists())
+async def should_create_missing_views(db: _db) -> bool:
+    """
+    Run only on first time startup.
+
+    If SpendLogs table already has values, then don't create views on startup.
+    """
+
+    sql_query = """
+    SELECT reltuples::BIGINT
+    FROM pg_class
+    WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
+    """
+
+    result = await db.query_raw(query=sql_query)
+
+    verbose_logger.debug("Estimated Row count of LiteLLM_SpendLogs = {}".format(result))
+    if (
+        result
+        and isinstance(result, list)
+        and len(result) > 0
+        and isinstance(result[0], dict)
+        and "reltuples" in result[0]
+        and result[0]["reltuples"]
+        and (result[0]["reltuples"] == 0 or result[0]["reltuples"] == -1)
+    ):
+        verbose_logger.debug("Should create views")
+        return True
+
+    return False
