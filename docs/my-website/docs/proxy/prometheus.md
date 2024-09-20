@@ -70,6 +70,16 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 
 
+### Proxy Level Tracking Metrics
+
+Use this to track overall LiteLLM Proxy usage.
+- Track Actual traffic rate to proxy 
+- Number of **client side** requests and failures for requests made to proxy 
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_proxy_failed_requests_metric`             | Total number of failed responses from proxy - the client did not get a success response from litellm proxy `"user", "key", "model", "team", "end-user"`          |
+| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests `"user", "key", "model", "team", "end-user"`          |
 
 ### LLM API / Provider Metrics
 
