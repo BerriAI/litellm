@@ -2752,8 +2752,8 @@ export const getProxyBaseUrlAndLogoutUrl = async (
    */
   try {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/sso/get/logout_url`
-      : `/sso/get/logout_url`;
+      ? `${proxyBaseUrl}/sso/get/ui_settings`
+      : `sso/get/ui_settings`;
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
