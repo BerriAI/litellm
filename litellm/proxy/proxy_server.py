@@ -659,6 +659,11 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         # Set your Azure Key Vault URI
         KVUri = os.getenv("AZURE_KEY_VAULT_URI", None)
 
+        if KVUri is None:
+            raise Exception(
+                "Error when loading keys from Azure Key Vault: AZURE_KEY_VAULT_URI is not set."
+            )
+
         credential = DefaultAzureCredential()
 
         # Create the SecretClient using the credential
@@ -8342,16 +8347,25 @@ async def login(request: Request):
 
 
 @app.get(
-    "/sso/get/logout_url",
+    "/sso/get/ui_settings",
     tags=["experimental"],
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_logout_url(request: Request):
+async def get_ui_settings(request: Request):
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
 
-    return {"PROXY_BASE_URL": _proxy_base_url, "PROXY_LOGOUT_URL": _logout_url}
+    default_team_disabled = general_settings.get("default_team_disabled", False)
+    if "PROXY_DEFAULT_TEAM_DISABLED" in os.environ:
+        if os.environ["PROXY_DEFAULT_TEAM_DISABLED"].lower() == "true":
+            default_team_disabled = True
+
+    return {
+        "PROXY_BASE_URL": _proxy_base_url,
+        "PROXY_LOGOUT_URL": _logout_url,
+        "DEFAULT_TEAM_DISABLED": default_team_disabled,
+    }
 
 
 @app.get("/onboarding/get_token", include_in_schema=False)
