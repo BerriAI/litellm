@@ -551,6 +551,10 @@ def function_setup(
         ):
             messages = args[0] if len(args) > 0 else kwargs["prompt"]
         elif (
+            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
+        ):
+            messages = kwargs.get("query")
+        elif (
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
         ):
