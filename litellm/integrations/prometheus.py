@@ -42,6 +42,7 @@ class PrometheusLogger(CustomLogger):
             REQUESTED_MODEL = "requested_model"
             EXCEPTION_STATUS = "exception_status"
             EXCEPTION_CLASS = "exception_class"
+            EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
@@ -53,10 +54,8 @@ class PrometheusLogger(CustomLogger):
                     REQUESTED_MODEL,
                     "team",
                     "team_alias",
-                    "user",
-                    EXCEPTION_STATUS,
-                    EXCEPTION_CLASS,
-                ],
+                ]
+                + EXCEPTION_LABELS,
             )
 
             self.litellm_proxy_total_requests_metric = Counter(
@@ -151,13 +150,6 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["hashed_api_key", "api_key_alias", "model"],
             )
 
-            # New metric for tracking error codes and models
-            self.litellm_error_code_metric = Counter(
-                "litellm_error_code_metric",
-                "Total number of errors by error code and model",
-                labelnames=["error_code", "model"],
-            )
-
             ########################################
             # LLM API Deployment Metrics / analytics
             ########################################
@@ -213,7 +205,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=[REQUESTED_MODEL, EXCEPTION_STATUS] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + EXCEPTION_LABELS,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
@@ -458,16 +450,6 @@ class PrometheusLogger(CustomLogger):
                 user_id,
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
-
-            _exception = kwargs.get("exception", None)
-            error_code = "unknown"
-            if _exception is not None and hasattr(_exception, "status_code"):
-                error_code = _exception.status_code
-
-            # Increment the new error code metric
-            self.litellm_error_code_metric.labels(
-                error_code=error_code, model=model
-            ).inc()
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
@@ -509,7 +491,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_dict.team_alias,
                 user_api_key_dict.user_id,
                 getattr(original_exception, "status_code", None),
-                str(original_exception.__class__),
+                str(original_exception.__class__.__name__),
             ).inc()
 
             self.litellm_proxy_total_requests_metric.labels(
@@ -564,8 +546,7 @@ class PrometheusLogger(CustomLogger):
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}
             model_id = _model_info.get("id", None)
-            exception = request_kwargs.get("exception", None)
-            exception_status_code: str = str(getattr(exception, "status_code", None))
+            exception: Exception = request_kwargs.get("exception", None)
 
             """
             log these labels
@@ -577,13 +558,13 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
             )
-
             self.litellm_deployment_failure_responses.labels(
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
-                exception_status=exception_status_code,
+                exception_status=str(getattr(exception, "status_code", None)),
+                exception_class=exception.__class__.__name__,
                 requested_model=model_group,
             ).inc()
 
