@@ -39,7 +39,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   } else {
     updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
   }
-  if (userRole === 'App User') return null;
+
 
   return (
     <div className="mt-5 mb-5">
