@@ -590,7 +590,7 @@ async def auth_callback(request: Request):
     if user_id is not None and isinstance(user_id, str):
         litellm_dashboard_ui += "?userID=" + user_id
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
+    redirect_response.set_cookie(key="token", value=jwt_token, secure=True)
     return redirect_response
 
 
