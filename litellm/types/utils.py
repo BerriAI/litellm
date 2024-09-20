@@ -118,6 +118,8 @@ class CallTypes(Enum):
     transcription = "transcription"
     aspeech = "aspeech"
     speech = "speech"
+    rerank = "rerank"
+    arerank = "arerank"
 
 
 class PassthroughCallTypes(Enum):
