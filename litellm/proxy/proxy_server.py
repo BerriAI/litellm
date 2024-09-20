@@ -2224,9 +2224,12 @@ class ProxyConfig:
                 and _general_settings.get("alerting", None) is not None
                 and isinstance(_general_settings["alerting"], list)
             ):
-                for alert in _general_settings["alerting"]:
-                    if alert not in general_settings["alerting"]:
-                        general_settings["alerting"].append(alert)
+                verbose_proxy_logger.debug(
+                    "Overriding Default 'alerting' values with db 'alerting' values."
+                )
+                general_settings["alerting"] = _general_settings[
+                    "alerting"
+                ]  # override yaml values with db
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
                     "alerting"
@@ -7774,10 +7777,13 @@ async def alerting_settings(
     if db_general_settings is not None and db_general_settings.param_value is not None:
         db_general_settings_dict = dict(db_general_settings.param_value)
         alerting_args_dict: dict = db_general_settings_dict.get("alerting_args", {})  # type: ignore
+        alerting_values: Optional[list] = db_general_settings_dict.get("alerting")  # type: ignore
     else:
         alerting_args_dict = {}
+        alerting_values = None
 
     allowed_args = {
+        "slack_alerting": {"type": "Boolean"},
         "daily_report_frequency": {"type": "Integer"},
         "report_check_interval": {"type": "Integer"},
         "budget_alert_ttl": {"type": "Integer"},
@@ -7792,6 +7798,25 @@ async def alerting_settings(
     _slack_alerting_args_dict = _slack_alerting.alerting_args.model_dump()
 
     return_val = []
+
+    is_slack_enabled = False
+
+    if general_settings.get("alerting") and isinstance(
+        general_settings["alerting"], list
+    ):
+        if "slack" in general_settings["alerting"]:
+            is_slack_enabled = True
+
+    _response_obj = ConfigList(
+        field_name="slack_alerting",
+        field_type=allowed_args["slack_alerting"]["type"],
+        field_description="Enable slack alerting for monitoring proxy in production: llm outages, budgets, spend tracking failures.",
+        field_value=is_slack_enabled,
+        stored_in_db=True if alerting_values is not None else False,
+        field_default_value=None,
+        premium_field=False,
+    )
+    return_val.append(_response_obj)
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
