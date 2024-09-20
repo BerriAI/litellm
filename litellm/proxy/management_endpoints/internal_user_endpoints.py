@@ -7,6 +7,7 @@ These are members of a Team on LiteLLM
 /user/new
 /user/update
 /user/delete
+/user/info
 """
 
 import asyncio
