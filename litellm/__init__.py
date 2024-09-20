@@ -969,6 +969,9 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
+from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
+    FireworksAIEmbeddingConfig,
+)
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (

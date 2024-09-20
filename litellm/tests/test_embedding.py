@@ -657,6 +657,19 @@ def test_mistral_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_fireworks_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="fireworks_ai/nomic-ai/nomic-embed-text-v1.5",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+        assert isinstance(response.usage, litellm.Usage)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_watsonx_embeddings():
 
     def mock_wx_embed_request(method: str, url: str, **kwargs):
