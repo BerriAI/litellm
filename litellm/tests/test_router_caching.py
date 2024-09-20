@@ -30,7 +30,7 @@ async def test_router_async_caching_with_ssl_url():
                 {
                     "model_name": "gpt-3.5-turbo",
                     "litellm_params": {
-                        "model": "gpt-3.5-turbo-0613",
+                        "model": "gpt-3.5-turbo",
                         "api_key": os.getenv("OPENAI_API_KEY"),
                     },
                     "tpm": 100000,
@@ -57,7 +57,7 @@ def test_router_sync_caching_with_ssl_url():
                 {
                     "model_name": "gpt-3.5-turbo",
                     "litellm_params": {
-                        "model": "gpt-3.5-turbo-0613",
+                        "model": "gpt-3.5-turbo",
                         "api_key": os.getenv("OPENAI_API_KEY"),
                     },
                     "tpm": 100000,
@@ -84,7 +84,7 @@ async def test_acompletion_caching_on_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 100000,
@@ -201,7 +201,7 @@ async def test_acompletion_caching_with_ttl_on_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 100000,
@@ -266,7 +266,7 @@ async def test_acompletion_caching_on_router_caching_groups():
             {
                 "model_name": "openai-gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 100000,

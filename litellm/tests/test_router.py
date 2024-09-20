@@ -1057,9 +1057,9 @@ def test_router_region_pre_call_check(allowed_model_region):
 def test_function_calling():
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo-0613",
+            "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "gpt-3.5-turbo-0613",
+                "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
             "tpm": 100000,
@@ -1088,7 +1088,7 @@ def test_function_calling():
 
     router = Router(model_list=model_list)
     response = router.completion(
-        model="gpt-3.5-turbo-0613", messages=messages, functions=functions
+        model="gpt-3.5-turbo", messages=messages, functions=functions
     )
     router.reset()
     print(response)
@@ -1104,7 +1104,7 @@ def test_function_calling_on_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
