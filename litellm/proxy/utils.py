@@ -632,9 +632,9 @@ class ProxyLogging:
 
     async def post_call_failure_hook(
         self,
+        request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -750,6 +750,7 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomLogger):
                     await _callback.async_post_call_failure_hook(
+                        request_data=request_data,
                         user_api_key_dict=user_api_key_dict,
                         original_exception=original_exception,
                     )

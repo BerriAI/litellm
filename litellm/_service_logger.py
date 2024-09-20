@@ -212,13 +212,18 @@ class ServiceLogging(CustomLogger):
             )
 
     async def async_post_call_failure_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
     ):
         """
         Hook to track failed litellm-service calls
         """
         return await super().async_post_call_failure_hook(
-            original_exception, user_api_key_dict
+            request_data,
+            original_exception,
+            user_api_key_dict,
         )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
