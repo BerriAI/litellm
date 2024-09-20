@@ -71,7 +71,7 @@ async def test_content_policy_exception_openai():
         # this is ony a test - we needed some way to invoke the exception :(
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="gpt-3.5-turbo-0613",
+            model="gpt-3.5-turbo",
             stream=True,
             messages=[
                 {"role": "user", "content": "Gimme the lyrics to Don't Stop Me Now"}

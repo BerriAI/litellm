@@ -15,6 +15,7 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class PrometheusLogger(CustomLogger):
@@ -38,28 +39,30 @@ class PrometheusLogger(CustomLogger):
                 )
                 return
 
-            self.litellm_llm_api_failed_requests_metric = Counter(
-                name="litellm_llm_api_failed_requests_metric",
-                documentation="Total number of failed LLM API calls via litellm - track fails per API Key, team, user",
+            REQUESTED_MODEL = "requested_model"
+
+            self.litellm_proxy_failed_requests_metric = Counter(
+                name="litellm_proxy_failed_requests_metric",
+                documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
                     "api_key_alias",
-                    "model",
+                    REQUESTED_MODEL,
                     "team",
                     "team_alias",
                     "user",
                 ],
             )
 
-            self.litellm_requests_metric = Counter(
-                name="litellm_requests_metric",
-                documentation="Total number of LLM calls to litellm - track total per API Key, team, user",
+            self.litellm_proxy_total_requests_metric = Counter(
+                name="litellm_proxy_total_requests_metric",
+                documentation="Total number of requests made to the proxy server - track number of client side requests",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
                     "api_key_alias",
-                    "model",
+                    REQUESTED_MODEL,
                     "team",
                     "team_alias",
                     "user",
@@ -201,17 +204,17 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = Counter(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=["requested_model"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=["requested_model", "exception_status"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL, "exception_status"] + _logged_llm_labels,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=["requested_model"] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
             )
 
             # Deployment Latency tracking
@@ -230,6 +233,34 @@ class PrometheusLogger(CustomLogger):
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
                 ["primary_model", "fallback_model"],
+            )
+
+            self.litellm_llm_api_failed_requests_metric = Counter(
+                name="litellm_llm_api_failed_requests_metric",
+                documentation="deprecated - use litellm_proxy_failed_requests_metric",
+                labelnames=[
+                    "end_user",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "model",
+                    "team",
+                    "team_alias",
+                    "user",
+                ],
+            )
+
+            self.litellm_requests_metric = Counter(
+                name="litellm_requests_metric",
+                documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
+                labelnames=[
+                    "end_user",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "model",
+                    "team",
+                    "team_alias",
+                    "user",
+                ],
             )
 
         except Exception as e:
@@ -439,6 +470,76 @@ class PrometheusLogger(CustomLogger):
             )
             pass
         pass
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """
+        Track client side failures
+
+        Proxy level tracking - failed client side requests
+
+        labelnames=[
+                    "end_user",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "model",
+                    "team",
+                    "team_alias",
+                    "user",
+                ],
+        """
+        try:
+            self.litellm_proxy_failed_requests_metric.labels(
+                user_api_key_dict.end_user_id,
+                user_api_key_dict.api_key,
+                user_api_key_dict.key_alias,
+                request_data.get("model", ""),
+                user_api_key_dict.team_id,
+                user_api_key_dict.team_alias,
+                user_api_key_dict.user_id,
+            ).inc()
+
+            self.litellm_proxy_total_requests_metric.labels(
+                user_api_key_dict.end_user_id,
+                user_api_key_dict.api_key,
+                user_api_key_dict.key_alias,
+                request_data.get("model", ""),
+                user_api_key_dict.team_id,
+                user_api_key_dict.team_alias,
+                user_api_key_dict.user_id,
+            )
+            pass
+        except Exception as e:
+            verbose_logger.exception(
+                "prometheus Layer Error(): Exception occured - {}".format(str(e))
+            )
+            pass
+
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
+    ):
+        """
+        Proxy level tracking - triggered when the proxy responds with a success response to the client
+        """
+        try:
+            self.litellm_proxy_total_requests_metric.labels(
+                user_api_key_dict.end_user_id,
+                user_api_key_dict.api_key,
+                user_api_key_dict.key_alias,
+                data.get("model", ""),
+                user_api_key_dict.team_id,
+                user_api_key_dict.team_alias,
+                user_api_key_dict.user_id,
+            ).inc()
+        except Exception as e:
+            verbose_logger.exception(
+                "prometheus Layer Error(): Exception occured - {}".format(str(e))
+            )
+            pass
 
     def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
         try:
