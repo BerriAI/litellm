@@ -558,6 +558,7 @@ jobs:
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
+            pip install "google-cloud-aiplatform==1.59.0"
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f Dockerfile.database .
