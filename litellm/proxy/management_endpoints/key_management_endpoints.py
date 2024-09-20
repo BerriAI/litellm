@@ -1134,6 +1134,7 @@ async def regenerate_key_fn(
 )
 @management_endpoint_wrapper
 async def list_keys(
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = Query(1, description="Page number", ge=1),
     size: int = Query(10, description="Page size", ge=1, le=100),
@@ -1152,13 +1153,24 @@ async def list_keys(
             logging.error("Database not connected")
             raise Exception("Database not connected")
 
+        # Check for unsupported parameters
+        supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
+        unsupported_params = set(request.query_params.keys()) - supported_params
+        if unsupported_params:
+            raise ProxyException(
+                message=f"Unsupported parameter(s): {', '.join(unsupported_params)}. Supported parameters: {', '.join(supported_params)}",
+                type=ProxyErrorTypes.bad_request_error,
+                param=", ".join(unsupported_params),
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Prepare filter conditions
         where = {}
-        if user_id:
+        if user_id and isinstance(user_id, str):
             where["user_id"] = user_id
-        if team_id:
+        if team_id and isinstance(team_id, str):
             where["team_id"] = team_id
-        if key_alias:
+        if key_alias and isinstance(key_alias, str):
             where["key_alias"] = key_alias
 
         logging.debug(f"Filter conditions: {where}")
@@ -1206,9 +1218,18 @@ async def list_keys(
         return response
 
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
         raise ProxyException(
-            message=f"Error listing keys: {str(e)}",
-            type=ProxyErrorTypes.internal_server_error,  # Use the enum value
-            param=None,
+            message="Authentication Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error,
+            param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
