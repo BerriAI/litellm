@@ -23,13 +23,13 @@ import asyncio
 import logging
 
 import pytest
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
     user_update,
+    get_users,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
@@ -322,3 +322,58 @@ async def test_regenerate_key_ui(prisma_client):
         ),
     )
     print("response from regenerate_key_fn", new_key)
+
+
+@pytest.mark.asyncio
+async def test_get_users(prisma_client):
+    """
+    Tests /users/list endpoint
+
+    Admin UI calls this endpoint to list all Internal Users
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create some test users
+    test_users = [
+        NewUserRequest(
+            user_id=f"test_user_{i}",
+            user_role=(
+                LitellmUserRoles.INTERNAL_USER.value
+                if i % 2 == 0
+                else LitellmUserRoles.PROXY_ADMIN.value
+            ),
+        )
+        for i in range(5)
+    ]
+    for user in test_users:
+        await new_user(
+            user,
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+
+    # Test get_users without filters
+    result = await get_users(
+        role=None,
+        page=1,
+        page_size=20,
+    )
+    print("get users result", result)
+    assert "users" in result
+
+    for user in result["users"]:
+        user = user.model_dump()
+        assert "user_id" in user
+        assert "spend" in user
+        assert "user_email" in user
+        assert "user_role" in user
+
+    # Clean up test users
+    for user in test_users:
+        await prisma_client.db.litellm_usertable.delete(where={"user_id": user.user_id})
