@@ -6269,6 +6269,9 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
     _response_headers: Optional[httpx.Headers] = None
     try:
         _response_headers = getattr(original_exception, "headers", None)
+        error_response = getattr(original_exception, "response", None)
+        if _response_headers is None and error_response:
+            _response_headers = getattr(error_response, "headers", None)
     except Exception:
         return None
 

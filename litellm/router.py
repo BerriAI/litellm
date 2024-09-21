@@ -3107,16 +3107,6 @@ class Router:
                 content_policy_fallbacks=content_policy_fallbacks,
             )
 
-            # decides how long to sleep before retry
-            _timeout = self._time_to_sleep_before_retry(
-                e=original_exception,
-                remaining_retries=num_retries,
-                num_retries=num_retries,
-                healthy_deployments=_healthy_deployments,
-            )
-            # sleeps for the length of the timeout
-            await asyncio.sleep(_timeout)
-
             if (
                 self.retry_policy is not None
                 or self.model_group_retry_policy is not None
@@ -3130,11 +3120,19 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+            else:
+                raise
 
+            # decides how long to sleep before retry
+            _timeout = self._time_to_sleep_before_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+                healthy_deployments=_healthy_deployments,
+            )
+            # sleeps for the length of the timeout
+            await asyncio.sleep(_timeout)
             for current_attempt in range(num_retries):
-                verbose_router_logger.debug(
-                    f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}"
-                )
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await original_function(*args, **kwargs)
@@ -3379,7 +3377,7 @@ class Router:
         response_headers: Optional[httpx.Headers] = None
         if hasattr(e, "response") and hasattr(e.response, "headers"):  # type: ignore
             response_headers = e.response.headers  # type: ignore
-        elif hasattr(e, "litellm_response_headers"):
+        if hasattr(e, "litellm_response_headers"):
             response_headers = e.litellm_response_headers  # type: ignore
 
         if response_headers is not None:
@@ -5326,7 +5324,6 @@ class Router:
 
             return deployment
         except Exception as e:
-
             traceback_exception = traceback.format_exc()
             # if router rejects call -> log to langfuse/otel/etc.
             if request_kwargs is not None:

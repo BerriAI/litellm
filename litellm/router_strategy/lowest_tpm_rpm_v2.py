@@ -529,8 +529,16 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         "current_rpm": current_rpm,
                         "rpm_limit": _deployment_rpm,
                     }
-            raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
+            raise litellm.RateLimitError(
+                message=f"{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
+                llm_provider="",
+                model=model_group,
+                response=httpx.Response(
+                    status_code=429,
+                    content="",
+                    headers={"retry-after": str(60)},  # type: ignore
+                    request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
             )
 
     def get_available_deployments(

@@ -155,7 +155,7 @@ async def _handle_router_calls(router):
 
 
 @pytest.mark.asyncio
-async def test_max_parallel_requests_rate_limiting():
+async def test_max_parallel_requests_rpm_rate_limiting():
     """
     - make sure requests > model limits are retried successfully.
     """
@@ -176,3 +176,35 @@ async def test_max_parallel_requests_rate_limiting():
         ],
     )
     await asyncio.gather(*[_handle_router_calls(router) for _ in range(16)])
+
+
+@pytest.mark.asyncio
+async def test_max_parallel_requests_tpm_rate_limiting_base_case():
+    """
+    - check error raised if defined tpm limit crossed.
+    """
+    from litellm import Router, token_counter
+
+    _messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    router = Router(
+        routing_strategy="usage-based-routing-v2",
+        enable_pre_call_checks=True,
+        model_list=[
+            {
+                "model_name": "gpt-4o-2024-08-06",
+                "litellm_params": {
+                    "model": "gpt-4o-2024-08-06",
+                    "temperature": 0.0,
+                    "tpm": 1,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        for _ in range(2):
+            await router.acompletion(
+                model="gpt-4o-2024-08-06",
+                messages=_messages,
+            )

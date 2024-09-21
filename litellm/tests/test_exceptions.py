@@ -910,6 +910,7 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
     {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
     ```
     """
+    print(f"Received args: {locals()}")
     import openai
 
     if sync_mode:
@@ -939,13 +940,38 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
     cooldown_time = 30.0
 
     def _return_exception(*args, **kwargs):
-        from fastapi import HTTPException
+        import datetime
 
-        raise HTTPException(
-            status_code=429,
-            detail="Rate Limited!",
-            headers={"retry-after": cooldown_time},  # type: ignore
-        )
+        from httpx import Headers, Request, Response
+
+        kwargs = {
+            "request": Request("POST", "https://www.google.com"),
+            "message": "Error code: 429 - Rate Limit Error!",
+            "body": {"detail": "Rate Limit Error!"},
+            "code": None,
+            "param": None,
+            "type": None,
+            "response": Response(
+                status_code=429,
+                headers=Headers(
+                    {
+                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
+                        "server": "uvicorn",
+                        "retry-after": "30",
+                        "content-length": "30",
+                        "content-type": "application/json",
+                    }
+                ),
+                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
+            ),
+            "status_code": 429,
+            "request_id": None,
+        }
+
+        exception = Exception()
+        for k, v in kwargs.items():
+            setattr(exception, k, v)
+        raise exception
 
     with patch.object(
         mapped_target,
@@ -975,7 +1001,7 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
         except litellm.RateLimitError as e:
             exception_raised = True
             assert e.litellm_response_headers is not None
-            assert e.litellm_response_headers["retry-after"] == cooldown_time
+            assert int(e.litellm_response_headers["retry-after"]) == cooldown_time
 
         if exception_raised is False:
             print(resp)
