@@ -1,32 +1,57 @@
 model_list:
-  - model_name: gemini-vision
-    litellm_params:
-      model: vertex_ai/gemini-1.5-pro
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
-  - model_name: gemini-vision
-    litellm_params:
-      model: vertex_ai/gemini-1.0-pro-vision-001
-      api_base: https://exampleopenaiendpoint-production-c715.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
+ - model_name: gpt-3.5-turbo
+   litellm_params:
+     model: openai/gpt-3.5-turbo
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamB"]
+   model_info:
+     id: "team-b-model"
+ - model_name: rerank-english-v3.0
+   litellm_params:
+     model: cohere/rerank-english-v3.0
+     api_key: os.environ/COHERE_API_KEY
+ - model_name: llava-hf
+   litellm_params:
+     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
+     api_base: http://localhost:8000
+     api_key: fake-key
+   model_info:
+     supports_vision: True
 
-  - model_name: fake-azure-endpoint
-    litellm_params:
-      model: openai/429
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app
-
-
-
-general_settings:
-  master_key: sk-1234
-  default_team_disabled: true
-  custom_sso: custom_sso.custom_sso_handler
 
 litellm_settings:
-  success_callback: ["prometheus"]
+  cache: true
+  # callbacks: ["otel"]
 
+guardrails:
+  - guardrail_name: "aporia-pre-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_1
+      api_base: os.environ/APORIA_API_BASE_1
+  - guardrail_name: "aporia-post-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+  - guardrail_name: "custom-pre-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "pre_call"
+  - guardrail_name: "custom-during-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "during_call"
+  - guardrail_name: "custom-post-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail
+      mode: "post_call"
