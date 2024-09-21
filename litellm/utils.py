@@ -2686,7 +2686,7 @@ def get_optional_params_embeddings(
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.FireworksAIEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}
+            non_default_params=non_default_params, optional_params={}, model=model
         )
         final_params = {**optional_params, **kwargs}
         return final_params

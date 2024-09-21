@@ -6,6 +6,8 @@ This is OpenAI compatible - no transformation is applied
 import types
 from typing import Literal, Optional, Union
 
+import litellm
+
 
 class FireworksAIEmbeddingConfig:
     def get_supported_openai_params(self, model: str):
@@ -29,3 +31,17 @@ class FireworksAIEmbeddingConfig:
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
+
+    def is_fireworks_embedding_model(self, model: str):
+        """
+        helper to check if a model is a fireworks embedding model
+
+        Fireworks embeddings does not support passing /accounts/fireworks in the model name so we need to know if it's a known embedding model
+        """
+        if (
+            model in litellm.fireworks_ai_embedding_models
+            or f"fireworks_ai/{model}" in litellm.fireworks_ai_embedding_models
+        ):
+            return True
+
+        return False
