@@ -17,9 +17,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LitellmUserRoles,
+    NewUserRequest,
     ProxyErrorTypes,
     ProxyException,
     SSOUserDefinedValues,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -27,6 +29,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     html_form,
     show_missing_vars_in_env,
 )
+from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.secret_managers.main import str_to_bool
 
 router = APIRouter()
@@ -459,7 +462,7 @@ async def auth_callback(request: Request):
         if prisma_client is not None:
             user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
             verbose_proxy_logger.debug(
-                f"user_info: {user_info}; litellm.default_user_params: {litellm.default_user_params}"
+                f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
             )
             if user_info is None:
                 ## check if user-email in db ##
@@ -487,24 +490,11 @@ async def auth_callback(request: Request):
                 await prisma_client.db.litellm_usertable.update_many(
                     where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
                 )
-            elif litellm.default_user_params is not None and isinstance(
-                litellm.default_user_params, dict
-            ):
-                user_defined_values = {
-                    "models": litellm.default_user_params.get("models", user_id_models),
-                    "user_id": litellm.default_user_params.get("user_id", user_id),
-                    "user_email": litellm.default_user_params.get(
-                        "user_email", user_email
-                    ),
-                    "user_role": litellm.default_user_params.get("user_role", None),
-                    "max_budget": litellm.default_user_params.get(
-                        "max_budget", max_internal_user_budget
-                    ),
-                    "budget_duration": litellm.default_user_params.get(
-                        "budget_duration", internal_user_budget_duration
-                    ),
-                }
-
+            else:
+                # user not in DB, insert User into LiteLLM DB
+                user_role = await insert_sso_user(
+                    user_defined_values=user_defined_values,
+                )
     except Exception as e:
         pass
 
@@ -512,26 +502,6 @@ async def auth_callback(request: Request):
         raise Exception(
             "Unable to map user identity to known values. 'user_defined_values' is None. File an issue - https://github.com/BerriAI/litellm/issues"
         )
-
-    is_internal_user = False
-    if (
-        user_defined_values["user_role"] is not None
-        and user_defined_values["user_role"] == LitellmUserRoles.INTERNAL_USER.value
-    ):
-        is_internal_user = True
-    if (
-        is_internal_user is True
-        and user_defined_values["max_budget"] is None
-        and litellm.max_internal_user_budget is not None
-    ):
-        user_defined_values["max_budget"] = litellm.max_internal_user_budget
-
-    if (
-        is_internal_user is True
-        and user_defined_values["budget_duration"] is None
-        and litellm.internal_user_budget_duration is not None
-    ):
-        user_defined_values["budget_duration"] = litellm.internal_user_budget_duration
 
     verbose_proxy_logger.info(
         f"user_defined_values for creating ui key: {user_defined_values}"
@@ -541,7 +511,9 @@ async def auth_callback(request: Request):
     default_ui_key_values["request_type"] = "key"
     response = await generate_key_helper_fn(
         **default_ui_key_values,  # type: ignore
+        table_name="key",
     )
+
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
 
@@ -549,19 +521,22 @@ async def auth_callback(request: Request):
     # User_id on SSO == user_id in the LiteLLM_VerificationToken Table
     assert user_id == _user_id_from_sso
     litellm_dashboard_ui = "/ui/"
-    user_role = user_role or "app_owner"
+    user_role = user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
     if (
         os.getenv("PROXY_ADMIN_ID", None) is not None
         and os.environ["PROXY_ADMIN_ID"] == user_id
     ):
         # checks if user is admin
-        user_role = "app_admin"
+        user_role = LitellmUserRoles.PROXY_ADMIN.value
 
     verbose_proxy_logger.debug(
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
     )
     ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    if ui_access_mode == "admin_only" and "admin" not in user_role:
+    if ui_access_mode == "admin_only" and (
+        user_role != LitellmUserRoles.PROXY_ADMIN.value
+        or user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
         verbose_proxy_logger.debug("EXCEPTION RAISED")
         raise HTTPException(
             status_code=401,
@@ -592,6 +567,47 @@ async def auth_callback(request: Request):
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     redirect_response.set_cookie(key="token", value=jwt_token, secure=True)
     return redirect_response
+
+
+async def insert_sso_user(
+    user_defined_values: Optional[SSOUserDefinedValues] = None,
+) -> str:
+    """
+    Helper function to create a New User in LiteLLM DB after a successful SSO login
+    """
+    verbose_proxy_logger.debug(
+        f"Inserting SSO user into DB. User values: {user_defined_values}"
+    )
+
+    if user_defined_values is None:
+        raise ValueError("user_defined_values is None")
+
+    if litellm.default_internal_user_params:
+        user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+
+    # Set budget for internal users
+    if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
+        if user_defined_values.get("max_budget") is None:
+            user_defined_values["max_budget"] = litellm.max_internal_user_budget
+        if user_defined_values.get("budget_duration") is None:
+            user_defined_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
+
+    if user_defined_values["user_role"] is None:
+        user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+    new_user_request = NewUserRequest(
+        user_id=user_defined_values["user_id"],
+        user_email=user_defined_values["user_email"],
+        user_role=user_defined_values["user_role"],  # type: ignore
+        max_budget=user_defined_values["max_budget"],
+        budget_duration=user_defined_values["budget_duration"],
+    )
+
+    await new_user(data=new_user_request, user_api_key_dict=UserAPIKeyAuth())
+
+    return user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
 @router.get(
