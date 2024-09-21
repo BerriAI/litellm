@@ -1422,6 +1422,13 @@ class UserAPIKeyAuth(
         arbitrary_types_allowed = True
 
 
+class UserInfoResponse(LiteLLMBase):
+    user_id: Optional[str]
+    user_info: Optional[Union[dict, BaseModel]]
+    keys: List
+    teams: List
+
+
 class LiteLLM_Config(LiteLLMBase):
     param_name: str
     param_value: Dict
