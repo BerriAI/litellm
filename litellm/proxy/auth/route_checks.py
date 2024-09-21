@@ -55,7 +55,7 @@ def non_admin_allowed_routes_check(
             verbose_proxy_logger.debug(
                 f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
             )
-            if user_id != valid_token.user_id:
+            if user_id and user_id != valid_token.user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="key not allowed to access this user's info. user_id={}, key's user_id={}".format(
@@ -104,6 +104,11 @@ def non_admin_allowed_routes_check(
     elif (
         _user_role == LitellmUserRoles.INTERNAL_USER.value
         and route in LiteLLMRoutes.internal_user_routes.value
+    ):
+        pass
+    elif (
+        _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        and route in LiteLLMRoutes.internal_user_view_only_routes.value
     ):
         pass
     elif (
