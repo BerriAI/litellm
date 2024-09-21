@@ -17,6 +17,11 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
+REQUESTED_MODEL = "requested_model"
+EXCEPTION_STATUS = "exception_status"
+EXCEPTION_CLASS = "exception_class"
+EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
+
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
@@ -39,11 +44,6 @@ class PrometheusLogger(CustomLogger):
                 )
                 return
 
-            REQUESTED_MODEL = "requested_model"
-            EXCEPTION_STATUS = "exception_status"
-            EXCEPTION_CLASS = "exception_class"
-            EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
-
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
                 documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
@@ -54,6 +54,7 @@ class PrometheusLogger(CustomLogger):
                     REQUESTED_MODEL,
                     "team",
                     "team_alias",
+                    "user",
                 ]
                 + EXCEPTION_LABELS,
             )
@@ -472,26 +473,22 @@ class PrometheusLogger(CustomLogger):
                     "end_user",
                     "hashed_api_key",
                     "api_key_alias",
-                    "model",
+                    REQUESTED_MODEL,
                     "team",
                     "team_alias",
-                    "user",
-                    EXCEPTION_STATUS,
-                    EXCEPTION_CLASS,
-
-                ],
+                ] + EXCEPTION_LABELS,
         """
         try:
             self.litellm_proxy_failed_requests_metric.labels(
-                user_api_key_dict.end_user_id,
-                user_api_key_dict.api_key,
-                user_api_key_dict.key_alias,
-                request_data.get("model", ""),
-                user_api_key_dict.team_id,
-                user_api_key_dict.team_alias,
-                user_api_key_dict.user_id,
-                getattr(original_exception, "status_code", None),
-                str(original_exception.__class__.__name__),
+                end_user=user_api_key_dict.end_user_id,
+                hashed_api_key=user_api_key_dict.api_key,
+                api_key_alias=user_api_key_dict.key_alias,
+                requested_model=request_data.get("model", ""),
+                team=user_api_key_dict.team_id,
+                team_alias=user_api_key_dict.team_alias,
+                user=user_api_key_dict.user_id,
+                exception_status=getattr(original_exception, "status_code", None),
+                exception_class=str(original_exception.__class__.__name__),
             ).inc()
 
             self.litellm_proxy_total_requests_metric.labels(
