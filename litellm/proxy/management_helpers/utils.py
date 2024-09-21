@@ -34,7 +34,7 @@ from litellm.proxy.utils import PrismaClient
 def get_new_internal_user_defaults(
     user_id: str, user_email: Optional[str] = None
 ) -> dict:
-    user_info = litellm.default_user_params or {}
+    user_info = litellm.default_internal_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
         "models": user_info.get("models", None),
@@ -277,7 +277,7 @@ def management_endpoint_wrapper(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = datetime.now()
-
+        _http_request: Optional[Request] = None
         try:
             result = await func(*args, **kwargs)
             end_time = datetime.now()
@@ -293,8 +293,7 @@ def management_endpoint_wrapper(func):
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
                 )
-
-                _http_request: Request = kwargs.get("http_request")
+                _http_request = kwargs.get("http_request", None)
                 parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     from litellm.proxy.proxy_server import open_telemetry_logger
@@ -315,7 +314,7 @@ def management_endpoint_wrapper(func):
                                 end_time=end_time,
                             )
 
-                            await open_telemetry_logger.async_management_endpoint_success_hook(
+                            await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
                                 logging_payload=logging_payload,
                                 parent_otel_span=parent_otel_span,
                             )
@@ -344,7 +343,7 @@ def management_endpoint_wrapper(func):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 if open_telemetry_logger is not None:
-                    _http_request: Request = kwargs.get("http_request")
+                    _http_request = kwargs.get("http_request")
                     if _http_request:
                         _route = _http_request.url.path
                         _request_body: dict = await _read_request_body(
@@ -359,7 +358,7 @@ def management_endpoint_wrapper(func):
                             exception=e,
                         )
 
-                        await open_telemetry_logger.async_management_endpoint_failure_hook(
+                        await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
                             logging_payload=logging_payload,
                             parent_otel_span=parent_otel_span,
                         )
