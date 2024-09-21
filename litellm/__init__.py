@@ -495,6 +495,7 @@ openai_compatible_providers: List = [
     "friendliai",
     "azure_ai",
     "github",
+    "litellm_proxy",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -748,6 +749,7 @@ class LlmProviders(str, Enum):
     EMPOWER = "empower"
     GITHUB = "github"
     CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)

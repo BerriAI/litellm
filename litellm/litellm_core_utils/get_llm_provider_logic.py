@@ -243,6 +243,9 @@ def get_llm_provider(
             elif custom_llm_provider == "github":
                 api_base = api_base or get_secret("GITHUB_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
                 dynamic_api_key = api_key or get_secret("GITHUB_API_KEY")
+            elif custom_llm_provider == "litellm_proxy":
+                api_base = api_base or get_secret("LITELLM_PROXY_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
+                dynamic_api_key = api_key or get_secret("LITELLM_PROXY_API_KEY")
 
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai

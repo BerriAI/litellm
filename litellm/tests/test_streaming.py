@@ -2154,7 +2154,7 @@ def test_openai_chat_completion_complete_response_call():
 # test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307"],  #
+    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307", "o1-preview"],  #
 )
 @pytest.mark.parametrize(
     "sync",
