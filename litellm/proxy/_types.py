@@ -284,11 +284,6 @@ class LiteLLMRoutes(enum.Enum):
     master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
     sso_only_routes = [
-        "/key/generate",
-        "/key/update",
-        "/key/delete",
-        "/global/spend/logs",
-        "/global/predict/spend/logs",
         "/sso/get/ui_settings",
     ]
 
@@ -336,6 +331,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/models",
         "/global/predict/spend/logs",
         "/global/spend/report",
+        "/global/spend/provider",
     ]
 
     public_routes = [
@@ -365,6 +361,10 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + sso_only_routes
+    )
+
+    internal_user_view_only_routes = (
+        spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
 
     self_managed_routes = [
