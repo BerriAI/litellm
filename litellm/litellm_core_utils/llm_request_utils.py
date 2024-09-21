@@ -41,10 +41,13 @@ def pick_cheapest_chat_model_from_llm_provider(custom_llm_provider: str):
     min_cost = float("inf")
     cheapest_model = None
     for model in known_models:
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        if model_info["mode"] != "chat":
+        try:
+            model_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except:
+            continue
+        if model_info.get("mode") != "chat":
             continue
         _cost = model_info.get("input_cost_per_token", 0) + model_info.get(
             "output_cost_per_token", 0
