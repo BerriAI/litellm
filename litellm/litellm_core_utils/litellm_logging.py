@@ -2175,9 +2175,12 @@ def _init_custom_logger_compatible_class(
             OpenTelemetryConfig,
         )
 
+        arize_endpoint = (
+            os.environ.get("ARIZE_ENDPOINT", None) or "https://otlp.arize.com/v1"
+        )
         otel_config = OpenTelemetryConfig(
             exporter="otlp_grpc",
-            endpoint="https://otlp.arize.com/v1",
+            endpoint=arize_endpoint,
         )
         os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
             f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
