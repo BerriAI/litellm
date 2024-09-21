@@ -560,24 +560,24 @@ export const userInfoCall = async (
   page_size: number | null
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-    if (userRole == "App Owner" && userID) {
-      url = `${url}?user_id=${userID}`;
+    let url: string;
+    
+    if (viewAll) {
+      // Use /user/list endpoint when viewAll is true
+      url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
+      const queryParams = new URLSearchParams();
+      if (page != null) queryParams.append('page', page.toString());
+      if (page_size != null) queryParams.append('page_size', page_size.toString());
+      url += `?${queryParams.toString()}`;
+    } else {
+      // Use /user/info endpoint for individual user info
+      url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
+      if (userID) {
+        url += `?user_id=${userID}`;
+      }
     }
-    if (userRole == "App User" && userID) {
-      url = `${url}?user_id=${userID}`;
-    }
-    if (
-      (userRole == "Internal User" || userRole == "Internal Viewer") &&
-      userID
-    ) {
-      url = `${url}?user_id=${userID}`;
-    }
-    console.log("in userInfoCall viewAll=", viewAll);
-    if (viewAll && page_size && page != null && page != undefined) {
-      url = `${url}?view_all=true&page=${page}&page_size=${page_size}`;
-    }
-    //message.info("Requesting user data");
+
+    console.log("Requesting user data from:", url);
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -594,11 +594,9 @@ export const userInfoCall = async (
 
     const data = await response.json();
     console.log("API Response:", data);
-    //message.info("Received user data");
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to fetch user data:", error);
     throw error;
   }
 };
