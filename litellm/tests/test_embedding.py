@@ -666,6 +666,8 @@ def test_fireworks_embeddings():
         )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
+
+        print(response._hidden_params)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
