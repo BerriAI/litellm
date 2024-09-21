@@ -3447,9 +3447,9 @@ def embedding(
                 or litellm.AZURE_DEFAULT_API_VERSION
             )
 
-            azure_ad_token = optional_params.pop("azure_ad_token", None) or get_secret(
-                "AZURE_AD_TOKEN"
-            )
+            azure_ad_token = optional_params.pop(
+                "azure_ad_token", None
+            ) or get_secret_str("AZURE_AD_TOKEN")
 
             api_key = (
                 api_key
@@ -3457,6 +3457,17 @@ def embedding(
                 or litellm.azure_key
                 or get_secret_str("AZURE_API_KEY")
             )
+
+            if api_key is None:
+                raise ValueError(
+                    f"No API Key provided for Azure OpenAI LLM provider. Set 'AZURE_API_KEY' in .env"
+                )
+
+            if api_base is None:
+                raise ValueError(
+                    f"No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env"
+                )
+
             ## EMBEDDING CALL
             response = azure_chat_completions.embedding(
                 model=model,
