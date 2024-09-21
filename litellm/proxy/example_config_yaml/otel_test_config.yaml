@@ -19,6 +19,11 @@ model_list:
    litellm_params:
      model: cohere/rerank-english-v3.0
      api_key: os.environ/COHERE_API_KEY
+ - model_name: fake-azure-endpoint
+   litellm_params:
+     model: openai/429
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app
  - model_name: llava-hf
    litellm_params:
      model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
@@ -28,9 +33,10 @@ model_list:
      supports_vision: True
 
 
+
 litellm_settings:
   cache: true
-  callbacks: ["otel"]
+  callbacks: ["otel", "prometheus"]
 
 guardrails:
   - guardrail_name: "aporia-pre-guard"
