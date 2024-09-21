@@ -632,6 +632,7 @@ class _GenerateKeyRequest(GenerateRequestBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    blocked: Optional[bool] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
@@ -965,6 +966,10 @@ class DeleteTeamRequest(LiteLLMBase):
 
 class BlockTeamRequest(LiteLLMBase):
     team_id: str  # required
+
+
+class BlockKeyRequest(LiteLLMBase):
+    key: str  # required
 
 
 class AddTeamCallback(LiteLLMBase):
@@ -1359,6 +1364,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
+    blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
 
@@ -1509,7 +1515,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     updated_at: datetime
     changed_by: str
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted"]
+    action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
         LitellmTableNames.USER_TABLE_NAME,
