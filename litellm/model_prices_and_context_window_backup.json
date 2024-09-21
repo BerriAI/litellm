@@ -1245,7 +1245,8 @@
         "mode": "chat",
         "supports_function_calling": true, 
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
     },
     "codestral/codestral-latest": {
         "max_tokens": 8191,
@@ -1300,7 +1301,8 @@
         "mode": "chat",
         "supports_function_calling": true, 
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
     },
     "groq/llama2-70b-4096": {
         "max_tokens": 4096,
@@ -1502,7 +1504,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 264,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true
     },
     "claude-3-opus-20240229": {
         "max_tokens": 4096,
@@ -1517,7 +1520,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 395,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true
     },
     "claude-3-sonnet-20240229": {
         "max_tokens": 4096,
@@ -1530,7 +1534,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true
     },
     "claude-3-5-sonnet-20240620": {
         "max_tokens": 8192,
@@ -1545,7 +1550,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true
     },
     "text-bison": {
         "max_tokens": 2048,
@@ -2664,6 +2670,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "supports_prompt_caching": true,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-flash": {
@@ -2781,6 +2788,24 @@
         "supports_vision": true,
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
+        "source": "https://ai.google.dev/pricing"
+    },
+    "gemini/gemini-1.5-pro-001": {
+        "max_tokens": 8192,
+        "max_input_tokens": 2097152,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000035, 
+        "input_cost_per_token_above_128k_tokens": 0.000007, 
+        "output_cost_per_token": 0.0000105, 
+        "output_cost_per_token_above_128k_tokens": 0.000021, 
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_tool_choice": true, 
+        "supports_response_schema": true, 
+        "supports_prompt_caching": true,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-exp-0801": {

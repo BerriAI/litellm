@@ -54,3 +54,11 @@ def test_get_model_info_shows_assistant_prefill():
     info = litellm.get_model_info("deepseek/deepseek-chat")
     print("info", info)
     assert info.get("supports_assistant_prefill") is True
+
+
+def test_get_model_info_shows_supports_prompt_caching():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info("deepseek/deepseek-chat")
+    print("info", info)
+    assert info.get("supports_prompt_caching") is True

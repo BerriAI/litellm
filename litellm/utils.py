@@ -4773,6 +4773,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_response_schema: Optional[bool]
             supports_vision: Optional[bool]
             supports_function_calling: Optional[bool]
+            supports_prompt_caching: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
@@ -4860,6 +4861,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_response_schema=None,
                 supports_function_calling=None,
                 supports_assistant_prefill=None,
+                supports_prompt_caching=None,
             )
         else:
             """
@@ -5010,6 +5012,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 ),
                 supports_assistant_prefill=_model_info.get(
                     "supports_assistant_prefill", False
+                ),
+                supports_prompt_caching=_model_info.get(
+                    "supports_prompt_caching", False
                 ),
             )
     except Exception as e:
