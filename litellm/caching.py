@@ -24,7 +24,6 @@ from openai._models import BaseModel as OpenAIObject
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import all_litellm_params
 
@@ -1271,6 +1270,7 @@ class QdrantSemanticCache(BaseCache):
             get_async_httpx_client,
             httpxSpecialProvider,
         )
+        from litellm.secret_managers.main import get_secret_str
 
         if collection_name is None:
             raise Exception("collection_name must be provided, passed None")
