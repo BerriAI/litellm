@@ -5508,8 +5508,8 @@
         "max_input_tokens": 8192,
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai", 
-        "mode": "fireworks_ai-embedding-models",
+        "litellm_provider": "fireworks_ai-embedding-models",
+        "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/nomic-ai/nomic-embed-text-v1": {
@@ -5517,8 +5517,8 @@
         "max_input_tokens": 8192,
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai", 
-        "mode": "fireworks_ai-embedding-models",
+        "litellm_provider": "fireworks_ai-embedding-models",
+        "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/WhereIsAI/UAE-Large-V1": {
@@ -5526,8 +5526,8 @@
         "max_input_tokens": 512,
         "input_cost_per_token": 0.000000016,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai", 
-        "mode": "fireworks_ai-embedding-models",
+        "litellm_provider": "fireworks_ai-embedding-models",
+        "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/thenlper/gte-large": {
@@ -5535,8 +5535,8 @@
         "max_input_tokens": 512,
         "input_cost_per_token": 0.000000016,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai", 
-        "mode": "fireworks_ai-embedding-models",
+        "litellm_provider": "fireworks_ai-embedding-models",
+        "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/thenlper/gte-base": {
@@ -5544,8 +5544,8 @@
         "max_input_tokens": 512,
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai", 
-        "mode": "fireworks_ai-embedding-models",
+        "litellm_provider": "fireworks_ai-embedding-models",
+        "mode": "embedding",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks-ai-up-to-16b": {
