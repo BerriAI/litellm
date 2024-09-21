@@ -3458,11 +3458,6 @@ def embedding(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            if api_key is None:
-                raise ValueError(
-                    f"No API Key provided for Azure OpenAI LLM provider. Set 'AZURE_API_KEY' in .env"
-                )
-
             if api_base is None:
                 raise ValueError(
                     f"No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env"
