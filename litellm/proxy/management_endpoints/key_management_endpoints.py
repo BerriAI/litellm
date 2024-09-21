@@ -25,6 +25,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
+    _delete_cache_key_object,
+    get_key_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import _duration_in_seconds
@@ -369,6 +374,7 @@ async def update_key_fn(
         create_audit_log_for_update,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
         user_api_key_cache,
     )
 
@@ -399,9 +405,11 @@ async def update_key_fn(
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
-        user_api_key_cache.delete_cache(key)
-        hashed_token = hash_token(key)
-        user_api_key_cache.delete_cache(hashed_token)
+        await _delete_cache_key_object(
+            hashed_token=hash_token(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -1054,6 +1062,7 @@ async def regenerate_key_fn(
         hash_token,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
         user_api_key_cache,
     )
 
@@ -1131,10 +1140,18 @@ async def regenerate_key_fn(
     ### 3. remove existing key entry from cache
     ######################################################################
     if key:
-        user_api_key_cache.delete_cache(key)
+        await _delete_cache_key_object(
+            hashed_token=hash_token(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     if hashed_api_key:
-        user_api_key_cache.delete_cache(hashed_api_key)
+        await _delete_cache_key_object(
+            hashed_token=hash_token(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     return GenerateKeyResponse(
         **updated_token_dict,
@@ -1270,6 +1287,8 @@ async def block_key(
         hash_token,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -1314,6 +1333,28 @@ async def block_key(
         where={"token": hashed_token}, data={"blocked": True}  # type: ignore
     )
 
+    ## UPDATE KEY CACHE
+
+    ### get cached object ###
+    key_object = await get_key_object(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    ### update cached object ###
+    key_object.blocked = True
+
+    ### store cached object ###
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=key_object,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     return record
 
 
@@ -1338,6 +1379,8 @@ async def unblock_key(
         hash_token,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -1380,6 +1423,28 @@ async def unblock_key(
 
     record = await prisma_client.db.litellm_verificationtoken.update(
         where={"token": hashed_token}, data={"blocked": False}  # type: ignore
+    )
+
+    ## UPDATE KEY CACHE
+
+    ### get cached object ###
+    key_object = await get_key_object(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    ### update cached object ###
+    key_object.blocked = False
+
+    ### store cached object ###
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=key_object,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     return record
