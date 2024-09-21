@@ -462,7 +462,7 @@ async def auth_callback(request: Request):
         if prisma_client is not None:
             user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
             verbose_proxy_logger.debug(
-                f"user_info: {user_info}; litellm.default_user_params: {litellm.default_user_params}"
+                f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
             )
             if user_info is None:
                 ## check if user-email in db ##
@@ -582,8 +582,8 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
-    if litellm.default_user_params:
-        user_defined_values.update(litellm.default_user_params)  # type: ignore
+    if litellm.default_internal_user_params:
+        user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
 
     # Set budget for internal users
     if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
