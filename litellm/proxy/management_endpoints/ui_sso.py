@@ -583,7 +583,7 @@ async def insert_sso_user(
         raise ValueError("user_defined_values is None")
 
     if litellm.default_user_params:
-        user_defined_values.update(litellm.default_user_params)
+        user_defined_values.update(litellm.default_user_params)  # type: ignore
 
     # Set budget for internal users
     if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
@@ -607,7 +607,7 @@ async def insert_sso_user(
 
     await new_user(data=new_user_request, user_api_key_dict=UserAPIKeyAuth())
 
-    return user_defined_values["user_role"]
+    return user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
 @router.get(
