@@ -596,10 +596,7 @@ async def insert_sso_user(
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    elif isinstance(user_defined_values["user_role"], str):
-        user_defined_values["user_role"] = LitellmUserRoles[
-            user_defined_values["user_role"]
-        ]
+
     new_user_request = NewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=user_defined_values["user_email"],
