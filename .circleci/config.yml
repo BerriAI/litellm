@@ -404,7 +404,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  proxy_log_to_otel_tests:
+  proxy_logging_guardrails_model_info_tests:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -711,7 +711,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - proxy_log_to_otel_tests:
+      - proxy_logging_guardrails_model_info_tests:
           filters:
             branches:
               only:
@@ -751,7 +751,7 @@ workflows:
             - litellm_assistants_api_testing
             - ui_endpoint_testing
             - installing_litellm_on_python
-            - proxy_log_to_otel_tests
+            - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
           filters:
             branches:
