@@ -378,6 +378,7 @@ nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
 fireworks_ai_models: List = []
+fireworks_ai_embedding_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 watsonx_models: List = []
@@ -454,6 +455,10 @@ def add_known_models():
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
                 fireworks_ai_models.append(key)
+        elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
+            # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
+            if "-to-" not in key:
+                fireworks_ai_embedding_models.append(key)
 
 
 add_known_models()
@@ -495,6 +500,7 @@ openai_compatible_providers: List = [
     "friendliai",
     "azure_ai",
     "github",
+    "litellm_proxy",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -748,6 +754,7 @@ class LlmProviders(str, Enum):
     EMPOWER = "empower"
     GITHUB = "github"
     CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -777,7 +784,7 @@ models_by_provider: dict = {
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
     "gemini": gemini_models,
-    "fireworks_ai": fireworks_ai_models,
+    "fireworks_ai": fireworks_ai_models + fireworks_ai_embedding_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -823,6 +830,7 @@ all_embedding_models = (
     + cohere_embedding_models
     + bedrock_embedding_models
     + vertex_embedding_models
+    + fireworks_ai_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -969,6 +977,9 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
+from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
+    FireworksAIEmbeddingConfig,
+)
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (

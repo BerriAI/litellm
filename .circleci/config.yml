@@ -404,7 +404,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  proxy_log_to_otel_tests:
+  proxy_logging_guardrails_model_info_tests:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -476,6 +476,7 @@ jobs:
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
@@ -503,7 +504,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/otel_tests/test_otel.py -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
@@ -711,7 +712,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - proxy_log_to_otel_tests:
+      - proxy_logging_guardrails_model_info_tests:
           filters:
             branches:
               only:
@@ -751,7 +752,7 @@ workflows:
             - litellm_assistants_api_testing
             - ui_endpoint_testing
             - installing_litellm_on_python
-            - proxy_log_to_otel_tests
+            - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
           filters:
             branches:

@@ -4,7 +4,7 @@ ARG LITELLM_BUILD_IMAGE=python:3.11.8-slim
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=python:3.11.8-slim
 # Builder stage
-FROM $LITELLM_BUILD_IMAGE as builder
+FROM $LITELLM_BUILD_IMAGE AS builder
 
 # Set the working directory to /app
 WORKDIR /app
@@ -47,7 +47,7 @@ RUN pip install PyJWT --no-cache-dir
 RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 
 # Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE as runtime
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app

@@ -259,6 +259,38 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
+## Use CONFIG_FILE_PATH for proxy (Easier Azure container deployment)
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Store filepath as env var 
+
+```bash
+CONFIG_FILE_PATH="/path/to/config.yaml"
+```
+
+3. Start Proxy
+
+```bash
+$ litellm 
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Expected Logs:**
+
+Look for this line in your console logs to confirm the config.yaml was loaded in correctly.
+```
+LiteLLM: Proxy initialized with Config, Set models:
+```
 
 ## Multiple OpenAI Organizations 
 

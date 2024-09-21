@@ -7,6 +7,7 @@ These are members of a Team on LiteLLM
 /user/new
 /user/update
 /user/delete
+/user/info
 """
 
 import asyncio
@@ -14,6 +15,7 @@ import copy
 import json
 import re
 import secrets
+import time
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -273,10 +275,23 @@ async def ui_get_available_role(
     return _data_to_return
 
 
+def get_team_from_list(
+    team_list: Optional[List[LiteLLM_TeamTable]], team_id: str
+) -> Optional[LiteLLM_TeamTable]:
+    if team_list is None:
+        return None
+
+    for team in team_list:
+        if team.team_id == team_id:
+            return team
+    return None
+
+
 @router.get(
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(
@@ -336,7 +351,7 @@ async def user_info(
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
-        # _DEPRECATED_ check if user in 'member' field
+        # get all teams user belongs to
         teams_1 = await prisma_client.get_data(
             user_id=user_id, table_name="team", query_type="find_all"
         )
@@ -413,13 +428,13 @@ async def user_info(
                 if (
                     key.token == litellm_master_key_hash
                     and general_settings.get("disable_master_key_return", False)
-                    == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+                    is True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
                 ):
                     continue
 
                 try:
                     key = key.model_dump()  # noqa
-                except:
+                except Exception:
                     # if using pydantic v1
                     key = key.dict()
                 if (
@@ -427,29 +442,29 @@ async def user_info(
                     and key["team_id"] is not None
                     and key["team_id"] != "litellm-dashboard"
                 ):
-                    team_info = await prisma_client.get_data(
-                        team_id=key["team_id"], table_name="team"
+                    team_info = get_team_from_list(
+                        team_list=teams_1, team_id=key["team_id"]
                     )
-                    team_alias = getattr(team_info, "team_alias", None)
-                    key["team_alias"] = team_alias
+                    if team_info is not None:
+                        team_alias = getattr(team_info, "team_alias", None)
+                        key["team_alias"] = team_alias
+                    else:
+                        key["team_alias"] = None
                 else:
                     key["team_alias"] = "None"
                 returned_keys.append(key)
 
-        response_data = {
-            "user_id": user_id,
-            "user_info": user_info,
-            "keys": returned_keys,
-            "teams": team_list,
-        }
+        response_data = UserInfoResponse(
+            user_id=user_id, user_info=user_info, keys=returned_keys, teams=team_list
+        )
+
         return response_data
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
