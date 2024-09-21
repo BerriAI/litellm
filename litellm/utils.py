@@ -2708,9 +2708,6 @@ def get_optional_params_embeddings(
                     status_code=500,
                     message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                 )
-    else:
-        raise ValueError(f"Unknown custom_llm_provider: {custom_llm_provider}")
-
     final_params = {**non_default_params, **kwargs}
     return final_params
 
