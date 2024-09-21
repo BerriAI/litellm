@@ -884,7 +884,7 @@ async def update_database(
 ):
     try:
         global prisma_client
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
         )
         if token is not None and isinstance(token, str) and token.startswith("sk-"):
