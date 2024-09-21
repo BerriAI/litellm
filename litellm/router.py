@@ -3087,9 +3087,9 @@ class Router:
         except Exception as e:
             current_attempt = None
             original_exception = e
+
             """
             Retry Logic
-             
             """
             _healthy_deployments, _all_deployments = (
                 await self._async_get_healthy_deployments(
@@ -3372,7 +3372,7 @@ class Router:
         if (
             healthy_deployments is not None
             and isinstance(healthy_deployments, list)
-            and len(healthy_deployments) > 0
+            and len(healthy_deployments) > 1
         ):
             return 0
 
