@@ -209,9 +209,9 @@ async def generate_key_fn(
         if "tags" in data_json:
             from litellm.proxy.proxy_server import premium_user
 
-            if premium_user is not True:
+            if premium_user is not True and data_json["tags"] is not None:
                 raise ValueError(
-                    f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+                    f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
                 )
 
             if data_json["metadata"] is None:
