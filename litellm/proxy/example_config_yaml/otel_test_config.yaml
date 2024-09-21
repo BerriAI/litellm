@@ -63,3 +63,6 @@ guardrails:
     litellm_params:
       guardrail: custom_guardrail.myCustomGuardrail
       mode: "post_call"
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change
