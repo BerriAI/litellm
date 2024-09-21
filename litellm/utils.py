@@ -4280,7 +4280,12 @@ def get_supported_openai_params(
     elif custom_llm_provider == "anthropic":
         return litellm.AnthropicConfig().get_supported_openai_params()
     elif custom_llm_provider == "fireworks_ai":
-        return litellm.FireworksAIConfig().get_supported_openai_params()
+        if request_type == "embeddings":
+            return litellm.FireworksAIEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
+        else:
+            return litellm.FireworksAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "nvidia_nim":
         return litellm.NvidiaNimConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cerebras":

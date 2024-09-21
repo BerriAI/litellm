@@ -216,7 +216,10 @@ def get_llm_provider(
                 dynamic_api_key = api_key or get_secret("DEEPSEEK_API_KEY")
             elif custom_llm_provider == "fireworks_ai":
                 # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
-                if not model.startswith("accounts/"):
+                if model in litellm.fireworks_ai_embedding_models:
+                    # fireworks embeddings models do no require accounts/fireworks prefix https://docs.fireworks.ai/api-reference/creates-an-embedding-vector-representing-the-input-text
+                    pass
+                elif not model.startswith("accounts/"):
                     model = f"accounts/fireworks/models/{model}"
                 api_base = (
                     api_base
