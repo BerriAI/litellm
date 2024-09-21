@@ -174,6 +174,7 @@ async def health_services_endpoint(
                             not in proxy_logging_obj.slack_alerting_instance.alert_types
                         ):
                             continue
+
                         test_message = "default test message"
                         if alert_type == "llm_exceptions":
                             test_message = f"LLM Exception test alert"
@@ -189,6 +190,8 @@ async def health_services_endpoint(
                             test_message = f"Outage Alert Exception test alert"
                         elif alert_type == "daily_reports":
                             test_message = f"Daily Reports test alert"
+                        else:
+                            test_message = f"Budget Alert test alert"
 
                         await proxy_logging_obj.alerting_handler(
                             message=test_message, level="Low", alert_type=alert_type
@@ -354,7 +357,7 @@ async def health_endpoint(
 db_health_cache = {"status": "unknown", "last_updated": datetime.now()}
 
 
-def _db_health_readiness_check():
+async def _db_health_readiness_check():
     from litellm.proxy.proxy_server import prisma_client
 
     global db_health_cache
@@ -365,7 +368,12 @@ def _db_health_readiness_check():
     time_diff = datetime.now() - db_health_cache["last_updated"]
     if db_health_cache["status"] != "unknown" and time_diff < timedelta(minutes=2):
         return db_health_cache
-    prisma_client.health_check()
+
+    if prisma_client is None:
+        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+        return db_health_cache
+
+    await prisma_client.health_check()
     db_health_cache = {"status": "connected", "last_updated": datetime.now()}
     return db_health_cache
 
@@ -478,7 +486,7 @@ async def health_readiness():
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
-            db_health_status = _db_health_readiness_check()
+            db_health_status = await _db_health_readiness_check()
             return {
                 "status": "healthy",
                 "db": "connected",

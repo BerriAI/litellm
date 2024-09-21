@@ -120,11 +120,26 @@ with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") 
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
+from concurrent.futures import ThreadPoolExecutor
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+    get_args,
+)
 
 from openai import OpenAIError as OriginalError
 
 from ._logging import verbose_logger
-from .caching import QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
+from .caching import Cache, QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -149,31 +164,6 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
-
-try:
-    from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
-except Exception as e:
-    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
-
-from concurrent.futures import ThreadPoolExecutor
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-    cast,
-    get_args,
-)
-
-from .caching import Cache
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -560,6 +550,10 @@ def function_setup(
             or call_type == CallTypes.text_completion.value
         ):
             messages = args[0] if len(args) > 0 else kwargs["prompt"]
+        elif (
+            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
+        ):
+            messages = kwargs.get("query")
         elif (
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
@@ -2616,13 +2610,13 @@ def get_optional_params_embeddings(
                 status_code=500,
                 message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
             )
-    if custom_llm_provider == "triton":
+    elif custom_llm_provider == "triton":
         keys = list(non_default_params.keys())
         for k in keys:
             non_default_params.pop(k, None)
         final_params = {**non_default_params, **kwargs}
         return final_params
-    if custom_llm_provider == "databricks":
+    elif custom_llm_provider == "databricks":
         supported_params = get_supported_openai_params(
             model=model or "",
             custom_llm_provider="databricks",
@@ -2634,7 +2628,7 @@ def get_optional_params_embeddings(
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    if custom_llm_provider == "vertex_ai":
+    elif custom_llm_provider == "vertex_ai":
         supported_params = get_supported_openai_params(
             model=model,
             custom_llm_provider="vertex_ai",
@@ -2649,7 +2643,7 @@ def get_optional_params_embeddings(
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    if custom_llm_provider == "bedrock":
+    elif custom_llm_provider == "bedrock":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
         if "amazon.titan-embed-text-v1" in model:
             object: Any = litellm.AmazonTitanG1Config()
@@ -2672,35 +2666,7 @@ def get_optional_params_embeddings(
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-        # elif model == "amazon.titan-embed-image-v1":
-        #     supported_params = litellm.AmazonTitanG1Config().get_supported_openai_params()
-        #     _check_valid_arg(supported_params=supported_params)
-        #     optional_params = litellm.AmazonTitanG1Config().map_openai_params(
-        #         non_default_params=non_default_params, optional_params={}
-        #     )
-        #     final_params = {**optional_params, **kwargs}
-        #     return final_params
-
-        # if (
-        #     "dimensions" in non_default_params.keys()
-        #     and "amazon.titan-embed-text-v2" in model
-        # ):
-        #     kwargs["dimensions"] = non_default_params["dimensions"]
-        #     non_default_params.pop("dimensions", None)
-
-        # if len(non_default_params.keys()) > 0:
-        #     if litellm.drop_params is True:  # drop the unsupported non-default values
-        #         keys = list(non_default_params.keys())
-        #         for k in keys:
-        #             non_default_params.pop(k, None)
-        #         final_params = {**non_default_params, **kwargs}
-        #         return final_params
-        #     raise UnsupportedParamsError(
-        #         status_code=500,
-        #         message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-        #     )
-        # return {**non_default_params, **kwargs}
-    if custom_llm_provider == "mistral":
+    elif custom_llm_provider == "mistral":
         supported_params = get_supported_openai_params(
             model=model,
             custom_llm_provider="mistral",
@@ -2712,7 +2678,20 @@ def get_optional_params_embeddings(
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    if (
+    elif custom_llm_provider == "fireworks_ai":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="fireworks_ai",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.FireworksAIEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}, model=model
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+
+    elif (
         custom_llm_provider != "openai"
         and custom_llm_provider != "azure"
         and custom_llm_provider not in litellm.openai_compatible_providers
@@ -2729,7 +2708,6 @@ def get_optional_params_embeddings(
                     status_code=500,
                     message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                 )
-
     final_params = {**non_default_params, **kwargs}
     return final_params
 
@@ -4299,7 +4277,12 @@ def get_supported_openai_params(
     elif custom_llm_provider == "anthropic":
         return litellm.AnthropicConfig().get_supported_openai_params()
     elif custom_llm_provider == "fireworks_ai":
-        return litellm.FireworksAIConfig().get_supported_openai_params()
+        if request_type == "embeddings":
+            return litellm.FireworksAIEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
+        else:
+            return litellm.FireworksAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "nvidia_nim":
         return litellm.NvidiaNimConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cerebras":
@@ -4921,6 +4904,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         "litellm_provider"
                     ].startswith("vertex_ai"):
                         pass
+                    elif custom_llm_provider == "fireworks_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("fireworks_ai"):
+                        pass
                     else:
                         raise Exception
             elif split_model in litellm.model_cost:
@@ -4934,6 +4921,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     if custom_llm_provider == "vertex_ai" and _model_info[
                         "litellm_provider"
                     ].startswith("vertex_ai"):
+                        pass
+                    elif custom_llm_provider == "fireworks_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("fireworks_ai"):
                         pass
                     else:
                         raise Exception
@@ -6291,6 +6282,7 @@ def exception_type(
     ):
         return original_exception
     exception_mapping_worked = False
+    exception_provider = custom_llm_provider
     if litellm.suppress_debug_info is False:
         print()  # noqa
         print(  # noqa
@@ -6332,7 +6324,6 @@ def exception_type(
                 _deployment = _metadata.get("deployment")
                 extra_information = f"\nModel: {model}"
 
-                exception_provider = "Unknown"
                 if (
                     isinstance(custom_llm_provider, str)
                     and len(custom_llm_provider) > 0
@@ -6840,7 +6831,10 @@ def exception_type(
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
-                    elif original_exception.status_code == 401:
+                    elif (
+                        original_exception.status_code == 401
+                        or original_exception.status_code == 403
+                    ):
                         exception_mapping_worked = True
                         raise AuthenticationError(
                             message=f"{custom_llm_provider}Exception - {original_exception.message}",
@@ -7933,6 +7927,7 @@ def exception_type(
                     )
                     or "Your task failed as a result of our safety system" in error_str
                     or "The model produced invalid content" in error_str
+                    or "content_filter_policy" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
@@ -8159,9 +8154,7 @@ def exception_type(
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
-                    message="{}\n{}".format(
-                        str(original_exception), traceback.format_exc()
-                    ),
+                    message="{} - {}".format(exception_provider, error_str),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=original_exception.request,

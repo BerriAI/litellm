@@ -96,7 +96,7 @@ def convert_key_logging_metadata_to_callback(
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = (
+        team_callback_settings_obj.callback_vars[var] = str(
             litellm.utils.get_secret(value, default_value=value) or value
         )
 
@@ -204,6 +204,13 @@ async def add_litellm_data_to_request(
 
     if _metadata_variable_name not in data:
         data[_metadata_variable_name] = {}
+
+    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself
+    if "metadata" in data and data["metadata"] is not None:
+        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
+            data["metadata"]
+        )
+
     data[_metadata_variable_name]["user_api_key"] = user_api_key_dict.api_key
     data[_metadata_variable_name]["user_api_key_alias"] = getattr(
         user_api_key_dict, "key_alias", None
@@ -344,15 +351,8 @@ async def add_litellm_data_to_request(
 
     # Enterprise Only - Check if using tag based routing
     if llm_router and llm_router.enable_tag_filtering is True:
-        if premium_user is not True:
-            verbose_proxy_logger.warning(
-                "router.enable_tag_filtering is on %s \n switched off router.enable_tag_filtering",
-                CommonProxyErrors.not_premium_user.value,
-            )
-            llm_router.enable_tag_filtering = False
-        else:
-            if "tags" in data:
-                data[_metadata_variable_name]["tags"] = data["tags"]
+        if "tags" in data:
+            data[_metadata_variable_name]["tags"] = data["tags"]
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:

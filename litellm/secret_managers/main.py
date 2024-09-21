@@ -50,12 +50,27 @@ def str_to_bool(value: str) -> Optional[bool]:
         return None
 
 
+def get_secret_str(
+    secret_name: str,
+    default_value: Optional[Union[str, bool]] = None,
+) -> Optional[str]:
+    """
+    Guarantees response from 'get_secret' is either string or none. Used for fixing linting errors.
+    """
+    value = get_secret(secret_name=secret_name, default_value=default_value)
+    if value is not None and not isinstance(value, str):
+        return None
+
+    return value
+
+
 def get_secret(
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):
     key_management_system = litellm._key_management_system
     key_management_settings = litellm._key_management_settings
+    secret = None
 
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
@@ -121,7 +136,7 @@ def get_secret(
                 },
             )
             if response.status_code == 200:
-                oidc_token = response.text["value"]
+                oidc_token = response.json().get("value", None)
                 oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
                 return oidc_token
             else:
@@ -245,8 +260,8 @@ def get_secret(
                     print_verbose(f"secret_dict: {secret_dict}")
                     for k, v in secret_dict.items():
                         secret = v
-                    print_verbose(f"secret: {secret}")
-                if key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
+                        print_verbose(f"secret: {secret}")
+                elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
                     try:
                         secret = client.get_secret_from_google_secret_manager(
                             secret_name
@@ -269,11 +284,12 @@ def get_secret(
                 )
                 secret = os.getenv(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret)
-                if isinstance(secret_value_as_bool, bool):
-                    return secret_value_as_bool
-                else:
-                    return secret
+                if isinstance(secret, str):
+                    secret_value_as_bool = ast.literal_eval(secret)
+                    if isinstance(secret_value_as_bool, bool):
+                        return secret_value_as_bool
+                    else:
+                        return secret
             except:
                 return secret
         else:

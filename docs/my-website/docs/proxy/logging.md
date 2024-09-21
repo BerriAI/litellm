@@ -61,7 +61,7 @@ litellm_settings:
 
 Removes any field with `user_api_key_*` from metadata.
 
-## What gets logged?
+## What gets logged? StandardLoggingPayload
 
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
@@ -85,9 +85,10 @@ class StandardLoggingPayload(TypedDict):
     cache_hit: Optional[bool]
     cache_key: Optional[str]
     saved_cache_cost: Optional[float]
-    request_tags: list
+    request_tags: list                         
     end_user: Optional[str]
-    requester_ip_address: Optional[str]
+    requester_ip_address: Optional[str]         # IP address of requester
+    requester_metadata: Optional[dict]          # metadata passed in request in the "metadata" field
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     model_parameters: dict
@@ -600,6 +601,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 
+<TabItem value="traceloop" label="Log to Traceloop Cloud">
+
+#### Quick Start - Log to Traceloop
+
+**Step 1:**
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="https://api.traceloop.com"
+OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
+```
+
+**Step 2:** Add `otel` as a callbacks
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
 <TabItem value="otel-col" label="Log to OTEL HTTP Collector">
 
 #### Quick Start - Log to OTEL Collector
@@ -669,52 +716,6 @@ litellm_settings:
 ```
 
 **Step 2**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --detailed_debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-```
-
-</TabItem>
-
-<TabItem value="traceloop" label="Log to Traceloop Cloud">
-
-#### Quick Start - Log to Traceloop
-
-**Step 1:** Install the `traceloop-sdk` SDK
-
-```shell
-pip install traceloop-sdk==0.21.2
-```
-
-**Step 2:** Add `traceloop` as a success_callback
-
-```shell
-litellm_settings:
-  success_callback: ["traceloop"]
-
-environment_variables:
-  TRACELOOP_API_KEY: "XXXXX"
-```
-
-**Step 3**: Start the proxy, make a test request
 
 Start proxy
 
@@ -1433,7 +1434,8 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["datadog"]
+  success_callback: ["datadog"] # logs llm success logs on datadog
+  service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
 
 **Step 2**: Set Required env variables for datadog

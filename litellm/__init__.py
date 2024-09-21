@@ -378,77 +378,90 @@ nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
 fireworks_ai_models: List = []
+fireworks_ai_embedding_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 watsonx_models: List = []
 gemini_models: List = []
-for key, value in model_cost.items():
-    if value.get("litellm_provider") == "openai":
-        open_ai_chat_completion_models.append(key)
-    elif value.get("litellm_provider") == "text-completion-openai":
-        open_ai_text_completion_models.append(key)
-    elif value.get("litellm_provider") == "cohere":
-        cohere_models.append(key)
-    elif value.get("litellm_provider") == "cohere_chat":
-        cohere_chat_models.append(key)
-    elif value.get("litellm_provider") == "mistral":
-        mistral_chat_models.append(key)
-    elif value.get("litellm_provider") == "anthropic":
-        anthropic_models.append(key)
-    elif value.get("litellm_provider") == "empower":
-        empower_models.append(key)
-    elif value.get("litellm_provider") == "openrouter":
-        openrouter_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-text-models":
-        vertex_text_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-code-text-models":
-        vertex_code_text_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-language-models":
-        vertex_language_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-vision-models":
-        vertex_vision_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-chat-models":
-        vertex_chat_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
-        vertex_code_chat_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-embedding-models":
-        vertex_embedding_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
-        key = key.replace("vertex_ai/", "")
-        vertex_anthropic_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-llama_models":
-        key = key.replace("vertex_ai/", "")
-        vertex_llama3_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-mistral_models":
-        key = key.replace("vertex_ai/", "")
-        vertex_mistral_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-ai21_models":
-        key = key.replace("vertex_ai/", "")
-        vertex_ai_ai21_models.append(key)
-    elif value.get("litellm_provider") == "vertex_ai-image-models":
-        key = key.replace("vertex_ai/", "")
-        vertex_ai_image_models.append(key)
-    elif value.get("litellm_provider") == "ai21":
-        if value.get("mode") == "chat":
-            ai21_chat_models.append(key)
-        else:
-            ai21_models.append(key)
-    elif value.get("litellm_provider") == "nlp_cloud":
-        nlp_cloud_models.append(key)
-    elif value.get("litellm_provider") == "aleph_alpha":
-        aleph_alpha_models.append(key)
-    elif value.get("litellm_provider") == "bedrock":
-        bedrock_models.append(key)
-    elif value.get("litellm_provider") == "deepinfra":
-        deepinfra_models.append(key)
-    elif value.get("litellm_provider") == "perplexity":
-        perplexity_models.append(key)
-    elif value.get("litellm_provider") == "watsonx":
-        watsonx_models.append(key)
-    elif value.get("litellm_provider") == "gemini":
-        gemini_models.append(key)
-    elif value.get("litellm_provider") == "fireworks_ai":
-        fireworks_ai_models.append(key)
+
+
+def add_known_models():
+    for key, value in model_cost.items():
+        if value.get("litellm_provider") == "openai":
+            open_ai_chat_completion_models.append(key)
+        elif value.get("litellm_provider") == "text-completion-openai":
+            open_ai_text_completion_models.append(key)
+        elif value.get("litellm_provider") == "cohere":
+            cohere_models.append(key)
+        elif value.get("litellm_provider") == "cohere_chat":
+            cohere_chat_models.append(key)
+        elif value.get("litellm_provider") == "mistral":
+            mistral_chat_models.append(key)
+        elif value.get("litellm_provider") == "anthropic":
+            anthropic_models.append(key)
+        elif value.get("litellm_provider") == "empower":
+            empower_models.append(key)
+        elif value.get("litellm_provider") == "openrouter":
+            openrouter_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-text-models":
+            vertex_text_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-code-text-models":
+            vertex_code_text_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-language-models":
+            vertex_language_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-vision-models":
+            vertex_vision_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-chat-models":
+            vertex_chat_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
+            vertex_code_chat_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-embedding-models":
+            vertex_embedding_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_anthropic_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-llama_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_llama3_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-mistral_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_mistral_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-ai21_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_ai_ai21_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-image-models":
+            key = key.replace("vertex_ai/", "")
+            vertex_ai_image_models.append(key)
+        elif value.get("litellm_provider") == "ai21":
+            if value.get("mode") == "chat":
+                ai21_chat_models.append(key)
+            else:
+                ai21_models.append(key)
+        elif value.get("litellm_provider") == "nlp_cloud":
+            nlp_cloud_models.append(key)
+        elif value.get("litellm_provider") == "aleph_alpha":
+            aleph_alpha_models.append(key)
+        elif value.get("litellm_provider") == "bedrock":
+            bedrock_models.append(key)
+        elif value.get("litellm_provider") == "deepinfra":
+            deepinfra_models.append(key)
+        elif value.get("litellm_provider") == "perplexity":
+            perplexity_models.append(key)
+        elif value.get("litellm_provider") == "watsonx":
+            watsonx_models.append(key)
+        elif value.get("litellm_provider") == "gemini":
+            gemini_models.append(key)
+        elif value.get("litellm_provider") == "fireworks_ai":
+            # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
+            if "-to-" not in key:
+                fireworks_ai_models.append(key)
+        elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
+            # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
+            if "-to-" not in key:
+                fireworks_ai_embedding_models.append(key)
+
+
+add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
@@ -487,6 +500,7 @@ openai_compatible_providers: List = [
     "friendliai",
     "azure_ai",
     "github",
+    "litellm_proxy",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -740,6 +754,7 @@ class LlmProviders(str, Enum):
     EMPOWER = "empower"
     GITHUB = "github"
     CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -769,7 +784,7 @@ models_by_provider: dict = {
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
     "gemini": gemini_models,
-    "fireworks_ai": fireworks_ai_models,
+    "fireworks_ai": fireworks_ai_models + fireworks_ai_embedding_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -815,6 +830,7 @@ all_embedding_models = (
     + cohere_embedding_models
     + bedrock_embedding_models
     + vertex_embedding_models
+    + fireworks_ai_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -914,11 +930,13 @@ from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock.chat import (
+from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
-    BEDROCK_CONVERSE_MODELS,
     bedrock_tool_name_mappings,
+)
+from .llms.bedrock.chat.converse_handler import (
+    BEDROCK_CONVERSE_MODELS,
 )
 from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
@@ -948,17 +966,20 @@ from .llms.OpenAI.openai import (
     AzureAIStudioConfig,
 )
 from .llms.mistral.mistral_chat_transformation import MistralConfig
-from .llms.OpenAI.o1_transformation import (
+from .llms.OpenAI.chat.o1_transformation import (
     OpenAIO1Config,
 )
-from .llms.OpenAI.gpt_transformation import (
+from .llms.OpenAI.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
-from .llms.fireworks_ai import FireworksAIConfig
+from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
+from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
+    FireworksAIEmbeddingConfig,
+)
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (

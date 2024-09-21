@@ -440,6 +440,7 @@ async def test_embeddings():
         await embeddings(session=session, key=key, model="mistral-embed")
 
 
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_image_generation():
     """

@@ -232,6 +232,12 @@ async def new_team(
 
     # Set tags on the new team
     if data.tags is not None:
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+            )
         if complete_team_data.metadata is None:
             complete_team_data.metadata = {"tags": data.tags}
         else:
@@ -381,6 +387,12 @@ async def update_team(
 
     # check if user is trying to update tags for team
     if "tags" in updated_kv and updated_kv["tags"] is not None:
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+            )
         # remove tags from updated_kv
         _tags = updated_kv.pop("tags")
         if "metadata" in updated_kv and updated_kv["metadata"] is not None:
@@ -985,12 +997,8 @@ async def team_info(
     get info on team + related keys
 
     ```
-    curl --location 'http://localhost:4000/team/info' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "teams": ["<team-id>",..]
-    }'
+    curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
+    --header 'Authorization: Bearer your_api_key_here'
     ```
     """
     from litellm.proxy.proxy_server import (
