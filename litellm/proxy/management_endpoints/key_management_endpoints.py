@@ -302,7 +302,7 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
 ):
     data_json: dict = data.dict(exclude_unset=True)
-    data_json.pop("key")
+    data_json.pop("key", None)
     _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
     non_default_values = {}
     for k, v in data_json.items():
