@@ -1,15 +1,12 @@
 model_list:
-  - model_name: llava-hf
+  - model_name: gpt-4-vision-preview # OpenAI gpt-4-vision-preview
+    litellm_params:
+      model: openai/gpt-4-vision-preview
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: llava-hf          # Custom OpenAI compatible model
     litellm_params:
       model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
       api_base: http://localhost:8000
       api_key: fake-key
     model_info:
-      supports_vision: True
-general_settings:
-  master_key: sk-1234
-  default_team_disabled: true
-
-litellm_settings:
-  success_callback: ["prometheus"]
-
+      supports_vision: True        # set supports_vision to True so /model/info returns this attribute as True
