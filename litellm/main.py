@@ -5189,11 +5189,11 @@ async def ahealth_check(
                 response = {}
             elif "*" in model:
                 from litellm.litellm_core_utils.llm_request_utils import (
-                    pick_cheapest_model_from_llm_provider,
+                    pick_cheapest_chat_model_from_llm_provider,
                 )
 
                 # this is a wildcard model, we need to pick a random model from the provider
-                cheapest_model = pick_cheapest_model_from_llm_provider(
+                cheapest_model = pick_cheapest_chat_model_from_llm_provider(
                     custom_llm_provider=custom_llm_provider
                 )
                 model_params["model"] = cheapest_model
