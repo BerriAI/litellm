@@ -256,7 +256,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
 
             # check /user/info to verify user_role was set correctly
             new_user_info = await user_info(user_id=user_id)
-            new_user_info = new_user_info["user_info"]
+            new_user_info = new_user_info.user_info
             print("new_user_info=", new_user_info)
             assert new_user_info.user_role == LitellmUserRoles.INTERNAL_USER
             assert new_user_info.user_id == user_id
