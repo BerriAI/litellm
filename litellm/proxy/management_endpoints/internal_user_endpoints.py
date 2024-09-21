@@ -453,20 +453,17 @@ async def user_info(
                     key["team_alias"] = "None"
                 returned_keys.append(key)
 
-        response_data = {
-            "user_id": user_id,
-            "user_info": user_info,
-            "keys": returned_keys,
-            "teams": team_list,
-        }
-        return UserInfoResponse(**response_data)
+        response_data = UserInfoResponse(
+            user_id=user_id, user_info=user_info, keys=returned_keys, teams=team_list
+        )
+
+        return response_data
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),

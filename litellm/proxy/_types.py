@@ -1424,7 +1424,7 @@ class UserAPIKeyAuth(
 
 class UserInfoResponse(LiteLLMBase):
     user_id: Optional[str]
-    user_info: Optional[dict]
+    user_info: Optional[Union[dict, BaseModel]]
     keys: List
     teams: List
 
