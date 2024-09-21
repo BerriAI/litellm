@@ -5,7 +5,7 @@ ARG LITELLM_BUILD_IMAGE=python:3.11-alpine
 ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine
 
 # Builder stage
-FROM $LITELLM_BUILD_IMAGE as builder
+FROM $LITELLM_BUILD_IMAGE AS builder
 
 # Set the working directory to /app
 WORKDIR /app
@@ -34,7 +34,7 @@ RUN pip install dist/*.whl
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE as runtime
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 WORKDIR /app
 
