@@ -302,15 +302,18 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
 ):
     data_json: dict = data.dict(exclude_unset=True)
-    key = data_json.pop("key", None)
-
+    data_json.pop("key", None)
     _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
     non_default_values = {}
     for k, v in data_json.items():
         if k in _metadata_fields:
             continue
-        if v is not None and v not in ([], {}, 0):
-            non_default_values[k] = v
+        if v is not None:
+            if not isinstance(v, bool) and v in ([], {}, 0):
+                pass
+            else:
+                non_default_values[k] = v
+
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
         if duration and (isinstance(duration, str)) and len(duration) > 0:
@@ -364,12 +367,9 @@ async def update_key_fn(
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
-        general_settings,
         litellm_proxy_admin_name,
         prisma_client,
-        proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_generate,
     )
 
     try:
@@ -434,6 +434,11 @@ async def update_key_fn(
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.update_key_fn(): Exception occured - {}".format(
+                str(e)
+            )
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -771,6 +776,7 @@ async def generate_key_helper_fn(
         float
     ] = None,  # soft_budget is used to set soft Budgets Per user
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
+    blocked: Optional[bool] = None,
     budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     key: Optional[
@@ -899,6 +905,7 @@ async def generate_key_helper_fn(
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
             "budget_id": budget_id,
+            "blocked": blocked,
         }
 
         if (
@@ -1240,3 +1247,139 @@ async def list_keys(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.post(
+    "/key/block", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+)
+@management_endpoint_wrapper
+async def block_key(
+    data: BlockKeyRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Blocks all calls from keys with this team id.
+    """
+    from litellm.proxy.proxy_server import (
+        create_audit_log_for_update,
+        hash_token,
+        litellm_proxy_admin_name,
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
+
+    if litellm.store_audit_logs is True:
+        # make an audit log for key update
+        record = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_token}
+        )
+        if record is None:
+            raise ProxyException(
+                message=f"Key {data.key} not found",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by
+                    or user_api_key_dict.user_id
+                    or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.KEY_TABLE_NAME,
+                    object_id=hashed_token,
+                    action="blocked",
+                    updated_values="{}",
+                    before_value=record.model_dump_json(),
+                )
+            )
+        )
+
+    record = await prisma_client.db.litellm_verificationtoken.update(
+        where={"token": hashed_token}, data={"blocked": True}  # type: ignore
+    )
+
+    return record
+
+
+@router.post(
+    "/key/unblock", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+)
+@management_endpoint_wrapper
+async def unblock_key(
+    data: BlockKeyRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Unblocks all calls from this key.
+    """
+    from litellm.proxy.proxy_server import (
+        create_audit_log_for_update,
+        hash_token,
+        litellm_proxy_admin_name,
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
+
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
+
+    if litellm.store_audit_logs is True:
+        # make an audit log for key update
+        record = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_token}
+        )
+        if record is None:
+            raise ProxyException(
+                message=f"Key {data.key} not found",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by
+                    or user_api_key_dict.user_id
+                    or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.KEY_TABLE_NAME,
+                    object_id=hashed_token,
+                    action="blocked",
+                    updated_values="{}",
+                    before_value=record.model_dump_json(),
+                )
+            )
+        )
+
+    record = await prisma_client.db.litellm_verificationtoken.update(
+        where={"token": hashed_token}, data={"blocked": False}  # type: ignore
+    )
+
+    return record

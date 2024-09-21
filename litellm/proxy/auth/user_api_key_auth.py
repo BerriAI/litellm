@@ -689,6 +689,12 @@ async def user_api_key_auth(
             # 8. If token spend is under team budget
             # 9. If team spend is under team budget
 
+            ## base case ## key is disabled
+            if valid_token is not None and valid_token.blocked is True:
+                raise Exception(
+                    "Key is blocked. Update via `/key/unblock` if your admin."
+                )
+
             # Check 1. If token can call model
             _model_alias_map = {}
             model: Optional[str] = None
