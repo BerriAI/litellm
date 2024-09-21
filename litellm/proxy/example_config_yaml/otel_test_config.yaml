@@ -15,17 +15,17 @@ model_list:
      tags: ["teamB"]
    model_info:
      id: "team-b-model"
- - model_name: rerank-english-v3.0  # Fixed indentation here
+ - model_name: rerank-english-v3.0
    litellm_params:
      model: cohere/rerank-english-v3.0
      api_key: os.environ/COHERE_API_KEY
  - model_name: llava-hf
-    litellm_params:
-      model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
-      api_base: http://localhost:8000
-      api_key: fake-key
-    model_info:
-      supports_vision: True
+   litellm_params:
+     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
+     api_base: http://localhost:8000
+     api_key: fake-key
+   model_info:
+     supports_vision: True
 
 
 litellm_settings:
