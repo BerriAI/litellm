@@ -499,7 +499,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_dict.team_id,
                 user_api_key_dict.team_alias,
                 user_api_key_dict.user_id,
-            )
+            ).inc()
             pass
         except Exception as e:
             verbose_logger.exception(
