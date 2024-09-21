@@ -65,7 +65,7 @@ const sidebars = {
         {
           type: "category",
           label: "Admin UI",
-          items: ["proxy/ui", "proxy/self_serve"],
+          items: ["proxy/ui", "proxy/self_serve", "proxy/custom_sso"],
         },
         {
           type: "category",

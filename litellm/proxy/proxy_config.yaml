@@ -25,6 +25,7 @@ model_list:
 general_settings:
   master_key: sk-1234
   default_team_disabled: true
+  custom_sso: custom_sso.custom_sso_handler
 
 litellm_settings:
   success_callback: ["prometheus"]
