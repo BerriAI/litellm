@@ -666,8 +666,11 @@ def test_fireworks_embeddings():
         )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
-
+        cost = completion_cost(completion_response=response)
+        print("cost", cost)
+        assert cost > 0.0
         print(response._hidden_params)
+        assert response._hidden_params["response_cost"] > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

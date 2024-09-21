@@ -4904,6 +4904,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         "litellm_provider"
                     ].startswith("vertex_ai"):
                         pass
+                    elif custom_llm_provider == "fireworks_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("fireworks_ai"):
+                        pass
                     else:
                         raise Exception
             elif split_model in litellm.model_cost:
@@ -4917,6 +4921,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     if custom_llm_provider == "vertex_ai" and _model_info[
                         "litellm_provider"
                     ].startswith("vertex_ai"):
+                        pass
+                    elif custom_llm_provider == "fireworks_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("fireworks_ai"):
                         pass
                     else:
                         raise Exception
