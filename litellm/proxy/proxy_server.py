@@ -251,7 +251,7 @@ from litellm.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.secret_managers.google_kms import load_google_kms
-from litellm.secret_managers.main import get_secret, str_to_bool
+from litellm.secret_managers.main import get_secret, get_secret_str, str_to_bool
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -2723,9 +2723,21 @@ async def startup_event():
 
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
+    env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
     verbose_proxy_logger.debug("worker_config: %s", worker_config)
     # check if it's a valid file path
-    if worker_config is not None:
+    if env_config_yaml is not None:
+        if os.path.isfile(env_config_yaml) and proxy_config.is_yaml(
+            config_file_path=env_config_yaml
+        ):
+            (
+                llm_router,
+                llm_model_list,
+                general_settings,
+            ) = await proxy_config.load_config(
+                router=llm_router, config_file_path=env_config_yaml
+            )
+    elif worker_config is not None:
         if (
             isinstance(worker_config, str)
             and os.path.isfile(worker_config)
