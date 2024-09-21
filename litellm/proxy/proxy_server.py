@@ -7595,7 +7595,6 @@ async def model_info_v1(
 
 @router.get(
     "/model_group/info",
-    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -7603,7 +7602,134 @@ async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Returns model info at the model group level.
+    Get information about all the deployments on litellm proxy, including config.yaml descriptions (except api key and api base)
+
+    - /models returns all deployments. Proxy Admins can use this to list all deployments setup on the proxy
+    - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
+
+
+    ```shell
+    curl -X 'GET' \
+    'http://localhost:4000/model_group/info' \
+    -H 'accept: application/json' \
+    -H 'x-api-key: sk-1234'
+    ```
+
+    Example Response:
+    ```json
+        {
+            "data": [
+                {
+                "model_group": "rerank-english-v3.0",
+                "providers": [
+                    "cohere"
+                ],
+                "max_input_tokens": null,
+                "max_output_tokens": null,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "mode": null,
+                "tpm": null,
+                "rpm": null,
+                "supports_parallel_function_calling": false,
+                "supports_vision": false,
+                "supports_function_calling": false,
+                "supported_openai_params": [
+                    "stream",
+                    "temperature",
+                    "max_tokens",
+                    "logit_bias",
+                    "top_p",
+                    "frequency_penalty",
+                    "presence_penalty",
+                    "stop",
+                    "n",
+                    "extra_headers"
+                ]
+                },
+                {
+                "model_group": "gpt-3.5-turbo",
+                "providers": [
+                    "openai"
+                ],
+                "max_input_tokens": 16385.0,
+                "max_output_tokens": 4096.0,
+                "input_cost_per_token": 1.5e-06,
+                "output_cost_per_token": 2e-06,
+                "mode": "chat",
+                "tpm": null,
+                "rpm": null,
+                "supports_parallel_function_calling": false,
+                "supports_vision": false,
+                "supports_function_calling": true,
+                "supported_openai_params": [
+                    "frequency_penalty",
+                    "logit_bias",
+                    "logprobs",
+                    "top_logprobs",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "n",
+                    "presence_penalty",
+                    "seed",
+                    "stop",
+                    "stream",
+                    "stream_options",
+                    "temperature",
+                    "top_p",
+                    "tools",
+                    "tool_choice",
+                    "function_call",
+                    "functions",
+                    "max_retries",
+                    "extra_headers",
+                    "parallel_tool_calls",
+                    "response_format"
+                ]
+                },
+                {
+                "model_group": "llava-hf",
+                "providers": [
+                    "openai"
+                ],
+                "max_input_tokens": null,
+                "max_output_tokens": null,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "mode": null,
+                "tpm": null,
+                "rpm": null,
+                "supports_parallel_function_calling": false,
+                "supports_vision": true,
+                "supports_function_calling": false,
+                "supported_openai_params": [
+                    "frequency_penalty",
+                    "logit_bias",
+                    "logprobs",
+                    "top_logprobs",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "n",
+                    "presence_penalty",
+                    "seed",
+                    "stop",
+                    "stream",
+                    "stream_options",
+                    "temperature",
+                    "top_p",
+                    "tools",
+                    "tool_choice",
+                    "function_call",
+                    "functions",
+                    "max_retries",
+                    "extra_headers",
+                    "parallel_tool_calls",
+                    "response_format"
+                ]
+                }
+            ]
+            }
+    ```
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
