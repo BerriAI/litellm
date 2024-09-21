@@ -16,23 +16,13 @@ from litellm.litellm_core_utils.logging_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CommonProxyErrors, SpendLogsMetadata, SpendLogsPayload
+from litellm.types.utils import StandardLoggingMetadata, StandardLoggingPayload
 
 
 class RequestKwargs(TypedDict):
     model: Optional[str]
     messages: Optional[List]
     optional_params: Optional[Dict[str, Any]]
-
-
-class GCSBucketPayload(TypedDict):
-    request_kwargs: Optional[RequestKwargs]
-    response_obj: Optional[Dict]
-    start_time: str
-    end_time: str
-    response_cost: Optional[float]
-    spend_log_metadata: str
-    exception: Optional[str]
-    log_event_type: Optional[str]
 
 
 class GCSBucketLogger(GCSBucketBase):
@@ -70,10 +60,12 @@ class GCSBucketLogger(GCSBucketBase):
             end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
             headers = await self.construct_request_headers()
 
-            logging_payload: GCSBucketPayload = await self.get_gcs_payload(
-                kwargs, response_obj, start_time_str, end_time_str
+            logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
             )
-            logging_payload["log_event_type"] = "successful_api_call"
+
+            if logging_payload is None:
+                raise ValueError("standard_logging_object not found in kwargs")
 
             json_logged_payload = json.dumps(logging_payload)
 
@@ -115,10 +107,12 @@ class GCSBucketLogger(GCSBucketBase):
             end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
             headers = await self.construct_request_headers()
 
-            logging_payload: GCSBucketPayload = await self.get_gcs_payload(
-                kwargs, response_obj, start_time_str, end_time_str
+            logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
             )
-            logging_payload["log_event_type"] = "failed_api_call"
+
+            if logging_payload is None:
+                raise ValueError("standard_logging_object not found in kwargs")
 
             _litellm_params = kwargs.get("litellm_params") or {}
             metadata = _litellm_params.get("metadata") or {}
@@ -148,50 +142,3 @@ class GCSBucketLogger(GCSBucketBase):
             verbose_logger.debug("GCS Bucket response.text %s", response.text)
         except Exception as e:
             verbose_logger.error("GCS Bucket logging error: %s", str(e))
-
-    async def get_gcs_payload(
-        self, kwargs, response_obj, start_time, end_time
-    ) -> GCSBucketPayload:
-        from litellm.proxy.spend_tracking.spend_tracking_utils import (
-            get_logging_payload,
-        )
-
-        request_kwargs = RequestKwargs(
-            model=kwargs.get("model", None),
-            messages=kwargs.get("messages", None),
-            optional_params=kwargs.get("optional_params", None),
-        )
-        response_dict = {}
-        if response_obj:
-            response_dict = convert_litellm_response_object_to_dict(
-                response_obj=response_obj
-            )
-
-        exception_str = None
-
-        # Handle logging exception attributes
-        if "exception" in kwargs:
-            exception_str = kwargs.get("exception", "")
-            if not isinstance(exception_str, str):
-                exception_str = str(exception_str)
-
-        _spend_log_payload: SpendLogsPayload = get_logging_payload(
-            kwargs=kwargs,
-            response_obj=response_obj,
-            start_time=start_time,
-            end_time=end_time,
-            end_user_id=kwargs.get("end_user_id", None),
-        )
-
-        gcs_payload: GCSBucketPayload = GCSBucketPayload(
-            request_kwargs=request_kwargs,
-            response_obj=response_dict,
-            start_time=start_time,
-            end_time=end_time,
-            spend_log_metadata=_spend_log_payload.get("metadata", ""),
-            response_cost=kwargs.get("response_cost", None),
-            exception=exception_str,
-            log_event_type=None,
-        )
-
-        return gcs_payload

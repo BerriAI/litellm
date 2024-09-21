@@ -16,7 +16,7 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.gcs_bucket import GCSBucketLogger, GCSBucketPayload
+from litellm.integrations.gcs_bucket import GCSBucketLogger, StandardLoggingPayload
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -89,6 +89,7 @@ async def test_basic_gcs_logger():
             "user_api_key_team_alias": None,
             "user_api_key_metadata": {},
             "requester_ip_address": "127.0.0.1",
+            "requester_metadata": {"foo": "bar"},
             "spend_logs_metadata": {"hello": "world"},
             "headers": {
                 "content-type": "application/json",
@@ -135,29 +136,26 @@ async def test_basic_gcs_logger():
 
     print("type of object_from_gcs", type(parsed_data))
 
-    gcs_payload = GCSBucketPayload(**parsed_data)
+    gcs_payload = StandardLoggingPayload(**parsed_data)
 
     print("gcs_payload", gcs_payload)
 
-    assert gcs_payload["request_kwargs"]["model"] == "gpt-3.5-turbo"
-    assert gcs_payload["request_kwargs"]["messages"] == [
-        {"role": "user", "content": "This is a test"}
-    ]
-    assert gcs_payload["response_obj"]["choices"][0]["message"]["content"] == "Hi!"
+    assert gcs_payload["model"] == "gpt-3.5-turbo"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+
+    assert gcs_payload["response"]["choices"][0]["message"]["content"] == "Hi!"
 
     assert gcs_payload["response_cost"] > 0.0
 
-    assert gcs_payload["log_event_type"] == "successful_api_call"
-    gcs_payload["spend_log_metadata"] = json.loads(gcs_payload["spend_log_metadata"])
+    assert gcs_payload["status"] == "success"
 
     assert (
-        gcs_payload["spend_log_metadata"]["user_api_key"]
+        gcs_payload["metadata"]["user_api_key_hash"]
         == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
     )
-    assert (
-        gcs_payload["spend_log_metadata"]["user_api_key_user_id"]
-        == "116544810872468347480"
-    )
+    assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
+
+    assert gcs_payload["metadata"]["requester_metadata"] == {"foo": "bar"}
 
     # Delete Object from GCS
     print("deleting object from GCS")
@@ -246,28 +244,21 @@ async def test_basic_gcs_logger_failure():
 
     print("type of object_from_gcs", type(parsed_data))
 
-    gcs_payload = GCSBucketPayload(**parsed_data)
+    gcs_payload = StandardLoggingPayload(**parsed_data)
 
     print("gcs_payload", gcs_payload)
 
-    assert gcs_payload["request_kwargs"]["model"] == "gpt-3.5-turbo"
-    assert gcs_payload["request_kwargs"]["messages"] == [
-        {"role": "user", "content": "This is a test"}
-    ]
+    assert gcs_payload["model"] == "gpt-3.5-turbo"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
 
     assert gcs_payload["response_cost"] == 0
-    assert gcs_payload["log_event_type"] == "failed_api_call"
-
-    gcs_payload["spend_log_metadata"] = json.loads(gcs_payload["spend_log_metadata"])
+    assert gcs_payload["status"] == "failure"
 
     assert (
-        gcs_payload["spend_log_metadata"]["user_api_key"]
+        gcs_payload["metadata"]["user_api_key_hash"]
         == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
     )
-    assert (
-        gcs_payload["spend_log_metadata"]["user_api_key_user_id"]
-        == "116544810872468347480"
-    )
+    assert gcs_payload["metadata"]["user_api_key_user_id"] == "116544810872468347480"
 
     # Delete Object from GCS
     print("deleting object from GCS")

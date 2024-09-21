@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes
+from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
 from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
@@ -118,6 +118,8 @@ class CallTypes(Enum):
     transcription = "transcription"
     aspeech = "aspeech"
     speech = "speech"
+    rerank = "rerank"
+    arerank = "arerank"
 
 
 class PassthroughCallTypes(Enum):
@@ -253,7 +255,7 @@ class HiddenParams(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -359,7 +361,7 @@ class Message(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -490,6 +492,19 @@ class Usage(CompletionUsage):
             completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=reasoning_tokens
             )
+
+        # Ensure completion_tokens_details is properly handled
+        if "completion_tokens_details" in params:
+            if isinstance(params["completion_tokens_details"], dict):
+                completion_tokens_details = CompletionTokensDetails(
+                    **params["completion_tokens_details"]
+                )
+            elif isinstance(
+                params["completion_tokens_details"], CompletionTokensDetails
+            ):
+                completion_tokens_details = params["completion_tokens_details"]
+            del params["completion_tokens_details"]
+
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
@@ -641,6 +656,7 @@ class ModelResponse(OpenAIObject):
             if choices is not None and isinstance(choices, list):
                 new_choices = []
                 for choice in choices:
+                    _new_choice = None
                     if isinstance(choice, StreamingChoices):
                         _new_choice = choice
                     elif isinstance(choice, dict):
@@ -715,7 +731,7 @@ class ModelResponse(OpenAIObject):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -804,7 +820,7 @@ class EmbeddingResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -855,7 +871,7 @@ class TextChoices(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -911,6 +927,7 @@ class TextCompletionResponse(OpenAIObject):
             if choices is not None and isinstance(choices, list):
                 new_choices = []
                 for choice in choices:
+                    _new_choice = None
                     if isinstance(choice, TextChoices):
                         _new_choice = choice
                     elif isinstance(choice, dict):
@@ -937,12 +954,12 @@ class TextCompletionResponse(OpenAIObject):
             usage = Usage()
 
         super(TextCompletionResponse, self).__init__(
-            id=id,
-            object=object,
-            created=created,
-            model=model,
-            choices=choices,
-            usage=usage,
+            id=id,  # type: ignore
+            object=object,  # type: ignore
+            created=created,  # type: ignore
+            model=model,  # type: ignore
+            choices=choices,  # type: ignore
+            usage=usage,  # type: ignore
             **params,
         )
 
@@ -986,7 +1003,7 @@ class ImageObject(OpenAIObject):
     revised_prompt: Optional[str] = None
 
     def __init__(self, b64_json=None, url=None, revised_prompt=None):
-        super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)
+        super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1004,7 +1021,7 @@ class ImageObject(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -1057,7 +1074,7 @@ class ImageResponse(OpenAIImageResponse):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -1072,7 +1089,7 @@ class TranscriptionResponse(OpenAIObject):
     _response_headers: Optional[dict] = None
 
     def __init__(self, text=None):
-        super().__init__(text=text)
+        super().__init__(text=text)  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1090,7 +1107,7 @@ class TranscriptionResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except:
@@ -1247,6 +1264,7 @@ class StandardLoggingMetadata(TypedDict):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    requester_metadata: Optional[dict]
 
 
 class StandardLoggingHiddenParams(TypedDict):
@@ -1262,10 +1280,14 @@ class StandardLoggingModelInformation(TypedDict):
     model_map_value: Optional[ModelInfo]
 
 
+StandardLoggingPayloadStatus = Literal["success", "failure"]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
     response_cost: float
+    status: StandardLoggingPayloadStatus
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -1286,6 +1308,7 @@ class StandardLoggingPayload(TypedDict):
     requester_ip_address: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
+    error_str: Optional[str]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
 

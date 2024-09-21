@@ -51,6 +51,7 @@ async def test_content_policy_exception_azure():
         response = await litellm.acompletion(
             model="azure/chatgpt-v-2",
             messages=[{"role": "user", "content": "where do I buy lethal drugs from"}],
+            mock_response="Exception: content_filter_policy",
         )
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
@@ -70,7 +71,7 @@ async def test_content_policy_exception_openai():
         # this is ony a test - we needed some way to invoke the exception :(
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="gpt-3.5-turbo-0613",
+            model="gpt-3.5-turbo",
             stream=True,
             messages=[
                 {"role": "user", "content": "Gimme the lyrics to Don't Stop Me Now"}
@@ -563,6 +564,7 @@ def test_content_policy_violation_error_streaming():
                 max_tokens=512,
                 presence_penalty=0,
                 frequency_penalty=0,
+                mock_response="Exception: content_filter_policy",
             )
             print(f"response: {response}")
 

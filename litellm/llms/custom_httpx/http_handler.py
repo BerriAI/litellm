@@ -4,6 +4,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import httpx
+from httpx import USE_CLIENT_DEFAULT
 
 import litellm
 
@@ -76,9 +77,20 @@ class AsyncHTTPHandler:
         await self.client.aclose()
 
     async def get(
-        self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        follow_redirects: Optional[bool] = None,
     ):
-        response = await self.client.get(url, params=params, headers=headers)
+        # Set follow_redirects to UseClientDefault if None
+        _follow_redirects = (
+            follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        )
+
+        response = await self.client.get(
+            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+        )
         return response
 
     async def post(
@@ -117,8 +129,9 @@ class AsyncHTTPHandler:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
             headers = {}
-            if hasattr(e, "response") and e.response is not None:
-                for key, value in e.response.headers.items():
+            error_response = getattr(e, "response", None)
+            if error_response is not None:
+                for key, value in error_response.headers.items():
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
@@ -173,8 +186,9 @@ class AsyncHTTPHandler:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
             headers = {}
-            if hasattr(e, "response") and e.response is not None:
-                for key, value in e.response.headers.items():
+            error_response = getattr(e, "response", None)
+            if error_response is not None:
+                for key, value in error_response.headers.items():
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
@@ -303,9 +317,20 @@ class HTTPHandler:
         self.client.close()
 
     def get(
-        self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        follow_redirects: Optional[bool] = None,
     ):
-        response = self.client.get(url, params=params, headers=headers)
+        # Set follow_redirects to UseClientDefault if None
+        _follow_redirects = (
+            follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        )
+
+        response = self.client.get(
+            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+        )
         return response
 
     def post(

@@ -175,7 +175,7 @@ class VertexAIPartnerModels(BaseLLM):
                 client=client,
                 timeout=timeout,
                 encoding=encoding,
-                custom_llm_provider="vertex_ai_beta",
+                custom_llm_provider="vertex_ai",
             )
 
         except Exception as e:

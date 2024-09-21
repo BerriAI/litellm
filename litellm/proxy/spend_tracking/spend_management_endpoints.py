@@ -1434,7 +1434,7 @@ async def _get_spend_report_for_time_range(
     except Exception as e:
         verbose_proxy_logger.error(
             "Exception in _get_daily_spend_reports {}".format(str(e))
-        )  # noqa
+        )
 
 
 @router.post(
@@ -1703,26 +1703,26 @@ async def view_spend_logs(
                 result: dict = {}
                 for record in response:
                     dt_object = datetime.strptime(
-                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"
+                        str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ"  # type: ignore
                     )  # type: ignore
                     date = dt_object.date()
                     if date not in result:
                         result[date] = {"users": {}, "models": {}}
-                    api_key = record["api_key"]
-                    user_id = record["user"]
-                    model = record["model"]
-                    result[date]["spend"] = (
-                        result[date].get("spend", 0) + record["_sum"]["spend"]
-                    )
-                    result[date][api_key] = (
-                        result[date].get(api_key, 0) + record["_sum"]["spend"]
-                    )
-                    result[date]["users"][user_id] = (
-                        result[date]["users"].get(user_id, 0) + record["_sum"]["spend"]
-                    )
-                    result[date]["models"][model] = (
-                        result[date]["models"].get(model, 0) + record["_sum"]["spend"]
-                    )
+                    api_key = record["api_key"]  # type: ignore
+                    user_id = record["user"]  # type: ignore
+                    model = record["model"]  # type: ignore
+                    result[date]["spend"] = result[date].get("spend", 0) + record.get(
+                        "_sum", {}
+                    ).get("spend", 0)
+                    result[date][api_key] = result[date].get(api_key, 0) + record.get(
+                        "_sum", {}
+                    ).get("spend", 0)
+                    result[date]["users"][user_id] = result[date]["users"].get(
+                        user_id, 0
+                    ) + record.get("_sum", {}).get("spend", 0)
+                    result[date]["models"][model] = result[date]["models"].get(
+                        model, 0
+                    ) + record.get("_sum", {}).get("spend", 0)
                 return_list = []
                 final_date = None
                 for k, v in sorted(result.items()):
@@ -1784,7 +1784,7 @@ async def view_spend_logs(
                 table_name="spend", query_type="find_all"
             )
 
-            return spend_log
+            return spend_logs
 
         return None
 
@@ -1843,6 +1843,88 @@ async def global_spend_reset():
     }
 
 
+@router.post(
+    "/global/spend/refresh",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def global_spend_refresh():
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Globally refresh spend MonthlyGlobalSpend view
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    ## RESET GLOBAL SPEND VIEW ###
+    async def is_materialized_global_spend_view() -> bool:
+        """
+        Return True if materialized view exists
+
+        Else False
+        """
+        sql_query = """
+        SELECT relname, relkind
+        FROM pg_class
+        WHERE relname = 'MonthlyGlobalSpend';            
+        """
+        try:
+            resp = await prisma_client.db.query_raw(sql_query)
+
+            assert resp[0]["relkind"] == "m"
+            return True
+        except Exception:
+            return False
+
+    view_exists = await is_materialized_global_spend_view()
+
+    if view_exists:
+        # refresh materialized view
+        sql_query = """
+        REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";    
+        """
+        try:
+            from litellm.proxy._types import CommonProxyErrors
+            from litellm.proxy.proxy_server import proxy_logging_obj
+            from litellm.proxy.utils import PrismaClient
+
+            db_url = os.getenv("DATABASE_URL")
+            if db_url is None:
+                raise Exception(CommonProxyErrors.db_not_connected_error.value)
+            new_client = PrismaClient(
+                database_url=db_url,
+                proxy_logging_obj=proxy_logging_obj,
+                http_client={
+                    "timeout": 6000,
+                },
+            )
+            await new_client.db.connect()
+            await new_client.db.query_raw(sql_query)
+            verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
+            return {
+                "message": "MonthlyGlobalSpend view refreshed",
+                "status": "success",
+            }
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Failed to refresh materialized view - {}".format(str(e))
+            )
+            return {
+                "message": "Failed to refresh materialized view",
+                "status": "failure",
+            }
+
+
 async def global_spend_for_internal_user(
     api_key: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1860,7 +1942,7 @@ async def global_spend_for_internal_user(
 
         user_id = user_api_key_dict.user_id
         if user_id is None:
-            raise ValueError(f"/global/spend/logs Error: User ID is None")
+            raise ValueError("/global/spend/logs Error: User ID is None")
         if api_key is not None:
             sql_query = """
                 SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"
@@ -1889,7 +1971,7 @@ async def global_spend_for_internal_user(
     include_in_schema=False,
 )
 async def global_spend_logs(
-    api_key: str = fastapi.Query(
+    api_key: Optional[str] = fastapi.Query(
         default=None,
         description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
     ),
@@ -1904,6 +1986,10 @@ async def global_spend_logs(
     """
     import traceback
 
+    from litellm.integrations.prometheus_helpers.prometheus_api import (
+        get_daily_spend_from_prometheus,
+        is_prometheus_connected,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -1925,22 +2011,28 @@ async def global_spend_logs(
 
             return response
 
-        if api_key is None:
-            sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
+        prometheus_api_enabled = is_prometheus_connected()
 
-            response = await prisma_client.db.query_raw(query=sql_query)
-
+        if prometheus_api_enabled:
+            response = await get_daily_spend_from_prometheus(api_key=api_key)
             return response
         else:
-            sql_query = """
-                SELECT * FROM "MonthlyGlobalSpendPerKey"
-                WHERE "api_key" = $1
-                ORDER BY "date";
-                """
+            if api_key is None:
+                sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
 
-            response = await prisma_client.db.query_raw(sql_query, api_key)
+                response = await prisma_client.db.query_raw(query=sql_query)
 
-            return response
+                return response
+            else:
+                sql_query = """
+                    SELECT * FROM "MonthlyGlobalSpendPerKey"
+                    WHERE "api_key" = $1
+                    ORDER BY "date";
+                    """
+
+                response = await prisma_client.db.query_raw(sql_query, api_key)
+
+                return response
 
     except Exception as e:
         error_trace = traceback.format_exc()

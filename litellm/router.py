@@ -1290,7 +1290,7 @@ class Router:
             raise e
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
-        model_name = ""
+        model_name = model
         try:
             verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
@@ -3532,7 +3532,8 @@ class Router:
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = completion_response["usage"].get("total_tokens", 0)
+                _usage_obj = completion_response.get("usage")
+                total_tokens = _usage_obj.get("total_tokens", 0) if _usage_obj else 0
 
                 # ------------
                 # Setup values
@@ -4019,7 +4020,9 @@ class Router:
                     _model_info=_model_info,
                 )
 
-        verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
+        verbose_router_logger.debug(
+            f"\nInitialized Model List {self.get_model_names()}"
+        )
         self.model_names = [m["model_name"] for m in model_list]
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
@@ -4630,24 +4633,25 @@ class Router:
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
-            for model_alias, model_value in self.model_group_alias.items():
+            if hasattr(self, "model_group_alias"):
+                for model_alias, model_value in self.model_group_alias.items():
 
-                if isinstance(model_value, str):
-                    _router_model_name: str = model_value
-                elif isinstance(model_value, dict):
-                    _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                    if _model_value["hidden"] is True:
-                        continue
+                    if isinstance(model_value, str):
+                        _router_model_name: str = model_value
+                    elif isinstance(model_value, dict):
+                        _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
+                        if _model_value["hidden"] is True:
+                            continue
+                        else:
+                            _router_model_name = _model_value["model"]
                     else:
-                        _router_model_name = _model_value["model"]
-                else:
-                    continue
+                        continue
 
-                returned_models.extend(
-                    self._get_all_deployments(
-                        model_name=_router_model_name, model_alias=model_alias
+                    returned_models.extend(
+                        self._get_all_deployments(
+                            model_name=_router_model_name, model_alias=model_alias
+                        )
                     )
-                )
 
             if model_name is None:
                 returned_models += self.model_list
@@ -5030,7 +5034,7 @@ class Router:
                     # return the first deployment where the `model` matches the specificed deployment name
                     return deployment_model, deployment
             raise ValueError(
-                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
+                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.get_model_names()}"
             )
         elif model in self.get_model_ids():
             deployment = self.get_model_info(id=model)
@@ -5180,6 +5184,7 @@ class Router:
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(  # type: ignore
                 llm_router_instance=self,
+                model=model,
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )

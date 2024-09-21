@@ -48,6 +48,7 @@ def load_vertex_ai_credentials():
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
 
+    # print(f"service_account_key_data: {service_account_key_data}")
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
         # Write the updated content to the temporary files
@@ -151,3 +152,46 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     )
 
     pass
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_pass_through_endpoint_context_caching():
+    import vertexai
+    from vertexai.generative_models import Part
+    from vertexai.preview import caching
+    import datetime
+
+    load_vertex_ai_credentials()
+
+    vertexai.init(
+        project="adroit-crow-413218",
+        location="us-central1",
+        api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex-ai",
+        api_transport="rest",
+    )
+
+    system_instruction = """
+    You are an expert researcher. You always stick to the facts in the sources provided, and never make up new facts.
+    Now look at these research papers, and answer the following questions.
+    """
+
+    contents = [
+        Part.from_uri(
+            "gs://cloud-samples-data/generative-ai/pdf/2312.11805v3.pdf",
+            mime_type="application/pdf",
+        ),
+        Part.from_uri(
+            "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+            mime_type="application/pdf",
+        ),
+    ]
+
+    cached_content = caching.CachedContent.create(
+        model_name="gemini-1.5-pro-001",
+        system_instruction=system_instruction,
+        contents=contents,
+        ttl=datetime.timedelta(minutes=60),
+        # display_name="example-cache",
+    )
+
+    print(cached_content.name)

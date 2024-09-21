@@ -15,6 +15,8 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.databricks.exceptions import DatabricksError
+from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.types.llms.openai import (
     ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
@@ -31,17 +33,6 @@ from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse,
 
 from ..base import BaseLLM
 from ..prompt_templates.factory import custom_prompt, prompt_factory
-
-
-class DatabricksError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        self.request = httpx.Request(method="POST", url="https://docs.databricks.com/")
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
 
 
 class DatabricksConfig:
@@ -253,6 +244,34 @@ class DatabricksChatCompletion(BaseLLM):
 
     # makes headers for API call
 
+    def _get_databricks_credentials(
+        self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
+    ) -> Tuple[str, dict]:
+        headers = headers or {"Content-Type": "application/json"}
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            databricks_client = WorkspaceClient()
+            api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
+
+            if api_key is None:
+                databricks_auth_headers: dict[str, str] = (
+                    databricks_client.config.authenticate()
+                )
+                headers = {**databricks_auth_headers, **headers}
+
+            return api_base, headers
+        except ImportError:
+            raise DatabricksError(
+                status_code=400,
+                message=(
+                    "If the Databricks base URL and API key are not set, the databricks-sdk "
+                    "Python library must be installed. Please install the databricks-sdk, set "
+                    "{LLM_PROVIDER}_API_BASE and {LLM_PROVIDER}_API_KEY environment variables, "
+                    "or provide the base URL and API key as arguments."
+                ),
+            )
+
     def _validate_environment(
         self,
         api_key: Optional[str],
@@ -262,16 +281,26 @@ class DatabricksChatCompletion(BaseLLM):
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
         if api_key is None and headers is None:
-            raise DatabricksError(
-                status_code=400,
-                message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
+            if custom_endpoint:
+                raise DatabricksError(
+                    status_code=400,
+                    message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                )
+            else:
+                api_base, headers = self._get_databricks_credentials(
+                    api_base=api_base, api_key=api_key, headers=headers
+                )
 
         if api_base is None:
-            raise DatabricksError(
-                status_code=400,
-                message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
+            if custom_endpoint:
+                raise DatabricksError(
+                    status_code=400,
+                    message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                )
+            else:
+                api_base, headers = self._get_databricks_credentials(
+                    api_base=api_base, api_key=api_key, headers=headers
+                )
 
         if headers is None:
             headers = {
@@ -281,6 +310,9 @@ class DatabricksChatCompletion(BaseLLM):
         else:
             if api_key is not None:
                 headers.update({"Authorization": "Bearer {}".format(api_key)})
+
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = "{}/chat/completions".format(api_base)
@@ -367,7 +399,7 @@ class DatabricksChatCompletion(BaseLLM):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise DatabricksError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
             raise DatabricksError(status_code=500, message=str(e))
@@ -380,7 +412,7 @@ class DatabricksChatCompletion(BaseLLM):
         )
         response = ModelResponse(**response_json)
 
-        response.model = custom_llm_provider + "/" + response.model
+        response.model = custom_llm_provider + "/" + (response.model or "")
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
@@ -529,7 +561,8 @@ class DatabricksChatCompletion(BaseLLM):
                     response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise DatabricksError(
-                        status_code=e.response.status_code, message=response.text
+                        status_code=e.response.status_code,
+                        message=e.response.text,
                     )
                 except httpx.TimeoutException as e:
                     raise DatabricksError(
@@ -540,7 +573,7 @@ class DatabricksChatCompletion(BaseLLM):
 
         response = ModelResponse(**response_json)
 
-        response.model = custom_llm_provider + "/" + response.model
+        response.model = custom_llm_provider + "/" + (response.model or "")
 
         if base_model is not None:
             response._hidden_params["model"] = base_model
@@ -657,7 +690,7 @@ class DatabricksChatCompletion(BaseLLM):
         except httpx.HTTPStatusError as e:
             raise DatabricksError(
                 status_code=e.response.status_code,
-                message=response.text if response else str(e),
+                message=e.response.text,
             )
         except httpx.TimeoutException as e:
             raise DatabricksError(status_code=408, message="Timeout error occurred.")
@@ -673,136 +706,3 @@ class DatabricksChatCompletion(BaseLLM):
         )
 
         return litellm.EmbeddingResponse(**response_json)
-
-
-class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool):
-        self.streaming_response = streaming_response
-
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
-        try:
-            processed_chunk = litellm.ModelResponse(**chunk, stream=True)  # type: ignore
-
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
-            finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
-
-            if processed_chunk.choices[0].delta.content is not None:  # type: ignore
-                text = processed_chunk.choices[0].delta.content  # type: ignore
-
-            if (
-                processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
-                and len(processed_chunk.choices[0].delta.tool_calls) > 0  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function is not None  # type: ignore
-                and processed_chunk.choices[0].delta.tool_calls[0].function.arguments  # type: ignore
-                is not None
-            ):
-                tool_use = ChatCompletionToolCallChunk(
-                    id=processed_chunk.choices[0].delta.tool_calls[0].id,  # type: ignore
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.name,
-                        arguments=processed_chunk.choices[0]
-                        .delta.tool_calls[0]  # type: ignore
-                        .function.arguments,
-                    ),
-                    index=processed_chunk.choices[0].index,
-                )
-
-            if processed_chunk.choices[0].finish_reason is not None:
-                is_finished = True
-                finish_reason = processed_chunk.choices[0].finish_reason
-
-            if hasattr(processed_chunk, "usage") and isinstance(
-                processed_chunk.usage, litellm.Usage
-            ):
-                usage_chunk: litellm.Usage = processed_chunk.usage
-
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=usage_chunk.prompt_tokens,
-                    completion_tokens=usage_chunk.completion_tokens,
-                    total_tokens=usage_chunk.total_tokens,
-                )
-
-            return GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=0,
-            )
-        except json.JSONDecodeError:
-            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
-
-    # Sync iterator
-    def __iter__(self):
-        self.response_iterator = self.streaming_response
-        return self
-
-    def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
-
-    # Async iterator
-    def __aiter__(self):
-        self.async_response_iterator = self.streaming_response.__aiter__()
-        return self
-
-    async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            if chunk == "[DONE]":
-                raise StopAsyncIteration
-            if len(chunk) > 0:
-                json_chunk = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")

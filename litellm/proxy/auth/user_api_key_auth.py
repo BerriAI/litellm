@@ -218,6 +218,12 @@ async def user_api_key_auth(
             return await handle_oauth2_proxy_request(request=request)
 
         if general_settings.get("enable_jwt_auth", False) is True:
+            from litellm.proxy.proxy_server import premium_user
+
+            if premium_user is not True:
+                raise ValueError(
+                    f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                )
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
@@ -446,7 +452,6 @@ async def user_api_key_auth(
                                 and request.headers.get(key=header_key) is not None  # type: ignore
                             ):
                                 api_key = request.headers.get(key=header_key)  # type: ignore
-
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -1033,7 +1038,7 @@ async def user_api_key_auth(
             # this token is only used for managing the ui
             allowed_routes = [
                 "/sso",
-                "/sso/get/logout_url",
+                "/sso/get/ui_settings",
                 "/login",
                 "/key/generate",
                 "/key/update",
@@ -1116,6 +1121,7 @@ async def user_api_key_auth(
         if open_telemetry_logger is not None:
             await open_telemetry_logger.async_post_call_failure_hook(  # type: ignore
                 original_exception=e,
+                request_data={},
                 user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
             )
 

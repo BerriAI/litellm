@@ -2129,6 +2129,9 @@ Here's the code for storing your service account credentials as `GOOGLE_APPLICAT
 
 
 ```python
+import os 
+import tempfile
+
 def load_vertex_ai_credentials():
   # Define the path to the vertex_key.json file
   print("loading vertex ai credentials")

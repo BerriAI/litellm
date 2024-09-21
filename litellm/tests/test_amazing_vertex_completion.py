@@ -31,6 +31,7 @@ from litellm import (
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     _gemini_convert_messages_with_history,
 )
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
 from litellm.tests.test_streaming import streaming_format_tests
 
 litellm.num_retries = 3
@@ -1398,7 +1399,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -1506,7 +1507,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -2869,3 +2870,24 @@ def test_gemini_finetuned_endpoint(base_model, metadata):
         assert mock_client.call_args.kwargs["url"].endswith(
             "endpoints/4965075652664360960:generateContent"
         )
+
+
+@pytest.mark.parametrize("api_base", ["", None, "my-custom-proxy-base"])
+def test_custom_api_base(api_base):
+    stream = None
+    test_endpoint = "my-fake-endpoint"
+    vertex_base = VertexBase()
+    auth_header, url = vertex_base._check_custom_proxy(
+        api_base=api_base,
+        custom_llm_provider="gemini",
+        gemini_api_key="12324",
+        endpoint="",
+        stream=stream,
+        auth_header=None,
+        url="my-fake-endpoint",
+    )
+
+    if api_base:
+        assert url == api_base + ":"
+    else:
+        assert url == test_endpoint
