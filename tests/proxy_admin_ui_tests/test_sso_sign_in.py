@@ -116,3 +116,74 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         await prisma_client.db.litellm_usertable.delete(
             where={"user_id": unique_user_id}
         )
+
+
+@patch("fastapi_sso.sso.google.GoogleSSO")
+@pytest.mark.asyncio
+async def test_auth_callback_new_user_with_sso_default(
+    mock_google_sso, mock_env_vars, prisma_client
+):
+    """
+    When litellm_settings.default_internal_user_params.user_role = 'INTERNAL_USER'
+
+    Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER' role
+    """
+    import uuid
+
+    # Generate a unique user ID
+    unique_user_id = str(uuid.uuid4())
+
+    try:
+        # Set up the prisma client
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        litellm.default_internal_user_params = {
+            "user_role": LitellmUserRoles.INTERNAL_USER.value
+        }
+        await litellm.proxy.proxy_server.prisma_client.connect()
+
+        # Set up the master key
+        litellm.proxy.proxy_server.master_key = "mock_master_key"
+
+        # Mock the GoogleSSO verify_and_process method
+        mock_sso_result = MagicMock()
+        mock_sso_result.email = "newuser@example.com"
+        mock_sso_result.id = unique_user_id
+        mock_google_sso.return_value.verify_and_process = AsyncMock(
+            return_value=mock_sso_result
+        )
+
+        # Create a mock Request object
+        mock_request = Request(
+            scope={
+                "type": "http",
+                "method": "GET",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "path": "/sso/callback",
+                "query_string": b"",
+                "headers": {},
+            }
+        )
+
+        # Call the auth_callback function directly
+        response = await auth_callback(request=mock_request)
+
+        # Assert the response
+        assert response.status_code == 303
+        assert response.headers["location"].startswith(f"/ui/?userID={unique_user_id}")
+
+        # Verify that the user was added to the database
+        user = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_id": unique_user_id}
+        )
+        print("inserted user from SSO", user)
+        assert user is not None
+        assert user.user_email == "newuser@example.com"
+        assert user.user_role == LitellmUserRoles.INTERNAL_USER
+
+    finally:
+        # Clean up: Delete the user from the database
+        await prisma_client.db.litellm_usertable.delete(
+            where={"user_id": unique_user_id}
+        )
+        litellm.default_internal_user_params = None
