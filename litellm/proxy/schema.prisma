@@ -139,6 +139,7 @@ model LiteLLM_VerificationToken {
     permissions Json @default("{}")
     max_parallel_requests Int?
     metadata   Json  @default("{}")
+    blocked Boolean?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
     max_budget Float?    
