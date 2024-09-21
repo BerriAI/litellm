@@ -5509,7 +5509,7 @@
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "fireworks_ai", 
-        "mode": "embedding",
+        "mode": "fireworks_ai-embedding-models",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/nomic-ai/nomic-embed-text-v1": {
@@ -5518,7 +5518,7 @@
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "fireworks_ai", 
-        "mode": "embedding",
+        "mode": "fireworks_ai-embedding-models",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/WhereIsAI/UAE-Large-V1": {
@@ -5527,7 +5527,7 @@
         "input_cost_per_token": 0.000000016,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "fireworks_ai", 
-        "mode": "embedding",
+        "mode": "fireworks_ai-embedding-models",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/thenlper/gte-large": {
@@ -5536,7 +5536,7 @@
         "input_cost_per_token": 0.000000016,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "fireworks_ai", 
-        "mode": "embedding",
+        "mode": "fireworks_ai-embedding-models",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/thenlper/gte-base": {
@@ -5545,7 +5545,7 @@
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "fireworks_ai", 
-        "mode": "embedding",
+        "mode": "fireworks_ai-embedding-models",
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks-ai-up-to-16b": {
@@ -5571,12 +5571,12 @@
     "fireworks-ai-embedding-up-to-150m": {
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai"
+        "litellm_provider": "fireworks_ai-embedding-models"
     },
     "fireworks-ai-embedding-150m-to-350m": {
         "input_cost_per_token": 0.000000016,
         "output_cost_per_token": 0.000000,
-        "litellm_provider": "fireworks_ai"
+        "litellm_provider": "fireworks_ai-embedding-models"
     },
       "anyscale/mistralai/Mistral-7B-Instruct-v0.1": {
         "max_tokens": 16384,
