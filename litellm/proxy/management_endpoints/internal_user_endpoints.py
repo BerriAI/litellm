@@ -8,6 +8,7 @@ These are members of a Team on LiteLLM
 /user/update
 /user/delete
 /user/info
+/user/list
 """
 
 import asyncio
@@ -298,10 +299,6 @@ async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
-    view_all: bool = fastapi.Query(
-        default=False,
-        description="set to true to View all users. When using view_all, don't pass user_id",
-    ),
     page: Optional[int] = fastapi.Query(
         default=0,
         description="Page number for pagination. Only use when view_all is true",
@@ -335,17 +332,6 @@ async def user_info(
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        elif view_all is True:
-            if page is None:
-                page = 0
-            if page_size is None:
-                page_size = 25
-            offset = (page) * page_size  # default is 0
-            limit = page_size  # default is 10
-            user_info = await prisma_client.get_data(
-                table_name="user", query_type="find_all", offset=offset, limit=limit
-            )
-            return user_info
         else:
             user_info = None
         ## GET ALL TEAMS ##
@@ -732,16 +718,22 @@ async def user_get_requests():
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.get(
+    "/user/list",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_users(
-    role: str = fastapi.Query(
-        default=None,
-        description="Either 'proxy_admin', 'proxy_viewer', 'app_owner', 'app_user'",
-    )
+    role: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by role"
+    ),
+    page: int = fastapi.Query(default=1, ge=1, description="Page number"),
+    page_size: int = fastapi.Query(
+        default=25, ge=1, le=100, description="Number of items per page"
+    ),
 ):
     """
-    [BETA] This could change without notice. Give feedback - https://github.com/BerriAI/litellm/issues
-
-    Get all users who are a specific `user_role`.
+    Get a paginated list of users, optionally filtered by role.
 
     Used by the UI to populate the user lists.
 
@@ -754,11 +746,36 @@ async def get_users(
             status_code=500,
             detail={"error": f"No db connected. prisma client={prisma_client}"},
         )
-    all_users = await prisma_client.get_data(
-        table_name="user", query_type="find_all", key_val={"user_role": role}
+
+    # Calculate skip and take for pagination
+    skip = (page - 1) * page_size
+    take = page_size
+
+    # Prepare the query
+    query = {}
+    if role:
+        query["user_role"] = role
+
+    # Get total count
+    total_count = await prisma_client.db.litellm_usertable.count(where=query)  # type: ignore
+
+    # Get paginated users
+    users = await prisma_client.db.litellm_usertable.find_many(
+        where=query,  # type: ignore
+        skip=skip,
+        take=take,
     )
 
-    return all_users
+    # Calculate total pages
+    total_pages = -(-total_count // page_size)  # Ceiling division
+
+    return {
+        "users": users,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @router.post(
