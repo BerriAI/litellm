@@ -154,6 +154,7 @@ class Router:
         client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
         ## SCHEDULER ##
         polling_interval: Optional[float] = None,
+        default_priority: Optional[int] = None,
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
@@ -220,6 +221,7 @@ class Router:
             caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
             client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
             polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
+            default_priority: (Optional[int]): the default priority for a request. Only for '.scheduler_acompletion()'. Default is None.
             num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
             timeout (Optional[float]): Timeout for requests. Defaults to None.
             default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
@@ -336,6 +338,7 @@ class Router:
         self.scheduler = Scheduler(
             polling_interval=polling_interval, redis_cache=redis_cache
         )
+        self.default_priority = default_priority
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployments: Dict[str, List] = {}
@@ -712,12 +715,11 @@ class Router:
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
 
-            timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-            if kwargs.get("priority", None) is not None and isinstance(
-                kwargs.get("priority"), int
-            ):
+            request_priority = kwargs.get("priority") or self.default_priority
+
+            if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
@@ -1290,7 +1292,7 @@ class Router:
             raise e
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
-        model_name = ""
+        model_name = model
         try:
             verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
@@ -3085,9 +3087,9 @@ class Router:
         except Exception as e:
             current_attempt = None
             original_exception = e
+
             """
             Retry Logic
-             
             """
             _healthy_deployments, _all_deployments = (
                 await self._async_get_healthy_deployments(
@@ -3105,16 +3107,6 @@ class Router:
                 content_policy_fallbacks=content_policy_fallbacks,
             )
 
-            # decides how long to sleep before retry
-            _timeout = self._time_to_sleep_before_retry(
-                e=original_exception,
-                remaining_retries=num_retries,
-                num_retries=num_retries,
-                healthy_deployments=_healthy_deployments,
-            )
-            # sleeps for the length of the timeout
-            await asyncio.sleep(_timeout)
-
             if (
                 self.retry_policy is not None
                 or self.model_group_retry_policy is not None
@@ -3128,11 +3120,19 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+            else:
+                raise
 
+            # decides how long to sleep before retry
+            _timeout = self._time_to_sleep_before_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+                healthy_deployments=_healthy_deployments,
+            )
+            # sleeps for the length of the timeout
+            await asyncio.sleep(_timeout)
             for current_attempt in range(num_retries):
-                verbose_router_logger.debug(
-                    f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}"
-                )
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await original_function(*args, **kwargs)
@@ -3370,14 +3370,14 @@ class Router:
         if (
             healthy_deployments is not None
             and isinstance(healthy_deployments, list)
-            and len(healthy_deployments) > 0
+            and len(healthy_deployments) > 1
         ):
             return 0
 
         response_headers: Optional[httpx.Headers] = None
         if hasattr(e, "response") and hasattr(e.response, "headers"):  # type: ignore
             response_headers = e.response.headers  # type: ignore
-        elif hasattr(e, "litellm_response_headers"):
+        if hasattr(e, "litellm_response_headers"):
             response_headers = e.litellm_response_headers  # type: ignore
 
         if response_headers is not None:
@@ -3532,7 +3532,8 @@ class Router:
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = completion_response["usage"].get("total_tokens", 0)
+                _usage_obj = completion_response.get("usage")
+                total_tokens = _usage_obj.get("total_tokens", 0) if _usage_obj else 0
 
                 # ------------
                 # Setup values
@@ -3560,7 +3561,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
                     str(e)
                 )
             )
@@ -4019,7 +4020,9 @@ class Router:
                     _model_info=_model_info,
                 )
 
-        verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
+        verbose_router_logger.debug(
+            f"\nInitialized Model List {self.get_model_names()}"
+        )
         self.model_names = [m["model_name"] for m in model_list]
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
@@ -4630,24 +4633,25 @@ class Router:
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
-            for model_alias, model_value in self.model_group_alias.items():
+            if hasattr(self, "model_group_alias"):
+                for model_alias, model_value in self.model_group_alias.items():
 
-                if isinstance(model_value, str):
-                    _router_model_name: str = model_value
-                elif isinstance(model_value, dict):
-                    _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                    if _model_value["hidden"] is True:
-                        continue
+                    if isinstance(model_value, str):
+                        _router_model_name: str = model_value
+                    elif isinstance(model_value, dict):
+                        _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
+                        if _model_value["hidden"] is True:
+                            continue
+                        else:
+                            _router_model_name = _model_value["model"]
                     else:
-                        _router_model_name = _model_value["model"]
-                else:
-                    continue
+                        continue
 
-                returned_models.extend(
-                    self._get_all_deployments(
-                        model_name=_router_model_name, model_alias=model_alias
+                    returned_models.extend(
+                        self._get_all_deployments(
+                            model_name=_router_model_name, model_alias=model_alias
+                        )
                     )
-                )
 
             if model_name is None:
                 returned_models += self.model_list
@@ -5030,7 +5034,7 @@ class Router:
                     # return the first deployment where the `model` matches the specificed deployment name
                     return deployment_model, deployment
             raise ValueError(
-                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
+                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.get_model_names()}"
             )
         elif model in self.get_model_ids():
             deployment = self.get_model_info(id=model)
@@ -5180,6 +5184,7 @@ class Router:
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(  # type: ignore
                 llm_router_instance=self,
+                model=model,
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
@@ -5319,7 +5324,6 @@ class Router:
 
             return deployment
         except Exception as e:
-
             traceback_exception = traceback.format_exc()
             # if router rejects call -> log to langfuse/otel/etc.
             if request_kwargs is not None:

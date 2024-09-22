@@ -65,6 +65,7 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "top_logprobs",
             "response_format",
             "stop",
+            "stream_options",
         ]
 
         return [

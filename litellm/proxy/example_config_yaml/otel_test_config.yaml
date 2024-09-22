@@ -15,15 +15,28 @@ model_list:
      tags: ["teamB"]
    model_info:
      id: "team-b-model"
- - model_name: rerank-english-v3.0  # Fixed indentation here
+ - model_name: rerank-english-v3.0
    litellm_params:
      model: cohere/rerank-english-v3.0
      api_key: os.environ/COHERE_API_KEY
+ - model_name: fake-azure-endpoint
+   litellm_params:
+     model: openai/429
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app
+ - model_name: llava-hf
+   litellm_params:
+     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
+     api_base: http://localhost:8000
+     api_key: fake-key
+   model_info:
+     supports_vision: True
+
 
 
 litellm_settings:
   cache: true
-  callbacks: ["otel"]
+  callbacks: ["otel", "prometheus"]
 
 guardrails:
   - guardrail_name: "aporia-pre-guard"
@@ -41,7 +54,7 @@ guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
       guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "pre_call"
+      mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
   - guardrail_name: "custom-pre-guard"
@@ -56,3 +69,6 @@ guardrails:
     litellm_params:
       guardrail: custom_guardrail.myCustomGuardrail
       mode: "post_call"
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change

@@ -1,18 +1,24 @@
 # Tests for router.get_available_deployment
 # specifically test if it can pick the correct LLM when rpm/tpm set
 # These are fast Tests, and make no API calls
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -27,7 +33,7 @@ def test_weighted_selection_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "rpm": 6,
                 },
@@ -83,7 +89,7 @@ def test_weighted_selection_router_tpm():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "tpm": 5,
                 },
@@ -139,7 +145,7 @@ def test_weighted_selection_router_tpm_as_router_param():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 5,
@@ -195,7 +201,7 @@ def test_weighted_selection_router_rpm_as_router_param():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "rpm": 5,
@@ -252,7 +258,7 @@ def test_weighted_selection_router_no_rpm_set():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "rpm": 6,
                 },
@@ -311,7 +317,7 @@ def test_model_group_aliases():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "tpm": 1,
                 },
@@ -537,7 +543,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo-0613",
+                    "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "rpm": rpm_list[0],
                     "tpm": tpm_list[0],
@@ -580,7 +586,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
         else:
             # Assert both are used
             assert selection_counts["azure/chatgpt-v-2"] > 0
-            assert selection_counts["gpt-3.5-turbo-0613"] > 0
+            assert selection_counts["gpt-3.5-turbo"] > 0
         router.reset()
     except Exception as e:
         traceback.print_exc()

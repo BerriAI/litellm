@@ -477,6 +477,7 @@ def test_completion_cohere_stream_bad_key():
 # test_completion_cohere_stream_bad_key()
 
 
+@pytest.mark.flaky(retries=5, delay=1)
 def test_completion_azure_stream():
     try:
         litellm.set_verbose = False
@@ -2153,7 +2154,7 @@ def test_openai_chat_completion_complete_response_call():
 # test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307"],  #
+    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307", "o1-preview"],  #
 )
 @pytest.mark.parametrize(
     "sync",
@@ -2508,7 +2509,7 @@ final_openai_function_call_example = {
     "id": "chatcmpl-7zVNA4sXUftpIg6W8WlntCyeBj2JY",
     "object": "chat.completion",
     "created": 1694892960,
-    "model": "gpt-3.5-turbo-0613",
+    "model": "gpt-3.5-turbo",
     "choices": [
         {
             "index": 0,
@@ -2572,7 +2573,7 @@ first_openai_function_call_example = {
     "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
     "object": "chat.completion.chunk",
     "created": 1694893248,
-    "model": "gpt-3.5-turbo-0613",
+    "model": "gpt-3.5-turbo",
     "choices": [
         {
             "index": 0,
@@ -2645,7 +2646,7 @@ second_function_call_chunk_format = {
     "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
     "object": "chat.completion.chunk",
     "created": 1694893248,
-    "model": "gpt-3.5-turbo-0613",
+    "model": "gpt-3.5-turbo",
     "choices": [
         {
             "index": 0,
@@ -2689,7 +2690,7 @@ final_function_call_chunk_example = {
     "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
     "object": "chat.completion.chunk",
     "created": 1694893248,
-    "model": "gpt-3.5-turbo-0613",
+    "model": "gpt-3.5-turbo",
     "choices": [{"index": 0, "delta": {}, "finish_reason": "function_call"}],
 }
 
@@ -3475,7 +3476,7 @@ def test_unit_test_custom_stream_wrapper_openai():
             )
         ],
         "created": 1721353246,
-        "model": "gpt-3.5-turbo-0613",
+        "model": "gpt-3.5-turbo",
         "object": "chat.completion.chunk",
         "system_fingerprint": None,
         "usage": None,

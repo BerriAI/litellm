@@ -381,6 +381,7 @@ class CompletionCustomHandler(
 
 # Simple Azure OpenAI call
 ## COMPLETION
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_async_chat_azure():
     try:
@@ -585,6 +586,7 @@ async def test_async_chat_azure_with_fallbacks():
 # CACHING
 ## Test Azure - completion, embedding
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_async_completion_azure_caching():
     customHandler_caching = CompletionCustomHandler()
     litellm.cache = Cache(

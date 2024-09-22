@@ -41,8 +41,10 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
+    StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -591,7 +593,7 @@ class Logging:
             RerankResponse,
         ],
         cache_hit: Optional[bool] = None,
-    ):
+    ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
 
@@ -607,22 +609,53 @@ class Logging:
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
-        response_cost = litellm.response_cost_calculator(
-            response_object=result,
-            model=self.model,
-            cache_hit=cache_hit,
-            custom_llm_provider=self.model_call_details.get(
-                "custom_llm_provider", None
-            ),
-            base_model=_get_base_model_from_metadata(
-                model_call_details=self.model_call_details
-            ),
-            call_type=self.call_type,
-            optional_params=self.optional_params,
-            custom_pricing=custom_pricing,
-        )
+        try:
+            response_cost_calculator_kwargs = {
+                "response_object": result,
+                "model": self.model,
+                "cache_hit": cache_hit,
+                "custom_llm_provider": self.model_call_details.get(
+                    "custom_llm_provider", None
+                ),
+                "base_model": _get_base_model_from_metadata(
+                    model_call_details=self.model_call_details
+                ),
+                "call_type": self.call_type,
+                "optional_params": self.optional_params,
+                "custom_pricing": custom_pricing,
+            }
+        except Exception as e:  # error creating kwargs for cost calculation
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=traceback.format_exc(),
+                )
+            )
+            return None
 
-        return response_cost
+        try:
+            response_cost = litellm.response_cost_calculator(
+                **response_cost_calculator_kwargs
+            )
+
+            return response_cost
+        except Exception as e:  # error calculating cost
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=traceback.format_exc(),
+                    model=response_cost_calculator_kwargs["model"],
+                    cache_hit=response_cost_calculator_kwargs["cache_hit"],
+                    custom_llm_provider=response_cost_calculator_kwargs[
+                        "custom_llm_provider"
+                    ],
+                    base_model=response_cost_calculator_kwargs["base_model"],
+                    call_type=response_cost_calculator_kwargs["call_type"],
+                    custom_pricing=response_cost_calculator_kwargs["custom_pricing"],
+                )
+            )
+
+        return None
 
     def _success_handler_helper_fn(
         self, result=None, start_time=None, end_time=None, cache_hit=None
@@ -686,6 +719,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             logging_obj=self,
+                            status="success",
                         )
                     )
                 elif isinstance(result, dict):  # pass-through endpoints
@@ -697,6 +731,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             logging_obj=self,
+                            status="success",
                         )
                     )
             else:  # streaming chunks + image gen.
@@ -780,6 +815,7 @@ class Logging:
                         start_time=start_time,
                         end_time=end_time,
                         logging_obj=self,
+                        status="success",
                     )
                 )
             if self.dynamic_success_callbacks is not None and isinstance(
@@ -1445,6 +1481,7 @@ class Logging:
                     start_time=start_time,
                     end_time=end_time,
                     logging_obj=self,
+                    status="success",
                 )
             )
         if self.dynamic_async_success_callbacks is not None and isinstance(
@@ -1689,6 +1726,20 @@ class Logging:
                 self.model_call_details["litellm_params"].get("metadata", {}) or {}
             )
             metadata.update(exception.headers)
+
+        ## STANDARDIZED LOGGING PAYLOAD
+
+        self.model_call_details["standard_logging_object"] = (
+            get_standard_logging_object_payload(
+                kwargs=self.model_call_details,
+                init_response_obj={},
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=self,
+                status="failure",
+                error_str=str(exception),
+            )
+        )
         return start_time, end_time
 
     async def special_failure_handlers(self, exception: Exception):
@@ -2242,9 +2293,12 @@ def _init_custom_logger_compatible_class(
             OpenTelemetryConfig,
         )
 
+        arize_endpoint = (
+            os.environ.get("ARIZE_ENDPOINT", None) or "https://otlp.arize.com/v1"
+        )
         otel_config = OpenTelemetryConfig(
             exporter="otlp_grpc",
-            endpoint="https://otlp.arize.com/v1",
+            endpoint=arize_endpoint,
         )
         os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
             f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
@@ -2422,10 +2476,12 @@ def is_valid_sha256_hash(value: str) -> bool:
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
-    init_response_obj: Any,
+    init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,
     end_time: dt_object,
     logging_obj: Logging,
+    status: StandardLoggingPayloadStatus,
+    error_str: Optional[str] = None,
 ) -> Optional[StandardLoggingPayload]:
     try:
         if kwargs is None:
@@ -2505,6 +2561,7 @@ def get_standard_logging_object_payload(
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            requester_metadata=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -2541,7 +2598,7 @@ def get_standard_logging_object_payload(
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
         model_cost_name = _select_model_name_for_cost_calc(
             model=None,
-            completion_response=init_response_obj,
+            completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
         )
@@ -2562,16 +2619,21 @@ def get_standard_logging_object_payload(
                 )
             except Exception:
                 verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
-                    "Model is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload"
+                    "Model={} is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload".format(
+                        model_cost_name
+                    )
                 )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name, model_map_value=None
                 )
 
+        response_cost: float = kwargs.get("response_cost", 0) or 0.0
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
             cache_hit=cache_hit,
+            status=status,
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
             endTime=end_time_float,
@@ -2579,7 +2641,7 @@ def get_standard_logging_object_payload(
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
             cache_key=cache_key,
-            response_cost=kwargs.get("response_cost", 0),
+            response_cost=response_cost,
             total_tokens=usage.get("total_tokens", 0),
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
@@ -2591,11 +2653,15 @@ def get_standard_logging_object_payload(
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
             response=(  # type: ignore
-                response_obj if len(response_obj.keys()) > 0 else init_response_obj
+                response_obj if len(response_obj.keys()) > 0 else init_response_obj  # type: ignore
             ),
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
+            error_str=error_str,
+            response_cost_failure_debug_info=kwargs.get(
+                "response_cost_failure_debug_information"
+            ),
         )
 
         verbose_logger.debug(

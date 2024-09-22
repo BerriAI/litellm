@@ -61,7 +61,7 @@ litellm_settings:
 
 Removes any field with `user_api_key_*` from metadata.
 
-## What gets logged?
+## What gets logged? StandardLoggingPayload
 
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
@@ -85,9 +85,10 @@ class StandardLoggingPayload(TypedDict):
     cache_hit: Optional[bool]
     cache_key: Optional[str]
     saved_cache_cost: Optional[float]
-    request_tags: list
+    request_tags: list                         
     end_user: Optional[str]
-    requester_ip_address: Optional[str]
+    requester_ip_address: Optional[str]         # IP address of requester
+    requester_metadata: Optional[dict]          # metadata passed in request in the "metadata" field
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     model_parameters: dict
@@ -1278,6 +1279,7 @@ litellm_settings:
 environment_variables:
     ARIZE_SPACE_KEY: "d0*****"
     ARIZE_API_KEY: "141a****"
+    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize api endpoint
 ```
 
 2. Start Proxy
@@ -1432,7 +1434,8 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["datadog"]
+  success_callback: ["datadog"] # logs llm success logs on datadog
+  service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
 
 **Step 2**: Set Required env variables for datadog

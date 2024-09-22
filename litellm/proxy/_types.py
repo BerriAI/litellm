@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
-from litellm.types.router import UpdateRouterConfig
+from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
 if TYPE_CHECKING:
@@ -123,6 +123,7 @@ AlertType = Literal[
     "outage_alerts",
     "region_outage_alerts",
     "fallback_reports",
+    "failed_tracking_spend",
 ]
 
 
@@ -283,12 +284,7 @@ class LiteLLMRoutes(enum.Enum):
     master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
     sso_only_routes = [
-        "/key/generate",
-        "/key/update",
-        "/key/delete",
-        "/global/spend/logs",
-        "/global/predict/spend/logs",
-        "/sso/get/logout_url",
+        "/sso/get/ui_settings",
     ]
 
     management_routes = [  # key
@@ -335,6 +331,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/models",
         "/global/predict/spend/logs",
         "/global/spend/report",
+        "/global/spend/provider",
     ]
 
     public_routes = [
@@ -364,6 +361,10 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + sso_only_routes
+    )
+
+    internal_user_view_only_routes = (
+        spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
 
     self_managed_routes = [
@@ -631,6 +632,7 @@ class _GenerateKeyRequest(GenerateRequestBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    blocked: Optional[bool] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
@@ -964,6 +966,10 @@ class DeleteTeamRequest(LiteLLMBase):
 
 class BlockTeamRequest(LiteLLMBase):
     team_id: str  # required
+
+
+class BlockKeyRequest(LiteLLMBase):
+    key: str  # required
 
 
 class AddTeamCallback(LiteLLMBase):
@@ -1358,6 +1364,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
+    blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
 
@@ -1419,6 +1426,13 @@ class UserAPIKeyAuth(
 
     class Config:
         arbitrary_types_allowed = True
+
+
+class UserInfoResponse(LiteLLMBase):
+    user_id: Optional[str]
+    user_info: Optional[Union[dict, BaseModel]]
+    keys: List
+    teams: List
 
 
 class LiteLLM_Config(LiteLLMBase):
@@ -1508,7 +1522,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     updated_at: datetime
     changed_by: str
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted"]
+    action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
         LitellmTableNames.USER_TABLE_NAME,
@@ -1826,6 +1840,8 @@ class ProxyException(Exception):
             or "No deployments available" in self.message
         ):
             self.code = "429"
+        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
+            self.code = "401"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
@@ -1841,7 +1857,7 @@ class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = "DB not connected"
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
-    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat. \nPricing: https://www.litellm.ai/#pricing"
 
 
 class SpendCalculateRequest(LiteLLMBase):

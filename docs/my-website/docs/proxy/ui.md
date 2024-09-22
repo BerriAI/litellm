@@ -239,6 +239,26 @@ If you don't see all your keys this could be due to a cached token. So just re-l
 
 :::
 
+### Disable `Default Team` on Admin UI
+
+Use this if you want to hide the Default Team on the Admin UI
+
+The following logic will apply
+- If team assigned don't show `Default Team`
+- If no team assigned then they should see `Default Team`
+
+Set `default_team_disabled: true` on your litellm config.yaml
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  default_team_disabled: true # OR you can set env var PROXY_DEFAULT_TEAM_DISABLED="true"
+```
+
+### Sign in with Username, Password when SSO is on
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
 ### Restrict UI Access
 
 You can restrict UI Access to just admins - includes you (proxy_admin) and people you give view only access to (proxy_admin_viewer) for seeing global spend.
@@ -297,3 +317,14 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 - Deploy LiteLLM Proxy Server
 
 
+
+## Disable Admin UI
+
+Set `DISABLE_ADMIN_UI="True"` in your environment to disable the Admin UI. 
+
+Useful, if your security team has additional restrictions on UI usage. 
+
+
+**Expected Response**
+
+<Image img={require('../../img/admin_ui_disabled.png')}/>
