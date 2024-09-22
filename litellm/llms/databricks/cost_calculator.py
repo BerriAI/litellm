@@ -49,6 +49,10 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         "gte-large-en"
     ):
         base_model = "databricks-gte-large-en"
+    elif model.startswith("databricks/llama-2-70b-chat") or model.startswith(
+        "llama-2-70b-chat"
+    ):
+        base_model = "databricks-llama-2-70b-chat"
     ## GET MODEL INFO
     model_info = get_model_info(model=base_model, custom_llm_provider="databricks")
 
