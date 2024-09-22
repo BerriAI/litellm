@@ -7455,6 +7455,14 @@ def exception_type(
                         model=model,
                         response=original_exception.response,
                     )
+                elif "Rate limit reached" in error_str:
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=error_str,
+                        llm_provider="huggingface",
+                        model=model,
+                        response=original_exception.response,
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
