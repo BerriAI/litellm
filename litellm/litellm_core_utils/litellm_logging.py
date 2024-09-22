@@ -41,6 +41,7 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
+    StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadStatus,
@@ -574,7 +575,7 @@ class Logging:
             RerankResponse,
         ],
         cache_hit: Optional[bool] = None,
-    ):
+    ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
 
@@ -590,22 +591,53 @@ class Logging:
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
-        response_cost = litellm.response_cost_calculator(
-            response_object=result,
-            model=self.model,
-            cache_hit=cache_hit,
-            custom_llm_provider=self.model_call_details.get(
-                "custom_llm_provider", None
-            ),
-            base_model=_get_base_model_from_metadata(
-                model_call_details=self.model_call_details
-            ),
-            call_type=self.call_type,
-            optional_params=self.optional_params,
-            custom_pricing=custom_pricing,
-        )
+        try:
+            response_cost_calculator_kwargs = {
+                "response_object": result,
+                "model": self.model,
+                "cache_hit": cache_hit,
+                "custom_llm_provider": self.model_call_details.get(
+                    "custom_llm_provider", None
+                ),
+                "base_model": _get_base_model_from_metadata(
+                    model_call_details=self.model_call_details
+                ),
+                "call_type": self.call_type,
+                "optional_params": self.optional_params,
+                "custom_pricing": custom_pricing,
+            }
+        except Exception as e:  # error creating kwargs for cost calculation
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=traceback.format_exc(),
+                )
+            )
+            return None
 
-        return response_cost
+        try:
+            response_cost = litellm.response_cost_calculator(
+                **response_cost_calculator_kwargs
+            )
+
+            return response_cost
+        except Exception as e:  # error calculating cost
+            self.model_call_details["response_cost_failure_debug_information"] = (
+                StandardLoggingModelCostFailureDebugInformation(
+                    error_str=str(e),
+                    traceback_str=traceback.format_exc(),
+                    model=response_cost_calculator_kwargs["model"],
+                    cache_hit=response_cost_calculator_kwargs["cache_hit"],
+                    custom_llm_provider=response_cost_calculator_kwargs[
+                        "custom_llm_provider"
+                    ],
+                    base_model=response_cost_calculator_kwargs["base_model"],
+                    call_type=response_cost_calculator_kwargs["call_type"],
+                    custom_pricing=response_cost_calculator_kwargs["custom_pricing"],
+                )
+            )
+
+        return None
 
     def _success_handler_helper_fn(
         self, result=None, start_time=None, end_time=None, cache_hit=None
@@ -2501,11 +2533,15 @@ def get_standard_logging_object_payload(
                 )
             except Exception:
                 verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
-                    "Model is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload"
+                    "Model={} is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload".format(
+                        model_cost_name
+                    )
                 )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name, model_map_value=None
                 )
+
+        response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
@@ -2519,7 +2555,7 @@ def get_standard_logging_object_payload(
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
             cache_key=cache_key,
-            response_cost=kwargs.get("response_cost", 0),
+            response_cost=response_cost,
             total_tokens=usage.get("total_tokens", 0),
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
@@ -2537,6 +2573,9 @@ def get_standard_logging_object_payload(
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
+            response_cost_failure_debug_info=kwargs.get(
+                "response_cost_failure_debug_information"
+            ),
         )
 
         verbose_logger.debug(
