@@ -824,11 +824,15 @@ async def _PROXY_track_cost_callback(
                     "User API key and team id and user id missing from custom callback."
                 )
         else:
-            if kwargs["stream"] != True or (
-                kwargs["stream"] == True and "complete_streaming_response" in kwargs
+            if kwargs["stream"] is not True or (
+                kwargs["stream"] is True and "complete_streaming_response" in kwargs
             ):
+                cost_tracking_failure_debug_info = kwargs.get(
+                    "response_cost_failure_debug_information"
+                )
+                model = kwargs.get("model")
                 raise Exception(
-                    f"Model not in litellm model cost map. Passed model = {kwargs.get('model')} - Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
+                    f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                 )
     except Exception as e:
         error_msg = f"error in tracking cost callback - {traceback.format_exc()}"
