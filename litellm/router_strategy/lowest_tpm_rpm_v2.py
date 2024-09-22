@@ -21,7 +21,7 @@ class LiteLLMBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
         except Exception as e:
@@ -185,6 +185,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             deployment_rpm,
                             local_result,
                         ),
+                        headers={"retry-after": 60},  # type: ignore
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                 )
@@ -207,6 +208,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                                 deployment_rpm,
                                 result,
                             ),
+                            headers={"retry-after": 60},  # type: ignore
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                     )
@@ -321,15 +323,18 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         tpm_keys: list,
-        tpm_values: list,
+        tpm_values: Optional[list],
         rpm_keys: list,
-        rpm_values: list,
+        rpm_values: Optional[list],
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
-    ):
+    ) -> Optional[dict]:
         """
         Common checks for get available deployment, across sync + async implementations
         """
+        if tpm_values is None or rpm_values is None:
+            return None
+
         tpm_dict = {}  # {model_id: 1, ..}
         for idx, key in enumerate(tpm_keys):
             tpm_dict[tpm_keys[idx]] = tpm_values[idx]
@@ -455,8 +460,12 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             keys=combined_tpm_rpm_keys
         )  # [1, 2, None, ..]
 
-        tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]
-        rpm_values = combined_tpm_rpm_values[len(tpm_keys) :]
+        if combined_tpm_rpm_values is not None:
+            tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]
+            rpm_values = combined_tpm_rpm_values[len(tpm_keys) :]
+        else:
+            tpm_values = None
+            rpm_values = None
 
         deployment = self._common_checks_available_deployment(
             model_group=model_group,
@@ -472,7 +481,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         try:
             assert deployment is not None
             return deployment
-        except Exception as e:
+        except Exception:
             ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
             deployment_dict = {}
             for index, _deployment in enumerate(healthy_deployments):
@@ -494,7 +503,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_tpm = float("inf")
 
                     ### GET CURRENT TPM ###
-                    current_tpm = tpm_values[index]
+                    current_tpm = tpm_values[index] if tpm_values else 0
 
                     ### GET DEPLOYMENT TPM LIMIT ###
                     _deployment_rpm = None
@@ -512,7 +521,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_rpm = float("inf")
 
                     ### GET CURRENT RPM ###
-                    current_rpm = rpm_values[index]
+                    current_rpm = rpm_values[index] if rpm_values else 0
 
                     deployment_dict[id] = {
                         "current_tpm": current_tpm,
@@ -520,8 +529,16 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         "current_rpm": current_rpm,
                         "rpm_limit": _deployment_rpm,
                     }
-            raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
+            raise litellm.RateLimitError(
+                message=f"{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
+                llm_provider="",
+                model=model_group,
+                response=httpx.Response(
+                    status_code=429,
+                    content="",
+                    headers={"retry-after": str(60)},  # type: ignore
+                    request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
             )
 
     def get_available_deployments(
@@ -597,7 +614,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_tpm = float("inf")
 
                     ### GET CURRENT TPM ###
-                    current_tpm = tpm_values[index]
+                    current_tpm = tpm_values[index] if tpm_values else 0
 
                     ### GET DEPLOYMENT TPM LIMIT ###
                     _deployment_rpm = None
@@ -615,7 +632,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_rpm = float("inf")
 
                     ### GET CURRENT RPM ###
-                    current_rpm = rpm_values[index]
+                    current_rpm = rpm_values[index] if rpm_values else 0
 
                     deployment_dict[id] = {
                         "current_tpm": current_tpm,

@@ -86,6 +86,7 @@ class ModelInfo(TypedDict, total=False):
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
     supports_assistant_prefill: Optional[bool]
+    supports_prompt_caching: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
