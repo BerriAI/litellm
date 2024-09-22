@@ -436,7 +436,9 @@ async def _cache_management_object(
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        _value = value.model_dump_json(exclude_unset=True)
+        _value = value.model_dump_json(
+            exclude_unset=True, exclude={"parent_otel_span": True}
+        )
         await proxy_logging_obj.internal_usage_cache.async_set_cache(
             key=key, value=_value
         )
