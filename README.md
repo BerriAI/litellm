@@ -119,7 +119,6 @@ LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, DynamoDB
 from litellm import completion
 
 ## set env variables for logging tools
-os.environ["LITERAL_API_KEY"] = "your-literalai-api-key"
 os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["HELICONE_API_KEY"] = "your-helicone-auth-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
@@ -129,7 +128,7 @@ os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["literalai", "lunary", "langfuse", "athina", "helicone"] # log input/output to literal ai, lunary, langfuse, supabase, athina, helicone etc
+litellm.success_callback = ["lunary", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
