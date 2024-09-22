@@ -302,6 +302,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: Optional[int]
     order: Optional[int]
     weight: Optional[int]
+    max_parallel_requests: Optional[int]
     api_key: Optional[str]
     api_base: Optional[str]
     api_version: Optional[str]

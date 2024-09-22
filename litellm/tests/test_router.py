@@ -2215,16 +2215,39 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
 
     openai_client = openai.OpenAI(api_key="")
 
-    cooldown_time = 30.0
+    cooldown_time = 30
 
     def _return_exception(*args, **kwargs):
-        from fastapi import HTTPException
+        from httpx import Headers, Request, Response
 
-        raise HTTPException(
-            status_code=429,
-            detail="Rate Limited!",
-            headers={"retry-after": cooldown_time},  # type: ignore
-        )
+        kwargs = {
+            "request": Request("POST", "https://www.google.com"),
+            "message": "Error code: 429 - Rate Limit Error!",
+            "body": {"detail": "Rate Limit Error!"},
+            "code": None,
+            "param": None,
+            "type": None,
+            "response": Response(
+                status_code=429,
+                headers=Headers(
+                    {
+                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
+                        "server": "uvicorn",
+                        "retry-after": f"{cooldown_time}",
+                        "content-length": "30",
+                        "content-type": "application/json",
+                    }
+                ),
+                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
+            ),
+            "status_code": 429,
+            "request_id": None,
+        }
+
+        exception = Exception()
+        for k, v in kwargs.items():
+            setattr(exception, k, v)
+        raise exception
 
     with patch.object(
         openai_client.embeddings.with_raw_response,
@@ -2250,12 +2273,12 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
         print(
             f"new_retry_after_mock_client.call_args.kwargs: {new_retry_after_mock_client.call_args.kwargs}"
         )
+        print(
+            f"new_retry_after_mock_client.call_args: {new_retry_after_mock_client.call_args[0][0]}"
+        )
 
-        response_headers: httpx.Headers = new_retry_after_mock_client.call_args.kwargs[
-            "response_headers"
-        ]
-        assert "retry-after" in response_headers
-        assert response_headers["retry-after"] == cooldown_time
+        response_headers: httpx.Headers = new_retry_after_mock_client.call_args[0][0]
+        assert int(response_headers["retry-after"]) == cooldown_time
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -2270,6 +2293,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     ```
     """
     litellm.set_verbose = True
+    cooldown_time = 30.0
     router = Router(
         model_list=[
             {
@@ -2287,20 +2311,42 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
         ],
         set_verbose=True,
         debug_level="DEBUG",
+        cooldown_time=cooldown_time,
     )
 
     openai_client = openai.OpenAI(api_key="")
 
-    cooldown_time = 30.0
-
     def _return_exception(*args, **kwargs):
-        from fastapi import HTTPException
+        from httpx import Headers, Request, Response
 
-        raise HTTPException(
-            status_code=429,
-            detail="Rate Limited!",
-            headers={"retry-after": cooldown_time},
-        )
+        kwargs = {
+            "request": Request("POST", "https://www.google.com"),
+            "message": "Error code: 429 - Rate Limit Error!",
+            "body": {"detail": "Rate Limit Error!"},
+            "code": None,
+            "param": None,
+            "type": None,
+            "response": Response(
+                status_code=429,
+                headers=Headers(
+                    {
+                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
+                        "server": "uvicorn",
+                        "retry-after": f"{cooldown_time}",
+                        "content-length": "30",
+                        "content-type": "application/json",
+                    }
+                ),
+                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
+            ),
+            "status_code": 429,
+            "request_id": None,
+        }
+
+        exception = Exception()
+        for k, v in kwargs.items():
+            setattr(exception, k, v)
+        raise exception
 
     with patch.object(
         openai_client.embeddings.with_raw_response,
