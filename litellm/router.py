@@ -154,6 +154,7 @@ class Router:
         client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
         ## SCHEDULER ##
         polling_interval: Optional[float] = None,
+        default_priority: Optional[int] = None,
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
@@ -220,6 +221,7 @@ class Router:
             caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
             client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
             polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
+            default_priority: (Optional[int]): the default priority for a request. Only for '.scheduler_acompletion()'. Default is None.
             num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
             timeout (Optional[float]): Timeout for requests. Defaults to None.
             default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
@@ -336,6 +338,7 @@ class Router:
         self.scheduler = Scheduler(
             polling_interval=polling_interval, redis_cache=redis_cache
         )
+        self.default_priority = default_priority
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployments: Dict[str, List] = {}
@@ -712,12 +715,11 @@ class Router:
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
 
-            timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-            if kwargs.get("priority", None) is not None and isinstance(
-                kwargs.get("priority"), int
-            ):
+            request_priority = kwargs.get("priority") or self.default_priority
+
+            if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
@@ -3085,9 +3087,9 @@ class Router:
         except Exception as e:
             current_attempt = None
             original_exception = e
+
             """
             Retry Logic
-             
             """
             _healthy_deployments, _all_deployments = (
                 await self._async_get_healthy_deployments(
@@ -3105,16 +3107,6 @@ class Router:
                 content_policy_fallbacks=content_policy_fallbacks,
             )
 
-            # decides how long to sleep before retry
-            _timeout = self._time_to_sleep_before_retry(
-                e=original_exception,
-                remaining_retries=num_retries,
-                num_retries=num_retries,
-                healthy_deployments=_healthy_deployments,
-            )
-            # sleeps for the length of the timeout
-            await asyncio.sleep(_timeout)
-
             if (
                 self.retry_policy is not None
                 or self.model_group_retry_policy is not None
@@ -3128,11 +3120,19 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+            else:
+                raise
 
+            # decides how long to sleep before retry
+            _timeout = self._time_to_sleep_before_retry(
+                e=original_exception,
+                remaining_retries=num_retries,
+                num_retries=num_retries,
+                healthy_deployments=_healthy_deployments,
+            )
+            # sleeps for the length of the timeout
+            await asyncio.sleep(_timeout)
             for current_attempt in range(num_retries):
-                verbose_router_logger.debug(
-                    f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}"
-                )
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await original_function(*args, **kwargs)
@@ -3370,14 +3370,14 @@ class Router:
         if (
             healthy_deployments is not None
             and isinstance(healthy_deployments, list)
-            and len(healthy_deployments) > 0
+            and len(healthy_deployments) > 1
         ):
             return 0
 
         response_headers: Optional[httpx.Headers] = None
         if hasattr(e, "response") and hasattr(e.response, "headers"):  # type: ignore
             response_headers = e.response.headers  # type: ignore
-        elif hasattr(e, "litellm_response_headers"):
+        if hasattr(e, "litellm_response_headers"):
             response_headers = e.litellm_response_headers  # type: ignore
 
         if response_headers is not None:
@@ -3561,7 +3561,7 @@ class Router:
 
         except Exception as e:
             verbose_router_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
                     str(e)
                 )
             )
@@ -5324,7 +5324,6 @@ class Router:
 
             return deployment
         except Exception as e:
-
             traceback_exception = traceback.format_exc()
             # if router rejects call -> log to langfuse/otel/etc.
             if request_kwargs is not None:

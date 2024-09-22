@@ -12,6 +12,8 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Literal, Optional
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -424,6 +426,24 @@ async def get_user_object(
         )
 
 
+async def _cache_management_object(
+    key: str,
+    value: BaseModel,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    await user_api_key_cache.async_set_cache(key=key, value=value)
+
+    ## UPDATE REDIS CACHE ##
+    if proxy_logging_obj is not None:
+        _value = value.model_dump_json(
+            exclude_unset=True, exclude={"parent_otel_span": True}
+        )
+        await proxy_logging_obj.internal_usage_cache.async_set_cache(
+            key=key, value=_value
+        )
+
+
 async def _cache_team_object(
     team_id: str,
     team_table: LiteLLM_TeamTableCachedObj,
@@ -435,20 +455,45 @@ async def _cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
-    value = team_table.model_dump_json(exclude_unset=True)
-    await user_api_key_cache.async_set_cache(key=key, value=value)
+    await _cache_management_object(
+        key=key,
+        value=team_table,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _cache_key_object(
+    hashed_token: str,
+    user_api_key_obj: UserAPIKeyAuth,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    key = hashed_token
+
+    ## CACHE REFRESH TIME!
+    user_api_key_obj.last_refreshed_at = time.time()
+
+    await _cache_management_object(
+        key=key,
+        value=user_api_key_obj,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _delete_cache_key_object(
+    hashed_token: str,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    key = hashed_token
+
+    user_api_key_cache.delete_cache(key=key)
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=value
-        )
-
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=team_table
-        )
+        await proxy_logging_obj.internal_usage_cache.async_delete_cache(key=key)
 
 
 @log_to_opentelemetry
@@ -521,6 +566,83 @@ async def get_team_object(
     except Exception as e:
         raise Exception(
             f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        )
+
+
+@log_to_opentelemetry
+async def get_key_object(
+    hashed_token: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    check_cache_only: Optional[bool] = None,
+) -> UserAPIKeyAuth:
+    """
+    - Check if team id in proxy Team Table
+    - if valid, return LiteLLM_TeamTable object with defined limits
+    - if not, then raise an error
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    key = hashed_token
+    cached_team_obj: Optional[UserAPIKeyAuth] = None
+
+    ## CHECK REDIS CACHE ##
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
+    ):
+        cached_team_obj = (
+            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
+                key=key
+            )
+        )
+
+    if cached_team_obj is None:
+        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    if cached_team_obj is not None:
+        if isinstance(cached_team_obj, dict):
+            return UserAPIKeyAuth(**cached_team_obj)
+        elif isinstance(cached_team_obj, UserAPIKeyAuth):
+            return cached_team_obj
+
+    if check_cache_only:
+        raise Exception(
+            f"Key doesn't exist in cache + check_cache_only=True. key={key}."
+        )
+
+    # else, check db
+    try:
+        _valid_token: Optional[BaseModel] = await prisma_client.get_data(
+            token=hashed_token,
+            table_name="combined_view",
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        if _valid_token is None:
+            raise Exception
+
+        _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+
+        # save the key object to cache
+        await _cache_key_object(
+            hashed_token=hashed_token,
+            user_api_key_obj=_response,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        return _response
+    except Exception:
+        raise Exception(
+            f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
 
 
