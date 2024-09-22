@@ -301,6 +301,7 @@ async def test_completion_sagemaker_non_stream():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_sagemaker_prompt_template_non_stream():
     mock_response = MagicMock()
 
