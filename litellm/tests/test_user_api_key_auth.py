@@ -113,7 +113,9 @@ async def test_check_blocked_team():
     team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id, blocked=False, last_refreshed_at=time.time()
     )
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    hashed_token = hash_token(user_key)
+    print(f"STORING TOKEN UNDER KEY={hashed_token}")
+    user_api_key_cache.set_cache(key=hashed_token, value=valid_token)
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)

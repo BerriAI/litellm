@@ -530,7 +530,7 @@ async def user_api_key_auth(
         try:
             valid_token = await get_key_object(
                 hashed_token=hash_token(api_key),
-                prisma_client=None,
+                prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
@@ -655,25 +655,31 @@ async def user_api_key_auth(
         _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
-        try:
-            valid_token = await get_key_object(
-                hashed_token=api_key,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            # update end-user params on valid token
-            # These can change per request - it's important to update them here
-            valid_token.end_user_id = end_user_params.get("end_user_id")
-            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
-            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-            valid_token.allowed_model_region = end_user_params.get(
-                "allowed_model_region"
-            )
 
-        except Exception:
-            valid_token = None
+        if valid_token is None:
+            try:
+                valid_token = await get_key_object(
+                    hashed_token=api_key,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                # update end-user params on valid token
+                # These can change per request - it's important to update them here
+                valid_token.end_user_id = end_user_params.get("end_user_id")
+                valid_token.end_user_tpm_limit = end_user_params.get(
+                    "end_user_tpm_limit"
+                )
+                valid_token.end_user_rpm_limit = end_user_params.get(
+                    "end_user_rpm_limit"
+                )
+                valid_token.allowed_model_region = end_user_params.get(
+                    "allowed_model_region"
+                )
+
+            except Exception:
+                valid_token = None
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
