@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💡 Migrating from OpenAI (Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl)
+# Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl examples
 
 LiteLLM Proxy is **OpenAI-Compatible**, and supports:
 * /chat/completions 

@@ -31,6 +31,7 @@ const sidebars = {
         "proxy/quick_start",
         "proxy/docker_quick_start",
         "proxy/deploy", 
+        "proxy/demo",
         "proxy/prod",
         {
           type: "category",
@@ -44,9 +45,23 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/user_keys",
-        "proxy/demo",
         "proxy/configs",
         "proxy/reliability",
+        {
+          type: "category",
+          label: "🔑 Authentication",
+          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/oauth2"],
+        },
+        {
+          type: "category",
+          label: "💸 Spend Tracking + Budgets",
+          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+        },
+        {
+          type: "category",
+          label: "Routing",
+          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
+        },
         {
           type: "category",
           label: "Use with Provider SDKs",
@@ -59,9 +74,6 @@ const sidebars = {
             "pass_through/langfuse"
           ],
         },
-        "proxy/cost_tracking",
-        "proxy/custom_pricing",
-        "proxy/virtual_keys",
         {
           type: "category",
           label: "Admin UI",
@@ -94,24 +106,10 @@ const sidebars = {
             "oidc"
           ]
         },
-        "proxy/tag_routing",
-        "proxy/users",
-        "proxy/team_budgets",
-        "proxy/customers",
-        "proxy/billing",
-        "proxy/token_auth",
-        "proxy/oauth2",
         "proxy/caching",
         "proxy/pass_through",
         "proxy/email",
         "proxy/multiple_admins",
-        "proxy/team_based_routing",
-        "proxy/customer_routing",
-        {
-          type: "category",
-          label: "Extra Load Balancing",
-          items: ["proxy/load_balancing"],
-        },
         "proxy/model_management",
         "proxy/health",
         "proxy/debugging",
