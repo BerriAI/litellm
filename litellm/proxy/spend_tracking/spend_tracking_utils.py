@@ -7,7 +7,7 @@ from typing import Optional
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
-from litellm.proxy.utils import hash_token
+from litellm.proxy.utils import hash_token, serialize_if_possible
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -105,7 +105,7 @@ def get_logging_payload(
     additional_usage_values = {}
     for k, v in usage.items():
         if k not in special_usage_fields:
-            additional_usage_values.update({k: v})
+            additional_usage_values.update({k: serialize_if_possible(v)})
     clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:

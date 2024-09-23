@@ -3134,3 +3134,15 @@ def get_error_message_str(e: Exception) -> str:
     else:
         error_message = str(e)
     return error_message
+
+def serialize_if_possible(obj):
+    try:
+        # Try to serialize the object
+        json.dumps(obj)
+        return obj  # If it works, return as-is
+    except TypeError:
+        # If it fails, try converting to a dictionary if possible
+        if hasattr(obj, '__dict__'):
+            return obj.__dict__
+        # As a last resort, convert to a string
+        return str(obj)
