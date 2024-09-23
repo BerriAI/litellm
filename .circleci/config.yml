@@ -679,7 +679,7 @@ jobs:
             echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
 
-  playwright_testing:
+  e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -767,7 +767,7 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            npx playwright test --reporter=html,junit --output=test-results
+            npx playwright test --reporter=html --output=test-results
           no_output_timeout: 120m
       - store_test_results:
           path: test-results
@@ -836,7 +836,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - playwright_testing:
+      - e2e_ui_testing:
           filters:
             branches:
               only:
@@ -851,6 +851,7 @@ workflows:
             - litellm_router_testing
             - litellm_assistants_api_testing
             - ui_endpoint_testing
+            - e2e_ui_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
