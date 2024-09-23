@@ -356,6 +356,10 @@ async def auth_callback(request: Request):
             "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
         )
 
+        generic_provider_attribute_name = os.getenv(
+            "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
+        )
+
         verbose_proxy_logger.debug(
             f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
         )
@@ -373,6 +377,7 @@ async def auth_callback(request: Request):
                 email=response.get(generic_user_email_attribute_name),
                 first_name=response.get(generic_user_first_name_attribute_name),
                 last_name=response.get(generic_user_last_name_attribute_name),
+                provider=response.get(generic_provider_attribute_name),
             )
 
         SSOProvider = create_provider(
