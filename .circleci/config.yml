@@ -678,6 +678,67 @@ jobs:
               -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
+  playwright_testing:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.37.0-focal
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            npm install -D @playwright/test
+      - run:
+          name: Install Playwright Browsers
+          command: |
+            npx playwright install
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/playwright_test_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run Playwright Tests
+          command: |
+            npx playwright test --reporter=dot,junit --output=test-results
+          no_output_timeout: 120m
+      - store_test_results:
+          path: test-results
+
 workflows:
   version: 2
   build_and_test:
@@ -742,6 +803,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - playwright_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - publish_to_pypi:
           requires:
             - local_testing
@@ -750,6 +817,7 @@ workflows:
             - llm_translation_testing
             - litellm_router_testing
             - litellm_assistants_api_testing
+            - playwright_testing
             - ui_endpoint_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
