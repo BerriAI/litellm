@@ -59,3 +59,54 @@ async def test_proxy_failure_metrics():
             'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None",user="default_user_id"} 1.0'
             in metrics
         )
+
+
+@pytest.mark.asyncio()
+async def test_proxy_tokens_metric():
+    """
+    make a working /chat/completions call
+
+    check:
+    - litellm_input_tokens_total
+    - litellm_output_tokens_total
+    - litellm_total_tokens_total
+    """
+    async with aiohttp.ClientSession() as session:
+        # Make a working chat completion call
+        url = "http://0.0.0.0:4000/chat/completions"
+        headers = {
+            "Authorization": "Bearer sk-1234",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "model": "fake-openai-endpoint",
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        async with session.post(url, headers=headers, json=data) as response:
+            status = response.status
+            response_text = await response.text()
+            assert status == 200, f"Expected status 200, but got {status}"
+
+        # Get metrics
+        async with session.get("http://0.0.0.0:4000/metrics") as response:
+            metrics = await response.text()
+
+        print("/metrics", metrics)
+
+        # Check if the input tokens metric is present and correct
+        expected_input_tokens_metric = 'litellm_input_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"} 9.0'
+        assert (
+            expected_input_tokens_metric in metrics
+        ), "Expected input tokens metric not found in /metrics"
+
+        # Check if the output tokens metric is present and correct
+        expected_output_tokens_metric = 'litellm_output_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"} 12.0'
+        assert (
+            expected_output_tokens_metric in metrics
+        ), "Expected output tokens metric not found in /metrics"
+
+        # Check if the total tokens metric is present and correct
+        expected_total_tokens_metric = 'litellm_total_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"} 21.0'
+        assert (
+            expected_total_tokens_metric in metrics
+        ), "Expected total tokens metric not found in /metrics"
