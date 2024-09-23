@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
@@ -291,3 +292,21 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     for var in callbacks.callback_vars.values():
         assert "os.environ" not in var
+
+
+@pytest.mark.parametrize(
+    "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
+)
+def test_is_request_body_safe(allow_client_side_credentials, expect_error):
+    error_raised = False
+    try:
+        is_request_body_safe(
+            request_body={"api_base": "hello-world"},
+            general_settings={
+                "allow_client_side_credentials": allow_client_side_credentials
+            },
+        )
+    except Exception:
+        error_raised = True
+
+    assert expect_error == error_raised

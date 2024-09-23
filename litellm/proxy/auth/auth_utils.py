@@ -72,7 +72,7 @@ def check_complete_credentials(request_body: dict) -> bool:
     return False
 
 
-def is_request_body_safe(request_body: dict) -> bool:
+def is_request_body_safe(request_body: dict, general_settings: dict) -> bool:
     """
     Check if the request body is safe.
 
@@ -88,7 +88,13 @@ def is_request_body_safe(request_body: dict) -> bool:
                 request_body=request_body
             )
         ):
-            raise ValueError(f"BadRequest: {param} is not allowed in request body")
+            if general_settings.get("allow_client_side_credentials") is True:
+                return True
+            raise ValueError(
+                f"Rejected Request: {param} is not allowed in request body. "
+                "Enable with `general_settings::allow_client_side_credentials` on proxy config.yaml. "
+                "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
+            )
 
     return True
 
@@ -116,7 +122,7 @@ async def pre_db_read_auth_checks(
     await check_if_request_size_is_safe(request=request)
 
     # Check 2. Request body is safe
-    is_request_body_safe(request_body=request_data)
+    is_request_body_safe(request_body=request_data, general_settings=general_settings)
 
     # Check 3. Check if IP address is allowed
     is_valid_ip, passed_in_ip = _check_valid_ip(
