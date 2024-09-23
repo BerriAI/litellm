@@ -686,10 +686,12 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Install Dependencies
+          name: Install Python and Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            sudo apt-get update
+            sudo apt-get install -y python3 python3-pip
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r requirements.txt
             npm install -D @playwright/test
       - run:
           name: Install Playwright Browsers
@@ -817,7 +819,6 @@ workflows:
             - llm_translation_testing
             - litellm_router_testing
             - litellm_assistants_api_testing
-            - playwright_testing
             - ui_endpoint_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
