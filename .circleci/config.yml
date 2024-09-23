@@ -740,12 +740,9 @@ jobs:
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e REDIS_HOST=$REDIS_HOST \
-              -e REDIS_PASSWORD=$REDIS_PASSWORD \
-              -e REDIS_PORT=$REDIS_PORT \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name my-app \
-              -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
