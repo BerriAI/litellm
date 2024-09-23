@@ -705,9 +705,26 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
             npm install -D @playwright/test
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            pip install "openai==1.45.0"
+            python -m pip install --upgrade pip
+            pip install "pydantic==2.7.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install pyarrow
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "anyio==3.7.1"
+            pip install "asyncio==3.4.3"
       - run:
           name: Install Playwright Browsers
           command: |
