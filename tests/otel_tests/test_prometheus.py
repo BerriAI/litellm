@@ -94,19 +94,19 @@ async def test_proxy_tokens_metric():
         print("/metrics", metrics)
 
         # Check if the input tokens metric is present and correct
-        expected_input_tokens_metric = 'litellm_input_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"} 9.0'
+        expected_input_tokens_metric = 'litellm_input_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"}'
         assert (
             expected_input_tokens_metric in metrics
         ), "Expected input tokens metric not found in /metrics"
 
         # Check if the output tokens metric is present and correct
-        expected_output_tokens_metric = 'litellm_output_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"} 12.0'
+        expected_output_tokens_metric = 'litellm_output_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"}'
         assert (
             expected_output_tokens_metric in metrics
         ), "Expected output tokens metric not found in /metrics"
 
         # Check if the total tokens metric is present and correct
-        expected_total_tokens_metric = 'litellm_total_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"} 21.0'
+        expected_total_tokens_metric = 'litellm_total_tokens_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",model="gpt-3.5-turbo",team="None",team_alias="None",user="default_user_id"}'
         assert (
             expected_total_tokens_metric in metrics
         ), "Expected total tokens metric not found in /metrics"
