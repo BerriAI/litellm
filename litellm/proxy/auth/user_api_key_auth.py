@@ -70,6 +70,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import non_admin_allowed_routes_check
+from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -964,6 +965,12 @@ async def user_api_key_auth(
                 )
             else:
                 _team_obj = None
+
+            # Check 9: Check if key is a service account key
+            await service_account_checks(
+                valid_token=valid_token,
+                request_data=request_data,
+            )
 
             user_api_key_cache.set_cache(
                 key=valid_token.team_id, value=_team_obj
