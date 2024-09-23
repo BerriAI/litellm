@@ -678,20 +678,35 @@ jobs:
               -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
-  playwright_testing:
-    docker:
-      - image: mcr.microsoft.com/playwright:v1.37.0-focal
-    working_directory: ~/project
 
+  playwright_testing:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
     steps:
       - checkout
       - run:
-          name: Install Python and Dependencies
+          name: Install Docker CLI (In case it's not already installed)
           command: |
             sudo apt-get update
-            sudo apt-get install -y python3 python3-pip
-            python3 -m pip install --upgrade pip
-            python3 -m pip install -r requirements.txt
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
             npm install -D @playwright/test
       - run:
           name: Install Playwright Browsers
