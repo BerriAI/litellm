@@ -1,3 +1,11 @@
+/*
+
+Login to Admin UI
+Basic UI Test
+
+Click on all the tabs ensure nothing is broken
+*/
+
 import { test, expect } from '@playwright/test';
 
 test('admin login test', async ({ page }) => {
