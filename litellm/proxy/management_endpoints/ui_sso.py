@@ -357,7 +357,7 @@ async def auth_callback(request: Request):
         )
 
         generic_provider_attribute_name = os.getenv(
-            "GENERIC_PROVIDER_ATTRIBUTE", "provider"
+            "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
         )
 
         verbose_proxy_logger.debug(
