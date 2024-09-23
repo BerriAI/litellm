@@ -215,6 +215,7 @@ const sidebars = {
       items: [
         "embedding/supported_embedding",
         "image_generation",
+        "image_analysis",
         "audio_transcription",
         "text_to_speech",
         "rerank",
