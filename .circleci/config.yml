@@ -800,6 +800,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - e2e_ui_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
           filters:
             branches:
@@ -831,12 +837,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - load_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - e2e_ui_testing:
           filters:
             branches:
               only:
