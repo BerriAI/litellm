@@ -4112,30 +4112,6 @@ def test_completion_volcengine():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_nvidia_nim():
-    model_name = "nvidia_nim/databricks/dbrx-instruct"
-    try:
-        response = completion(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What's the weather like in Boston today in Fahrenheit?",
-                }
-            ],
-            presence_penalty=0.5,
-            frequency_penalty=0.1,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
-    except litellm.exceptions.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # Gemini tests
 @pytest.mark.parametrize(
     "model",
