@@ -740,6 +740,8 @@ jobs:
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e UI_USERNAME="admin" \
+              -e UI_PASSWORD="gm" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
