@@ -66,9 +66,6 @@ class CohereRerank(BaseLLM):
 
         request_data_dict = request_data.dict(exclude_none=True)
 
-        if _is_async:
-            return self.async_rerank(request_data_dict=request_data_dict, api_key=api_key, api_base=api_base, headers=headers)  # type: ignore # Call async method
-
         ## LOGGING
         litellm_logging_obj.pre_call(
             input=request_data_dict,
@@ -79,6 +76,10 @@ class CohereRerank(BaseLLM):
                 "headers": headers,
             },
         )
+
+        if _is_async:
+            return self.async_rerank(request_data_dict=request_data_dict, api_key=api_key, api_base=api_base, headers=headers)  # type: ignore # Call async method
+
         client = _get_httpx_client()
         response = client.post(
             api_base,

@@ -25,6 +25,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
 )
+from litellm.llms.fireworks_ai.cost_calculator import (
+    cost_per_token as fireworks_ai_cost_per_token,
+)
 from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -217,6 +220,8 @@ def cost_per_token(
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "fireworks_ai":
+        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
@@ -245,6 +250,13 @@ def cost_per_token(
                 )
             )
         return prompt_cost, completion_cost
+    elif call_type == "arerank" or call_type == "rerank":
+        completion_tokens_cost_usd_dollar = rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        prompt_tokens_cost_usd_dollar = 0
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
@@ -684,7 +696,18 @@ def completion_cost(
             call_type == CallTypes.speech.value or call_type == CallTypes.aspeech.value
         ):
             prompt_characters = litellm.utils._count_characters(text=prompt)
-
+        elif (
+            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
+        ):
+            if completion_response is not None and isinstance(
+                completion_response, RerankResponse
+            ):
+                meta_obj = completion_response.meta
+                billed_units = meta_obj.get("billed_units", {}) or {}
+                search_units = (
+                    billed_units.get("search_units") or 1
+                )  # cohere charges per request by default.
+                completion_tokens = search_units
         # Calculate cost based on prompt_tokens, completion_tokens
         if (
             "togethercomputer" in model
@@ -789,7 +812,7 @@ def response_cost_calculator(
 ) -> Optional[float]:
     """
     Returns
-    - float or None: cost of response OR none if error.
+    - float or None: cost of response
     """
     try:
         response_cost: float = 0.0
@@ -801,15 +824,6 @@ def response_cost_calculator(
             if isinstance(response_object, ImageResponse):
                 response_cost = completion_cost(
                     completion_response=response_object,
-                    model=model,
-                    call_type=call_type,
-                    custom_llm_provider=custom_llm_provider,
-                )
-            elif isinstance(response_object, RerankResponse) and (
-                call_type == "arerank" or call_type == "rerank"
-            ):
-                response_cost = rerank_cost(
-                    rerank_response=response_object,
                     model=model,
                     call_type=call_type,
                     custom_llm_provider=custom_llm_provider,
@@ -826,24 +840,12 @@ def response_cost_calculator(
                     custom_llm_provider=custom_llm_provider,
                 )
         return response_cost
-    except litellm.NotFoundError as e:
-        verbose_logger.debug(  # debug since it can be spammy in logs, for calls
-            f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
-        )
-        return None
     except Exception as e:
-        verbose_logger.debug(
-            "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                str(e), traceback.format_exc()
-            )
-        )
-        return None
+        raise e
 
 
 def rerank_cost(
-    rerank_response: RerankResponse,
     model: str,
-    call_type: Literal["rerank", "arerank"],
     custom_llm_provider: Optional[str],
 ) -> float:
     """

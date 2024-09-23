@@ -10,7 +10,7 @@ Track spend for keys, users, and teams across 100+ LLMs.
 
 **Step 1**
 
-👉 [Setup LiteLLM with a Database](https://docs.litellm.ai/docs/proxy/deploy)
+👉 [Setup LiteLLM with a Database](https://docs.litellm.ai/docs/proxy/virtual_keys#setup)
 
 
 **Step2** Send `/chat/completions` request
@@ -151,7 +151,7 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 </Tabs>
 
 ## ✨ (Enterprise) API Endpoints to get Spend
-#### Getting Spend Reports - To Charge Other Teams, Customers, Users
+### Getting Spend Reports - To Charge Other Teams, Customers, Users
 
 Use the `/global/spend/report` endpoint to get spend reports
 
@@ -159,7 +159,7 @@ Use the `/global/spend/report` endpoint to get spend reports
 
 <TabItem value="per team" label="Spend Per Team">
 
-##### Example Request
+#### Example Request
 
 👉 Key Change: Specify `group_by=team`
 
@@ -168,7 +168,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
   -H 'Authorization: Bearer sk-1234'
 ```
 
-##### Example Response
+#### Example Response
 <Tabs>
 
 <TabItem value="response" label="Expected Response">
@@ -292,7 +292,7 @@ Customer This is the value of `user_id` passed when calling [`/key/generate`](ht
 
 :::
 
-##### Example Request
+#### Example Request
 
 👉 Key Change: Specify `group_by=customer`
 
@@ -302,7 +302,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
   -H 'Authorization: Bearer sk-1234'
 ```
 
-##### Example Response
+#### Example Response
 
 
 ```shell
@@ -359,7 +359,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
   -H 'Authorization: Bearer sk-1234'
 ```
 
-##### Example Response
+#### Example Response
 
 
 ```shell
@@ -406,7 +406,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
   -H 'Authorization: Bearer sk-1234'
 ```
 
-##### Example Response
+#### Example Response
 
 
 ```shell
@@ -472,7 +472,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 
 </Tabs>
 
-#### Allowing Non-Proxy Admins to access `/spend` endpoints 
+### Allowing Non-Proxy Admins to access `/spend` endpoints 
 
 Use this when you want non-proxy admins to access `/spend` endpoints
 
@@ -572,7 +572,7 @@ model_list:
 
 👉 Head to [Custom Input/Output Pricing](https://docs.litellm.ai/docs/proxy/custom_pricing) to setup custom pricing or your models
 
-## ✨ Custom k,v pairs
+## ✨ Custom Spend Log metadata
 
 Log specific key,value pairs as part of the metadata for a spend log
 

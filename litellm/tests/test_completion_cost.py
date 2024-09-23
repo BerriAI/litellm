@@ -1255,3 +1255,54 @@ def test_completion_cost_databricks_embedding(model):
 
     print(resp)
     cost = completion_cost(completion_response=resp)
+
+
+def test_completion_cost_fireworks_ai():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    resp = litellm.completion(
+        model="fireworks_ai/mixtral-8x7b-instruct", messages=messages
+    )  # works fine
+
+    print(resp)
+    cost = completion_cost(completion_response=resp)
+
+
+def test_completion_cost_vertex_llama3():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import Choices, Message, ModelResponse, Usage
+
+    response = ModelResponse(
+        id="2024-09-19|14:52:01.823070-07|3.10.13.64|-333502972",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="My name is Litellm Bot, and I'm here to help you with any questions or tasks you may have. As for the weather, I'd be happy to provide you with the current conditions and forecast for your location. However, I'm a large language model, I don't have real-time access to your location, so I'll need you to tell me where you are or provide me with a specific location you're interested in knowing the weather for.\\n\\nOnce you provide me with that information, I can give you the current weather conditions, including temperature, humidity, wind speed, and more, as well as a forecast for the next few days. Just let me know how I can assist you!",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1726782721,
+        model="vertex_ai/meta/llama3-405b-instruct-maas",
+        object="chat.completion",
+        system_fingerprint="",
+        usage=Usage(
+            completion_tokens=152,
+            prompt_tokens=27,
+            total_tokens=179,
+            completion_tokens_details=None,
+        ),
+    )
+
+    model = "vertex_ai/meta/llama3-8b-instruct-maas"
+    cost = completion_cost(model=model, completion_response=response)
+
+    assert cost == 0

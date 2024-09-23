@@ -86,6 +86,7 @@ class ModelInfo(TypedDict, total=False):
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
     supports_assistant_prefill: Optional[bool]
+    supports_prompt_caching: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -118,6 +119,8 @@ class CallTypes(Enum):
     transcription = "transcription"
     aspeech = "aspeech"
     speech = "speech"
+    rerank = "rerank"
+    arerank = "arerank"
 
 
 class PassthroughCallTypes(Enum):
@@ -1278,6 +1281,23 @@ class StandardLoggingModelInformation(TypedDict):
     model_map_value: Optional[ModelInfo]
 
 
+class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
+    """
+    Debug information, if cost tracking fails.
+
+    Avoid logging sensitive information like response or optional params
+    """
+
+    error_str: Required[str]
+    traceback_str: Required[str]
+    model: str
+    cache_hit: Optional[bool]
+    custom_llm_provider: Optional[str]
+    base_model: Optional[str]
+    call_type: str
+    custom_pricing: Optional[bool]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
@@ -1285,6 +1305,9 @@ class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
     response_cost: float
+    response_cost_failure_debug_info: Optional[
+        StandardLoggingModelCostFailureDebugInformation
+    ]
     status: StandardLoggingPayloadStatus
     total_tokens: int
     prompt_tokens: int

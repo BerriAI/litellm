@@ -86,7 +86,7 @@ class VertexBase(BaseLLM):
                 )
 
             if project_id is None:
-                project_id = creds.project_id
+                project_id = getattr(creds, "project_id", None)
         else:
             creds, creds_project_id = google_auth.default(
                 quota_project_id=project_id,
@@ -95,7 +95,7 @@ class VertexBase(BaseLLM):
             if project_id is None:
                 project_id = creds_project_id
 
-        creds.refresh(Request())
+        creds.refresh(Request())  # type: ignore
 
         if not project_id:
             raise ValueError("Could not resolve project_id")
@@ -169,6 +169,39 @@ class VertexBase(BaseLLM):
             return True
         return False
 
+    def _check_custom_proxy(
+        self,
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        gemini_api_key: Optional[str],
+        endpoint: str,
+        stream: Optional[bool],
+        auth_header: Optional[str],
+        url: str,
+    ) -> Tuple[Optional[str], str]:
+        """
+        for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
+
+        ## Returns
+        - (auth_header, url) - Tuple[Optional[str], str]
+        """
+        if api_base:
+            if custom_llm_provider == "gemini":
+                url = "{}:{}".format(api_base, endpoint)
+                if gemini_api_key is None:
+                    raise ValueError(
+                        "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                    )
+                auth_header = (
+                    gemini_api_key  # cloudflare expects api key as bearer token
+                )
+            else:
+                url = "{}:{}".format(api_base, endpoint)
+
+            if stream is True:
+                url = url + "?alt=sse"
+        return auth_header, url
+
     def _get_token_and_url(
         self,
         model: str,
@@ -215,25 +248,15 @@ class VertexBase(BaseLLM):
                 vertex_api_version=version,
             )
 
-        if (
-            api_base is not None
-        ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
-            if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
-                if gemini_api_key is None:
-                    raise ValueError(
-                        "Missing gemini_api_key, please set `GEMINI_API_KEY`"
-                    )
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
-            else:
-                url = "{}:{}".format(api_base, endpoint)
-
-            if stream is True:
-                url = url + "?alt=sse"
-
-        return auth_header, url
+        return self._check_custom_proxy(
+            api_base=api_base,
+            auth_header=auth_header,
+            custom_llm_provider=custom_llm_provider,
+            gemini_api_key=gemini_api_key,
+            endpoint=endpoint,
+            stream=stream,
+            url=url,
+        )
 
     async def _ensure_access_token_async(
         self,

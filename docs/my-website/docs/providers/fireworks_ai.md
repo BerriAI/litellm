@@ -151,3 +151,17 @@ We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when se
 | mixtral-8x7b-instruct | `completion(model="fireworks_ai/mixtral-8x7b-instruct", messages)` | 
 | firefunction-v1 | `completion(model="fireworks_ai/firefunction-v1", messages)` |
 | llama-v2-70b-chat | `completion(model="fireworks_ai/llama-v2-70b-chat", messages)` |  
+
+## Supported Embedding Models
+
+:::info
+We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending embedding requests
+:::
+
+| Model Name            | Function Call                                                   |
+|-----------------------|-----------------------------------------------------------------|
+| fireworks_ai/nomic-ai/nomic-embed-text-v1.5 | `response = litellm.embedding(model="fireworks_ai/nomic-ai/nomic-embed-text-v1.5", input=input_text)` |
+| fireworks_ai/nomic-ai/nomic-embed-text-v1 | `response = litellm.embedding(model="fireworks_ai/nomic-ai/nomic-embed-text-v1", input=input_text)` |
+| fireworks_ai/WhereIsAI/UAE-Large-V1 | `response = litellm.embedding(model="fireworks_ai/WhereIsAI/UAE-Large-V1", input=input_text)` |
+| fireworks_ai/thenlper/gte-large | `response = litellm.embedding(model="fireworks_ai/thenlper/gte-large", input=input_text)` |
+| fireworks_ai/thenlper/gte-base | `response = litellm.embedding(model="fireworks_ai/thenlper/gte-base", input=input_text)` |

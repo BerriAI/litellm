@@ -24,7 +24,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -935,6 +935,9 @@ def test_completion_base64(model):
         print(f"\nResponse: {resp}")
 
         prompt_tokens = resp.usage.prompt_tokens
+    except litellm.ServiceUnavailableError as e:
+        print("got service unavailable error: ", e)
+        pass
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
@@ -1922,6 +1925,41 @@ async def test_openai_compatible_custom_api_base(provider):
             )
         except Exception as e:
             pass
+
+        mock_call.assert_called_once()
+
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+
+        assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
+
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk():
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": "Hello world",
+        }
+    ]
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="litellm_proxy/my-vllm-model",
+                messages=messages,
+                response_format={"type": "json_object"},
+                client=openai_client,
+                api_base="my-custom-api-base",
+                hello="world",
+            )
+        except Exception as e:
+            print(e)
 
         mock_call.assert_called_once()
 

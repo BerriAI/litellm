@@ -103,10 +103,20 @@ def rerank(
             )
         )
 
+        model_parameters = [
+            "top_n",
+            "rank_fields",
+            "return_documents",
+            "max_chunks_per_doc",
+        ]
+        model_params_dict = {}
+        for k, v in optional_params.model_fields.items():
+            if k in model_parameters:
+                model_params_dict[k] = v
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
-            optional_params=optional_params.model_dump(),
+            optional_params=model_params_dict,
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
@@ -114,6 +124,7 @@ def rerank(
                 "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
+                **optional_params.model_dump(exclude_unset=True),
             },
             custom_llm_provider=_custom_llm_provider,
         )

@@ -138,11 +138,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.common_utils.admin_ui_utils import (
-    admin_ui_disabled,
-    html_form,
-    show_missing_vars_in_env,
-)
+from litellm.proxy.common_utils.admin_ui_utils import html_form
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -194,6 +190,7 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
+from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -251,7 +248,7 @@ from litellm.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.secret_managers.google_kms import load_google_kms
-from litellm.secret_managers.main import get_secret, str_to_bool
+from litellm.secret_managers.main import get_secret, get_secret_str, str_to_bool
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -488,6 +485,7 @@ redis_usage_cache: Optional[RedisCache] = (
 )
 user_custom_auth = None
 user_custom_key_generate = None
+user_custom_sso = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
@@ -653,38 +651,24 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         return
 
     try:
-        from azure.identity import ClientSecretCredential, DefaultAzureCredential
+        from azure.identity import DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
 
         # Set your Azure Key Vault URI
         KVUri = os.getenv("AZURE_KEY_VAULT_URI", None)
 
-        # Set your Azure AD application/client ID, client secret, and tenant ID
-        client_id = os.getenv("AZURE_CLIENT_ID", None)
-        client_secret = os.getenv("AZURE_CLIENT_SECRET", None)
-        tenant_id = os.getenv("AZURE_TENANT_ID", None)
-
-        if (
-            KVUri is not None
-            and client_id is not None
-            and client_secret is not None
-            and tenant_id is not None
-        ):
-            # Initialize the ClientSecretCredential
-            # credential = ClientSecretCredential(
-            #     client_id=client_id, client_secret=client_secret, tenant_id=tenant_id
-            # )
-            credential = DefaultAzureCredential()
-
-            # Create the SecretClient using the credential
-            client = SecretClient(vault_url=KVUri, credential=credential)
-
-            litellm.secret_manager_client = client
-            litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
-        else:
+        if KVUri is None:
             raise Exception(
-                f"Missing KVUri or client_id or client_secret or tenant_id from environment"
+                "Error when loading keys from Azure Key Vault: AZURE_KEY_VAULT_URI is not set."
             )
+
+        credential = DefaultAzureCredential()
+
+        # Create the SecretClient using the credential
+        client = SecretClient(vault_url=KVUri, credential=credential)
+
+        litellm.secret_manager_client = client
+        litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
     except Exception as e:
         _error_str = str(e)
         verbose_proxy_logger.exception(
@@ -840,11 +824,15 @@ async def _PROXY_track_cost_callback(
                     "User API key and team id and user id missing from custom callback."
                 )
         else:
-            if kwargs["stream"] != True or (
-                kwargs["stream"] == True and "complete_streaming_response" in kwargs
+            if kwargs["stream"] is not True or (
+                kwargs["stream"] is True and "complete_streaming_response" in kwargs
             ):
+                cost_tracking_failure_debug_info = kwargs.get(
+                    "response_cost_failure_debug_information"
+                )
+                model = kwargs.get("model")
                 raise Exception(
-                    f"Model not in litellm model cost map. Passed model = {kwargs.get('model')} - Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
+                    f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                 )
     except Exception as e:
         error_msg = f"error in tracking cost callback - {traceback.format_exc()}"
@@ -898,7 +886,7 @@ async def update_database(
 ):
     try:
         global prisma_client
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Enters prisma db call, response_cost: {response_cost}, token: {token}; user_id: {user_id}; team_id: {team_id}"
         )
         if token is not None and isinstance(token, str) and token.startswith("sk-"):
@@ -1498,7 +1486,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         # Load existing config
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
@@ -1626,8 +1614,8 @@ class ProxyConfig:
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     self._init_cache(cache_params=cache_params)
                     if litellm.cache is not None:
-                        verbose_proxy_logger.debug(  # noqa
-                            f"{blue_color_code}Set Cache on LiteLLM Proxy= {vars(litellm.cache.cache)}{vars(litellm.cache)}{reset_color_code}"
+                        verbose_proxy_logger.debug(
+                            f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
                         )
                 elif key == "cache" and value is False:
                     pass
@@ -1860,6 +1848,13 @@ class ProxyConfig:
                 user_custom_key_generate = get_instance_fn(
                     value=custom_key_generate, config_file_path=config_file_path
                 )
+
+            custom_sso = general_settings.get("custom_sso", None)
+            if custom_sso is not None:
+                user_custom_sso = get_instance_fn(
+                    value=custom_sso, config_file_path=config_file_path
+                )
+
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
                 await initialize_pass_through_endpoints(
@@ -2243,9 +2238,12 @@ class ProxyConfig:
                 and _general_settings.get("alerting", None) is not None
                 and isinstance(_general_settings["alerting"], list)
             ):
-                for alert in _general_settings["alerting"]:
-                    if alert not in general_settings["alerting"]:
-                        general_settings["alerting"].append(alert)
+                verbose_proxy_logger.debug(
+                    "Overriding Default 'alerting' values with db 'alerting' values."
+                )
+                general_settings["alerting"] = _general_settings[
+                    "alerting"
+                ]  # override yaml values with db
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
                     "alerting"
@@ -2734,9 +2732,21 @@ async def startup_event():
 
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
+    env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
     verbose_proxy_logger.debug("worker_config: %s", worker_config)
     # check if it's a valid file path
-    if worker_config is not None:
+    if env_config_yaml is not None:
+        if os.path.isfile(env_config_yaml) and proxy_config.is_yaml(
+            config_file_path=env_config_yaml
+        ):
+            (
+                llm_router,
+                llm_model_list,
+                general_settings,
+            ) = await proxy_config.load_config(
+                router=llm_router, config_file_path=env_config_yaml
+            )
+    elif worker_config is not None:
         if (
             isinstance(worker_config, str)
             and os.path.isfile(worker_config)
@@ -7589,7 +7599,6 @@ async def model_info_v1(
 
 @router.get(
     "/model_group/info",
-    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -7597,7 +7606,134 @@ async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Returns model info at the model group level.
+    Get information about all the deployments on litellm proxy, including config.yaml descriptions (except api key and api base)
+
+    - /models returns all deployments. Proxy Admins can use this to list all deployments setup on the proxy
+    - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
+
+
+    ```shell
+    curl -X 'GET' \
+    'http://localhost:4000/model_group/info' \
+    -H 'accept: application/json' \
+    -H 'x-api-key: sk-1234'
+    ```
+
+    Example Response:
+    ```json
+        {
+            "data": [
+                {
+                "model_group": "rerank-english-v3.0",
+                "providers": [
+                    "cohere"
+                ],
+                "max_input_tokens": null,
+                "max_output_tokens": null,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "mode": null,
+                "tpm": null,
+                "rpm": null,
+                "supports_parallel_function_calling": false,
+                "supports_vision": false,
+                "supports_function_calling": false,
+                "supported_openai_params": [
+                    "stream",
+                    "temperature",
+                    "max_tokens",
+                    "logit_bias",
+                    "top_p",
+                    "frequency_penalty",
+                    "presence_penalty",
+                    "stop",
+                    "n",
+                    "extra_headers"
+                ]
+                },
+                {
+                "model_group": "gpt-3.5-turbo",
+                "providers": [
+                    "openai"
+                ],
+                "max_input_tokens": 16385.0,
+                "max_output_tokens": 4096.0,
+                "input_cost_per_token": 1.5e-06,
+                "output_cost_per_token": 2e-06,
+                "mode": "chat",
+                "tpm": null,
+                "rpm": null,
+                "supports_parallel_function_calling": false,
+                "supports_vision": false,
+                "supports_function_calling": true,
+                "supported_openai_params": [
+                    "frequency_penalty",
+                    "logit_bias",
+                    "logprobs",
+                    "top_logprobs",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "n",
+                    "presence_penalty",
+                    "seed",
+                    "stop",
+                    "stream",
+                    "stream_options",
+                    "temperature",
+                    "top_p",
+                    "tools",
+                    "tool_choice",
+                    "function_call",
+                    "functions",
+                    "max_retries",
+                    "extra_headers",
+                    "parallel_tool_calls",
+                    "response_format"
+                ]
+                },
+                {
+                "model_group": "llava-hf",
+                "providers": [
+                    "openai"
+                ],
+                "max_input_tokens": null,
+                "max_output_tokens": null,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "mode": null,
+                "tpm": null,
+                "rpm": null,
+                "supports_parallel_function_calling": false,
+                "supports_vision": true,
+                "supports_function_calling": false,
+                "supported_openai_params": [
+                    "frequency_penalty",
+                    "logit_bias",
+                    "logprobs",
+                    "top_logprobs",
+                    "max_tokens",
+                    "max_completion_tokens",
+                    "n",
+                    "presence_penalty",
+                    "seed",
+                    "stop",
+                    "stream",
+                    "stream_options",
+                    "temperature",
+                    "top_p",
+                    "tools",
+                    "tool_choice",
+                    "function_call",
+                    "functions",
+                    "max_retries",
+                    "extra_headers",
+                    "parallel_tool_calls",
+                    "response_format"
+                ]
+                }
+            ]
+            }
+    ```
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
@@ -7793,10 +7929,13 @@ async def alerting_settings(
     if db_general_settings is not None and db_general_settings.param_value is not None:
         db_general_settings_dict = dict(db_general_settings.param_value)
         alerting_args_dict: dict = db_general_settings_dict.get("alerting_args", {})  # type: ignore
+        alerting_values: Optional[list] = db_general_settings_dict.get("alerting")  # type: ignore
     else:
         alerting_args_dict = {}
+        alerting_values = None
 
     allowed_args = {
+        "slack_alerting": {"type": "Boolean"},
         "daily_report_frequency": {"type": "Integer"},
         "report_check_interval": {"type": "Integer"},
         "budget_alert_ttl": {"type": "Integer"},
@@ -7811,6 +7950,25 @@ async def alerting_settings(
     _slack_alerting_args_dict = _slack_alerting.alerting_args.model_dump()
 
     return_val = []
+
+    is_slack_enabled = False
+
+    if general_settings.get("alerting") and isinstance(
+        general_settings["alerting"], list
+    ):
+        if "slack" in general_settings["alerting"]:
+            is_slack_enabled = True
+
+    _response_obj = ConfigList(
+        field_name="slack_alerting",
+        field_type=allowed_args["slack_alerting"]["type"],
+        field_description="Enable slack alerting for monitoring proxy in production: llm outages, budgets, spend tracking failures.",
+        field_value=is_slack_enabled,
+        stored_in_db=True if alerting_values is not None else False,
+        field_default_value=None,
+        premium_field=False,
+    )
+    return_val.append(_response_obj)
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
@@ -7951,184 +8109,6 @@ async def async_queue_request(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
-
-#### LOGIN ENDPOINTS ####
-
-
-@app.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request):
-    """
-    Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
-    PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
-    Example:
-    """
-    global premium_user, prisma_client, master_key
-
-    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
-    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
-
-    ####### Check if UI is disabled #######
-    _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None:
-        is_disabled = str_to_bool(value=_disable_ui_flag)
-        if is_disabled:
-            return admin_ui_disabled()
-
-    ####### Check if user is a Enterprise / Premium User #######
-    if (
-        microsoft_client_id is not None
-        or google_client_id is not None
-        or generic_client_id is not None
-    ):
-        if premium_user != True:
-            raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                type=ProxyErrorTypes.auth_error,
-                param="premium_user",
-                code=status.HTTP_403_FORBIDDEN,
-            )
-
-    ####### Detect DB + MASTER KEY in .env #######
-    missing_env_vars = show_missing_vars_in_env()
-    if missing_env_vars is not None:
-        return missing_env_vars
-
-    # get url from request
-    redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
-    ui_username = os.getenv("UI_USERNAME")
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
-    # Google SSO Auth
-    if google_client_id is not None:
-        from fastapi_sso.sso.google import GoogleSSO
-
-        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
-        if google_client_secret is None:
-            raise ProxyException(
-                message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GOOGLE_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        google_sso = GoogleSSO(
-            client_id=google_client_id,
-            client_secret=google_client_secret,
-            redirect_uri=redirect_url,
-        )
-        verbose_proxy_logger.info(
-            f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {redirect_url}\nGOOGLE_CLIENT_ID: {google_client_id}"
-        )
-        with google_sso:
-            return await google_sso.get_login_redirect()
-    # Microsoft SSO Auth
-    elif microsoft_client_id is not None:
-        from fastapi_sso.sso.microsoft import MicrosoftSSO
-
-        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
-        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
-        if microsoft_client_secret is None:
-            raise ProxyException(
-                message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="MICROSOFT_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        microsoft_sso = MicrosoftSSO(
-            client_id=microsoft_client_id,
-            client_secret=microsoft_client_secret,
-            tenant=microsoft_tenant,
-            redirect_uri=redirect_url,
-            allow_insecure_http=True,
-        )
-        with microsoft_sso:
-            return await microsoft_sso.get_login_redirect()
-    elif generic_client_id is not None:
-        from fastapi_sso.sso.base import DiscoveryDocument
-        from fastapi_sso.sso.generic import create_provider
-
-        generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-        generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
-        generic_authorization_endpoint = os.getenv(
-            "GENERIC_AUTHORIZATION_ENDPOINT", None
-        )
-        generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
-        generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
-        if generic_client_secret is None:
-            raise ProxyException(
-                message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_authorization_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_AUTHORIZATION_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_token_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_TOKEN_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_userinfo_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_USERINFO_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        verbose_proxy_logger.debug(
-            f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
-        )
-        verbose_proxy_logger.debug(
-            f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
-        )
-        discovery = DiscoveryDocument(
-            authorization_endpoint=generic_authorization_endpoint,
-            token_endpoint=generic_token_endpoint,
-            userinfo_endpoint=generic_userinfo_endpoint,
-        )
-        SSOProvider = create_provider(name="oidc", discovery_document=discovery)
-        generic_sso = SSOProvider(
-            client_id=generic_client_id,
-            client_secret=generic_client_secret,
-            redirect_uri=redirect_url,
-            allow_insecure_http=True,
-            scope=generic_scope,
-        )
-        with generic_sso:
-            # TODO: state should be a random string and added to the user session with cookie
-            # or a cryptographicly signed state that we can verify stateless
-            # For simplification we are using a static state, this is not perfect but some
-            # SSO providers do not allow stateless verification
-            redirect_params = {}
-            state = os.getenv("GENERIC_CLIENT_STATE", None)
-
-            if state:
-                redirect_params["state"] = state
-            elif "okta" in generic_authorization_endpoint:
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
-            return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
-    elif ui_username is not None:
-        # No Google, Microsoft SSO
-        # Use UI Credentials set in .env
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=html_form, status_code=200)
-    else:
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=html_form, status_code=200)
 
 
 @app.get("/fallback/login", tags=["experimental"], include_in_schema=False)
@@ -8360,19 +8340,6 @@ async def login(request: Request):
         )
 
 
-@app.get(
-    "/sso/get/logout_url",
-    tags=["experimental"],
-    include_in_schema=False,
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def get_logout_url(request: Request):
-    _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-    _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
-
-    return {"PROXY_BASE_URL": _proxy_base_url, "PROXY_LOGOUT_URL": _logout_url}
-
-
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str):
     """
@@ -8591,376 +8558,6 @@ def get_image():
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
         return FileResponse(logo_path, media_type="image/jpeg")
-
-
-@app.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request):
-    """Verify login"""
-    global general_settings, ui_access_mode, premium_user, master_key
-    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
-    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
-    # get url from request
-    if master_key is None:
-        raise ProxyException(
-            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type=ProxyErrorTypes.auth_error,
-            param="master_key",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-    redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
-    if redirect_url.endswith("/"):
-        redirect_url += "sso/callback"
-    else:
-        redirect_url += "/sso/callback"
-
-    result = None
-    if google_client_id is not None:
-        from fastapi_sso.sso.google import GoogleSSO
-
-        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
-        if google_client_secret is None:
-            raise ProxyException(
-                message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GOOGLE_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        google_sso = GoogleSSO(
-            client_id=google_client_id,
-            redirect_uri=redirect_url,
-            client_secret=google_client_secret,
-        )
-        result = await google_sso.verify_and_process(request)
-    elif microsoft_client_id is not None:
-        from fastapi_sso.sso.microsoft import MicrosoftSSO
-
-        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
-        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
-        if microsoft_client_secret is None:
-            raise ProxyException(
-                message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="MICROSOFT_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if microsoft_tenant is None:
-            raise ProxyException(
-                message="MICROSOFT_TENANT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="MICROSOFT_TENANT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        microsoft_sso = MicrosoftSSO(
-            client_id=microsoft_client_id,
-            client_secret=microsoft_client_secret,
-            tenant=microsoft_tenant,
-            redirect_uri=redirect_url,
-            allow_insecure_http=True,
-        )
-        result = await microsoft_sso.verify_and_process(request)
-    elif generic_client_id is not None:
-        # make generic sso provider
-        from fastapi_sso.sso.base import DiscoveryDocument, OpenID
-        from fastapi_sso.sso.generic import create_provider
-
-        generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-        generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
-        generic_authorization_endpoint = os.getenv(
-            "GENERIC_AUTHORIZATION_ENDPOINT", None
-        )
-        generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
-        generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
-        generic_include_client_id = (
-            os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
-        )
-        if generic_client_secret is None:
-            raise ProxyException(
-                message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_authorization_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_AUTHORIZATION_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_token_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_TOKEN_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_userinfo_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_USERINFO_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        verbose_proxy_logger.debug(
-            f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
-        )
-        verbose_proxy_logger.debug(
-            f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
-        )
-
-        generic_user_id_attribute_name = os.getenv(
-            "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
-        )
-        generic_user_display_name_attribute_name = os.getenv(
-            "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
-        )
-        generic_user_email_attribute_name = os.getenv(
-            "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
-        )
-        generic_user_role_attribute_name = os.getenv(
-            "GENERIC_USER_ROLE_ATTRIBUTE", "role"
-        )
-        generic_user_first_name_attribute_name = os.getenv(
-            "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
-        )
-        generic_user_last_name_attribute_name = os.getenv(
-            "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
-        )
-
-        verbose_proxy_logger.debug(
-            f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
-        )
-
-        discovery = DiscoveryDocument(
-            authorization_endpoint=generic_authorization_endpoint,
-            token_endpoint=generic_token_endpoint,
-            userinfo_endpoint=generic_userinfo_endpoint,
-        )
-
-        def response_convertor(response, client):
-            return OpenID(
-                id=response.get(generic_user_id_attribute_name),
-                display_name=response.get(generic_user_display_name_attribute_name),
-                email=response.get(generic_user_email_attribute_name),
-                first_name=response.get(generic_user_first_name_attribute_name),
-                last_name=response.get(generic_user_last_name_attribute_name),
-            )
-
-        SSOProvider = create_provider(
-            name="oidc",
-            discovery_document=discovery,
-            response_convertor=response_convertor,
-        )
-        generic_sso = SSOProvider(
-            client_id=generic_client_id,
-            client_secret=generic_client_secret,
-            redirect_uri=redirect_url,
-            allow_insecure_http=True,
-            scope=generic_scope,
-        )
-        verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
-        result = await generic_sso.verify_and_process(
-            request, params={"include_client_id": generic_include_client_id}
-        )
-        verbose_proxy_logger.debug("generic result: %s", result)
-
-    # User is Authe'd in - generate key for the UI to access Proxy
-    user_email: Optional[str] = getattr(result, "email", None)
-    user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
-
-    if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
-        email_domain = user_email.split("@")[1]
-        allowed_domains = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")  # type: ignore
-        if email_domain not in allowed_domains:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "message": "The email domain={}, is not an allowed email domain={}. Contact your admin to change this.".format(
-                        email_domain, allowed_domains
-                    )
-                },
-            )
-
-    # generic client id
-    if generic_client_id is not None and result is not None:
-        user_id = getattr(result, "id", None)
-        user_email = getattr(result, "email", None)
-        user_role = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
-
-    if user_id is None and result is not None:
-        _first_name = getattr(result, "first_name", "") or ""
-        _last_name = getattr(result, "last_name", "") or ""
-        user_id = _first_name + _last_name
-
-    if user_email is not None and (user_id is None or len(user_id) == 0):
-        user_id = user_email
-
-    user_info = None
-    user_id_models: List = []
-    max_internal_user_budget = litellm.max_internal_user_budget
-    internal_user_budget_duration = litellm.internal_user_budget_duration
-
-    # User might not be already created on first generation of key
-    # But if it is, we want their models preferences
-    default_ui_key_values = {
-        "duration": "24hr",
-        "key_max_budget": 0.01,
-        "aliases": {},
-        "config": {},
-        "spend": 0,
-        "team_id": "litellm-dashboard",
-    }
-    user_defined_values: Optional[SSOUserDefinedValues] = None
-    if user_id is not None:
-        user_defined_values = SSOUserDefinedValues(
-            models=user_id_models,
-            user_id=user_id,
-            user_email=user_email,
-            max_budget=max_internal_user_budget,
-            user_role=None,
-            budget_duration=internal_user_budget_duration,
-        )
-
-    _user_id_from_sso = user_id
-    user_role = None
-    try:
-        if prisma_client is not None:
-            user_info = await prisma_client.get_data(user_id=user_id, table_name="user")
-            verbose_proxy_logger.debug(
-                f"user_info: {user_info}; litellm.default_user_params: {litellm.default_user_params}"
-            )
-            if user_info is None:
-                ## check if user-email in db ##
-                user_info = await prisma_client.db.litellm_usertable.find_first(
-                    where={"user_email": user_email}
-                )
-
-            if user_info is not None and user_id is not None:
-                user_defined_values = SSOUserDefinedValues(
-                    models=getattr(user_info, "models", user_id_models),
-                    user_id=user_id,
-                    user_email=getattr(user_info, "user_email", user_email),
-                    user_role=getattr(user_info, "user_role", None),
-                    max_budget=getattr(
-                        user_info, "max_budget", max_internal_user_budget
-                    ),
-                    budget_duration=getattr(
-                        user_info, "budget_duration", internal_user_budget_duration
-                    ),
-                )
-
-                user_role = getattr(user_info, "user_role", None)
-
-                # update id
-                await prisma_client.db.litellm_usertable.update_many(
-                    where={"user_email": user_email}, data={"user_id": user_id}  # type: ignore
-                )
-            elif litellm.default_user_params is not None and isinstance(
-                litellm.default_user_params, dict
-            ):
-                user_defined_values = {
-                    "models": litellm.default_user_params.get("models", user_id_models),
-                    "user_id": litellm.default_user_params.get("user_id", user_id),
-                    "user_email": litellm.default_user_params.get(
-                        "user_email", user_email
-                    ),
-                    "user_role": litellm.default_user_params.get("user_role", None),
-                    "max_budget": litellm.default_user_params.get(
-                        "max_budget", max_internal_user_budget
-                    ),
-                    "budget_duration": litellm.default_user_params.get(
-                        "budget_duration", internal_user_budget_duration
-                    ),
-                }
-
-    except Exception as e:
-        pass
-
-    if user_defined_values is None:
-        raise Exception(
-            "Unable to map user identity to known values. 'user_defined_values' is None. File an issue - https://github.com/BerriAI/litellm/issues"
-        )
-
-    is_internal_user = False
-    if (
-        user_defined_values["user_role"] is not None
-        and user_defined_values["user_role"] == LitellmUserRoles.INTERNAL_USER.value
-    ):
-        is_internal_user = True
-    if (
-        is_internal_user is True
-        and user_defined_values["max_budget"] is None
-        and litellm.max_internal_user_budget is not None
-    ):
-        user_defined_values["max_budget"] = litellm.max_internal_user_budget
-
-    if (
-        is_internal_user is True
-        and user_defined_values["budget_duration"] is None
-        and litellm.internal_user_budget_duration is not None
-    ):
-        user_defined_values["budget_duration"] = litellm.internal_user_budget_duration
-
-    verbose_proxy_logger.info(
-        f"user_defined_values for creating ui key: {user_defined_values}"
-    )
-
-    default_ui_key_values.update(user_defined_values)
-    default_ui_key_values["request_type"] = "key"
-    response = await generate_key_helper_fn(
-        **default_ui_key_values,  # type: ignore
-    )
-    key = response["token"]  # type: ignore
-    user_id = response["user_id"]  # type: ignore
-
-    # This should always be true
-    # User_id on SSO == user_id in the LiteLLM_VerificationToken Table
-    assert user_id == _user_id_from_sso
-    litellm_dashboard_ui = "/ui/"
-    user_role = user_role or "app_owner"
-    if (
-        os.getenv("PROXY_ADMIN_ID", None) is not None
-        and os.environ["PROXY_ADMIN_ID"] == user_id
-    ):
-        # checks if user is admin
-        user_role = "app_admin"
-
-    verbose_proxy_logger.debug(
-        f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
-    )
-    ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    if ui_access_mode == "admin_only" and "admin" not in user_role:
-        verbose_proxy_logger.debug("EXCEPTION RAISED")
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
-            },
-        )
-
-    import jwt
-
-    jwt_token = jwt.encode(  # type: ignore
-        {
-            "user_id": user_id,
-            "key": key,
-            "user_email": user_email,
-            "user_role": user_role,
-            "login_method": "sso",
-            "premium_user": premium_user,
-            "auth_header_name": general_settings.get(
-                "litellm_key_header_name", "Authorization"
-            ),
-        },
-        master_key,
-        algorithm="HS256",
-    )
-    if user_id is not None and isinstance(user_id, str):
-        litellm_dashboard_ui += "?userID=" + user_id
-    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
-    return redirect_response
 
 
 #### INVITATION MANAGEMENT ####
@@ -10024,7 +9621,7 @@ async def shutdown_event():
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
 
     # Set all variables to None
     master_key = None
@@ -10033,6 +9630,7 @@ def cleanup_router_config_variables():
     user_custom_auth = None
     user_custom_auth_path = None
     user_custom_key_generate = None
+    user_custom_sso = None
     use_background_health_checks = None
     health_check_interval = None
     health_check_details = None
@@ -10051,6 +9649,7 @@ app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(team_router)
+app.include_router(ui_sso_router)
 app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)

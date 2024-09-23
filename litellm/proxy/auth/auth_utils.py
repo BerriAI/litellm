@@ -354,9 +354,26 @@ def is_pass_through_provider_route(route: str) -> bool:
 def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     """
     Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on /vertex-ai/{endpoint} routes
+    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on provider pass through routes
+    ex /vertex-ai/{endpoint} routes
+    Run virtual key auth if the following is try:
+    - User is premium_user
+    - User has enabled litellm_setting.use_client_credentials_pass_through_routes
     """
-    # by default we do not run virtual key auth checks on /vertex-ai/{endpoint} routes
-    return False
+    from litellm.proxy.proxy_server import general_settings, premium_user
+
+    if premium_user is not True:
+        return False
+
+    # premium use has opted into using client credentials
+    if (
+        general_settings.get("use_client_credentials_pass_through_routes", False)
+        is True
+    ):
+        return False
+
+    # only enabled for LiteLLM Enterprise
+    return True
 
 
 def _has_user_setup_sso():

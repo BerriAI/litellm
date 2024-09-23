@@ -284,12 +284,7 @@ class LiteLLMRoutes(enum.Enum):
     master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
     sso_only_routes = [
-        "/key/generate",
-        "/key/update",
-        "/key/delete",
-        "/global/spend/logs",
-        "/global/predict/spend/logs",
-        "/sso/get/logout_url",
+        "/sso/get/ui_settings",
     ]
 
     management_routes = [  # key
@@ -336,6 +331,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/models",
         "/global/predict/spend/logs",
         "/global/spend/report",
+        "/global/spend/provider",
     ]
 
     public_routes = [
@@ -365,6 +361,10 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + sso_only_routes
+    )
+
+    internal_user_view_only_routes = (
+        spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
 
     self_managed_routes = [
@@ -632,6 +632,7 @@ class _GenerateKeyRequest(GenerateRequestBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    blocked: Optional[bool] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
@@ -965,6 +966,10 @@ class DeleteTeamRequest(LiteLLMBase):
 
 class BlockTeamRequest(LiteLLMBase):
     team_id: str  # required
+
+
+class BlockKeyRequest(LiteLLMBase):
+    key: str  # required
 
 
 class AddTeamCallback(LiteLLMBase):
@@ -1359,6 +1364,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
+    blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
 
@@ -1420,6 +1426,13 @@ class UserAPIKeyAuth(
 
     class Config:
         arbitrary_types_allowed = True
+
+
+class UserInfoResponse(LiteLLMBase):
+    user_id: Optional[str]
+    user_info: Optional[Union[dict, BaseModel]]
+    keys: List
+    teams: List
 
 
 class LiteLLM_Config(LiteLLMBase):
@@ -1509,7 +1522,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     updated_at: datetime
     changed_by: str
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted"]
+    action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
         LitellmTableNames.USER_TABLE_NAME,
