@@ -27,5 +27,5 @@ litellm_settings:
 
 general_settings:
   service_account_settings:
-    required_params: ["user"]
+    enforced_params: ["user"]
 
