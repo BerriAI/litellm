@@ -297,14 +297,68 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 @pytest.mark.parametrize(
     "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
 )
-def test_is_request_body_safe(allow_client_side_credentials, expect_error):
+def test_is_request_body_safe_global_enabled(
+    allow_client_side_credentials, expect_error
+):
+    from litellm import Router
+
     error_raised = False
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            }
+        ]
+    )
     try:
         is_request_body_safe(
             request_body={"api_base": "hello-world"},
             general_settings={
                 "allow_client_side_credentials": allow_client_side_credentials
             },
+            llm_router=llm_router,
+        )
+    except Exception:
+        error_raised = True
+
+    assert expect_error == error_raised
+
+
+@pytest.mark.parametrize(
+    "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
+)
+def test_is_request_body_safe_model_enabled(
+    allow_client_side_credentials, expect_error
+):
+    from litellm import Router
+
+    error_raised = False
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "fireworks_ai/*",
+                "litellm_params": {
+                    "model": "fireworks_ai/*",
+                    "api_key": os.getenv("FIREWORKS_API_KEY"),
+                    "configurable_clientside_auth_parameters": (
+                        ["api_base"] if allow_client_side_credentials else []
+                    ),
+                },
+            }
+        ]
+    )
+    try:
+        is_request_body_safe(
+            request_body={"api_base": "hello-world"},
+            general_settings={},
+            llm_router=llm_router,
+            model="fireworks_ai/my-new-model",
         )
     except Exception:
         error_raised = True
