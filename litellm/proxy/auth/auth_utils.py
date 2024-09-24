@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
+from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 
@@ -72,7 +73,41 @@ def check_complete_credentials(request_body: dict) -> bool:
     return False
 
 
-def is_request_body_safe(request_body: dict) -> bool:
+def _allow_model_level_clientside_configurable_parameters(
+    model: str, param: str, llm_router: Optional[Router]
+) -> bool:
+    """
+    Check if model is allowed to use configurable client-side params
+    - get matching model
+    - check if 'clientside_configurable_parameters' is set for model
+    -
+    """
+    if llm_router is None:
+        return False
+    # check if model is set
+    model_info = llm_router.get_model_group_info(model_group=model)
+    if model_info is None:
+        # check if wildcard model is set
+        if model.split("/", 1)[0] in provider_list:
+            model_info = llm_router.get_model_group_info(
+                model_group=model.split("/", 1)[0]
+            )
+
+    if model_info is None:
+        return False
+
+    if model_info is None or model_info.configurable_clientside_auth_params is None:
+        return False
+
+    if param in model_info.configurable_clientside_auth_params:
+        return True
+
+    return False
+
+
+def is_request_body_safe(
+    request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
+) -> bool:
     """
     Check if the request body is safe.
 
@@ -88,7 +123,20 @@ def is_request_body_safe(request_body: dict) -> bool:
                 request_body=request_body
             )
         ):
-            raise ValueError(f"BadRequest: {param} is not allowed in request body")
+            if general_settings.get("allow_client_side_credentials") is True:
+                return True
+            elif (
+                _allow_model_level_clientside_configurable_parameters(
+                    model=model, param=param, llm_router=llm_router
+                )
+                is True
+            ):
+                return True
+            raise ValueError(
+                f"Rejected Request: {param} is not allowed in request body. "
+                "Enable with `general_settings::allow_client_side_credentials` on proxy config.yaml. "
+                "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
+            )
 
     return True
 
@@ -110,13 +158,20 @@ async def pre_db_read_auth_checks(
     Raises:
     - HTTPException if request fails initial auth checks
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
+    from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
 
     # Check 1. request size
     await check_if_request_size_is_safe(request=request)
 
     # Check 2. Request body is safe
-    is_request_body_safe(request_body=request_data)
+    is_request_body_safe(
+        request_body=request_data,
+        general_settings=general_settings,
+        llm_router=llm_router,
+        model=request_data.get(
+            "model", ""
+        ),  # [TODO] use model passed in url as well (azure openai routes)
+    )
 
     # Check 3. Check if IP address is allowed
     is_valid_ip, passed_in_ip = _check_valid_ip(

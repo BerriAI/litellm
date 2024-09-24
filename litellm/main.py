@@ -83,6 +83,7 @@ from .llms import (
 from .llms.AI21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
+from .llms.azure_ai.chat.handler import AzureAIChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
 from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -166,6 +167,7 @@ openai_text_completions = OpenAITextCompletion()
 openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
+azure_ai_chat_completions = AzureAIChatCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
 anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -1177,7 +1179,7 @@ def completion(
             headers = headers or litellm.headers
 
             ## LOAD CONFIG - if set
-            config = litellm.OpenAIConfig.get_config()
+            config = litellm.AzureAIStudioConfig.get_config()
             for k, v in config.items():
                 if (
                     k not in optional_params
@@ -1190,7 +1192,7 @@ def completion(
 
             ## COMPLETION CALL
             try:
-                response = openai_chat_completions.completion(
+                response = azure_ai_chat_completions.completion(
                     model=model,
                     messages=messages,
                     headers=headers,

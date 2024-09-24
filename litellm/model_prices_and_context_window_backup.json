@@ -3862,9 +3862,9 @@
         "supports_vision": true
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 8192, 
+        "max_tokens": 4096, 
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "bedrock",
@@ -3906,9 +3906,9 @@
         "supports_vision": true
     },
     "us.anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "bedrock",
@@ -3939,9 +3939,9 @@
         "supports_vision": true
     },
     "eu.anthropic.claude-3-sonnet-20240229-v1:0": {
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "bedrock",
@@ -3950,9 +3950,9 @@
         "supports_vision": true
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "bedrock",
@@ -5591,6 +5591,11 @@
     "fireworks-ai-56b-to-176b": {
         "input_cost_per_token": 0.0000012,
         "output_cost_per_token": 0.0000012,
+        "litellm_provider": "fireworks_ai"
+    },
+    "fireworks-ai-default": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
         "litellm_provider": "fireworks_ai"
     },
     "fireworks-ai-embedding-up-to-150m": {
