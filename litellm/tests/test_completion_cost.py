@@ -1257,14 +1257,31 @@ def test_completion_cost_databricks_embedding(model):
     cost = completion_cost(completion_response=resp)
 
 
-def test_completion_cost_fireworks_ai():
+from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
+
+
+@pytest.mark.parametrize(
+    "model, base_model",
+    [
+        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-default"),
+        ("fireworks_ai/mixtral-8x7b-instruct", "fireworks-ai-moe-up-to-56b"),
+    ],
+)
+def test_get_model_params_fireworks_ai(model, base_model):
+    pricing_model = get_base_model_for_pricing(model_name=model)
+    assert base_model == pricing_model
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/mixtral-8x7b-instruct"],
+)
+def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    resp = litellm.completion(
-        model="fireworks_ai/mixtral-8x7b-instruct", messages=messages
-    )  # works fine
+    resp = litellm.completion(model=model, messages=messages)  # works fine
 
     print(resp)
     cost = completion_cost(completion_response=resp)
