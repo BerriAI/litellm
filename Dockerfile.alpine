@@ -39,6 +39,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Update dependencies and clean up - handles debian security issue
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
 
+# Update dependencies and clean up
+RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
+
 WORKDIR /app
 
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
