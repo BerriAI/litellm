@@ -963,8 +963,8 @@ from .llms.OpenAI.openai import (
     MistralEmbeddingConfig,
     DeepInfraConfig,
     GroqConfig,
-    AzureAIStudioConfig,
 )
+from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.OpenAI.chat.o1_transformation import (
     OpenAIO1Config,
