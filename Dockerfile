@@ -49,6 +49,9 @@ RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
+# Update dependencies and clean up - handles debian security issue
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
+
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .
