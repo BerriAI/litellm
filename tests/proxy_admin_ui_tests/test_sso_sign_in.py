@@ -78,6 +78,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         mock_sso_result = MagicMock()
         mock_sso_result.email = "newuser@example.com"
         mock_sso_result.id = unique_user_id
+        mock_sso_result.provider = "google"
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )
@@ -110,6 +111,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         assert user is not None
         assert user.user_email == "newuser@example.com"
         assert user.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        assert user.metadata == {"auth_provider": "google"}
 
     finally:
         # Clean up: Delete the user from the database
@@ -148,6 +150,7 @@ async def test_auth_callback_new_user_with_sso_default(
         mock_sso_result = MagicMock()
         mock_sso_result.email = "newuser@example.com"
         mock_sso_result.id = unique_user_id
+        mock_sso_result.provider = "google"
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )

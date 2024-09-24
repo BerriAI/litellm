@@ -109,6 +109,7 @@ model LiteLLM_UserTable {
     spend      Float    @default(0.0)
     user_email    String?
     models     String[]
+    metadata  Json  @default("{}")
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
