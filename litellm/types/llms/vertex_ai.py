@@ -283,7 +283,7 @@ class PromptFeedback(TypedDict):
 
 
 class GenerateContentResponseBody(TypedDict, total=False):
-    candidates: Required[List[Candidates]]
+    candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
 

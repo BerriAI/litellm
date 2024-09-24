@@ -4,6 +4,8 @@ import secrets
 import traceback
 from typing import Optional
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -105,6 +107,8 @@ def get_logging_payload(
     additional_usage_values = {}
     for k, v in usage.items():
         if k not in special_usage_fields:
+            if isinstance(v, BaseModel):
+                v = v.model_dump()
             additional_usage_values.update({k: v})
     clean_metadata["additional_usage_values"] = additional_usage_values
 

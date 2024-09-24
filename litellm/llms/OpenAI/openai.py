@@ -103,25 +103,6 @@ class MistralEmbeddingConfig:
         return optional_params
 
 
-class AzureAIStudioConfig:
-    def get_required_params(self) -> List[ProviderField]:
-        """For a given provider, return it's required fields with a description"""
-        return [
-            ProviderField(
-                field_name="api_key",
-                field_type="string",
-                field_description="Your Azure AI Studio API Key.",
-                field_value="zEJ...",
-            ),
-            ProviderField(
-                field_name="api_base",
-                field_type="string",
-                field_description="Your Azure AI Studio API Base.",
-                field_value="https://Mistral-serverless.",
-            ),
-        ]
-
-
 class DeepInfraConfig:
     """
     Reference: https://deepinfra.com/docs/advanced/openai_api
