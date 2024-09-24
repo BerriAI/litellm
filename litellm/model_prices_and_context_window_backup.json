@@ -5593,6 +5593,11 @@
         "output_cost_per_token": 0.0000012,
         "litellm_provider": "fireworks_ai"
     },
+    "fireworks-ai-default": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "fireworks_ai"
+    },
     "fireworks-ai-embedding-up-to-150m": {
         "input_cost_per_token": 0.000000008,
         "output_cost_per_token": 0.000000,
