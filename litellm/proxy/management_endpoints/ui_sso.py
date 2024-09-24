@@ -8,11 +8,10 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
-from fastapi_sso.sso.base import OpenID
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -32,6 +31,13 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.secret_managers.main import str_to_bool
+
+if TYPE_CHECKING:
+    from fastapi_sso.sso.base import OpenID as _OpenID
+
+    OpenID = _OpenID
+else:
+    OpenID = Any
 
 router = APIRouter()
 
