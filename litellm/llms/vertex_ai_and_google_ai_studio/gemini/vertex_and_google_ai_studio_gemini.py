@@ -49,6 +49,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.llms.vertex_ai import (
+    Candidates,
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
@@ -187,7 +188,11 @@ class VertexAIConfig:
                     optional_params["stop_sequences"] = value
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":
+            if (
+                param == "response_format"
+                and isinstance(value, dict)
+                and value["type"] == "json_object"
+            ):
                 optional_params["response_mime_type"] = "application/json"
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
@@ -900,14 +905,14 @@ class VertexLLM(VertexBase):
 
                 return model_response
 
-        if len(completion_response["candidates"]) > 0:
+        _candidates = completion_response.get("candidates")
+        if _candidates and len(_candidates) > 0:
             content_policy_violations = (
                 VertexGeminiConfig().get_flagged_finish_reasons()
             )
             if (
-                "finishReason" in completion_response["candidates"][0]
-                and completion_response["candidates"][0]["finishReason"]
-                in content_policy_violations.keys()
+                "finishReason" in _candidates[0]
+                and _candidates[0]["finishReason"] in content_policy_violations.keys()
             ):
                 ## CONTENT POLICY VIOLATION ERROR
                 model_response.choices[0].finish_reason = "content_filter"
@@ -956,55 +961,58 @@ class VertexLLM(VertexBase):
             content_str = ""
             tools: List[ChatCompletionToolCallChunk] = []
             functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-            for idx, candidate in enumerate(completion_response["candidates"]):
-                if "content" not in candidate:
-                    continue
+            if _candidates:
+                for idx, candidate in enumerate(_candidates):
+                    if "content" not in candidate:
+                        continue
 
-                if "groundingMetadata" in candidate:
-                    grounding_metadata.append(candidate["groundingMetadata"])
+                    if "groundingMetadata" in candidate:
+                        grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
 
-                if "safetyRatings" in candidate:
-                    safety_ratings.append(candidate["safetyRatings"])
+                    if "safetyRatings" in candidate:
+                        safety_ratings.append(candidate["safetyRatings"])
 
-                if "citationMetadata" in candidate:
-                    citation_metadata.append(candidate["citationMetadata"])
-                if "text" in candidate["content"]["parts"][0]:
-                    content_str = candidate["content"]["parts"][0]["text"]
+                    if "citationMetadata" in candidate:
+                        citation_metadata.append(candidate["citationMetadata"])
+                    if "text" in candidate["content"]["parts"][0]:
+                        content_str = candidate["content"]["parts"][0]["text"]
 
-                if "functionCall" in candidate["content"]["parts"][0]:
-                    _function_chunk = ChatCompletionToolCallFunctionChunk(
-                        name=candidate["content"]["parts"][0]["functionCall"]["name"],
-                        arguments=json.dumps(
-                            candidate["content"]["parts"][0]["functionCall"]["args"]
-                        ),
-                    )
-                    if litellm_params.get("litellm_param_is_function_call") is True:
-                        functions = _function_chunk
-                    else:
-                        _tool_response_chunk = ChatCompletionToolCallChunk(
-                            id=f"call_{str(uuid.uuid4())}",
-                            type="function",
-                            function=_function_chunk,
-                            index=candidate.get("index", idx),
+                    if "functionCall" in candidate["content"]["parts"][0]:
+                        _function_chunk = ChatCompletionToolCallFunctionChunk(
+                            name=candidate["content"]["parts"][0]["functionCall"][
+                                "name"
+                            ],
+                            arguments=json.dumps(
+                                candidate["content"]["parts"][0]["functionCall"]["args"]
+                            ),
                         )
-                        tools.append(_tool_response_chunk)
-                chat_completion_message["content"] = (
-                    content_str if len(content_str) > 0 else None
-                )
-                if len(tools) > 0:
-                    chat_completion_message["tool_calls"] = tools
+                        if litellm_params.get("litellm_param_is_function_call") is True:
+                            functions = _function_chunk
+                        else:
+                            _tool_response_chunk = ChatCompletionToolCallChunk(
+                                id=f"call_{str(uuid.uuid4())}",
+                                type="function",
+                                function=_function_chunk,
+                                index=candidate.get("index", idx),
+                            )
+                            tools.append(_tool_response_chunk)
+                    chat_completion_message["content"] = (
+                        content_str if len(content_str) > 0 else None
+                    )
+                    if len(tools) > 0:
+                        chat_completion_message["tool_calls"] = tools
 
-                if functions is not None:
-                    chat_completion_message["function_call"] = functions
-                choice = litellm.Choices(
-                    finish_reason=candidate.get("finishReason", "stop"),
-                    index=candidate.get("index", idx),
-                    message=chat_completion_message,  # type: ignore
-                    logprobs=None,
-                    enhancements=None,
-                )
+                    if functions is not None:
+                        chat_completion_message["function_call"] = functions
+                    choice = litellm.Choices(
+                        finish_reason=candidate.get("finishReason", "stop"),
+                        index=candidate.get("index", idx),
+                        message=chat_completion_message,  # type: ignore
+                        logprobs=None,
+                        enhancements=None,
+                    )
 
-                model_response.choices.append(choice)
+                    model_response.choices.append(choice)
 
             ## GET USAGE ##
             usage = litellm.Usage(
@@ -1433,10 +1441,12 @@ class ModelResponseIterator:
             is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
+            gemini_chunk: Optional[Candidates] = None
+            if _candidates and len(_candidates) > 0:
+                gemini_chunk = _candidates[0]
 
-            gemini_chunk = processed_chunk["candidates"][0]
-
-            if "content" in gemini_chunk:
+            if gemini_chunk and "content" in gemini_chunk:
                 if "text" in gemini_chunk["content"]["parts"][0]:
                     text = gemini_chunk["content"]["parts"][0]["text"]
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
@@ -1455,7 +1465,7 @@ class ModelResponseIterator:
                         index=0,
                     )
 
-            if "finishReason" in gemini_chunk:
+            if gemini_chunk and "finishReason" in gemini_chunk:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
@@ -1533,18 +1543,19 @@ class ModelResponseIterator:
             )
 
     def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
-        chunk = chunk.replace("data:", "")
-        if len(chunk) > 0:
-            """
-            Check if initial chunk valid json
-            - if partial json -> enter accumulated json logic
-            - if valid - continue
-            """
-            if self.chunk_type == "valid_json":
-                return self.handle_valid_json_chunk(chunk=chunk)
-            elif self.chunk_type == "accumulated_json":
-                return self.handle_accumulated_json_chunk(chunk=chunk)
-        else:
+        try:
+            chunk = chunk.replace("data:", "")
+            if len(chunk) > 0:
+                """
+                Check if initial chunk valid json
+                - if partial json -> enter accumulated json logic
+                - if valid - continue
+                """
+                if self.chunk_type == "valid_json":
+                    return self.handle_valid_json_chunk(chunk=chunk)
+                elif self.chunk_type == "accumulated_json":
+                    return self.handle_accumulated_json_chunk(chunk=chunk)
+
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,
@@ -1553,6 +1564,8 @@ class ModelResponseIterator:
                 index=0,
                 tool_use=None,
             )
+        except Exception:
+            raise
 
     def __next__(self):
         try:
