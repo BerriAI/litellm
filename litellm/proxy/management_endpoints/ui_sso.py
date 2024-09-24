@@ -33,11 +33,9 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
-    from fastapi_sso.sso.base import OpenID as _OpenID
-
-    OpenID = _OpenID
+    from fastapi_sso.sso.base import OpenID
 else:
-    OpenID = Any
+    from typing import Any as OpenID
 
 router = APIRouter()
 
