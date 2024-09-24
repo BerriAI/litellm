@@ -1,13 +1,13 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.4.0 # openai + http req.
 openai==1.45.0 # openai req. 
-fastapi==0.111.0 # server dep
+fastapi==0.114.1 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.0 # server dep
 uvicorn==0.29.0 # server dep
-gunicorn==22.0.0 # server dep
+gunicorn==23.0.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
-redis==5.0.0 # caching
+redis==5.0.8 # caching
 numpy==1.24.3 # semantic caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
@@ -20,20 +20,20 @@ langfuse==2.45.0 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 orjson==3.9.15 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
-fastapi-sso==0.10.0 # admin UI, SSO
+fastapi-sso==0.15.0 # admin UI, SSO
 pyjwt[crypto]==2.8.0
 python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 # for azure content safety
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
-opentelemetry-exporter-otlp==1.25.0
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp==1.27.0
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==42.0.7
 
 ### LITELLM PACKAGE DEPENDENCIES
-python-dotenv==1.0.0 # for env 
+python-dotenv==1.0.1 # for env 
 tiktoken==0.7.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
 tokenizers==0.14.0 # for calculating usage
