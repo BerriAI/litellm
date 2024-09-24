@@ -25,4 +25,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         ]
 
     def _transform_messages(self, messages: List[AllMessageValues]) -> List:
-        return convert_content_list_to_str(messages=messages)
+        for message in messages:
+            message = convert_content_list_to_str(message=message)
+
+        return messages
