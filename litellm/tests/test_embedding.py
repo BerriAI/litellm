@@ -104,14 +104,30 @@ def test_openai_embedding_3():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_openai_azure_embedding_simple():
+@pytest.mark.parametrize(
+    "model, api_base, api_key",
+    [
+        (
+            "azure_ai/Cohere-embed-v3-multilingual-jzu",
+            "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
+            os.getenv("AZURE_AI_COHERE_API_KEY_2"),
+        ),
+        ("azure/azure-embedding-model", None, None),
+    ],
+)
+def test_openai_azure_embedding_simple(model, api_base, api_key):
     try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.set_verbose = True
         response = embedding(
-            model="azure/azure-embedding-model",
+            model=model,
             input=["good morning from litellm"],
+            api_base=api_base,
+            api_key=api_key,
         )
         print(response)
+        print(response._hidden_params)
         response_keys = set(dict(response).keys())
         response_keys.discard("_response_ms")
         assert set(["usage", "model", "object", "data"]) == set(
@@ -267,20 +283,29 @@ def test_openai_azure_embedding_optional_arg():
 # test_openai_embedding()
 
 
+@pytest.mark.parametrize(
+    "model, api_base",
+    [
+        ("embed-english-v2.0", None),
+    ],
+)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_cohere_embedding(sync_mode):
+async def test_cohere_embedding(sync_mode, model, api_base):
     try:
         # litellm.set_verbose=True
         data = {
-            "model": "embed-english-v2.0",
+            "model": model,
             "input": ["good morning from litellm", "this is another item"],
             "input_type": "search_query",
+            "api_base": api_base,
         }
         if sync_mode:
             response = embedding(**data)
         else:
             response = await litellm.aembedding(**data)
+
+        await response
         print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)

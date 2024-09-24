@@ -83,7 +83,7 @@ from .llms import (
 from .llms.AI21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
-from .llms.azure_ai.chat.handler import AzureAIChatCompletion
+from .llms.azure_ai import AzureAIChatCompletion, AzureAIEmbedding
 from .llms.azure_text import AzureTextCompletion
 from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
 from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -168,6 +168,7 @@ openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 azure_ai_chat_completions = AzureAIChatCompletion()
+azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -3830,6 +3831,33 @@ def embedding(
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "azure_ai":
+            api_base = (
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or get_secret("AZURE_AI_API_BASE")
+            )
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or get_secret("AZURE_AI_API_KEY")
+            )
+
+            ## EMBEDDING CALL
+            response = azure_ai_embedding.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
                 aembedding=aembedding,
             )
         else:

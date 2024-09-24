@@ -37,7 +37,7 @@ class AzureAIChatCompletion(OpenAIChatCompletion):
             messages=messages  # type: ignore
         )
 
-        return super().completion(
+        response = super().completion(
             model_response,
             timeout,
             optional_params,
@@ -57,3 +57,5 @@ class AzureAIChatCompletion(OpenAIChatCompletion):
             custom_llm_provider,
             drop_params,
         )
+
+        return response

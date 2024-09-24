@@ -990,6 +990,26 @@
         "mode": "chat",
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice"
     },
+    "azure_ai/Cohere-embed-v3-english": {
+        "max_tokens": 512,
+        "max_input_tokens": 512,
+        "output_vector_size": 1024,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "mode": "embedding",
+        "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice"
+    },
+    "azure_ai/Cohere-embed-v3-multilingual": {
+        "max_tokens": 512,
+        "max_input_tokens": 512,
+        "output_vector_size": 1024,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "mode": "embedding",
+        "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/cohere.cohere-embed-v3-english-offer?tab=PlansAndPrice"
+    },
     "babbage-002": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
