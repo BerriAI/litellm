@@ -28,6 +28,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.mlflow import MlflowLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -553,6 +554,21 @@ class Logging:
                             message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
+
+                    # MLflow trace logging needs be done synchronously to render the trace in the
+                    # notebook. Therefore, we use post_call handler instead of the success_handler
+                    # which is executed asynchronously.
+                    elif callback == "mlflow":
+                        global mlflowLogger
+                        if mlflowLogger is None:
+                            mlflowLogger = MlflowLogger()
+
+                        mlflowLogger.log_pre_api_call(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details
+                        )
+
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
                             model=self.model,
@@ -663,6 +679,22 @@ class Logging:
                             message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
+
+                    # MLflow trace logging needs be done synchronously to render the trace in the
+                    # notebook. Therefore, we use post_call handler instead of the success_handler
+                    # which is executed asynchronously.
+                    elif callback == "mlflow":
+                        global mlflowLogger
+                        if mlflowLogger is None:
+                            mlflowLogger = MlflowLogger()
+
+                        mlflowLogger.log_post_api_call(
+                            kwargs=self.model_call_details,
+                            response_obj=original_response,
+                            start_time=self.start_time,
+                            end_time=datetime.datetime.now(),
+                        )
+
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_post_api_call(
                             kwargs=self.model_call_details,
@@ -2043,7 +2075,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, mlflowLogger
 
     try:
         for callback in callback_list:
@@ -2129,6 +2161,8 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
+            elif callback == "mlflow":
+                mlflowLogger = MlflowLogger()
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
