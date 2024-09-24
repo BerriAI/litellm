@@ -322,8 +322,10 @@ def test_is_request_body_safe_global_enabled(
                 "allow_client_side_credentials": allow_client_side_credentials
             },
             llm_router=llm_router,
+            model="gpt-3.5-turbo",
         )
-    except Exception:
+    except Exception as e:
+        print(e)
         error_raised = True
 
     assert expect_error == error_raised
@@ -346,7 +348,7 @@ def test_is_request_body_safe_model_enabled(
                 "litellm_params": {
                     "model": "fireworks_ai/*",
                     "api_key": os.getenv("FIREWORKS_API_KEY"),
-                    "configurable_clientside_auth_parameters": (
+                    "configurable_clientside_auth_params": (
                         ["api_base"] if allow_client_side_credentials else []
                     ),
                 },
@@ -360,7 +362,8 @@ def test_is_request_body_safe_model_enabled(
             llm_router=llm_router,
             model="fireworks_ai/my-new-model",
         )
-    except Exception:
+    except Exception as e:
+        print(e)
         error_raised = True
 
     assert expect_error == error_raised
