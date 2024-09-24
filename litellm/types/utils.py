@@ -1196,6 +1196,7 @@ all_litellm_params = [
     "client_id",
     "client_secret",
     "user_continue_message",
+    "configurable_clientside_auth_params",
 ]
 
 
