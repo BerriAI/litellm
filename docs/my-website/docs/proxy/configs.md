@@ -764,6 +764,11 @@ general_settings:
     "redact_user_api_key_info": "boolean" # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
 
   }, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
+  "callback_settings": {
+    "otel": {        # OTEL logging callback specific settings
+      "message_logging": "boolean"
+    }
+  },
   "general_settings": {
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
