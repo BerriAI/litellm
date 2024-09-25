@@ -440,7 +440,7 @@ async def _cache_management_object(
             exclude_unset=True, exclude={"parent_otel_span": True}
         )
         await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=_value
+            key=key, value=_value, litellm_parent_otel_span=None
         )
 
 
@@ -493,7 +493,9 @@ async def _delete_cache_key_object(
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.async_delete_cache(key=key)
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+            key=key
+        )
 
 
 @log_to_opentelemetry
@@ -522,12 +524,10 @@ async def get_team_object(
     ## CHECK REDIS CACHE ##
     if (
         proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache is not None
     ):
-        cached_team_obj = (
-            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
-                key=key
-            )
+        cached_team_obj = await proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
+            key=key
         )
 
     if cached_team_obj is None:
@@ -595,12 +595,10 @@ async def get_key_object(
     ## CHECK REDIS CACHE ##
     if (
         proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache is not None
     ):
-        cached_team_obj = (
-            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
-                key=key
-            )
+        cached_team_obj = await proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
+            key=key
         )
 
     if cached_team_obj is None:

@@ -16,18 +16,20 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
-from litellm.proxy.utils import InternalUsageCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
+
     Span = _Span
+    InternalUsageCache = _InternalUsageCache
 else:
     Span = Any
+    InternalUsageCache = Any
 
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
-
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
