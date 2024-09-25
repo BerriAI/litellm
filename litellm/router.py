@@ -90,6 +90,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
+    VALID_LITELLM_ENVIRONMENTS,
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
@@ -3973,11 +3974,54 @@ class Router:
             }
         )
 
+        ## Check if LLM Deployment is allowed for this deployment
+        if deployment.model_info and "supported_environments" in deployment.model_info:
+            if (
+                self.deployment_is_active_for_environment(deployment=deployment)
+                is not True
+            ):
+                return
+
         deployment = self._add_deployment(deployment=deployment)
 
         model = deployment.to_json(exclude_none=True)
 
         self.model_list.append(model)
+
+    def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
+        """
+        Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
+
+        Requires `LITELLM_ENVIRONMENT` to be set in .env. Valid values for environment:
+            - development
+            - staging
+            - production
+
+        Raises:
+        - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
+        - ValueError: If supported_environments is not set in model_info or not one of the valid values
+        """
+        litellm_environment = litellm.get_secret_str(secret_name="LITELLM_ENVIRONMENT")
+        if litellm_environment is None:
+            raise ValueError(
+                f"Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env"
+            )
+
+        if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
+            raise ValueError(
+                f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
+            )
+
+        for _env in deployment.model_info["supported_environments"]:
+            if _env not in VALID_LITELLM_ENVIRONMENTS:
+                raise ValueError(
+                    f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} for deployment: {deployment}"
+                )
+
+        # validate litellm_environment is one of LiteLLMEnvironment
+        if litellm_environment in deployment.model_info["supported_environments"]:
+            return True
+        return False
 
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
