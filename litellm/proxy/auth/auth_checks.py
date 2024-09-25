@@ -524,10 +524,12 @@ async def get_team_object(
     ## CHECK REDIS CACHE ##
     if (
         proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
-        cached_team_obj = await proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
-            key=key
+        cached_team_obj = (
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
+                key=key
+            )
         )
 
     if cached_team_obj is None:
