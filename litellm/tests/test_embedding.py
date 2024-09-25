@@ -406,7 +406,6 @@ async def test_cohere_embedding(sync_mode, model, api_base):
         else:
             response = await litellm.aembedding(**data)
 
-        await response
         print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)
