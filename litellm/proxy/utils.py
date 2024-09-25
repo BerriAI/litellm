@@ -157,6 +157,7 @@ def log_to_opentelemetry(func):
                 # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
                 args is not None
                 and len(args) > 0
+                and isinstance(args[0], dict)
             ):
                 passed_kwargs = args[0]
                 parent_otel_span = _get_parent_otel_span_from_kwargs(
