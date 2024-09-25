@@ -103,16 +103,14 @@ def rerank(
             )
         )
 
-        model_parameters = [
-            "top_n",
-            "rank_fields",
-            "return_documents",
-            "max_chunks_per_doc",
-        ]
-        model_params_dict = {}
-        for k, v in optional_params.model_fields.items():
-            if k in model_parameters:
-                model_params_dict[k] = v
+        model_params_dict = {
+            "top_n": top_n,
+            "rank_fields": rank_fields,
+            "return_documents": return_documents,
+            "max_chunks_per_doc": max_chunks_per_doc,
+            "documents": documents,
+        }
+
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
