@@ -322,7 +322,7 @@ class BedrockLLM(BaseAWSLLM):
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        provider = model.split(".")[0]
+        provider = self.get_provider(model=model)
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -574,6 +574,10 @@ class BedrockLLM(BaseAWSLLM):
         """
         return urllib.parse.quote(model_id, safe="")
 
+    def get_provider(self, model: str) -> str:
+        parts = model.split(".")
+        return parts[0] if parts[0] not in ["us", "eu"] else parts[1]
+
     def completion(
         self,
         model: str,
@@ -608,7 +612,7 @@ class BedrockLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        provider = model.split(".")[0]
+        provider = self.get_provider(model=model)
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
