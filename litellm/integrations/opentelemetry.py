@@ -159,6 +159,8 @@ class OpenTelemetry(CustomLogger):
 
             if event_metadata:
                 for key, value in event_metadata.items():
+                    if value is None:
+                        value = "None"
                     if isinstance(value, dict):
                         try:
                             value = str(value)
