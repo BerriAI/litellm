@@ -3712,6 +3712,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
@@ -3820,6 +3821,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )
     elif custom_llm_provider == "azure":
         supported_params = get_supported_openai_params(

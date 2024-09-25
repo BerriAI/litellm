@@ -602,6 +602,26 @@ def test_o1_model_params():
     assert optional_params["user"] == "John"
 
 
+@pytest.mark.parametrize(
+    "temperature, expected_error",
+    [(0.2, True), (1, False)],
+)
+def test_o1_model_temperature_params(temperature, expected_error):
+    if expected_error:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="o1-preview-2024-09-12",
+                custom_llm_provider="openai",
+                temperature=temperature,
+            )
+    else:
+        get_optional_params(
+            model="o1-preview-2024-09-12",
+            custom_llm_provider="openai",
+            temperature=temperature,
+        )
+
+
 def test_unmapped_gemini_model_params():
     """
     Test if unmapped gemini model optional params are translated correctly
