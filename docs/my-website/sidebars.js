@@ -50,7 +50,7 @@ const sidebars = {
         {
           type: "category",
           label: "🔑 Authentication",
-          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/oauth2"],
+          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/oauth2", "proxy/ip_address"],
         },
         {
           type: "category",
