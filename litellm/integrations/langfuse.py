@@ -677,12 +677,19 @@ def _add_prompt_to_generation_params(
                 generation_params["prompt"] = TextPromptClient(prompt=_prompt_obj)
 
             elif isinstance(user_prompt["prompt"], list):
-                _prompt_obj = Prompt_Chat(
-                    name=user_prompt["name"],
-                    prompt=user_prompt["prompt"],
-                    version=user_prompt["version"],
-                    config=user_prompt.get("config", None),
-                )
+                prompt_chat_params = Prompt_Chat.__init__.__code__.co_varnames
+                _data = {
+                    "name": user_prompt["name"],
+                    "prompt": user_prompt["prompt"],
+                    "version": user_prompt["version"],
+                    "config": user_prompt.get("config", None),
+                }
+                if "labels" in prompt_chat_params and "tags" in prompt_chat_params:
+                    _data["labels"] = user_prompt.get("labels", []) or []
+                    _data["tags"] = user_prompt.get("tags", []) or []
+
+                _prompt_obj = Prompt_Chat(**_data)  # type: ignore
+
                 generation_params["prompt"] = ChatPromptClient(prompt=_prompt_obj)
             else:
                 verbose_logger.error(
