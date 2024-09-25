@@ -4936,7 +4936,11 @@ def speech(
     aspeech: Optional[bool] = None,
     **kwargs,
 ) -> HttpxBinaryResponseContent:
-
+    user = kwargs.get("user", None)
+    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    proxy_server_request = kwargs.get("proxy_server_request", None)
+    model_info = kwargs.get("model_info", None)
+    metadata = kwargs.get("metadata", {})
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
     tags = kwargs.pop("tags", [])
 
@@ -4953,6 +4957,21 @@ def speech(
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
 
     logging_obj = kwargs.get("litellm_logging_obj", None)
+    logging_obj.update_environment_variables(
+        model=model,
+        user=user,
+        optional_params={},
+        litellm_params={
+            "litellm_call_id": litellm_call_id,
+            "proxy_server_request": proxy_server_request,
+            "model_info": model_info,
+            "metadata": metadata,
+            "preset_cache_key": None,
+            "stream_response": {},
+            **kwargs,
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
     response: Optional[HttpxBinaryResponseContent] = None
     if custom_llm_provider == "openai":
         if voice is None or not (isinstance(voice, str)):
