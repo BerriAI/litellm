@@ -9,7 +9,7 @@ Convers
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from litellm.types.utils import EmbeddingResponse, Usage
 

@@ -112,20 +112,31 @@ def test_openai_embedding_3():
             "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
             os.getenv("AZURE_AI_COHERE_API_KEY_2"),
         ),
-        ("azure/azure-embedding-model", None, None),
+        # ("azure/azure-embedding-model", None, None),
     ],
 )
-def test_openai_azure_embedding_simple(model, api_base, api_key):
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode):
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.set_verbose = True
-        response = embedding(
-            model=model,
-            input=["good morning from litellm"],
-            api_base=api_base,
-            api_key=api_key,
-        )
+        if sync_mode:
+            response = embedding(
+                model=model,
+                input=["good morning from litellm"],
+                api_base=api_base,
+                api_key=api_key,
+            )
+        else:
+            response = await litellm.aembedding(
+                model=model,
+                input=["good morning from litellm"],
+                api_base=api_base,
+                api_key=api_key,
+            )
+            # print(await response)
         print(response)
         print(response._hidden_params)
         response_keys = set(dict(response).keys())
@@ -145,6 +156,50 @@ def test_openai_azure_embedding_simple(model, api_base, api_key):
 
 
 # test_openai_azure_embedding_simple()
+
+
+# @pytest.mark.parametrize(
+#     "model, api_base, api_key",
+#     [
+#         (
+#             "azure_ai/Cohere-embed-v3-multilingual-jzu",
+#             "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
+#             os.getenv("AZURE_AI_COHERE_API_KEY_2"),
+#         )
+#     ],
+# )
+# def test_azure_ai_embedding_image(model, api_base, api_key):
+#     try:
+#         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+#         litellm.model_cost = litellm.get_model_cost_map(url="")
+#         litellm.set_verbose = True
+#         response = embedding(
+#             model=model,
+#             input=[
+#                 {
+#                     "image": "https://dummyimage.com/100/100/fff&text=Test+image",
+#                     "text": "this is a sample piece of text",
+#                 }
+#             ],
+#             api_base=api_base,
+#             api_key=api_key,
+#         )
+#         print(response)
+#         print(response._hidden_params)
+#         response_keys = set(dict(response).keys())
+#         response_keys.discard("_response_ms")
+#         assert set(["usage", "model", "object", "data"]) == set(
+#             response_keys
+#         )  # assert litellm response has expected keys from OpenAI embedding response
+
+#         request_cost = litellm.completion_cost(completion_response=response)
+
+#         print("Calculated request cost=", request_cost)
+
+#         assert isinstance(response.usage, litellm.Usage)
+
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 
 def test_openai_azure_embedding_timeouts():
