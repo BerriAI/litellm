@@ -2,3 +2,8 @@ model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
+  - model_name: fake-gpt-3.5-turbo
+   litellm_params:
+     model: openai/gpt-3.5-turbo
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
