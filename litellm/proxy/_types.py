@@ -332,6 +332,9 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/spend/report",
         "/global/spend/provider",
+        "/global/spend/tags",
+        "/global/activity",
+        "/global/activity/model",
     ]
 
     public_routes = [
@@ -351,16 +354,10 @@ class LiteLLMRoutes(enum.Enum):
             "/key/update",
             "/key/delete",
             "/key/info",
-            "/global/spend/tags",
-            "/global/spend/keys",
-            "/global/spend/models",
-            "/global/spend/provider",
-            "/global/spend/end_users",
-            "/global/activity",
-            "/global/activity/model",
         ]
         + spend_tracking_routes
         + sso_only_routes
+        + global_spend_tracking_routes
     )
 
     internal_user_view_only_routes = (
