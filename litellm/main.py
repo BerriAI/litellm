@@ -3217,6 +3217,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "azure_ai"
+            or custom_llm_provider == "together_ai"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3387,6 +3388,9 @@ def embedding(
         api_base=api_base,
         api_key=api_key,
     )
+    if dynamic_api_key is not None:
+        api_key = dynamic_api_key
+
     optional_params = get_optional_params_embeddings(
         model=model,
         user=user,
@@ -3483,7 +3487,9 @@ def embedding(
                 aembedding=aembedding,
             )
         elif (
-            model in litellm.open_ai_embedding_models or custom_llm_provider == "openai"
+            model in litellm.open_ai_embedding_models
+            or custom_llm_provider == "openai"
+            or custom_llm_provider == "together_ai"
         ):
             api_base = (
                 api_base

@@ -107,7 +107,8 @@ def test_openai_embedding_3():
 @pytest.mark.parametrize(
     "model, api_base, api_key",
     [
-        ("azure/azure-embedding-model", None, None),
+        # ("azure/azure-embedding-model", None, None),
+        ("together_ai/togethercomputer/m2-bert-80M-8k-retrieval", None, None),
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -116,7 +117,7 @@ async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         if sync_mode:
             response = embedding(
                 model=model,
@@ -140,7 +141,9 @@ async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode
             response_keys
         )  # assert litellm response has expected keys from OpenAI embedding response
 
-        request_cost = litellm.completion_cost(completion_response=response)
+        request_cost = litellm.completion_cost(
+            completion_response=response, call_type="embedding"
+        )
 
         print("Calculated request cost=", request_cost)
 

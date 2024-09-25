@@ -8,7 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure_ai.rerank import AzureAIRerank
 from litellm.llms.cohere.rerank import CohereRerank
-from litellm.llms.togetherai.rerank import TogetherAIRerank
+from litellm.llms.together_ai.rerank import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
 from litellm.types.router import *
 from litellm.utils import client, exception_type, supports_httpx_timeout

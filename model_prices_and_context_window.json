@@ -4852,50 +4852,71 @@
     "together-ai-up-to-4b": {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000001,
-        "litellm_provider": "together_ai"
+        "litellm_provider": "together_ai",
+        "mode": "chat"
     },
     "together-ai-4.1b-8b": {
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000002,
-        "litellm_provider": "together_ai"
+        "litellm_provider": "together_ai",
+        "mode": "chat"
     },
     "together-ai-8.1b-21b": {
         "max_tokens": 1000,
         "input_cost_per_token": 0.0000003,
         "output_cost_per_token": 0.0000003,
-        "litellm_provider": "together_ai"
+        "litellm_provider": "together_ai",
+        "mode": "chat"
     },
     "together-ai-21.1b-41b": {
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.0000008,
-        "litellm_provider": "together_ai"
+        "litellm_provider": "together_ai",
+        "mode": "chat"
     },
     "together-ai-41.1b-80b": {
         "input_cost_per_token": 0.0000009,
         "output_cost_per_token": 0.0000009,
-        "litellm_provider": "together_ai"
+        "litellm_provider": "together_ai",
+        "mode": "chat"
     },
     "together-ai-81.1b-110b": {
         "input_cost_per_token": 0.0000018,
         "output_cost_per_token": 0.0000018,
-        "litellm_provider": "together_ai"
+        "litellm_provider": "together_ai",
+        "mode": "chat"
+    },
+    "together-ai-embedding-up-to-150m": {
+        "input_cost_per_token": 0.000000008,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "together_ai",
+        "mode": "embedding"
+    },
+    "together-ai-embedding-151m-to-350m": {
+        "input_cost_per_token": 0.000000016,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "together_ai",
+        "mode": "embedding"
     },
     "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
         "input_cost_per_token": 0.0000006,
         "output_cost_per_token": 0.0000006,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "mode": "chat"
     },
     "together_ai/mistralai/Mistral-7B-Instruct-v0.1": {
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "mode": "chat"
     },
     "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true
+        "supports_parallel_function_calling": true,
+        "mode": "chat"
     },
     "ollama/codegemma": {
         "max_tokens": 8192, 
