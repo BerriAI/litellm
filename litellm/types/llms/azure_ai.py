@@ -12,6 +12,6 @@ EncodingFormat = Literal["base64", "binary", "float", "int8", "ubinary", "uint8"
 
 
 class ImageEmbeddingRequest(TypedDict, total=False):
-    input: List[ImageEmbeddingInput]
+    input: Required[List[ImageEmbeddingInput]]
     dimensions: int
     encoding_format: EncodingFormat

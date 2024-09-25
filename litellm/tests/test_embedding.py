@@ -156,50 +156,86 @@ async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode
 
 
 # test_openai_azure_embedding_simple()
+import base64
+
+import requests
+
+litellm.set_verbose = True
+url = "https://dummyimage.com/100/100/fff&text=Test+image"
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+base64_image = f"data:image/png;base64,{encoded_file}"
 
 
-# @pytest.mark.parametrize(
-#     "model, api_base, api_key",
-#     [
-#         (
-#             "azure_ai/Cohere-embed-v3-multilingual-jzu",
-#             "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
-#             os.getenv("AZURE_AI_COHERE_API_KEY_2"),
-#         )
-#     ],
-# )
-# def test_azure_ai_embedding_image(model, api_base, api_key):
-#     try:
-#         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-#         litellm.model_cost = litellm.get_model_cost_map(url="")
-#         litellm.set_verbose = True
-#         response = embedding(
-#             model=model,
-#             input=[
-#                 {
-#                     "image": "https://dummyimage.com/100/100/fff&text=Test+image",
-#                     "text": "this is a sample piece of text",
-#                 }
-#             ],
-#             api_base=api_base,
-#             api_key=api_key,
-#         )
-#         print(response)
-#         print(response._hidden_params)
-#         response_keys = set(dict(response).keys())
-#         response_keys.discard("_response_ms")
-#         assert set(["usage", "model", "object", "data"]) == set(
-#             response_keys
-#         )  # assert litellm response has expected keys from OpenAI embedding response
+from openai.types.embedding import Embedding
 
-#         request_cost = litellm.completion_cost(completion_response=response)
 
-#         print("Calculated request cost=", request_cost)
+def _azure_ai_image_mock_response(*args, **kwargs):
+    new_response = MagicMock()
+    new_response.headers = {"azureml-model-group": "offer-cohere-embed-multili-paygo"}
 
-#         assert isinstance(response.usage, litellm.Usage)
+    new_response.json.return_value = {
+        "data": [Embedding(embedding=[1234], index=0, object="embedding")],
+        "model": "",
+        "object": "list",
+        "usage": {"prompt_tokens": 1, "total_tokens": 2},
+    }
 
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+    return new_response
+
+
+@pytest.mark.parametrize(
+    "model, api_base, api_key",
+    [
+        (
+            "azure_ai/Cohere-embed-v3-multilingual-jzu",
+            "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
+            os.getenv("AZURE_AI_COHERE_API_KEY_2"),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "input",
+    [
+        base64_image,
+    ],
+)
+def test_azure_ai_embedding_image(model, api_base, api_key, input):
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        client = HTTPHandler()
+        with patch.object(
+            client, "post", side_effect=_azure_ai_image_mock_response
+        ) as mock_client:
+            response = embedding(
+                model=model,
+                input=[input],
+                api_base=api_base,
+                api_key=api_key,
+                client=client,
+            )
+        print(response)
+
+        assert len(response.data) == 1
+
+        print(response._hidden_params)
+        response_keys = set(dict(response).keys())
+        response_keys.discard("_response_ms")
+        assert set(["usage", "model", "object", "data"]) == set(
+            response_keys
+        )  # assert litellm response has expected keys from OpenAI embedding response
+
+        request_cost = litellm.completion_cost(completion_response=response)
+
+        print("Calculated request cost=", request_cost)
+
+        assert isinstance(response.usage, litellm.Usage)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_openai_azure_embedding_timeouts():
@@ -297,13 +333,16 @@ def test_openai_azure_embedding_with_oidc_and_cf():
         os.environ["AZURE_API_KEY"] = old_key
 
 
+from openai.types.embedding import Embedding
+
+
 def _openai_mock_response(*args, **kwargs):
     new_response = MagicMock()
     new_response.headers = {"hello": "world"}
 
     new_response.parse.return_value = (
         openai.types.create_embedding_response.CreateEmbeddingResponse(
-            data=[],
+            data=[Embedding(embedding=[1234, 45667], index=0, object="embedding")],
             model="azure/test",
             object="list",
             usage=openai.types.create_embedding_response.Usage(
