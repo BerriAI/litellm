@@ -107,12 +107,7 @@ def test_openai_embedding_3():
 @pytest.mark.parametrize(
     "model, api_base, api_key",
     [
-        (
-            "azure_ai/Cohere-embed-v3-multilingual-jzu",
-            "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
-            os.getenv("AZURE_AI_COHERE_API_KEY_2"),
-        ),
-        # ("azure/azure-embedding-model", None, None),
+        ("azure/azure-embedding-model", None, None),
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -196,27 +191,36 @@ def _azure_ai_image_mock_response(*args, **kwargs):
         )
     ],
 )
-@pytest.mark.parametrize(
-    "input",
-    [
-        base64_image,
-    ],
-)
-def test_azure_ai_embedding_image(model, api_base, api_key, input):
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        client = HTTPHandler()
+        input = base64_image
+        if sync_mode:
+            client = HTTPHandler()
+        else:
+            client = AsyncHTTPHandler()
         with patch.object(
             client, "post", side_effect=_azure_ai_image_mock_response
         ) as mock_client:
-            response = embedding(
-                model=model,
-                input=[input],
-                api_base=api_base,
-                api_key=api_key,
-                client=client,
-            )
+            if sync_mode:
+                response = embedding(
+                    model=model,
+                    input=[input],
+                    api_base=api_base,
+                    api_key=api_key,
+                    client=client,
+                )
+            else:
+                response = await litellm.aembedding(
+                    model=model,
+                    input=[input],
+                    api_base=api_base,
+                    api_key=api_key,
+                    client=client,
+                )
         print(response)
 
         assert len(response.data) == 1

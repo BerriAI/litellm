@@ -60,12 +60,12 @@ class AzureAICohereConfig:
                 image_embedding_idx.append(idx)
 
         ## REMOVE IMAGE EMBEDDINGS FROM input list
-        if len(image_embedding_idx) > 0:
-            for idx in reversed(image_embedding_idx):
-                input.pop(idx)
+        filtered_input = [
+            item for idx, item in enumerate(input) if idx not in image_embedding_idx
+        ]
 
         v1_embeddings_request = EmbeddingCreateParams(
-            input=input, model=model, **optional_params
+            input=filtered_input, model=model, **optional_params
         )
         image_embeddings_request = self._transform_request_image_embeddings(
             input=image_embeddings, optional_params=optional_params
