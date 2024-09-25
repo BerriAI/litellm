@@ -636,3 +636,63 @@ def test_init_clients_async_mode():
             assert router.cache.get_cache(f"{model_id}_stream_async_client") is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "environment,expected_models",
+    [
+        ("development", ["gpt-3.5-turbo"]),
+        ("production", ["gpt-4", "gpt-3.5-turbo", "gpt-4o"]),
+    ],
+)
+def test_init_router_with_supported_environments(environment, expected_models):
+    """
+    Tests that the correct models are setup on router when LITELLM_ENVIRONMENT is set
+    """
+    os.environ["LITELLM_ENVIRONMENT"] = environment
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "timeout": 0.01,
+                "stream_timeout": 0.000_001,
+                "max_retries": 7,
+            },
+            "model_info": {"supported_environments": ["development", "production"]},
+        },
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+                "timeout": 0.01,
+                "stream_timeout": 0.000_001,
+                "max_retries": 7,
+            },
+            "model_info": {"supported_environments": ["production"]},
+        },
+        {
+            "model_name": "gpt-4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+                "timeout": 0.01,
+                "stream_timeout": 0.000_001,
+                "max_retries": 7,
+            },
+            "model_info": {"supported_environments": ["production"]},
+        },
+    ]
+    router = Router(model_list=model_list, set_verbose=True)
+    _model_list = router.get_model_names()
+
+    print("model_list: ", _model_list)
+    print("expected_models: ", expected_models)
+
+    assert set(_model_list) == set(expected_models)
+
+    os.environ.pop("LITELLM_ENVIRONMENT")
