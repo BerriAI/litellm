@@ -93,6 +93,7 @@ def _get_parent_otel_span_from_kwargs(
             return litellm_params["metadata"]["litellm_parent_otel_span"]
         elif "litellm_parent_otel_span" in kwargs:
             return kwargs["litellm_parent_otel_span"]
+        return None
     except Exception as e:
         verbose_logger.exception(
             "Error in _get_parent_otel_span_from_kwargs: " + str(e)
