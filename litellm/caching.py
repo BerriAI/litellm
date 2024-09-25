@@ -753,6 +753,7 @@ class RedisCache(BaseCache):
                         start_time=start_time,
                         end_time=end_time,
                         parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        event_metadata={"key": key},
                     )
                 )
                 return response
@@ -769,6 +770,7 @@ class RedisCache(BaseCache):
                         start_time=start_time,
                         end_time=end_time,
                         parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        event_metadata={"key": key},
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
