@@ -22,7 +22,7 @@ from litellm.types.llms.vertex_ai import (
     Tools,
 )
 
-from ..common_utils import get_supports_system_message
+from ..common_utils import get_supports_system_message, get_supports_response_schema
 from ..vertex_ai_non_gemini import _gemini_convert_messages_with_history
 
 
@@ -46,8 +46,8 @@ def _transform_request_body(
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
-        supports_response_schema = litellm.supports_response_schema(
-            model=model, custom_llm_provider="vertex_ai"
+        supports_response_schema = get_supports_response_schema(
+            model=model, custom_llm_provider=custom_llm_provider
         )
         if supports_response_schema is False:
             user_response_schema_message = response_schema_prompt(
