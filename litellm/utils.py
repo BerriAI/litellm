@@ -3240,7 +3240,9 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
         )
-    elif custom_llm_provider == "vertex_ai_beta":
+    elif custom_llm_provider == "vertex_ai_beta" or (
+        custom_llm_provider == "vertex_ai" and "gemini" in model
+    ):
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )

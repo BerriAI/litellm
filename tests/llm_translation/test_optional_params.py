@@ -600,3 +600,15 @@ def test_o1_model_params():
     )
     assert optional_params["seed"] == 10
     assert optional_params["user"] == "John"
+
+
+def test_unmapped_gemini_model_params():
+    """
+    Test if unmapped gemini model optional params are translated correctly
+    """
+    optional_params = get_optional_params(
+        model="gemini-new-model",
+        custom_llm_provider="vertex_ai",
+        stop="stop_word",
+    )
+    assert optional_params["stop_sequences"] == ["stop_word"]
