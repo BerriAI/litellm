@@ -98,3 +98,4 @@ def _get_parent_otel_span_from_kwargs(
         verbose_logger.exception(
             "Error in _get_parent_otel_span_from_kwargs: " + str(e)
         )
+        return None
