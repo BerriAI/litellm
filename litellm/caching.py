@@ -1945,12 +1945,8 @@ class DualCache(BaseCache):
                 if in_memory_result is not None:
                     result = in_memory_result
 
-            if (
-                (self.always_read_redis is True)
-                and self.redis_cache is not None
-                and local_only == False
-            ):
-                # If not found in in-memory cache or always_read_redis is True, try fetching from Redis
+            if result is None and self.redis_cache is not None and local_only == False:
+                # If not found in in-memory cache, try fetching from Redis
                 redis_result = await self.redis_cache.async_get_cache(key, **kwargs)
 
                 if redis_result is not None:
@@ -2697,7 +2693,7 @@ class DiskCache(BaseCache):
         original_cached_response = self.disk_cache.get(key)
         if original_cached_response:
             try:
-                cached_response = json.loads(original_cached_response)
+                cached_response = json.loads(original_cached_response)  # type: ignore
             except:
                 cached_response = original_cached_response
             return cached_response
@@ -2713,7 +2709,7 @@ class DiskCache(BaseCache):
     def increment_cache(self, key, value: int, **kwargs) -> int:
         # get the value
         init_value = self.get_cache(key=key) or 0
-        value = init_value + value
+        value = init_value + value  # type: ignore
         self.set_cache(key, value, **kwargs)
         return value
 
@@ -2730,7 +2726,7 @@ class DiskCache(BaseCache):
     async def async_increment(self, key, value: int, **kwargs) -> int:
         # get the value
         init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value
+        value = init_value + value  # type: ignore
         await self.async_set_cache(key, value, **kwargs)
         return value
 
