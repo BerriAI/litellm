@@ -2045,7 +2045,7 @@ async def test_proxy_logging_setup():
     from litellm.proxy.utils import ProxyLogging
 
     pl_obj = ProxyLogging(user_api_key_cache=DualCache())
-    assert pl_obj.internal_usage_cache.always_read_redis is True
+    assert pl_obj.internal_usage_cache.dual_cache.always_read_redis is True
 
 
 @pytest.mark.skip(reason="local test. Requires sentinel setup.")
