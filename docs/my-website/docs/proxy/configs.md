@@ -509,7 +509,7 @@ s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for h
 
 ### Set Supported Environments for a model - `production`, `staging`, `development`
 
-Use this if you want to control which model is exposed on specific litellm environment
+Use this if you want to control which model is exposed on a specific litellm environment
 
 Supported Environments:
 - `production`
