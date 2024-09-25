@@ -2,26 +2,30 @@ model_list:
  - model_name: gpt-3.5-turbo
    litellm_params:
      model: openai/gpt-3.5-turbo
-     api_key: os.environ/OPENAI_API_KEY
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
    model_info:
      supported_environments: ["development", "production", "staging"]
- - model_name: gpt-4
+ - model_name: rerank-english-v3.0
    litellm_params:
-     model: openai/gpt-4
-     api_key: os.environ/OPENAI_API_KEY
+     model: cohere/rerank-english-v3.0
+     api_key: os.environ/COHERE_API_KEY
    model_info:
      supported_environments: ["production", "staging"]
- - model_name: gpt-4o
+ - model_name: llava-hf
    litellm_params:
-     model: openai/gpt-4o
-     api_key: os.environ/OPENAI_API_KEY
+     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
+     api_key: fake-key
    model_info:
-     supported_environments: ["production"]
+     supported_environments: ["production", "staging"]
 
+general_settings:
+    service_account_settings: 
+        enforced_params: ["user"]
 
 litellm_settings:
   cache: true
-  callbacks: ["otel"]
+  # callbacks: ["otel"]
 
 
 general_settings:
