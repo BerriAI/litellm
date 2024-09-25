@@ -753,10 +753,10 @@ async def test_team_update_redis():
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
 
-    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+    proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache = RedisCache()
 
     with patch.object(
-        proxy_logging_obj.internal_usage_cache.redis_cache,
+        proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache,
         "async_set_cache",
         new=AsyncMock(),
     ) as mock_client:
