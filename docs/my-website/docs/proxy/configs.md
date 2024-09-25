@@ -734,7 +734,7 @@ general_settings:
   database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
 ```
 
-## All settings 
+## **All settings**
 
 ```python
 {
@@ -754,7 +754,21 @@ general_settings:
       }
     }
   ],
-  "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
+  "litellm_settings": {
+    "success_callback": "List[str]" # list of success callbacks - eg ["langfuse"]
+    "failure_callback": "List[str]" # list of failure callbacks - eg ["sentry"]
+    "callbacks": "List[str] or str" # list of callbacks - runs on success and failure - eg ["otel"]
+    "service_callbacks": "List[str]" # logs redis, postgres failures on datadog, prometheus
+
+    "turn_off_message_logging": "boolean" # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
+    "redact_user_api_key_info": "boolean" # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+
+  }, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
+  "callback_settings": {
+    "otel": {        # OTEL logging callback specific settings
+      "message_logging": "boolean"
+    }
+  },
   "general_settings": {
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
