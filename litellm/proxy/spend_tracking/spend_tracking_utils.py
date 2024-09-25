@@ -5,6 +5,8 @@ import traceback
 from typing import Optional
 from pydantic import BaseModel
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload

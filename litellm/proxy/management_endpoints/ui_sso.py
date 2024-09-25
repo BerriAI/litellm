@@ -8,7 +8,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -31,6 +31,11 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.secret_managers.main import str_to_bool
+
+if TYPE_CHECKING:
+    from fastapi_sso.sso.base import OpenID
+else:
+    from typing import Any as OpenID
 
 router = APIRouter()
 
@@ -356,6 +361,10 @@ async def auth_callback(request: Request):
             "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
         )
 
+        generic_provider_attribute_name = os.getenv(
+            "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
+        )
+
         verbose_proxy_logger.debug(
             f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
         )
@@ -373,6 +382,7 @@ async def auth_callback(request: Request):
                 email=response.get(generic_user_email_attribute_name),
                 first_name=response.get(generic_user_first_name_attribute_name),
                 last_name=response.get(generic_user_last_name_attribute_name),
+                provider=response.get(generic_provider_attribute_name),
             )
 
         SSOProvider = create_provider(
@@ -493,6 +503,7 @@ async def auth_callback(request: Request):
             else:
                 # user not in DB, insert User into LiteLLM DB
                 user_role = await insert_sso_user(
+                    result_openid=result,
                     user_defined_values=user_defined_values,
                 )
     except Exception as e:
@@ -570,10 +581,15 @@ async def auth_callback(request: Request):
 
 
 async def insert_sso_user(
+    result_openid: Optional[OpenID],
     user_defined_values: Optional[SSOUserDefinedValues] = None,
 ) -> str:
     """
     Helper function to create a New User in LiteLLM DB after a successful SSO login
+
+    Args:
+        result_openid (OpenID): User information in OpenID format if the login was successful.
+        user_defined_values (Optional[SSOUserDefinedValues], optional): LiteLLM SSOValues / fields that were read
     """
     verbose_proxy_logger.debug(
         f"Inserting SSO user into DB. User values: {user_defined_values}"
@@ -604,6 +620,9 @@ async def insert_sso_user(
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
     )
+
+    if result_openid:
+        new_user_request.metadata = {"auth_provider": result_openid.provider}
 
     await new_user(data=new_user_request, user_api_key_dict=UserAPIKeyAuth())
 

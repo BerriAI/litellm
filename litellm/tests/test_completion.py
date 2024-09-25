@@ -141,9 +141,16 @@ def test_completion_azure_ai_command_r():
         os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
         os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
 
-        response: litellm.ModelResponse = completion(
+        response = completion(
             model="azure_ai/command-r-plus",
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is the meaning of life?"}
+                    ],
+                }
+            ],
         )  # type: ignore
 
         assert "azure_ai" in response.model
@@ -4106,30 +4113,6 @@ def test_completion_volcengine():
         # Add any assertions here to check the response
         print(response)
 
-    except litellm.exceptions.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_completion_nvidia_nim():
-    model_name = "nvidia_nim/databricks/dbrx-instruct"
-    try:
-        response = completion(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What's the weather like in Boston today in Fahrenheit?",
-                }
-            ],
-            presence_penalty=0.5,
-            frequency_penalty=0.1,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
     except litellm.exceptions.Timeout as e:
         pass
     except Exception as e:

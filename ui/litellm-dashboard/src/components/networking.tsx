@@ -572,7 +572,9 @@ export const userInfoCall = async (
     } else {
       // Use /user/info endpoint for individual user info
       url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if (userID) {
+      if (userRole === "Admin" || userRole === "Admin Viewer") {
+        // do nothing 
+      } else if (userID) {
         url += `?user_id=${userID}`;
       }
     }

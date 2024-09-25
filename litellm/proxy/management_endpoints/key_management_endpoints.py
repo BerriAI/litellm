@@ -883,6 +883,7 @@ async def generate_key_helper_fn(
             "user_role": user_role,
             "spend": spend,
             "models": models,
+            "metadata": metadata_json,
             "max_parallel_requests": max_parallel_requests,
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,

@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
@@ -291,3 +292,78 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     for var in callbacks.callback_vars.values():
         assert "os.environ" not in var
+
+
+@pytest.mark.parametrize(
+    "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
+)
+def test_is_request_body_safe_global_enabled(
+    allow_client_side_credentials, expect_error
+):
+    from litellm import Router
+
+    error_raised = False
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            }
+        ]
+    )
+    try:
+        is_request_body_safe(
+            request_body={"api_base": "hello-world"},
+            general_settings={
+                "allow_client_side_credentials": allow_client_side_credentials
+            },
+            llm_router=llm_router,
+            model="gpt-3.5-turbo",
+        )
+    except Exception as e:
+        print(e)
+        error_raised = True
+
+    assert expect_error == error_raised
+
+
+@pytest.mark.parametrize(
+    "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
+)
+def test_is_request_body_safe_model_enabled(
+    allow_client_side_credentials, expect_error
+):
+    from litellm import Router
+
+    error_raised = False
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "fireworks_ai/*",
+                "litellm_params": {
+                    "model": "fireworks_ai/*",
+                    "api_key": os.getenv("FIREWORKS_API_KEY"),
+                    "configurable_clientside_auth_params": (
+                        ["api_base"] if allow_client_side_credentials else []
+                    ),
+                },
+            }
+        ]
+    )
+    try:
+        is_request_body_safe(
+            request_body={"api_base": "hello-world"},
+            general_settings={},
+            llm_router=llm_router,
+            model="fireworks_ai/my-new-model",
+        )
+    except Exception as e:
+        print(e)
+        error_raised = True
+
+    assert expect_error == error_raised

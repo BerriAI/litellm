@@ -10,7 +10,7 @@ import traceback
 from datetime import datetime as dt
 from datetime import timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Set, TypedDict, Union, get_args
 
 import aiohttp
 import dotenv
@@ -57,20 +57,7 @@ class SlackAlerting(CustomBatchLogger):
             float
         ] = None,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
-        alert_types: List[AlertType] = [
-            "llm_exceptions",
-            "llm_too_slow",
-            "llm_requests_hanging",
-            "budget_alerts",
-            "db_exceptions",
-            "daily_reports",
-            "spend_reports",
-            "fallback_reports",
-            "cooldown_deployment",
-            "new_model_added",
-            "outage_alerts",
-            "failed_tracking_spend",
-        ],
+        alert_types: List[AlertType] = list(get_args(AlertType)),
         alert_to_webhook_url: Optional[
             Dict[AlertType, Union[List[str], str]]
         ] = None,  # if user wants to separate alerts to diff channels
@@ -613,7 +600,7 @@ class SlackAlerting(CustomBatchLogger):
             await self.send_alert(
                 message=message,
                 level="High",
-                alert_type="budget_alerts",
+                alert_type="failed_tracking_spend",
                 alerting_metadata={},
             )
             await _cache.async_set_cache(
