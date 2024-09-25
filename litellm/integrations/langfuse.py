@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import copy
+import inspect
 import os
 import traceback
 
@@ -668,16 +669,25 @@ def _add_prompt_to_generation_params(
         elif "version" in user_prompt and "prompt" in user_prompt:
             # prompts
             if isinstance(user_prompt["prompt"], str):
-                _prompt_obj = Prompt_Text(
-                    name=user_prompt["name"],
-                    prompt=user_prompt["prompt"],
-                    version=user_prompt["version"],
-                    config=user_prompt.get("config", None),
+                prompt_text_params = getattr(
+                    Prompt_Text, "model_fields", Prompt_Text.__fields__
                 )
+                _data = {
+                    "name": user_prompt["name"],
+                    "prompt": user_prompt["prompt"],
+                    "version": user_prompt["version"],
+                    "config": user_prompt.get("config", None),
+                }
+                if "labels" in prompt_text_params and "tags" in prompt_text_params:
+                    _data["labels"] = user_prompt.get("labels", []) or []
+                    _data["tags"] = user_prompt.get("tags", []) or []
+                _prompt_obj = Prompt_Text(**_data)  # type: ignore
                 generation_params["prompt"] = TextPromptClient(prompt=_prompt_obj)
 
             elif isinstance(user_prompt["prompt"], list):
-                prompt_chat_params = Prompt_Chat.__init__.__code__.co_varnames
+                prompt_chat_params = getattr(
+                    Prompt_Chat, "model_fields", Prompt_Chat.__fields__
+                )
                 _data = {
                     "name": user_prompt["name"],
                     "prompt": user_prompt["prompt"],
