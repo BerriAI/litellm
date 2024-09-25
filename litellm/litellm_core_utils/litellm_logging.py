@@ -2498,13 +2498,16 @@ def get_standard_logging_object_payload(
         else:
             cache_key = None
 
-        saved_cache_cost: Optional[float] = None
+        saved_cache_cost: float = 0.0
         if cache_hit is True:
 
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
 
-            saved_cache_cost = logging_obj._response_cost_calculator(
-                result=init_response_obj, cache_hit=False  # type: ignore
+            saved_cache_cost = (
+                logging_obj._response_cost_calculator(
+                    result=init_response_obj, cache_hit=False  # type: ignore
+                )
+                or 0.0
             )
 
         ## Get model cost information ##

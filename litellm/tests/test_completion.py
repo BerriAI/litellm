@@ -141,9 +141,16 @@ def test_completion_azure_ai_command_r():
         os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
         os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
 
-        response: litellm.ModelResponse = completion(
+        response = completion(
             model="azure_ai/command-r-plus",
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is the meaning of life?"}
+                    ],
+                }
+            ],
         )  # type: ignore
 
         assert "azure_ai" in response.model

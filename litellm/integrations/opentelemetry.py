@@ -159,6 +159,8 @@ class OpenTelemetry(CustomLogger):
 
             if event_metadata:
                 for key, value in event_metadata.items():
+                    if value is None:
+                        value = "None"
                     if isinstance(value, dict):
                         try:
                             value = str(value)
@@ -409,12 +411,50 @@ class OpenTelemetry(CustomLogger):
                 str(optional_params.get("stream", False)),
             )
 
+            if optional_params.get("user"):
+                span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
+
+            # The unique identifier for the completion.
+            if response_obj.get("id"):
+                span.set_attribute("gen_ai.response.id", response_obj.get("id"))
+
+            # The model used to generate the response.
+            if response_obj.get("model"):
+                span.set_attribute(
+                    SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
+                )
+
+            usage = response_obj.get("usage")
+            if usage:
+                span.set_attribute(
+                    SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                    usage.get("total_tokens"),
+                )
+
+                # The number of tokens used in the LLM response (completion).
+                span.set_attribute(
+                    SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                    usage.get("completion_tokens"),
+                )
+
+                # The number of tokens used in the LLM prompt.
+                span.set_attribute(
+                    SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                    usage.get("prompt_tokens"),
+                )
+
+            ########################################################################
+            ########## LLM Request Medssages / tools / content Attributes ###########
+            #########################################################################
+
+            if litellm.turn_off_message_logging is True:
+                return
+            if self.message_logging is not True:
+                return
+
             if optional_params.get("tools"):
                 tools = optional_params["tools"]
                 self.set_tools_attributes(span, tools)
-
-            if optional_params.get("user"):
-                span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
 
             if kwargs.get("messages"):
                 for idx, prompt in enumerate(kwargs.get("messages")):
@@ -472,34 +512,6 @@ class OpenTelemetry(CustomLogger):
                                     tool_calls[0].get("function").get("arguments"),
                                 )
 
-                # The unique identifier for the completion.
-                if response_obj.get("id"):
-                    span.set_attribute("gen_ai.response.id", response_obj.get("id"))
-
-                # The model used to generate the response.
-                if response_obj.get("model"):
-                    span.set_attribute(
-                        SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
-                    )
-
-                usage = response_obj.get("usage")
-                if usage:
-                    span.set_attribute(
-                        SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-                        usage.get("total_tokens"),
-                    )
-
-                    # The number of tokens used in the LLM response (completion).
-                    span.set_attribute(
-                        SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
-                        usage.get("completion_tokens"),
-                    )
-
-                    # The number of tokens used in the LLM prompt.
-                    span.set_attribute(
-                        SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
-                        usage.get("prompt_tokens"),
-                    )
         except Exception as e:
             verbose_logger.error(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
