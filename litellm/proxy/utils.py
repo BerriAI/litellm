@@ -65,11 +65,13 @@ from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
 )
+from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -938,6 +940,9 @@ class PrismaClient:
         )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
+        self.iam_token_db_auth: Optional[bool] = str_to_bool(
+            os.getenv("IAM_TOKEN_DB_AUTH")
+        )
         try:
             from prisma import Prisma  # type: ignore
         except Exception as e:
@@ -964,9 +969,23 @@ class PrismaClient:
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         if http_client is not None:
-            self.db = Prisma(http=http_client)
+            self.db = PrismaWrapper(
+                original_prisma=Prisma(http=http_client),
+                iam_token_db_auth=(
+                    self.iam_token_db_auth
+                    if self.iam_token_db_auth is not None
+                    else False
+                ),
+            )
         else:
-            self.db = Prisma()  # Client to connect to Prisma db
+            self.db = PrismaWrapper(
+                original_prisma=Prisma(),
+                iam_token_db_auth=(
+                    self.iam_token_db_auth
+                    if self.iam_token_db_auth is not None
+                    else False
+                ),
+            )  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
@@ -1062,9 +1081,9 @@ class PrismaClient:
                         "LiteLLM_VerificationTokenView Created in DB!"
                     )
                 else:
-                    should_create_views = await should_create_missing_views(db=self.db)
+                    should_create_views = await should_create_missing_views(db=self.db.db)  # type: ignore
                     if should_create_views:
-                        await create_missing_views(db=self.db)
+                        await create_missing_views(db=self.db)  # type: ignore
                     else:
                         # don't block execution if these views are missing
                         # Convert lists to sets for efficient difference calculation
