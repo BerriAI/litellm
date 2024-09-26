@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.proxy._types import CommonProxyErrors
 from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -2140,7 +2141,8 @@ def _init_custom_logger_compatible_class(
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
-) -> CustomLogger:
+    premium_user: bool = False,
+) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -2174,13 +2176,19 @@ def _init_custom_logger_compatible_class(
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
     elif logging_integration == "prometheus":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, PrometheusLogger):
-                return callback  # type: ignore
+        if premium_user:
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrometheusLogger):
+                    return callback  # type: ignore
 
-        _prometheus_logger = PrometheusLogger()
-        _in_memory_loggers.append(_prometheus_logger)
-        return _prometheus_logger  # type: ignore
+            _prometheus_logger = PrometheusLogger()
+            _in_memory_loggers.append(_prometheus_logger)
+            return _prometheus_logger  # type: ignore
+        else:
+            verbose_logger.warning(
+                f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
+            )
+            return None
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):

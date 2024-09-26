@@ -2434,6 +2434,17 @@
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
     },
+    "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "source": "https://console.cloud.google.com/vertex-ai/publishers/meta/model-garden/llama-3.2-90b-vision-instruct-maas"
+    },
     "vertex_ai/mistral-large@latest": {
         "max_tokens": 8191,
         "max_input_tokens": 128000,

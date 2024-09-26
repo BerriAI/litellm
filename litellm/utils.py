@@ -367,7 +367,7 @@ def function_setup(
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                         callback, internal_usage_cache=None, llm_router=None
                     )
-                    if any(
+                    if callback is None or any(
                         isinstance(cb, type(callback))
                         for cb in litellm._async_success_callback
                     ):  # don't double add a callback
@@ -431,7 +431,7 @@ def function_setup(
                     )
 
                     # don't double add a callback
-                    if not any(
+                    if callback_class is not None and not any(
                         isinstance(cb, type(callback_class)) for cb in litellm.callbacks
                     ):
                         litellm.callbacks.append(callback_class)  # type: ignore
