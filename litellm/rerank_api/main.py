@@ -8,7 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure_ai.rerank import AzureAIRerank
 from litellm.llms.cohere.rerank import CohereRerank
-from litellm.llms.togetherai.rerank import TogetherAIRerank
+from litellm.llms.together_ai.rerank import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
 from litellm.types.router import *
 from litellm.utils import client, exception_type, supports_httpx_timeout
@@ -103,16 +103,14 @@ def rerank(
             )
         )
 
-        model_parameters = [
-            "top_n",
-            "rank_fields",
-            "return_documents",
-            "max_chunks_per_doc",
-        ]
-        model_params_dict = {}
-        for k, v in optional_params.model_fields.items():
-            if k in model_parameters:
-                model_params_dict[k] = v
+        model_params_dict = {
+            "top_n": top_n,
+            "rank_fields": rank_fields,
+            "return_documents": return_documents,
+            "max_chunks_per_doc": max_chunks_per_doc,
+            "documents": documents,
+        }
+
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
