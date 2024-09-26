@@ -332,6 +332,7 @@ def test_all_model_configs():
         model="gemini-1.0-pro",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_output_tokens": 10}
 
     assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()
