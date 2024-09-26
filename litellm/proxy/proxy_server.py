@@ -901,9 +901,6 @@ async def update_database(
             - Update litellm-proxy-budget row (global proxy spend)
             """
             ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
-            existing_token_obj = await user_api_key_cache.async_get_cache(
-                key=hashed_token
-            )
             existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
             if existing_user_obj is not None and isinstance(existing_user_obj, dict):
                 existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
@@ -1156,7 +1153,9 @@ async def update_cache(
 
         # Update the cost column for the given token
         existing_spend_obj.spend = new_spend
-        user_api_key_cache.set_cache(key=hashed_token, value=existing_spend_obj)
+        await user_api_key_cache.async_set_cache(
+            key=hashed_token, value=existing_spend_obj
+        )
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
@@ -1185,10 +1184,12 @@ async def update_cache(
                 # Update the cost column for the given user
                 if isinstance(existing_spend_obj, dict):
                     existing_spend_obj["spend"] = new_spend
-                    user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                    await user_api_key_cache.async_set_cache(
+                        key=_id, value=existing_spend_obj
+                    )
                 else:
                     existing_spend_obj.spend = new_spend
-                    user_api_key_cache.set_cache(
+                    await user_api_key_cache.async_set_cache(
                         key=_id, value=existing_spend_obj.json()
                     )
             ## UPDATE GLOBAL PROXY ##
@@ -1237,10 +1238,14 @@ async def update_cache(
             # Update the cost column for the given user
             if isinstance(existing_spend_obj, dict):
                 existing_spend_obj["spend"] = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                await user_api_key_cache.async_set_cache(
+                    key=_id, value=existing_spend_obj
+                )
             else:
                 existing_spend_obj.spend = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj.json())
+                await user_api_key_cache.async_set_cache(
+                    key=_id, value=existing_spend_obj.json()
+                )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"An error occurred updating end user cache: {str(e)}"
@@ -1279,10 +1284,14 @@ async def update_cache(
             # Update the cost column for the given user
             if isinstance(existing_spend_obj, dict):
                 existing_spend_obj["spend"] = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                await user_api_key_cache.async_set_cache(
+                    key=_id, value=existing_spend_obj
+                )
             else:
                 existing_spend_obj.spend = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                await user_api_key_cache.async_set_cache(
+                    key=_id, value=existing_spend_obj
+                )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"An error occurred updating end user cache: {str(e)}"
