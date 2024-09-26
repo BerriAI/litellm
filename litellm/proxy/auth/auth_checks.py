@@ -8,6 +8,7 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
+import asyncio
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Literal, Optional
@@ -432,7 +433,7 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    await user_api_key_cache.async_set_cache(key=key, value=value)
+    asyncio.create_task(user_api_key_cache.async_set_cache(key=key, value=value))
 
 
 async def _cache_team_object(
@@ -583,16 +584,14 @@ async def get_key_object(
 
     # check if in cache
     key = hashed_token
-    cached_team_obj: Optional[UserAPIKeyAuth] = None
+    cached_key_obj: Optional[UserAPIKeyAuth] = None
+    cached_key_obj = await user_api_key_cache.async_get_cache(key=key)
 
-    if cached_team_obj is None:
-        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
-
-    if cached_team_obj is not None:
-        if isinstance(cached_team_obj, dict):
-            return UserAPIKeyAuth(**cached_team_obj)
-        elif isinstance(cached_team_obj, UserAPIKeyAuth):
-            return cached_team_obj
+    if cached_key_obj is not None:
+        if isinstance(cached_key_obj, dict):
+            return UserAPIKeyAuth(**cached_key_obj)
+        elif isinstance(cached_key_obj, UserAPIKeyAuth):
+            return cached_key_obj
 
     if check_cache_only:
         raise Exception(
