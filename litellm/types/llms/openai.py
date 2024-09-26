@@ -9,7 +9,7 @@ from openai.lib.streaming._assistants import (
     AsyncAssistantStreamManager,
 )
 from openai.pagination import AsyncCursorPage, SyncCursorPage
-from openai.types import Batch, EmbeddingCreateParams, FileObject
+from openai.types import Batch, FileObject
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.thread_create_params import (

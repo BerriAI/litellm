@@ -11131,10 +11131,6 @@ def is_cached_message(message: AllMessageValues) -> bool:
 
 def is_base64_encoded(s: str) -> bool:
     try:
-        # Strip out the prefix if it exists
-        if s.startswith("data:"):
-            s = s.split(",")[1]
-
         # Try to decode the string
         decoded_bytes = base64.b64decode(s, validate=True)
         # Check if the original string can be re-encoded to the same string

@@ -1215,6 +1215,7 @@ class OpenAIChatCompletion(BaseLLM):
         client: Optional[AsyncOpenAI] = None,
         max_retries=None,
     ):
+        response = None
         try:
             openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                 is_async=True,
@@ -1236,15 +1237,12 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            returned_response: (
-                litellm.EmbeddingResponse
-            ) = convert_to_model_response_object(
+            return convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
                 _response_headers=headers,
             )  # type: ignore
-            return returned_response
         except OpenAIError as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1286,6 +1284,7 @@ class OpenAIChatCompletion(BaseLLM):
         aembedding=None,
     ):
         super().embedding()
+        exception_mapping_worked = False
         try:
             model = model
             data = {"model": model, "input": input, **optional_params}
@@ -1300,7 +1299,7 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             if aembedding is True:
-                async_response = self.aembedding(
+                response = self.aembedding(
                     data=data,
                     input=input,
                     logging_obj=logging_obj,
@@ -1311,7 +1310,7 @@ class OpenAIChatCompletion(BaseLLM):
                     client=client,
                     max_retries=max_retries,
                 )
-                return async_response
+                return response
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1336,13 +1335,12 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=sync_embedding_response,
             )
-            response: litellm.EmbeddingResponse = convert_to_model_response_object(
+            return convert_to_model_response_object(
                 response_object=sync_embedding_response.model_dump(),
                 model_response_object=model_response,
                 _response_headers=headers,
                 response_type="embedding",
             )  # type: ignore
-            return response
         except OpenAIError as e:
             raise e
         except Exception as e:
