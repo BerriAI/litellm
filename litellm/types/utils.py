@@ -766,7 +766,7 @@ class EmbeddingResponse(OpenAIObject):
     """The actual embedding value"""
 
     object: Literal["list"]
-    """The object type, which is always "embedding" """
+    """The object type, which is always "list" """
 
     usage: Optional[Usage] = None
     """Usage statistics for the embedding request."""
