@@ -74,6 +74,7 @@ def _transform_request_body(
             "safety_settings", None
         )  # type: ignore
         config_fields = GenerationConfig.__annotations__.keys()
+
         filtered_params = {
             k: v for k, v in optional_params.items() if k in config_fields
         }
