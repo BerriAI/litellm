@@ -434,15 +434,6 @@ async def _cache_management_object(
 ):
     await user_api_key_cache.async_set_cache(key=key, value=value)
 
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        _value = value.model_dump_json(
-            exclude_unset=True, exclude={"parent_otel_span": True}
-        )
-        await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=_value, litellm_parent_otel_span=None
-        )
-
 
 async def _cache_team_object(
     team_id: str,
@@ -471,7 +462,7 @@ async def _cache_key_object(
 ):
     key = hashed_token
 
-    ## CACHE REFRESH TIME!
+    ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
 
     await _cache_management_object(
@@ -524,10 +515,12 @@ async def get_team_object(
     ## CHECK REDIS CACHE ##
     if (
         proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
-        cached_team_obj = await proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
-            key=key
+        cached_team_obj = (
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
+                key=key
+            )
         )
 
     if cached_team_obj is None:
@@ -591,15 +584,6 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
     cached_team_obj: Optional[UserAPIKeyAuth] = None
-
-    ## CHECK REDIS CACHE ##
-    if (
-        proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache is not None
-    ):
-        cached_team_obj = await proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
-            key=key
-        )
 
     if cached_team_obj is None:
         cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
