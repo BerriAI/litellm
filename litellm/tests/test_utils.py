@@ -808,3 +808,21 @@ def test_usage_object_null_tokens():
     usage_obj = litellm.Usage(prompt_tokens=2, completion_tokens=None, total_tokens=2)
 
     assert usage_obj.completion_tokens == 0
+
+
+def test_is_base64_encoded():
+    import base64
+
+    import requests
+
+    litellm.set_verbose = True
+    url = "https://dummyimage.com/100/100/fff&text=Test+image"
+    response = requests.get(url)
+    file_data = response.content
+
+    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    base64_image = f"data:image/png;base64,{encoded_file}"
+
+    from litellm.utils import is_base64_encoded
+
+    assert is_base64_encoded(s=base64_image) is True
