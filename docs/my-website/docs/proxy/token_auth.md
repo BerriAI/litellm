@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] JWT-based Auth 
+# JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 

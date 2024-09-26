@@ -205,6 +205,11 @@ class LangFuseLogger:
                 input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
+                response_obj, litellm.HttpxBinaryResponseContent
+            ):
+                input = prompt
+                output = "speech-output"
+            elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
                 input = prompt
@@ -549,7 +554,10 @@ class LangFuseLogger:
             generation_id = None
             usage = None
             if response_obj is not None:
-                if response_obj.get("id", None) is not None:
+                if (
+                    hasattr(response_obj, "id")
+                    and response_obj.get("id", None) is not None
+                ):
                     generation_id = litellm.utils.get_logging_id(
                         start_time, response_obj
                     )
@@ -571,8 +579,8 @@ class LangFuseLogger:
                 if _user_api_key_alias is not None:
                     generation_name = f"litellm:{_user_api_key_alias}"
 
-            if response_obj is not None and "system_fingerprint" in response_obj:
-                system_fingerprint = response_obj.get("system_fingerprint", None)
+            if response_obj is not None:
+                system_fingerprint = getattr(response_obj, "system_fingerprint", None)
             else:
                 system_fingerprint = None
 

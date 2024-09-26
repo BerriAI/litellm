@@ -596,3 +596,10 @@ class RouterRateLimitError(ValueError):
 class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+VALID_LITELLM_ENVIRONMENTS = [
+    "development",
+    "staging",
+    "production",
+]
