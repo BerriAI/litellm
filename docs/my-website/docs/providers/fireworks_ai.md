@@ -148,6 +148,10 @@ We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when se
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| llama-v3p2-1b-instruct | `completion(model="fireworks_ai/llama-v3p2-1b-instruct", messages)` |
+| llama-v3p2-3b-instruct | `completion(model="fireworks_ai/llama-v3p2-3b-instruct", messages)` |
+| llama-v3p2-11b-vision-instruct | `completion(model="fireworks_ai/llama-v3p2-11b-vision-instruct", messages)` |
+| llama-v3p2-90b-vision-instruct | `completion(model="fireworks_ai/llama-v3p2-90b-vision-instruct", messages)` |
 | mixtral-8x7b-instruct | `completion(model="fireworks_ai/mixtral-8x7b-instruct", messages)` | 
 | firefunction-v1 | `completion(model="fireworks_ai/firefunction-v1", messages)` |
 | llama-v2-70b-chat | `completion(model="fireworks_ai/llama-v2-70b-chat", messages)` |  
