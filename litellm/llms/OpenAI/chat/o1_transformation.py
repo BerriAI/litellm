@@ -57,7 +57,6 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "parallel_tool_calls",
             "function_call",
             "functions",
-            "temperature",
             "top_p",
             "n",
             "presence_penalty",
@@ -73,13 +72,36 @@ class OpenAIO1Config(OpenAIGPTConfig):
         ]
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ):
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"
             )
-        return super()._map_openai_params(non_default_params, optional_params, model)
+        if "temperature" in non_default_params:
+            temperature_value: Optional[float] = non_default_params.pop("temperature")
+            if temperature_value is not None:
+                if temperature_value == 0 or temperature_value == 1:
+                    optional_params["temperature"] = temperature_value
+                else:
+                    ## UNSUPPORTED TOOL CHOICE VALUE
+                    if litellm.drop_params is True or drop_params is True:
+                        pass
+                    else:
+                        raise litellm.utils.UnsupportedParamsError(
+                            message="O-1 doesn't support temperature={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
+                                temperature_value
+                            ),
+                            status_code=400,
+                        )
+
+        return super()._map_openai_params(
+            non_default_params, optional_params, model, drop_params
+        )
 
     def is_model_o1_reasoning_model(self, model: str) -> bool:
         if model in litellm.open_ai_chat_completion_models and "o1" in model:
