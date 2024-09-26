@@ -72,6 +72,8 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
+from .auth.user_api_key_cache import UserAPIKeyCache
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -295,7 +297,7 @@ class ProxyLogging:
 
     def __init__(
         self,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserAPIKeyCache,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}

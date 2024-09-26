@@ -361,7 +361,8 @@ async def user_api_key_auth(
                 if litellm.max_budget > 0:  # user set proxy max budget
                     # check cache
                     global_proxy_spend = await user_api_key_cache.async_get_cache(
-                        key="{}:spend".format(litellm_proxy_admin_name)
+                        key="{}:spend".format(litellm_proxy_admin_name),
+                        litellm_parent_otel_span=parent_otel_span,
                     )
                     if global_proxy_spend is None and prisma_client is not None:
                         # get from db
@@ -374,6 +375,7 @@ async def user_api_key_auth(
                         await user_api_key_cache.async_set_cache(
                             key="{}:spend".format(litellm_proxy_admin_name),
                             value=global_proxy_spend,
+                            litellm_parent_otel_span=parent_otel_span,
                         )
                     if global_proxy_spend is not None:
                         user_info = CallInfo(
@@ -786,7 +788,8 @@ async def user_api_key_auth(
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
                     team_member_info = await user_api_key_cache.async_get_cache(
-                        key=_cache_key
+                        key=_cache_key,
+                        litellm_parent_otel_span=parent_otel_span,
                     )
                     if team_member_info is None:
                         # read from DB
@@ -804,6 +807,7 @@ async def user_api_key_auth(
                             await user_api_key_cache.async_set_cache(
                                 key=_cache_key,
                                 value=team_member_info,
+                                litellm_parent_otel_span=parent_otel_span,
                             )
 
                     if (
@@ -982,7 +986,8 @@ async def user_api_key_auth(
             ):  # user set proxy max budget
                 # check cache
                 global_proxy_spend = await user_api_key_cache.async_get_cache(
-                    key="{}:spend".format(litellm_proxy_admin_name)
+                    key="{}:spend".format(litellm_proxy_admin_name),
+                    litellm_parent_otel_span=parent_otel_span,
                 )
                 if global_proxy_spend is None:
                     # get from db
@@ -994,6 +999,7 @@ async def user_api_key_auth(
                     await user_api_key_cache.async_set_cache(
                         key="{}:spend".format(litellm_proxy_admin_name),
                         value=global_proxy_spend,
+                        litellm_parent_otel_span=parent_otel_span,
                     )
 
                 if global_proxy_spend is not None:

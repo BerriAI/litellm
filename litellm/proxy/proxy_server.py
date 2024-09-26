@@ -119,7 +119,10 @@ from litellm.integrations.SlackAlerting.slack_alerting import (
     SlackAlerting,
     SlackAlertingArgs,
 )
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_litellm_metadata_from_kwargs,
+)
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -135,6 +138,7 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_cache import UserAPIKeyCache
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
@@ -477,8 +481,10 @@ master_key: Optional[str] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
 custom_db_client: Optional[DBClient] = None
-user_api_key_cache = DualCache(
-    default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+user_api_key_cache = UserAPIKeyCache(
+    dual_cache=DualCache(
+        default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+    ),
 )
 redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
@@ -776,6 +782,7 @@ async def _PROXY_track_cost_callback(
         org_id = metadata.get("user_api_key_org_id", None)
         key_alias = metadata.get("user_api_key_alias", None)
         end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
+        litellm_parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = metadata.get("user_api_key", None)
@@ -802,6 +809,7 @@ async def _PROXY_track_cost_callback(
                     start_time=start_time,
                     end_time=end_time,
                     org_id=org_id,
+                    parent_otel_span=litellm_parent_otel_span,
                 )
 
                 await update_cache(
@@ -810,6 +818,7 @@ async def _PROXY_track_cost_callback(
                     end_user_id=end_user_id,
                     response_cost=response_cost,
                     team_id=team_id,
+                    parent_otel_span=litellm_parent_otel_span,
                 )
 
                 await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
@@ -883,6 +892,7 @@ async def update_database(
     start_time=None,
     end_time=None,
     org_id=None,
+    parent_otel_span: Optional[Span] = None,
 ):
     try:
         global prisma_client
@@ -902,9 +912,12 @@ async def update_database(
             """
             ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
             existing_token_obj = await user_api_key_cache.async_get_cache(
-                key=hashed_token
+                key=hashed_token,
+                litellm_parent_otel_span=parent_otel_span,
             )
-            existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+            existing_user_obj = await user_api_key_cache.async_get_cache(
+                key=user_id, litellm_parent_otel_span=parent_otel_span
+            )
             if existing_user_obj is not None and isinstance(existing_user_obj, dict):
                 existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
             data_list = []
@@ -1064,6 +1077,7 @@ async def update_cache(
     end_user_id: Optional[str],
     team_id: Optional[str],
     response_cost: Optional[float],
+    parent_otel_span: Optional[Span] = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -1156,7 +1170,11 @@ async def update_cache(
 
         # Update the cost column for the given token
         existing_spend_obj.spend = new_spend
-        user_api_key_cache.set_cache(key=hashed_token, value=existing_spend_obj)
+        await user_api_key_cache.async_set_cache(
+            key=hashed_token,
+            value=existing_spend_obj,
+            litellm_parent_otel_span=parent_otel_span,
+        )
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
@@ -1167,7 +1185,9 @@ async def update_cache(
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
+                existing_spend_obj = await user_api_key_cache.async_get_cache(
+                    key=_id, litellm_parent_otel_span=parent_otel_span
+                )
                 if existing_spend_obj is None:
                     # do nothing if there is no cache value
                     return
@@ -1185,7 +1205,11 @@ async def update_cache(
                 # Update the cost column for the given user
                 if isinstance(existing_spend_obj, dict):
                     existing_spend_obj["spend"] = new_spend
-                    user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                    user_api_key_cache.set_cache(
+                        key=_id,
+                        value=existing_spend_obj,
+                        litellm_parent_otel_span=parent_otel_span,
+                    )
                 else:
                     existing_spend_obj.spend = new_spend
                     user_api_key_cache.set_cache(
@@ -1193,7 +1217,8 @@ async def update_cache(
                     )
             ## UPDATE GLOBAL PROXY ##
             global_proxy_spend = await user_api_key_cache.async_get_cache(
-                key="{}:spend".format(litellm_proxy_admin_name)
+                key="{}:spend".format(litellm_proxy_admin_name),
+                litellm_parent_otel_span=parent_otel_span,
             )
             if global_proxy_spend is None:
                 # do nothing if not in cache
@@ -1201,7 +1226,9 @@ async def update_cache(
             elif response_cost is not None and global_proxy_spend is not None:
                 increment = global_proxy_spend + response_cost
                 await user_api_key_cache.async_set_cache(
-                    key="{}:spend".format(litellm_proxy_admin_name), value=increment
+                    key="{}:spend".format(litellm_proxy_admin_name),
+                    value=increment,
+                    litellm_parent_otel_span=parent_otel_span,
                 )
         except Exception as e:
             verbose_proxy_logger.debug(
@@ -1216,7 +1243,10 @@ async def update_cache(
         _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj = await user_api_key_cache.async_get_cache(
+                key=_id,
+                litellm_parent_otel_span=parent_otel_span,
+            )
             if existing_spend_obj is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
@@ -1237,10 +1267,18 @@ async def update_cache(
             # Update the cost column for the given user
             if isinstance(existing_spend_obj, dict):
                 existing_spend_obj["spend"] = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                await user_api_key_cache.async_set_cache(
+                    key=_id,
+                    value=existing_spend_obj,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
             else:
                 existing_spend_obj.spend = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj.json())
+                await user_api_key_cache.async_set_cache(
+                    key=_id,
+                    value=existing_spend_obj.json(),
+                    litellm_parent_otel_span=parent_otel_span,
+                )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"An error occurred updating end user cache: {str(e)}"
@@ -1255,7 +1293,10 @@ async def update_cache(
         try:
             # Fetch the existing cost for the given user
             existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
+                await user_api_key_cache.async_get_cache(
+                    key=_id,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
             )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
@@ -1279,10 +1320,18 @@ async def update_cache(
             # Update the cost column for the given user
             if isinstance(existing_spend_obj, dict):
                 existing_spend_obj["spend"] = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                await user_api_key_cache.async_set_cache(
+                    key=_id,
+                    value=existing_spend_obj,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
             else:
                 existing_spend_obj.spend = new_spend
-                user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
+                await user_api_key_cache.async_set_cache(
+                    key=_id,
+                    value=existing_spend_obj,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"An error occurred updating end user cache: {str(e)}"
@@ -1827,7 +1876,7 @@ class ProxyConfig:
                 "user_api_key_cache_ttl", None
             )
             if user_api_key_cache_ttl is not None:
-                user_api_key_cache.update_cache_ttl(
+                user_api_key_cache.dual_cache.update_cache_ttl(
                     default_in_memory_ttl=float(user_api_key_cache_ttl),
                     default_redis_ttl=None,  # user_api_key_cache is an in-memory cache
                 )

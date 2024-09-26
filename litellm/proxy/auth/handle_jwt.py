@@ -18,6 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable
+from litellm.proxy.auth.user_api_key_cache import UserAPIKeyCache
 from litellm.proxy.utils import PrismaClient
 
 
@@ -30,7 +31,7 @@ class JWTHandler:
     """
 
     prisma_client: Optional[PrismaClient]
-    user_api_key_cache: DualCache
+    user_api_key_cache: UserAPIKeyCache
 
     def __init__(
         self,
@@ -40,7 +41,7 @@ class JWTHandler:
     def update_environment(
         self,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserAPIKeyCache,
         litellm_jwtauth: LiteLLM_JWTAuth,
     ) -> None:
         self.prisma_client = prisma_client
@@ -167,7 +168,8 @@ class JWTHandler:
             raise Exception("Missing JWT Public Key URL from environment.")
 
         cached_keys = await self.user_api_key_cache.async_get_cache(
-            "litellm_jwt_auth_keys"
+            "litellm_jwt_auth_keys",
+            litellm_parent_otel_span=None,
         )
         if cached_keys is None:
             response = await self.http_handler.get(keys_url)
@@ -182,6 +184,7 @@ class JWTHandler:
                 key="litellm_jwt_auth_keys",
                 value=keys,
                 ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
+                litellm_parent_otel_span=None,
             )
         else:
             keys = cached_keys
