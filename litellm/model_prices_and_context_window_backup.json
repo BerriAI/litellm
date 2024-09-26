@@ -5473,6 +5473,28 @@
         "litellm_provider": "perplexity",
         "mode": "chat"
     },
+    "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000001, 
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "fireworks_ai", 
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://fireworks.ai/pricing"
+    },
+    "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000001, 
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "fireworks_ai", 
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://fireworks.ai/pricing"
+    },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
