@@ -901,7 +901,7 @@ from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
 from .llms.AI21.completion import AI21Config
 from .llms.AI21.chat import AI21ChatConfig
-from .llms.together_ai.chat import TogetherAIConfig
+from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
 from .llms.gemini import GeminiConfig

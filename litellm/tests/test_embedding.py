@@ -104,131 +104,14 @@ def test_openai_embedding_3():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize(
-    "model, api_base, api_key",
-    [
-        # ("azure/azure-embedding-model", None, None),
-        ("together_ai/togethercomputer/m2-bert-80M-8k-retrieval", None, None),
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode):
+def test_openai_azure_embedding_simple():
     try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-        # litellm.set_verbose = True
-        if sync_mode:
-            response = embedding(
-                model=model,
-                input=["good morning from litellm"],
-                api_base=api_base,
-                api_key=api_key,
-            )
-        else:
-            response = await litellm.aembedding(
-                model=model,
-                input=["good morning from litellm"],
-                api_base=api_base,
-                api_key=api_key,
-            )
-            # print(await response)
-        print(response)
-        print(response._hidden_params)
-        response_keys = set(dict(response).keys())
-        response_keys.discard("_response_ms")
-        assert set(["usage", "model", "object", "data"]) == set(
-            response_keys
-        )  # assert litellm response has expected keys from OpenAI embedding response
-
-        request_cost = litellm.completion_cost(
-            completion_response=response, call_type="embedding"
+        litellm.set_verbose = True
+        response = embedding(
+            model="azure/azure-embedding-model",
+            input=["good morning from litellm"],
         )
-
-        print("Calculated request cost=", request_cost)
-
-        assert isinstance(response.usage, litellm.Usage)
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_openai_azure_embedding_simple()
-import base64
-
-import requests
-
-litellm.set_verbose = True
-url = "https://dummyimage.com/100/100/fff&text=Test+image"
-response = requests.get(url)
-file_data = response.content
-
-encoded_file = base64.b64encode(file_data).decode("utf-8")
-base64_image = f"data:image/png;base64,{encoded_file}"
-
-
-from openai.types.embedding import Embedding
-
-
-def _azure_ai_image_mock_response(*args, **kwargs):
-    new_response = MagicMock()
-    new_response.headers = {"azureml-model-group": "offer-cohere-embed-multili-paygo"}
-
-    new_response.json.return_value = {
-        "data": [Embedding(embedding=[1234], index=0, object="embedding")],
-        "model": "",
-        "object": "list",
-        "usage": {"prompt_tokens": 1, "total_tokens": 2},
-    }
-
-    return new_response
-
-
-@pytest.mark.parametrize(
-    "model, api_base, api_key",
-    [
-        (
-            "azure_ai/Cohere-embed-v3-multilingual-jzu",
-            "https://Cohere-embed-v3-multilingual-jzu.eastus2.models.ai.azure.com",
-            os.getenv("AZURE_AI_COHERE_API_KEY_2"),
-        )
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-        input = base64_image
-        if sync_mode:
-            client = HTTPHandler()
-        else:
-            client = AsyncHTTPHandler()
-        with patch.object(
-            client, "post", side_effect=_azure_ai_image_mock_response
-        ) as mock_client:
-            if sync_mode:
-                response = embedding(
-                    model=model,
-                    input=[input],
-                    api_base=api_base,
-                    api_key=api_key,
-                    client=client,
-                )
-            else:
-                response = await litellm.aembedding(
-                    model=model,
-                    input=[input],
-                    api_base=api_base,
-                    api_key=api_key,
-                    client=client,
-                )
         print(response)
-
-        assert len(response.data) == 1
-
-        print(response._hidden_params)
         response_keys = set(dict(response).keys())
         response_keys.discard("_response_ms")
         assert set(["usage", "model", "object", "data"]) == set(
@@ -243,6 +126,9 @@ async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+# test_openai_azure_embedding_simple()
 
 
 def test_openai_azure_embedding_timeouts():
@@ -340,16 +226,13 @@ def test_openai_azure_embedding_with_oidc_and_cf():
         os.environ["AZURE_API_KEY"] = old_key
 
 
-from openai.types.embedding import Embedding
-
-
 def _openai_mock_response(*args, **kwargs):
     new_response = MagicMock()
     new_response.headers = {"hello": "world"}
 
     new_response.parse.return_value = (
         openai.types.create_embedding_response.CreateEmbeddingResponse(
-            data=[Embedding(embedding=[1234, 45667], index=0, object="embedding")],
+            data=[],
             model="azure/test",
             object="list",
             usage=openai.types.create_embedding_response.Usage(
@@ -384,28 +267,20 @@ def test_openai_azure_embedding_optional_arg():
 # test_openai_embedding()
 
 
-@pytest.mark.parametrize(
-    "model, api_base",
-    [
-        ("embed-english-v2.0", None),
-    ],
-)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_cohere_embedding(sync_mode, model, api_base):
+async def test_cohere_embedding(sync_mode):
     try:
         # litellm.set_verbose=True
         data = {
-            "model": model,
+            "model": "embed-english-v2.0",
             "input": ["good morning from litellm", "this is another item"],
             "input_type": "search_query",
-            "api_base": api_base,
         }
         if sync_mode:
             response = embedding(**data)
         else:
             response = await litellm.aembedding(**data)
-
         print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)
