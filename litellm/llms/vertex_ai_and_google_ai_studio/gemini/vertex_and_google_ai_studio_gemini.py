@@ -610,6 +610,22 @@ class GoogleAIStudioGeminiConfig(
             "stop",
         ]
 
+    def map_openai_params(
+        self,
+        model: str,
+        non_default_params: Dict,
+        optional_params: Dict,
+        drop_params: bool,
+    ):
+        # drop frequency_penalty and presence_penalty
+        if "frequency_penalty" in non_default_params:
+            del non_default_params["frequency_penalty"]
+        if "presence_penalty" in non_default_params:
+            del non_default_params["presence_penalty"]
+        return super().map_openai_params(
+            model, non_default_params, optional_params, drop_params
+        )
+
 
 async def make_call(
     client: Optional[AsyncHTTPHandler],
