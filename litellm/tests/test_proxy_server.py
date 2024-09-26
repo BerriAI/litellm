@@ -753,17 +753,17 @@ async def test_team_update_redis():
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
 
-    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+    redis_cache = RedisCache()
 
     with patch.object(
-        proxy_logging_obj.internal_usage_cache.redis_cache,
+        redis_cache,
         "async_set_cache",
         new=AsyncMock(),
     ) as mock_client:
         await _cache_team_object(
             team_id="1234",
             team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=DualCache(redis_cache=redis_cache),
             proxy_logging_obj=proxy_logging_obj,
         )
 
@@ -782,17 +782,17 @@ async def test_get_team_redis(client_no_auth):
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
 
-    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+    redis_cache = RedisCache()
 
     with patch.object(
-        proxy_logging_obj.internal_usage_cache.redis_cache,
+        redis_cache,
         "async_get_cache",
         new=AsyncMock(),
     ) as mock_client:
         try:
             await get_team_object(
                 team_id="1234",
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=DualCache(redis_cache=redis_cache),
                 parent_otel_span=None,
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=AsyncMock(),
