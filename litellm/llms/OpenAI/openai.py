@@ -413,7 +413,11 @@ class OpenAIConfig:
         return optional_params
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         """ """
         if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
@@ -421,11 +425,13 @@ class OpenAIConfig:
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
+                drop_params=drop_params,
             )
         return litellm.OpenAIGPTConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )
 
 

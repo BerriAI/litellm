@@ -29,7 +29,7 @@ def _is_base64(s):
         return False
 
 
-def str_to_bool(value: str) -> Optional[bool]:
+def str_to_bool(value: Optional[str]) -> Optional[bool]:
     """
     Converts a string to a boolean if it's a recognized boolean string.
     Returns None if the string is not a recognized boolean value.
@@ -37,6 +37,9 @@ def str_to_bool(value: str) -> Optional[bool]:
     :param value: The string to be checked.
     :return: True or False if the string is a recognized boolean, otherwise None.
     """
+    if value is None:
+        return None
+
     true_values = {"true"}
     false_values = {"false"}
 
