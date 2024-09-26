@@ -2148,50 +2148,64 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         return False
 
 
-def supports_function_calling(model: str) -> bool:
+def supports_function_calling(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
 
     Returns:
     bool: True if the model supports function calling, False otherwise.
 
     Raises:
-    Exception: If the given model is not found in model_prices_and_context_window.json.
+    Exception: If the given model is not found or there's an error in retrieval.
     """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
         if model_info.get("supports_function_calling", False) is True:
             return True
         return False
-    else:
+    except Exception as e:
         raise Exception(
-            f"Model not supports function calling. You passed model={model}."
+            f"Model not found or error in checking function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
 
-
-def supports_vision(model: str):
+def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """
     Check if the given model supports vision and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
 
     Returns:
     bool: True if the model supports vision, False otherwise.
-
-    Raises:
-    Exception: If the given model is not found in model_prices_and_context_window.json.
     """
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
         if model_info.get("supports_vision", False) is True:
             return True
         return False
-    else:
+    except Exception as e:
+        verbose_logger.error(
+            f"Model not found or error in checking vision support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
         return False
 
 
@@ -2217,7 +2231,6 @@ def supports_parallel_function_calling(model: str):
         raise Exception(
             f"Model not supports parallel function calling. You passed model={model}."
         )
-
 
 ####### HELPER FUNCTIONS ################
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
