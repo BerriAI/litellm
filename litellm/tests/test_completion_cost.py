@@ -570,6 +570,9 @@ def test_groq_response_cost_tracking(is_streaming):
     print(f"response_cost: {response_cost}")
 
 
+from litellm.types.utils import CallTypes
+
+
 def test_together_ai_qwen_completion_cost():
     input_kwargs = {
         "completion_response": litellm.ModelResponse(
@@ -612,7 +615,7 @@ def test_together_ai_qwen_completion_cost():
     }
 
     response = litellm.cost_calculator.get_model_params_and_category(
-        model_name="qwen/Qwen2-72B-Instruct"
+        model_name="qwen/Qwen2-72B-Instruct", call_type=CallTypes.completion
     )
 
     assert response == "together-ai-41.1b-80b"
