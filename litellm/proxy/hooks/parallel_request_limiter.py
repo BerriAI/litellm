@@ -472,6 +472,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - API Key
             # ------------
 
+            values_to_update_in_cache = []
+
             if user_api_key is not None:
                 request_count_api_key = (
                     f"{user_api_key}::{precise_minute}::request_count"
@@ -495,12 +497,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(
                     f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
                 )
-                await self.internal_usage_cache.async_set_cache(
-                    request_count_api_key,
-                    new_val,
-                    ttl=60,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                )  # store in cache for 1 min.
+                values_to_update_in_cache.append((request_count_api_key, new_val))
 
             # ------------
             # Update usage - model group + API Key
@@ -536,12 +533,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(
                     f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
                 )
-                await self.internal_usage_cache.async_set_cache(
-                    request_count_api_key,
-                    new_val,
-                    ttl=60,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                )
+                values_to_update_in_cache.append((request_count_api_key, new_val))
 
             # ------------
             # Update usage - User
@@ -574,12 +566,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(
                     f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
                 )
-                await self.internal_usage_cache.async_set_cache(
-                    request_count_api_key,
-                    new_val,
-                    ttl=60,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                )  # store in cache for 1 min.
+                values_to_update_in_cache.append((request_count_api_key, new_val))
 
             # ------------
             # Update usage - Team
@@ -612,12 +599,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(
                     f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
                 )
-                await self.internal_usage_cache.async_set_cache(
-                    request_count_api_key,
-                    new_val,
-                    ttl=60,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                )  # store in cache for 1 min.
+                values_to_update_in_cache.append((request_count_api_key, new_val))
 
             # ------------
             # Update usage - End User
@@ -650,13 +632,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(
                     f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
                 )
-                await self.internal_usage_cache.async_set_cache(
-                    request_count_api_key,
-                    new_val,
-                    ttl=60,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
-                )  # store in cache for 1 min.
+                values_to_update_in_cache.append((request_count_api_key, new_val))
 
+            await self.internal_usage_cache.dual_cache.async_batch_set_cache(
+                cache_list=values_to_update_in_cache,
+                ttl=60,
+            )
         except Exception as e:
             self.print_verbose(e)  # noqa
 

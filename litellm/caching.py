@@ -2038,7 +2038,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
+                    cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
             verbose_logger.exception(
