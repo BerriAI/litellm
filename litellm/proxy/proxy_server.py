@@ -505,7 +505,9 @@ prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = N
 store_model_in_db: bool = False
 open_telemetry_logger = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
-proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+proxy_logging_obj = ProxyLogging(
+    user_api_key_cache=user_api_key_cache, premium_user=premium_user
+)
 ### REDIS QUEUE ###
 async_result = None
 celery_app_conn = None
