@@ -434,22 +434,6 @@ class Logging:
                             message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
-                    elif callback == "literalai":
-                        from literalai.context import active_root_run_var, active_steps_var, active_thread_var
-                        current_thread = active_thread_var.get()
-                        current_root_run = active_root_run_var.get()
-                        current_steps = active_steps_var.get()
-                        call_id_cache = {}
-                        call_id_cache["orig_messages"] = input
-                        call_id_cache["literalai_thread_id"] = current_thread.id if current_thread else None 
-                        call_id_cache["literalai_parent_id"] = current_steps[-1].id if current_steps else None 
-                        call_id_cache["literalai_root_run_id"] = current_root_run.id if current_root_run else None
-                        call_id_cache["literalai_root_run_id"] = current_root_run.id if current_root_run else None
-                        in_memory_trace_id_cache.set_cache(
-                            litellm_call_id=self.litellm_call_id,
-                            service_name="literalai",
-                            trace_id=call_id_cache,
-                        )
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
                             model=self.model,
