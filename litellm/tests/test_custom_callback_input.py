@@ -1254,6 +1254,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
         ]
         if turn_off_message_logging:
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
+            assert "redacted-by-litellm" == slobject["response"]
 
 
 @pytest.mark.skip(reason="Works locally. Flaky on ci/cd")

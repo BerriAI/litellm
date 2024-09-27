@@ -1328,6 +1328,40 @@ def test_completion_cost_vertex_llama3():
     assert cost == 0
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "cohere/rerank-english-v3.0",
+        "azure_ai/cohere-embed-v3-multilingual",
+    ],
+)
+def test_completion_cost_azure_ai_rerank(model):
+    from litellm import RerankResponse, rerank
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = RerankResponse(
+        id="b01dbf2e-63c8-4981-9e69-32241da559ed",
+        results=[
+            {
+                "document": {
+                    "id": "1",
+                    "text": "Paris is the capital of France.",
+                },
+                "index": 0,
+                "relevance_score": 0.990732,
+            },
+        ],
+        meta={},
+    )
+    print("response", response)
+    model = model
+    cost = completion_cost(
+        model=model, completion_response=response, call_type="arerank"
+    )
+    assert cost > 0
+
 def test_together_ai_embedding_completion_cost():
     from litellm.utils import Choices, EmbeddingResponse, Message, ModelResponse, Usage
 
