@@ -322,9 +322,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
-            request_count_api_key = f"{user_id}::{precise_minute}::request_count"
             _user_id_rate_limits = await self.internal_usage_cache.async_get_cache(
-                key=request_count_api_key,
+                key=user_id,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )
             # get user tpm/rpm limits
