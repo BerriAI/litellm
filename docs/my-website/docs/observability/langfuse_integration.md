@@ -2,24 +2,56 @@ import Image from '@theme/IdealImage';
 
 # 🪢 Langfuse - Logging LLM Input/Output
 
-LangFuse is open Source Observability & Analytics for LLM Apps
-Detailed production traces and a granular view on quality, cost and latency
+## What is Langfuse?
 
-<Image img={require('../../img/langfuse.png')} />
+Langfuse ([GitHub](https://github.com/langfuse/langfuse)) is an open-source LLM engineering platform for model [tracing](https://langfuse.com/docs/tracing), [prompt management](https://langfuse.com/docs/prompts/get-started), and application [evaluation](https://langfuse.com/docs/scores/overview). Langfuse helps teams to collaboratively debug, analyze, and iterate on their LLM applications. 
+
+## Monitoring LiteLLM with Langfuse
+
+You can integrate LiteLLM with Langfuse in three different ways:
+
+1. Using the LiteLLM Proxy with the OpenAI SDK Wrapper. This proxy standardizes over 100 models to the OpenAI API schema, and the Langfuse OpenAI SDK wrapper instruments the LLM calls.
+2. Enabling logging in the LiteLLM Proxy through the UI to send logs to Langfuse.
+3. Configuring the LiteLLM Python SDK to send logs to Langfuse by setting the appropriate environment variables.
+
+
+Example trace in Langfuse using multiple models via LiteLLM:
+<Image img={require('../../img/langfuse-example-trace-multiple-models-min')} />
+
+## 1. LiteLLM Proxy + Langfuse OpenAI SDK Wrapper
 
 :::info
-We want to learn how we can make the callbacks better! Meet the LiteLLM [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
-join our [discord](https://discord.gg/wuPM9dRgDw)
-::: 
+This is the recommended method to integrate LiteLLM with Langfuse. The Langfuse OpenAI SDK wrapper automatically records token counts, latencies, streaming response times (time to first token), API errors, and more.
+:::
 
-## Pre-Requisites
+**How this works:**
+
+The [LiteLLM Proxy](https://docs.litellm.ai/docs/simple_proxy) standardizes 100+ models on the OpenAI API schema
+and the Langfuse OpenAI SDK wrapper ([Python](https://langfuse.com/docs/integrations/openai/python), [JS/TS](https://langfuse.com/docs/integrations/openai/js)) instruments the LLM calls.
+
+To see a full end-to-end example, check out the LiteLLM cookbook:
+
+- [Python Cookbook](https://langfuse.com/docs/integrations/litellm/example-proxy-python)
+- [JS/TS Cookbook](https://langfuse.com/docs/integrations/litellm/example-proxy-js)
+
+
+## 2. Send Logs from LiteLLM Proxy to Langfuse
+
+By setting the callback to Langfuse in the LiteLLM UI you can instantly log your responses across all providers. For more information on how to setup the Proxy UI, see the [LiteLLM docs](../proxy/ui).
+
+<Image img={require('../../img/langfuse-litellm-ui.png')} />
+
+## 3. LiteLLM Python SDK
+
+### Pre-Requisites
 Ensure you have run `pip install langfuse` for this integration
 ```shell
 pip install langfuse>=2.0.0 litellm
 ```
 
-## Quick Start
-Use just 2 lines of code, to instantly log your responses **across all providers** with Langfuse
+### Quick Start
+Use just 2 lines of code, to instantly log your responses **across all providers** with Langfuse:
+
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Langfuse.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
@@ -55,8 +87,8 @@ response = litellm.completion(
 )
 ```
 
-## Advanced
-### Set Custom Generation names, pass metadata
+### Advanced
+#### Set Custom Generation Names, pass Metadata
 
 Pass `generation_name` in `metadata`
 
@@ -66,13 +98,13 @@ from litellm import completion
 import os
 
 # from https://cloud.langfuse.com/
-os.environ["LANGFUSE_PUBLIC_KEY"] = ""
-os.environ["LANGFUSE_SECRET_KEY"] = ""
+os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-..."
+os.environ["LANGFUSE_SECRET_KEY"] = "sk-..."
 
 
 # OpenAI and Cohere keys 
 # You can use any of the litellm supported providers: https://docs.litellm.ai/docs/providers
-os.environ['OPENAI_API_KEY']=""
+os.environ['OPENAI_API_KEY']="sk-..."
 
 # set langfuse as a callback, litellm will send the data to langfuse
 litellm.success_callback = ["langfuse"] 
@@ -94,7 +126,7 @@ print(response)
 
 ```
 
-### Set Custom Trace ID, Trace User ID, Trace Metadata, Trace Version, Trace Release and Tags
+#### Set Custom Trace ID, Trace User ID, Trace Metadata, Trace Version, Trace Release and Tags
 
 Pass `trace_id`, `trace_user_id`, `trace_metadata`, `trace_version`, `trace_release`, `tags` in `metadata`
 
@@ -105,10 +137,10 @@ from litellm import completion
 import os
 
 # from https://cloud.langfuse.com/
-os.environ["LANGFUSE_PUBLIC_KEY"] = ""
-os.environ["LANGFUSE_SECRET_KEY"] = ""
+os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-..."
+os.environ["LANGFUSE_SECRET_KEY"] = "sk-..."
 
-os.environ['OPENAI_API_KEY']=""
+os.environ['OPENAI_API_KEY']="sk-..."
 
 # set langfuse as a callback, litellm will send the data to langfuse
 litellm.success_callback = ["langfuse"] 
@@ -167,9 +199,9 @@ curl --location --request POST 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 
-### Trace & Generation Parameters
+#### Trace & Generation Parameters
 
-#### Trace Specific Parameters
+##### Trace Specific Parameters
 
 * `trace_id`       - Identifier for the trace, must use `existing_trace_id` instead of `trace_id` if this is an existing trace, auto-generated by default
 * `trace_name`     - Name of the trace, auto-generated by default
@@ -216,10 +248,10 @@ from langchain.schema import HumanMessage
 import litellm
 
 # from https://cloud.langfuse.com/
-os.environ["LANGFUSE_PUBLIC_KEY"] = ""
-os.environ["LANGFUSE_SECRET_KEY"] = ""
+os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-..."
+os.environ["LANGFUSE_SECRET_KEY"] = "sk-..."
 
-os.environ['OPENAI_API_KEY']=""
+os.environ['OPENAI_API_KEY']="sk-..."
 
 # set langfuse as a callback, litellm will send the data to langfuse
 litellm.success_callback = ["langfuse"] 
@@ -242,13 +274,13 @@ messages = [
 chat(messages)
 ```
 
-## Redacting Messages, Response Content from Langfuse Logging 
+### Redacting Messages, Response Content from Langfuse Logging 
 
-### Redact Messages and Responses from all Langfuse Logging
+#### Redact Messages and Responses from all Langfuse Logging
 
 Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
 
-### Redact Messages and Responses from specific Langfuse Logging
+#### Redact Messages and Responses from specific Langfuse Logging
 
 In the metadata typically passed for text completion or embedding calls you can set specific keys to mask the messages and responses for this call.
 
@@ -258,13 +290,14 @@ Setting `mask_output` to `True` will make the output from being logged for this 
 
 Be aware that if you are continuing an existing trace, and you set `update_trace_keys` to include either `input` or `output` and you set the corresponding `mask_input` or `mask_output`, then that trace will have its existing input and/or output replaced with a redacted message.
 
-## **Use with LiteLLM Proxy (LLM Gateway) **
+### Use with LiteLLM Proxy (LLM Gateway)
 
 👉 [**Follow this link to start sending logs to langfuse with LiteLLM Proxy server**](../proxy/logging)
 
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 
 - Ensure you're on the latest version of langfuse `pip install langfuse -U`. The latest version allows litellm to log JSON input/outputs to langfuse
+- Follow [this checklist](https://langfuse.com/faq/all/missing-traces) if you don't see any traces in langfuse.
 
 ## Support & Talk to Founders
 
