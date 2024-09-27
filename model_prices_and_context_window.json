@@ -1151,6 +1151,18 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true
     },
+    "mistral/pixtral-12b-2409": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000015,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_vision": true
+    },
     "mistral/open-mistral-7b": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
