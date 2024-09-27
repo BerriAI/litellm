@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import StandardLoggingPayload
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
@@ -191,6 +192,8 @@ class PrometheusLogger(CustomLogger):
                     "api_provider",
                     "api_base",
                     "litellm_model_name",
+                    "hashed_api_key",
+                    "api_key_alias",
                 ],
             )
 
@@ -202,6 +205,8 @@ class PrometheusLogger(CustomLogger):
                     "api_provider",
                     "api_base",
                     "litellm_model_name",
+                    "hashed_api_key",
+                    "api_key_alias",
                 ],
             )
             # Get all keys
@@ -628,14 +633,15 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
+            standard_logging_payload: StandardLoggingPayload = request_kwargs.get(
+                "standard_logging_object", {}
+            )
+            model_group = standard_logging_payload["model_group"]
+            api_base = standard_logging_payload["api_base"]
             _response_headers = request_kwargs.get("response_headers")
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             _metadata = _litellm_params.get("metadata", {})
             litellm_model_name = request_kwargs.get("model", None)
-            model_group = _metadata.get("model_group", None)
-            api_base = _metadata.get("api_base", None)
-            if api_base is None:
-                api_base = _litellm_params.get("api_base", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}
             model_id = _model_info.get("id", None)
@@ -665,12 +671,22 @@ class PrometheusLogger(CustomLogger):
                 "litellm_model_name"
                 """
                 self.litellm_remaining_requests_metric.labels(
-                    model_group, llm_provider, api_base, litellm_model_name
+                    model_group,
+                    llm_provider,
+                    api_base,
+                    litellm_model_name,
+                    standard_logging_payload["metadata"]["user_api_key_hash"],
+                    standard_logging_payload["metadata"]["user_api_key_alias"],
                 ).set(remaining_requests)
 
             if remaining_tokens:
                 self.litellm_remaining_tokens_metric.labels(
-                    model_group, llm_provider, api_base, litellm_model_name
+                    model_group,
+                    llm_provider,
+                    api_base,
+                    litellm_model_name,
+                    standard_logging_payload["metadata"]["user_api_key_hash"],
+                    standard_logging_payload["metadata"]["user_api_key_alias"],
                 ).set(remaining_tokens)
 
             """
