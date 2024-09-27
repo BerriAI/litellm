@@ -634,9 +634,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )
                 values_to_update_in_cache.append((request_count_api_key, new_val))
 
-            await self.internal_usage_cache.dual_cache.async_batch_set_cache(
+            await self.internal_usage_cache.async_batch_set_cache(
                 cache_list=values_to_update_in_cache,
                 ttl=60,
+                litellm_parent_otel_span=litellm_parent_otel_span,
             )
         except Exception as e:
             self.print_verbose(e)  # noqa
