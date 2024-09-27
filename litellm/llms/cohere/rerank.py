@@ -113,7 +113,7 @@ class CohereRerank(BaseLLM):
 
         returned_response = RerankResponse(**response.json())
 
-        _response_headers = response.headers
+        _response_headers = dict(response.headers)
 
         llm_response_headers = {
             "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()

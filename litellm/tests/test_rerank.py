@@ -185,6 +185,7 @@ async def test_rerank_custom_api_base():
         }
 
     mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
     mock_response.status_code = 200
 
     expected_payload = {
@@ -238,6 +239,9 @@ class TestLogger(CustomLogger):
 
 @pytest.mark.asyncio()
 async def test_rerank_custom_callbacks():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     custom_logger = TestLogger()
     litellm.callbacks = [custom_logger]
     response = await litellm.arerank(
