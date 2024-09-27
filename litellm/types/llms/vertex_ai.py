@@ -355,6 +355,22 @@ class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: List[Instance]
 
 
+class VideoEmbedding(TypedDict):
+    startOffsetSec: int
+    endOffsetSec: int
+    embedding: List[float]
+
+
+class MultimodalPrediction(TypedDict, total=False):
+    textEmbedding: List[float]
+    imageEmbedding: List[float]
+    videoEmbeddings: List[VideoEmbedding]
+
+
+class MultimodalPredictions(TypedDict, total=False):
+    predictions: List[MultimodalPrediction]
+
+
 class VertexAICachedContentResponseObject(TypedDict):
     name: str
     model: str

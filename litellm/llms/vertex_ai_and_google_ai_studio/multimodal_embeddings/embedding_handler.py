@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
@@ -11,9 +12,14 @@ from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_stu
 )
 from litellm.types.llms.vertex_ai import (
     Instance,
+    InstanceImage,
     InstanceVideo,
+    MultimodalPrediction,
+    MultimodalPredictions,
     VertexMultimodalEmbeddingRequest,
 )
+from litellm.types.utils import Embedding
+from litellm.utils import is_base64_encoded
 
 
 class VertexMultimodalEmbedding(VertexLLM):
@@ -32,9 +38,9 @@ class VertexMultimodalEmbedding(VertexLLM):
         model_response: litellm.EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
+        logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        logging_obj=None,
         encoding=None,
         vertex_project=None,
         vertex_location=None,
@@ -94,7 +100,22 @@ class VertexMultimodalEmbedding(VertexLLM):
             vertex_request_instance = Instance(**optional_params)
 
             if isinstance(input, str):
-                vertex_request_instance["text"] = input
+                if len(input) == 0:
+                    vertex_request_instance["text"] = input
+                elif "gs://" in input:
+                    # gcs uri
+                    if "mp4" in input:
+                        vertex_request_instance["video"] = InstanceVideo(gcsUri=input)
+                    else:
+                        vertex_request_instance["image"] = InstanceImage(gcsUri=input)
+                elif is_base64_encoded(s=input):
+                    # base64 encoded image
+                    vertex_request_instance["image"] = InstanceImage(
+                        bytesBase64Encoded=input
+                    )
+                else:
+                    # treated as text
+                    vertex_request_instance["text"] = input
 
             request_data["instances"] = [vertex_request_instance]
 
@@ -142,8 +163,10 @@ class VertexMultimodalEmbedding(VertexLLM):
                 model=model,
             )
         _predictions = _json_response["predictions"]
-
-        model_response.data = _predictions
+        vertex_predictions = MultimodalPredictions(predictions=_predictions)
+        model_response.data = self.transform_embedding_response_to_openai(
+            predictions=vertex_predictions
+        )
         model_response.model = model
 
         return model_response
@@ -186,7 +209,10 @@ class VertexMultimodalEmbedding(VertexLLM):
             )
         _predictions = _json_response["predictions"]
 
-        model_response.data = _predictions
+        vertex_predictions = MultimodalPredictions(predictions=_predictions)
+        model_response.data = self.transform_embedding_response_to_openai(
+            predictions=vertex_predictions
+        )
         model_response.model = model
 
         return model_response
@@ -222,3 +248,37 @@ class VertexMultimodalEmbedding(VertexLLM):
             processed_instances.append(instance)
 
         return processed_instances
+
+    def transform_embedding_response_to_openai(
+        self, predictions: MultimodalPredictions
+    ) -> List[float]:
+
+        openai_embeddings = []
+        if "predictions" in predictions:
+            for idx, _prediction in enumerate(predictions["predictions"]):
+                if _prediction:
+                    if "textEmbedding" in _prediction:
+                        openai_embedding_object = Embedding(
+                            embedding=_prediction["textEmbedding"],
+                            index=idx,
+                            object="embedding",
+                        )
+                        openai_embeddings.append(openai_embedding_object)
+                    elif "imageEmbedding" in _prediction:
+                        openai_embedding_object = Embedding(
+                            embedding=_prediction["imageEmbedding"],
+                            index=idx,
+                            object="embedding",
+                        )
+                        openai_embeddings.append(openai_embedding_object)
+                    elif "videoEmbeddings" in _prediction:
+                        all_video_embeddings = []
+                        for video_embedding in _prediction["videoEmbeddings"]:
+                            openai_embedding_object = Embedding(
+                                embedding=video_embedding["embedding"],
+                                index=idx,
+                                object="embedding",
+                            )
+                            all_video_embeddings.append(openai_embedding_object)
+                        openai_embeddings.append(all_video_embeddings)
+        return openai_embeddings
