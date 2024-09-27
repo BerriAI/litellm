@@ -4,11 +4,11 @@ import traceback
 import os
 from typing import Optional
 import httpx
-import requests
 import uuid
 
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    HTTPHandler,
     httpxSpecialProvider,
 )
 from litellm._logging import verbose_logger
@@ -36,6 +36,7 @@ class LiteralAILogger(CustomBatchLogger):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
+        self.sync_http_handler = HTTPHandler()
         batch_size = (
             os.getenv("LITERAL_BATCH_SIZE", None)
         )
@@ -92,7 +93,7 @@ class LiteralAILogger(CustomBatchLogger):
         variables = self._steps_variables_builder(self.log_queue)
 
         try:
-            response = requests.post(
+            response = self.sync_http_handler.post(
                 url=url,
                 json={
                     "query": query,
@@ -110,10 +111,6 @@ class LiteralAILogger(CustomBatchLogger):
                 verbose_logger.debug(
                     f"Batch of {len(self.log_queue)} runs successfully created"
                 )
-        except requests.exceptions.HTTPError as e:
-            verbose_logger.exception(
-                f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}"
-            )
         except Exception as e:
             verbose_logger.exception(
                 f"Literal AI Layer Error - {traceback.format_exc()}"
@@ -210,26 +207,22 @@ class LiteralAILogger(CustomBatchLogger):
 
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-            metadata = logging_payload["metadata"]
-            
-            clean_metadata = redact_user_api_key_info(metadata=metadata)
-
+            clean_metadata = logging_payload["metadata"]
+            metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+                        
             settings = logging_payload["model_parameters"]
 
             messages = logging_payload["messages"]
-            
             prompt_id = None
             variables = None
-            if "orig_messages" in clean_metadata:
-                orig_messages = clean_metadata.pop("orig_messages")
-                for index, message in enumerate(messages):
-                    orig_message = orig_messages[index]
-                    if literal_prompt := getattr(orig_message, "__literal_prompt__", None):
-                        prompt_id = literal_prompt.get("prompt_id")
-                        variables = literal_prompt.get("variables")
-                        message["uuid"] = literal_prompt.get("uuid")
-                        message["templated"] = True
-            
+    
+            for index, message in enumerate(messages):
+                if literal_prompt := getattr(message, "__literal_prompt__", None):
+                    prompt_id = literal_prompt.get("prompt_id")
+                    variables = literal_prompt.get("variables")
+                    message["uuid"] = literal_prompt.get("uuid")
+                    message["templated"] = True
+        
             tools = settings.pop("tools", None)
 
             # only accepts str, int, bool, float for logging
@@ -241,16 +234,16 @@ class LiteralAILogger(CustomBatchLogger):
                         # if casting value to str fails don't block logging
                         pass
             step = {
-                    "id": clean_metadata.get("step_id", str(uuid.uuid4())),
+                    "id": metadata.get("step_id", str(uuid.uuid4())),
                     "error": logging_payload["error_str"],
                     "name": kwargs.get("model", ""),
-                    "threadId": clean_metadata.get("literalai_thread_id", None),
-                    "parentId": clean_metadata.get("literalai_parent_id", None),
-                    "rootRunId": clean_metadata.get("literalai_root_run_id", None),
+                    "threadId": metadata.get("literalai_thread_id", None),
+                    "parentId": metadata.get("literalai_parent_id", None),
+                    "rootRunId": metadata.get("literalai_root_run_id", None),
                     "input": None,
                     "output": None,
                     "type": "llm",
-                    "tags": clean_metadata.get("tags", clean_metadata.get("literalai_tags", None)),
+                    "tags": metadata.get("tags", metadata.get("literalai_tags", None)),
                     "startTime": str(start_time),
                     "endTime": str(end_time),
                     "metadata":  clean_metadata,
