@@ -40,7 +40,7 @@ def append_query_params(url, params) -> str:
     parsed_query.update(params)
     encoded_query = urlparse.urlencode(parsed_query, doseq=True)
     modified_url = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
-    return modified_url
+    return modified_url  # type: ignore
 
 
 def run_ollama_serve():
@@ -287,7 +287,7 @@ def run_server(
                     save_worker_config,
                 )
     if version == True:
-        pkg_version = importlib.metadata.version("litellm")
+        pkg_version = importlib.metadata.version("litellm")  # type: ignore
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
         return
     if model and "ollama" in model and api_base is None:
@@ -338,14 +338,14 @@ def run_server(
         futures = []
         start_time = time.time()
         # Make concurrent calls
-        with concurrent.futures.ThreadPoolExecutor(
+        with concurrent.futures.ThreadPoolExecutor(  # type: ignore
             max_workers=concurrent_calls
         ) as executor:
             for _ in range(concurrent_calls):
                 futures.append(executor.submit(_make_openai_completion))
 
         # Wait for all futures to complete
-        concurrent.futures.wait(futures)
+        concurrent.futures.wait(futures)  # type: ignore
 
         # Summarize the results
         successful_calls = 0
@@ -476,6 +476,7 @@ def run_server(
                 _db_url += f"?schema={db_schema}"
 
             os.environ["DATABASE_URL"] = _db_url
+            os.environ["IAM_TOKEN_DB_AUTH"] = "True"
 
         ### DECRYPT ENV VAR ###
 
@@ -600,8 +601,9 @@ def run_server(
                     0, os.path.abspath("../..")
                 )  # Adds the parent directory to the system path - for litellm local dev
                 import litellm
+                from litellm import get_secret_str
 
-                database_url = litellm.get_secret(database_url, default_value=None)
+                database_url = get_secret_str(database_url, default_value=None)
                 os.chdir(original_dir)
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
@@ -650,6 +652,8 @@ def run_server(
                         subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
                         break  # Exit the loop if the subprocess succeeds
                     except subprocess.CalledProcessError as e:
+                        import time
+
                         print(f"Error: {e}")  # noqa
                         time.sleep(random.randrange(start=1, stop=5))
                     finally:
@@ -728,13 +732,17 @@ def run_server(
 
                 def load_config(self):
                     # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
-                    config = {
-                        key: value
-                        for key, value in self.options.items()
-                        if key in self.cfg.settings and value is not None
-                    }
+                    if self.cfg is not None:
+                        config = {
+                            key: value
+                            for key, value in self.options.items()
+                            if key in self.cfg.settings and value is not None
+                        }
+                    else:
+                        config = {}
                     for key, value in config.items():
-                        self.cfg.set(key.lower(), value)
+                        if self.cfg is not None:
+                            self.cfg.set(key.lower(), value)
 
                 def load(self):
                     # gunicorn app function
