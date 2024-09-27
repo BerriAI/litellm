@@ -60,6 +60,7 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
     UserAPIKeyAuth,
+    UserAPIKeyCacheTTLEnum,
 )
 from litellm.proxy.db.create_views import (
     create_missing_views,
@@ -70,7 +71,6 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:

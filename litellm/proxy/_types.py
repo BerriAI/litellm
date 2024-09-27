@@ -1913,3 +1913,7 @@ class TeamInfoResponseObject(TypedDict):
     team_info: LiteLLM_TeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
+
+
+class UserAPIKeyCacheTTLEnum(enum.Enum):
+    in_memory_cache_ttl = 60  # 1 min ttl ## configure via `general_settings::user_api_key_cache_ttl: <your-value>`
