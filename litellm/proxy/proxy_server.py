@@ -567,7 +567,9 @@ def get_custom_headers(
 
     try:
         return {
-            key: value for key, value in headers.items() if value not in exclude_values
+            key: str(value)
+            for key, value in headers.items()
+            if value not in exclude_values
         }
     except Exception as e:
         verbose_proxy_logger.error(f"Error setting custom headers: {e}")
