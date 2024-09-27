@@ -158,9 +158,9 @@ jobs:
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
         - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -188,9 +188,9 @@ jobs:
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
         - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
