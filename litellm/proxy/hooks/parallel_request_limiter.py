@@ -322,10 +322,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
-            request_count_api_key = f"{user_id}::{precise_minute}::request_count"
-            _user_id_rate_limits = await self.internal_usage_cache.async_get_cache(
-                key=request_count_api_key,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            _user_id_rate_limits = await self.get_internal_user_object(
+                user_id=user_id,
+                user_api_key_dict=user_api_key_dict,
             )
             # get user tpm/rpm limits
             if _user_id_rate_limits is not None and isinstance(
@@ -742,3 +741,25 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     str(e)
                 )
             )
+
+    async def get_internal_user_object(
+        self,
+        user_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[dict]:
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.proxy_server import prisma_client
+
+        _user_id_rate_limits = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=self.internal_usage_cache.dual_cache,
+            user_id_upsert=False,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=None,
+        )
+
+        if _user_id_rate_limits is None:
+            return None
+
+        return _user_id_rate_limits.model_dump()
