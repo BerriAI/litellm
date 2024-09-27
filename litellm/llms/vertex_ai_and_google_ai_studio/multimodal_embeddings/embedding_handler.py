@@ -100,22 +100,7 @@ class VertexMultimodalEmbedding(VertexLLM):
             vertex_request_instance = Instance(**optional_params)
 
             if isinstance(input, str):
-                if len(input) == 0:
-                    vertex_request_instance["text"] = input
-                elif "gs://" in input:
-                    # gcs uri
-                    if "mp4" in input:
-                        vertex_request_instance["video"] = InstanceVideo(gcsUri=input)
-                    else:
-                        vertex_request_instance["image"] = InstanceImage(gcsUri=input)
-                elif is_base64_encoded(s=input):
-                    # base64 encoded image
-                    vertex_request_instance["image"] = InstanceImage(
-                        bytesBase64Encoded=input
-                    )
-                else:
-                    # treated as text
-                    vertex_request_instance["text"] = input
+                vertex_request_instance = self._process_input_element(input)
 
             request_data["instances"] = [vertex_request_instance]
 
@@ -217,6 +202,28 @@ class VertexMultimodalEmbedding(VertexLLM):
 
         return model_response
 
+    def _process_input_element(self, input_element: str) -> Instance:
+        """
+        Process the input element for multimodal embedding requests. checks if the if the input is gcs uri, base64 encoded image or plain text.
+
+        Args:
+            input_element (str): The input element to process.
+
+        Returns:
+            Dict[str, Any]: A dictionary representing the processed input element.
+        """
+        if len(input_element) == 0:
+            return Instance(text=input_element)
+        elif "gs://" in input_element:
+            if "mp4" in input_element:
+                return Instance(video=InstanceVideo(gcsUri=input_element))
+            else:
+                return Instance(image=InstanceImage(gcsUri=input_element))
+        elif is_base64_encoded(s=input_element):
+            return Instance(image=InstanceImage(bytesBase64Encoded=input_element))
+        else:
+            return Instance(text=input_element)
+
     def process_openai_embedding_input(
         self, _input: Union[list, str]
     ) -> List[Instance]:
@@ -237,14 +244,13 @@ class VertexMultimodalEmbedding(VertexLLM):
             _input_list = _input
 
         processed_instances = []
-        for element in _input:
-            if not isinstance(element, dict):
-                # assuming that input is a list of strings
-                # example: input = ["hello from litellm"]
-                instance = Instance(text=element)
-            else:
-                # assume this is a
+        for element in _input_list:
+            if isinstance(element, str):
+                instance = Instance(**self._process_input_element(element))
+            elif isinstance(element, dict):
                 instance = Instance(**element)
+            else:
+                raise ValueError(f"Unsupported input type: {type(element)}")
             processed_instances.append(instance)
 
         return processed_instances

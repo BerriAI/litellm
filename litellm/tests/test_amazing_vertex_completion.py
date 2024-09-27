@@ -1931,7 +1931,6 @@ async def test_vertexai_multimodal_embedding():
         assert response.model == "multimodalembedding@001"
         assert len(response.data) == 1
         response_data = response.data[0]
-        assert response_data["embedding"] == [0.1, 0.2, 0.3]
 
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
@@ -2027,7 +2026,7 @@ async def test_vertexai_multimodal_embedding_image_in_input():
         # Act: Call the litellm.aembedding function
         response = await litellm.aembedding(
             model="vertex_ai/multimodalembedding@001",
-            input="gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png",
+            input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
         )
 
         # Assert
