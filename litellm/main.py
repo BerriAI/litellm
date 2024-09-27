@@ -2931,6 +2931,7 @@ def batch_completion(
     deployment_id=None,
     request_timeout: Optional[int] = None,
     timeout: Optional[int] = 600,
+    max_workers:Optional[int]= 100,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -2954,6 +2955,7 @@ def batch_completion(
         user (str, optional): The user string for generating completions. Defaults to "".
         deployment_id (optional): The deployment ID for generating completions. Defaults to None.
         request_timeout (int, optional): The request timeout for generating completions. Defaults to None.
+        max_workers (int,optional): The maximum number of threads to use for parallel processing.
 
     Returns:
         list: A list of completion results.
@@ -2999,7 +3001,7 @@ def batch_completion(
             for i in range(0, len(lst), n):
                 yield lst[i : i + n]
 
-        with ThreadPoolExecutor(max_workers=100) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for sub_batch in chunks(batch_messages, 100):
                 for message_list in sub_batch:
                     kwargs_modified = args.copy()
