@@ -3920,20 +3920,19 @@ def get_optional_params(
             )
             is False
         ):
-            extra_body = passed_params.pop("extra_body", None)
-            if extra_body:
-                for k in passed_params.keys():
-                    if k not in default_params.keys():
-                        extra_body[k] = passed_params[k]
-                optional_params.setdefault("extra_body", {})
-                optional_params["extra_body"] = {
-                    **optional_params["extra_body"],
-                    **extra_body,
-                }
+            extra_body = passed_params.pop("extra_body", {})
+            for k in passed_params.keys():
+                if k not in default_params.keys():
+                    extra_body[k] = passed_params[k]
+            optional_params.setdefault("extra_body", {})
+            optional_params["extra_body"] = {
+                **optional_params["extra_body"],
+                **extra_body,
+            }
 
-                optional_params["extra_body"] = _ensure_extra_body_is_safe(
-                    extra_body=optional_params["extra_body"]
-                )
+            optional_params["extra_body"] = _ensure_extra_body_is_safe(
+                extra_body=optional_params["extra_body"]
+            )
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
