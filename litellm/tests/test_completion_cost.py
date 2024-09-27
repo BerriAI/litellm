@@ -1332,7 +1332,7 @@ def test_completion_cost_vertex_llama3():
     "model",
     [
         "cohere/rerank-english-v3.0",
-        "azure_ai/cohere-embed-v3-multilingual",
+        "azure_ai/cohere-rerank-v3-english",
     ],
 )
 def test_completion_cost_azure_ai_rerank(model):
@@ -1361,6 +1361,7 @@ def test_completion_cost_azure_ai_rerank(model):
         model=model, completion_response=response, call_type="arerank"
     )
     assert cost > 0
+
 
 def test_together_ai_embedding_completion_cost():
     from litellm.utils import Choices, EmbeddingResponse, Message, ModelResponse, Usage
