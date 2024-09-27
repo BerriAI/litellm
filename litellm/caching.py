@@ -123,7 +123,7 @@ class InMemoryCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
         for cache_key, cache_value in cache_list:
             if ttl is not None:
                 self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
@@ -2038,7 +2038,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
+                    cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
             verbose_logger.exception(
