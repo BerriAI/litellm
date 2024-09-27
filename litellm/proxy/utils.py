@@ -70,6 +70,7 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -301,7 +302,9 @@ class ProxyLogging:
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
-            dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
+            dual_cache=DualCache(
+                default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+            )  # ping redis cache every 1s
         )
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(
             self.internal_usage_cache
