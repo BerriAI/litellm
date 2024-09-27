@@ -598,7 +598,7 @@ class LangFuseLogger:
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
-                "metadata": clean_metadata,
+                "metadata": log_requester_metadata(clean_metadata),
                 "level": level,
                 "version": clean_metadata.pop("version", None),
             }
@@ -765,3 +765,15 @@ def log_provider_specific_information_as_span(
                 name="vertex_ai_grounding_metadata",
                 input=vertex_ai_grounding_metadata,
             )
+
+
+def log_requester_metadata(clean_metadata: dict):
+    returned_metadata = {}
+    requester_metadata = clean_metadata.get("requester_metadata") or {}
+    for k, v in clean_metadata.items():
+        if k not in requester_metadata:
+            returned_metadata[k] = v
+
+    returned_metadata.update({"requester_metadata": requester_metadata})
+
+    return returned_metadata

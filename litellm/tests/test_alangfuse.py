@@ -1224,3 +1224,14 @@ def test_langfuse_prompt_type(prompt):
     _add_prompt_to_generation_params(
         generation_params=generation_params, clean_metadata=clean_metadata
     )
+
+
+def test_langfuse_logging_metadata():
+    from litellm.integrations.langfuse import log_requester_metadata
+
+    metadata = {"key": "value", "requester_metadata": {"key": "value"}}
+
+    got_metadata = log_requester_metadata(clean_metadata=metadata)
+    expected_metadata = {"requester_metadata": {"key": "value"}}
+
+    assert expected_metadata == got_metadata
