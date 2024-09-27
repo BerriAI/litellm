@@ -2048,6 +2048,64 @@ async def test_vertexai_multimodal_embedding_image_in_input():
         print("Response:", response)
 
 
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding_base64image_in_input():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    image_path = "../proxy/cached_logo.jpg"
+    # Getting the base64 string
+    base64_image = encode_image(image_path)
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "image": {"bytesBase64Encoded": base64_image},
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[base64_image],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+
+        assert response_data["embedding"] == [0.1, 0.2, 0.3]
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
 @pytest.mark.skip(
     reason="new test - works locally running into vertex version issues on ci/cd"
 )
