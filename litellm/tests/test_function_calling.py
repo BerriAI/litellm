@@ -45,11 +45,12 @@ def get_current_weather(location, unit="fahrenheit"):
 @pytest.mark.parametrize(
     "model",
     [
-        # "gpt-3.5-turbo-1106",
+        "gpt-3.5-turbo-1106",
         # "mistral/mistral-large-latest",
         # "claude-3-haiku-20240307",
         # "gemini/gemini-1.5-pro",
         "anthropic.claude-3-sonnet-20240229-v1:0",
+        "groq/llama3-8b-8192",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
