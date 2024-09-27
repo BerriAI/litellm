@@ -25,6 +25,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_query as azure_ai_rerank_cost_per_query,
 )
+from litellm.llms.cohere.cost_calculator import (
+    cost_per_query as cohere_rerank_cost_per_query,
+)
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
 )
@@ -860,7 +863,9 @@ def rerank_cost(
 
     try:
         if custom_llm_provider == "cohere":
-            return 0.002, 0.0
+            return cohere_rerank_cost_per_query(
+                model=model, num_queries=default_num_queries
+            )
         elif custom_llm_provider == "azure_ai":
             return azure_ai_rerank_cost_per_query(
                 model=model, num_queries=default_num_queries
@@ -869,8 +874,4 @@ def rerank_cost(
             f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
         )
     except Exception as e:
-
-        verbose_logger.exception(
-            f"litellm.cost_calculator.py::rerank_cost - Exception occurred - {str(e)}"
-        )
         raise e
