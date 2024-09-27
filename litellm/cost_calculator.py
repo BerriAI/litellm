@@ -834,7 +834,6 @@ def response_cost_calculator(
                 if custom_pricing is True:  # override defaults if custom pricing is set
                     base_model = model
                 # base_model defaults to None if not set on model_info
-
                 response_cost = completion_cost(
                     completion_response=response_object,
                     call_type=call_type,
@@ -870,6 +869,7 @@ def rerank_cost(
             f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
         )
     except Exception as e:
+
         verbose_logger.exception(
             f"litellm.cost_calculator.py::rerank_cost - Exception occurred - {str(e)}"
         )

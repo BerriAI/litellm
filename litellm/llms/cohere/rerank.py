@@ -87,7 +87,16 @@ class CohereRerank(BaseLLM):
             json=request_data_dict,
         )
 
-        return RerankResponse(**response.json())
+        returned_response = RerankResponse(**response.json())
+
+        _response_headers = response.headers
+
+        llm_response_headers = {
+            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
+        }
+        returned_response._hidden_params["additional_headers"] = llm_response_headers
+
+        return returned_response
 
     async def async_rerank(
         self,
@@ -104,4 +113,13 @@ class CohereRerank(BaseLLM):
             json=request_data_dict,
         )
 
-        return RerankResponse(**response.json())
+        returned_response = RerankResponse(**response.json())
+
+        _response_headers = response.headers
+
+        llm_response_headers = {
+            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
+        }
+        returned_response._hidden_params["additional_headers"] = llm_response_headers
+
+        return returned_response

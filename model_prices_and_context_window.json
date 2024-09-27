@@ -990,7 +990,7 @@
         "mode": "chat",
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice"
     },
-    "azure_ai/Cohere-embed-v3-multilingual": {
+    "azure_ai/cohere-embed-v3-multilingual": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
@@ -1001,7 +1001,7 @@
         "litellm_provider": "azure_ai",
         "mode": "rerank"
     },
-    "azure_ai/Cohere-embed-v3-english": {
+    "azure_ai/cohere-embed-v3-english": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
