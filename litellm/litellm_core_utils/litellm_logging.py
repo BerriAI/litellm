@@ -2421,6 +2421,7 @@ def get_standard_logging_object_payload(
             response_obj = init_response_obj
         else:
             response_obj = {}
+
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
@@ -2556,6 +2557,16 @@ def get_standard_logging_object_payload(
 
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
+        if response_obj is not None:
+            final_response_obj: Optional[Union[dict, str, list]] = response_obj
+        elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
+            final_response_obj = init_response_obj
+        else:
+            final_response_obj = None
+
+        if litellm.turn_off_message_logging:
+            final_response_obj = "redacted-by-litellm"
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
@@ -2579,9 +2590,7 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
-            response=(  # type: ignore
-                response_obj if len(response_obj.keys()) > 0 else init_response_obj  # type: ignore
-            ),
+            response=final_response_obj,
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
