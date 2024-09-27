@@ -747,19 +747,33 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         user_id: str,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Optional[dict]:
+        """
+        Helper to get the 'Internal User Object'
+
+        It uses the `get_user_object` function from `litellm.proxy.auth.auth_checks`
+
+        We need this because the UserApiKeyAuth object does not contain the rpm/tpm limits for a User AND there could be a perf impact by additionally reading the UserTable.
+        """
+        from litellm._logging import verbose_proxy_logger
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import prisma_client
 
-        _user_id_rate_limits = await get_user_object(
-            user_id=user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=self.internal_usage_cache.dual_cache,
-            user_id_upsert=False,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            proxy_logging_obj=None,
-        )
+        try:
+            _user_id_rate_limits = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=self.internal_usage_cache.dual_cache,
+                user_id_upsert=False,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=None,
+            )
 
-        if _user_id_rate_limits is None:
+            if _user_id_rate_limits is None:
+                return None
+
+            return _user_id_rate_limits.model_dump()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Parallel Request Limiter: Error getting user object", str(e)
+            )
             return None
-
-        return _user_id_rate_limits.model_dump()
