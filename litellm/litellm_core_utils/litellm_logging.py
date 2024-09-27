@@ -98,7 +98,9 @@ try:
         GenericAPILogger,
     )
 except Exception as e:
-    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
+    verbose_logger.debug(
+        f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
+    )
 
 _in_memory_loggers: List[Any] = []
 
