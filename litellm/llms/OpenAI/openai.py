@@ -950,27 +950,7 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
-                    invalid_params: List[str] = []
-                    if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
-                        detail = e.body.get("detail")  # type: ignore
-                        if (
-                            isinstance(detail, List)
-                            and len(detail) > 0
-                            and isinstance(detail[0], dict)
-                        ):
-                            for error_dict in detail:
-                                if (
-                                    error_dict.get("loc")
-                                    and isinstance(error_dict.get("loc"), list)
-                                    and len(error_dict.get("loc")) == 2
-                                ):
-                                    invalid_params.append(error_dict["loc"][1])
-
-                    new_data = {}
-                    for k, v in data.items():
-                        if k not in invalid_params:
-                            new_data[k] = v
-                    data = new_data
+                    data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
                 # e.message
