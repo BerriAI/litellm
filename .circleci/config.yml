@@ -3,9 +3,9 @@ jobs:
   local_testing:
     docker:
       - image: cimg/python:3.11
-      auth:
-        username: ${DOCKERHUB_USERNAME}
-        password: ${DOCKERHUB_PASSWORD}
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
