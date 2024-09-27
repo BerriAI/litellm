@@ -2148,7 +2148,9 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         return False
 
 
-def supports_function_calling(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+def supports_function_calling(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
@@ -2178,6 +2180,7 @@ def supports_function_calling(model: str, custom_llm_provider: Optional[str] = N
         raise Exception(
             f"Model not found or error in checking function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+
 
 def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """
@@ -2231,6 +2234,7 @@ def supports_parallel_function_calling(model: str):
         raise Exception(
             f"Model not supports parallel function calling. You passed model={model}."
         )
+
 
 ####### HELPER FUNCTIONS ################
 def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
@@ -4749,6 +4753,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             input_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
+            input_cost_per_query: Optional[float] # only for rerank models
             input_cost_per_image: Optional[float]  # only for vertex ai models
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
             input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -4994,6 +4999,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 input_cost_per_token_above_128k_tokens=_model_info.get(
                     "input_cost_per_token_above_128k_tokens", None
                 ),
+                input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None

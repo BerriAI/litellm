@@ -1323,3 +1323,43 @@ def test_completion_cost_vertex_llama3():
     cost = completion_cost(model=model, completion_response=response)
 
     assert cost == 0
+
+
+def test_completion_cost_azure_ai_rerank():
+    from litellm import RerankResponse, rerank
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # response = rerank(
+    #     model="azure_ai/Cohere-embed-v3-english",
+    #     query="What is the capital of France?",
+    #     documents=[
+    #         {"id": "1", "text": "Paris is the capital of France."},
+    #         {"id": "2", "text": "Berlin is the capital of Germany."},
+    #         {"id": "3", "text": "Madrid is the capital of Spain."},
+    #     ],
+    #     api_key=os.getenv("AZURE_AI_COHERE_API_KEY"),
+    #     api_base=os.getenv("AZURE_AI_COHERE_API_BASE"),
+    # )
+
+    response = RerankResponse(
+        id="b01dbf2e-63c8-4981-9e69-32241da559ed",
+        results=[
+            {
+                "document": {
+                    "id": "1",
+                    "text": "Paris is the capital of France.",
+                },
+                "index": 0,
+                "relevance_score": 0.990732,
+            },
+        ],
+        meta={},
+    )
+    print("response", response)
+    model = "azure_ai/Cohere-embed-v3-english"
+    cost = completion_cost(
+        model=model, completion_response=response, call_type="arerank"
+    )
+    assert cost > 0

@@ -22,6 +22,9 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_cha
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
+from litellm.llms.azure_ai.cost_calculator import (
+    cost_per_query as azure_ai_rerank_cost_per_query,
+)
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
 )
@@ -84,6 +87,8 @@ def cost_per_token(
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
+    ### NUMBER OF QUERIES ###
+    number_of_queries: Optional[int] = None,
     ### CALL TYPE ###
     call_type: Literal[
         "embedding",
@@ -189,7 +194,6 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-
     if custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
@@ -251,12 +255,10 @@ def cost_per_token(
             )
         return prompt_cost, completion_cost
     elif call_type == "arerank" or call_type == "rerank":
-        completion_tokens_cost_usd_dollar = rerank_cost(
+        return rerank_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
         )
-        prompt_tokens_cost_usd_dollar = 0
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
@@ -847,18 +849,23 @@ def response_cost_calculator(
 def rerank_cost(
     model: str,
     custom_llm_provider: Optional[str],
-) -> float:
+) -> Tuple[float, float]:
     """
     Returns
     - float or None: cost of response OR none if error.
     """
+    default_num_queries = 1
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
     try:
         if custom_llm_provider == "cohere":
-            return 0.002
+            return 0.002, 0.0
+        elif custom_llm_provider == "azure_ai":
+            return azure_ai_rerank_cost_per_query(
+                model=model, num_queries=default_num_queries
+            )
         raise ValueError(
             f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
         )
