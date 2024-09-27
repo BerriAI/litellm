@@ -16,7 +16,7 @@ You can integrate LiteLLM with Langfuse in three different ways:
 
 
 Example trace in Langfuse using multiple models via LiteLLM:
-<Image img={require('../../img/langfuse-example-trace-multiple-models-min')} />
+<Image img={require('../../img/langfuse-example-trace-multiple-models-min.png')} />
 
 ## 1. LiteLLM Proxy + Langfuse OpenAI SDK Wrapper
 
