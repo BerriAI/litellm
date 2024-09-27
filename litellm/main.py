@@ -2410,8 +2410,9 @@ def completion(
                         aws_bedrock_client.meta.region_name
                     )
 
-            if model in litellm.BEDROCK_CONVERSE_MODELS:
+            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
 
+            if base_model in litellm.BEDROCK_CONVERSE_MODELS:
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
