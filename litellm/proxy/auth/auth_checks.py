@@ -386,8 +386,6 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
-    if prisma_client is None:
-        raise Exception("No db connected")
 
     if user_id is None:
         return None
@@ -400,6 +398,8 @@ async def get_user_object(
         elif isinstance(cached_user_obj, LiteLLM_UserTable):
             return cached_user_obj
     # else, check db
+    if prisma_client is None:
+        raise Exception("No db connected")
     try:
 
         response = await prisma_client.db.litellm_usertable.find_unique(
@@ -415,9 +415,10 @@ async def get_user_object(
                 raise Exception
 
         _response = LiteLLM_UserTable(**dict(response))
+        response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
 
         return _response
     except Exception:  # if user not in db

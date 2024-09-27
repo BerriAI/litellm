@@ -295,7 +295,13 @@ async def test_pre_call_hook_user_tpm_limits():
     local_cache = DualCache()
     # create user with tpm/rpm limits
     user_id = "test-user"
-    user_obj = {"tpm_limit": 9, "rpm_limit": 10}
+    user_obj = {
+        "tpm_limit": 9,
+        "rpm_limit": 10,
+        "user_id": user_id,
+        "user_email": "user_email",
+        "max_budget": None,
+    }
 
     local_cache.set_cache(key=user_id, value=user_obj)
 
@@ -331,6 +337,7 @@ async def test_pre_call_hook_user_tpm_limits():
     ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
 
     try:
+        print("cache=local_cache", local_cache.in_memory_cache.cache_dict)
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
