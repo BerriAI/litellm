@@ -2,7 +2,7 @@ from typing import List, Literal, Tuple
 
 import httpx
 
-from litellm import supports_system_messages, verbose_logger
+from litellm import supports_system_messages, supports_response_schema, verbose_logger
 from litellm.types.llms.vertex_ai import PartType
 
 
@@ -38,6 +38,20 @@ def get_supports_system_message(
         supports_system_message = False
 
     return supports_system_message
+
+
+def get_supports_response_schema(
+    model: str, custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"]
+) -> bool:
+    _custom_llm_provider = custom_llm_provider
+    if custom_llm_provider == "vertex_ai_beta":
+        _custom_llm_provider = "vertex_ai"
+
+    _supports_response_schema = supports_response_schema(
+        model=model, custom_llm_provider=_custom_llm_provider
+    )
+
+    return _supports_response_schema
 
 
 from typing import Literal, Optional

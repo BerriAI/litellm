@@ -678,6 +678,100 @@ jobs:
               -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
+
+  e2e_ui_testing:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            npm install -D @playwright/test
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            pip install "openai==1.45.0"
+            python -m pip install --upgrade pip
+            pip install "pydantic==2.7.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install pyarrow
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "anyio==3.7.1"
+            pip install "asyncio==3.4.3"
+      - run:
+          name: Install Playwright Browsers
+          command: |
+            npx playwright install
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e UI_USERNAME="admin" \
+              -e UI_PASSWORD="gm" \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run Playwright Tests
+          command: |
+            npx playwright test --reporter=html --output=test-results
+          no_output_timeout: 120m
+      - store_test_results:
+          path: test-results
+
 workflows:
   version: 2
   build_and_test:
@@ -701,6 +795,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - ui_endpoint_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - e2e_ui_testing:
           filters:
             branches:
               only:
@@ -751,6 +851,7 @@ workflows:
             - litellm_router_testing
             - litellm_assistants_api_testing
             - ui_endpoint_testing
+            - e2e_ui_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests

@@ -21,7 +21,7 @@ prometheus_client==0.20.0 # for /metrics endpoint on proxy
 orjson==3.9.15 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
 fastapi-sso==0.10.0 # admin UI, SSO
-pyjwt[crypto]==2.8.0
+pyjwt[crypto]==2.9.0
 python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
 azure-ai-contentsafety==1.0.0 # for azure content safety

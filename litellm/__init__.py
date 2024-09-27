@@ -902,7 +902,7 @@ from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
 from .llms.AI21.completion import AI21Config
 from .llms.AI21.chat import AI21ChatConfig
-from .llms.together_ai import TogetherAIConfig
+from .llms.together_ai.chat import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
 from .llms.gemini import GeminiConfig
@@ -964,8 +964,8 @@ from .llms.OpenAI.openai import (
     MistralEmbeddingConfig,
     DeepInfraConfig,
     GroqConfig,
-    AzureAIStudioConfig,
 )
+from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.OpenAI.chat.o1_transformation import (
     OpenAIO1Config,

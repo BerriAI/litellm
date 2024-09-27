@@ -386,8 +386,6 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
-    if prisma_client is None:
-        raise Exception("No db connected")
 
     if user_id is None:
         return None
@@ -400,6 +398,8 @@ async def get_user_object(
         elif isinstance(cached_user_obj, LiteLLM_UserTable):
             return cached_user_obj
     # else, check db
+    if prisma_client is None:
+        raise Exception("No db connected")
     try:
 
         response = await prisma_client.db.litellm_usertable.find_unique(
@@ -415,9 +415,10 @@ async def get_user_object(
                 raise Exception
 
         _response = LiteLLM_UserTable(**dict(response))
+        response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
 
         return _response
     except Exception:  # if user not in db
@@ -433,15 +434,6 @@ async def _cache_management_object(
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     await user_api_key_cache.async_set_cache(key=key, value=value)
-
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        _value = value.model_dump_json(
-            exclude_unset=True, exclude={"parent_otel_span": True}
-        )
-        await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=_value
-        )
 
 
 async def _cache_team_object(
@@ -471,7 +463,7 @@ async def _cache_key_object(
 ):
     key = hashed_token
 
-    ## CACHE REFRESH TIME!
+    ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
 
     await _cache_management_object(
@@ -493,7 +485,9 @@ async def _delete_cache_key_object(
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.async_delete_cache(key=key)
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+            key=key
+        )
 
 
 @log_to_opentelemetry
@@ -522,10 +516,10 @@ async def get_team_object(
     ## CHECK REDIS CACHE ##
     if (
         proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
         cached_team_obj = (
-            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
                 key=key
             )
         )
@@ -591,17 +585,6 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
     cached_team_obj: Optional[UserAPIKeyAuth] = None
-
-    ## CHECK REDIS CACHE ##
-    if (
-        proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
-    ):
-        cached_team_obj = (
-            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
-                key=key
-            )
-        )
 
     if cached_team_obj is None:
         cached_team_obj = await user_api_key_cache.async_get_cache(key=key)

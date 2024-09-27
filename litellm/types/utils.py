@@ -766,7 +766,7 @@ class EmbeddingResponse(OpenAIObject):
     """The actual embedding value"""
 
     object: Literal["list"]
-    """The object type, which is always "embedding" """
+    """The object type, which is always "list" """
 
     usage: Optional[Usage] = None
     """Usage statistics for the embedding request."""
@@ -1196,6 +1196,7 @@ all_litellm_params = [
     "client_id",
     "client_secret",
     "user_continue_message",
+    "configurable_clientside_auth_params",
 ]
 
 
@@ -1323,7 +1324,7 @@ class StandardLoggingPayload(TypedDict):
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
-    saved_cache_cost: Optional[float]
+    saved_cache_cost: float
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]

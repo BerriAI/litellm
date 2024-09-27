@@ -139,6 +139,7 @@ class GenericLiteLLMParams(BaseModel):
     )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
+    configurable_clientside_auth_params: Optional[List[str]] = None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
     ## VERTEX AI ##
@@ -310,6 +311,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
     organization: Optional[Union[List, str]]  # for openai orgs
+    configurable_clientside_auth_params: Optional[
+        List[str]
+    ]  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
@@ -487,6 +491,7 @@ class ModelGroupInfo(BaseModel):
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
+    configurable_clientside_auth_params: Optional[List[str]] = None
 
 
 class AssistantsTypedDict(TypedDict):
@@ -591,3 +596,10 @@ class RouterRateLimitError(ValueError):
 class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+VALID_LITELLM_ENVIRONMENTS = [
+    "development",
+    "staging",
+    "production",
+]

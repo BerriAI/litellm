@@ -14,7 +14,17 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import wraps
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    get_args,
+    overload,
+)
 
 import backoff
 import httpx
@@ -55,11 +65,13 @@ from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
 )
+from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -147,6 +159,7 @@ def log_to_opentelemetry(func):
                 # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
                 args is not None
                 and len(args) > 0
+                and isinstance(args[0], dict)
             ):
                 passed_kwargs = args[0]
                 parent_otel_span = _get_parent_otel_span_from_kwargs(
@@ -195,6 +208,83 @@ def log_to_opentelemetry(func):
     return wrapper
 
 
+class InternalUsageCache:
+    def __init__(self, dual_cache: DualCache):
+        self.dual_cache: DualCache = dual_cache
+
+    async def async_get_cache(
+        self,
+        key,
+        litellm_parent_otel_span: Union[Span, None],
+        local_only: bool = False,
+        **kwargs,
+    ) -> Any:
+        return await self.dual_cache.async_get_cache(
+            key=key,
+            local_only=local_only,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+            **kwargs,
+        )
+
+    async def async_set_cache(
+        self,
+        key,
+        value,
+        litellm_parent_otel_span: Union[Span, None],
+        local_only: bool = False,
+        **kwargs,
+    ) -> None:
+        return await self.dual_cache.async_set_cache(
+            key=key,
+            value=value,
+            local_only=local_only,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+            **kwargs,
+        )
+
+    async def async_increment_cache(
+        self,
+        key,
+        value: float,
+        litellm_parent_otel_span: Union[Span, None],
+        local_only: bool = False,
+        **kwargs,
+    ):
+        return await self.dual_cache.async_increment_cache(
+            key=key,
+            value=value,
+            local_only=local_only,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+            **kwargs,
+        )
+
+    def set_cache(
+        self,
+        key,
+        value,
+        local_only: bool = False,
+        **kwargs,
+    ) -> None:
+        return self.dual_cache.set_cache(
+            key=key,
+            value=value,
+            local_only=local_only,
+            **kwargs,
+        )
+
+    def get_cache(
+        self,
+        key,
+        local_only: bool = False,
+        **kwargs,
+    ) -> Any:
+        return self.dual_cache.get_cache(
+            key=key,
+            local_only=local_only,
+            **kwargs,
+        )
+
+
 ### LOGGING ###
 class ProxyLogging:
     """
@@ -212,9 +302,9 @@ class ProxyLogging:
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
-        self.internal_usage_cache = DualCache(
-            default_in_memory_ttl=1, always_read_redis=litellm.always_read_redis
-        )  # ping redis cache every 1s
+        self.internal_usage_cache: InternalUsageCache = InternalUsageCache(
+            dual_cache=DualCache(default_in_memory_ttl=1)  # ping redis cache every 1s
+        )
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(
             self.internal_usage_cache
         )
@@ -222,25 +312,13 @@ class ProxyLogging:
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
-        self.alert_types: List[AlertType] = [
-            "llm_exceptions",
-            "llm_too_slow",
-            "llm_requests_hanging",
-            "budget_alerts",
-            "db_exceptions",
-            "daily_reports",
-            "spend_reports",
-            "fallback_reports",
-            "cooldown_deployment",
-            "new_model_added",
-            "outage_alerts",
-        ]
+        self.alert_types: List[AlertType] = list(get_args(AlertType))
         self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
             alert_types=self.alert_types,
-            internal_usage_cache=self.internal_usage_cache,
+            internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
 
     def update_values(
@@ -285,7 +363,7 @@ class ProxyLogging:
                 litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
-            self.internal_usage_cache.redis_cache = redis_cache
+            self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
         self.service_logging_obj = ServiceLogging()
@@ -300,7 +378,7 @@ class ProxyLogging:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     callback,
-                    internal_usage_cache=self.internal_usage_cache,
+                    internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
             if callback not in litellm.input_callback:
@@ -349,6 +427,7 @@ class ProxyLogging:
             value=status,
             local_only=True,
             ttl=alerting_threshold,
+            litellm_parent_otel_span=None,
         )
 
     async def process_pre_call_hook_response(self, response, data, call_type):
@@ -940,6 +1019,9 @@ class PrismaClient:
         )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
+        self.iam_token_db_auth: Optional[bool] = str_to_bool(
+            os.getenv("IAM_TOKEN_DB_AUTH")
+        )
         try:
             from prisma import Prisma  # type: ignore
         except Exception as e:
@@ -966,9 +1048,23 @@ class PrismaClient:
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         if http_client is not None:
-            self.db = Prisma(http=http_client)
+            self.db = PrismaWrapper(
+                original_prisma=Prisma(http=http_client),
+                iam_token_db_auth=(
+                    self.iam_token_db_auth
+                    if self.iam_token_db_auth is not None
+                    else False
+                ),
+            )
         else:
-            self.db = Prisma()  # Client to connect to Prisma db
+            self.db = PrismaWrapper(
+                original_prisma=Prisma(),
+                iam_token_db_auth=(
+                    self.iam_token_db_auth
+                    if self.iam_token_db_auth is not None
+                    else False
+                ),
+            )  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
@@ -1064,9 +1160,9 @@ class PrismaClient:
                         "LiteLLM_VerificationTokenView Created in DB!"
                     )
                 else:
-                    should_create_views = await should_create_missing_views(db=self.db)
+                    should_create_views = await should_create_missing_views(db=self.db.db)  # type: ignore
                     if should_create_views:
-                        await create_missing_views(db=self.db)
+                        await create_missing_views(db=self.db)  # type: ignore
                     else:
                         # don't block execution if these views are missing
                         # Convert lists to sets for efficient difference calculation

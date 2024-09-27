@@ -90,6 +90,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
+    VALID_LITELLM_ENVIRONMENTS,
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
@@ -3973,11 +3974,54 @@ class Router:
             }
         )
 
+        ## Check if LLM Deployment is allowed for this deployment
+        if deployment.model_info and "supported_environments" in deployment.model_info:
+            if (
+                self.deployment_is_active_for_environment(deployment=deployment)
+                is not True
+            ):
+                return
+
         deployment = self._add_deployment(deployment=deployment)
 
         model = deployment.to_json(exclude_none=True)
 
         self.model_list.append(model)
+
+    def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
+        """
+        Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
+
+        Requires `LITELLM_ENVIRONMENT` to be set in .env. Valid values for environment:
+            - development
+            - staging
+            - production
+
+        Raises:
+        - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
+        - ValueError: If supported_environments is not set in model_info or not one of the valid values
+        """
+        litellm_environment = litellm.get_secret_str(secret_name="LITELLM_ENVIRONMENT")
+        if litellm_environment is None:
+            raise ValueError(
+                f"Set 'supported_environments' for model but not 'LITELLM_ENVIRONMENT' set in .env"
+            )
+
+        if litellm_environment not in VALID_LITELLM_ENVIRONMENTS:
+            raise ValueError(
+                f"LITELLM_ENVIRONMENT must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {litellm_environment}"
+            )
+
+        for _env in deployment.model_info["supported_environments"]:
+            if _env not in VALID_LITELLM_ENVIRONMENTS:
+                raise ValueError(
+                    f"supported_environments must be one of {VALID_LITELLM_ENVIRONMENTS}. but set as: {_env} for deployment: {deployment}"
+                )
+
+        # validate litellm_environment is one of LiteLLMEnvironment
+        if litellm_environment in deployment.model_info["supported_environments"]:
+            return True
+        return False
 
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
@@ -4335,157 +4379,177 @@ class Router:
 
         total_tpm: Optional[int] = None
         total_rpm: Optional[int] = None
+        configurable_clientside_auth_params: Optional[List[str]] = None
 
         for model in self.model_list:
-            if "model_name" in model and model["model_name"] == model_group:
-                # model in model group found #
-                litellm_params = LiteLLM_Params(**model["litellm_params"])
-                # get model tpm
-                _deployment_tpm: Optional[int] = None
-                if _deployment_tpm is None:
-                    _deployment_tpm = model.get("tpm", None)
-                if _deployment_tpm is None:
-                    _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)
-                if _deployment_tpm is None:
-                    _deployment_tpm = model.get("model_info", {}).get("tpm", None)
+            is_match = False
+            if (
+                "model_name" in model and model["model_name"] == model_group
+            ):  # exact match
+                is_match = True
+            elif (
+                "model_name" in model
+                and model_group in self.provider_default_deployments
+            ):  # wildcard model
+                is_match = True
 
-                if _deployment_tpm is not None:
-                    if total_tpm is None:
-                        total_tpm = 0
-                    total_tpm += _deployment_tpm  # type: ignore
-                # get model rpm
-                _deployment_rpm: Optional[int] = None
-                if _deployment_rpm is None:
-                    _deployment_rpm = model.get("rpm", None)
-                if _deployment_rpm is None:
-                    _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)
-                if _deployment_rpm is None:
-                    _deployment_rpm = model.get("model_info", {}).get("rpm", None)
+            if not is_match:
+                continue
+            # model in model group found #
+            litellm_params = LiteLLM_Params(**model["litellm_params"])
+            # get configurable clientside auth params
+            configurable_clientside_auth_params = (
+                litellm_params.configurable_clientside_auth_params
+            )
+            # get model tpm
+            _deployment_tpm: Optional[int] = None
+            if _deployment_tpm is None:
+                _deployment_tpm = model.get("tpm", None)
+            if _deployment_tpm is None:
+                _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)
+            if _deployment_tpm is None:
+                _deployment_tpm = model.get("model_info", {}).get("tpm", None)
 
-                if _deployment_rpm is not None:
-                    if total_rpm is None:
-                        total_rpm = 0
-                    total_rpm += _deployment_rpm  # type: ignore
-                # get model info
-                try:
-                    model_info = litellm.get_model_info(model=litellm_params.model)
-                except Exception:
-                    model_info = None
-                # get llm provider
-                model, llm_provider = "", ""
-                try:
-                    model, llm_provider, _, _ = litellm.get_llm_provider(
-                        model=litellm_params.model,
-                        custom_llm_provider=litellm_params.custom_llm_provider,
+            if _deployment_tpm is not None:
+                if total_tpm is None:
+                    total_tpm = 0
+                total_tpm += _deployment_tpm  # type: ignore
+            # get model rpm
+            _deployment_rpm: Optional[int] = None
+            if _deployment_rpm is None:
+                _deployment_rpm = model.get("rpm", None)
+            if _deployment_rpm is None:
+                _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)
+            if _deployment_rpm is None:
+                _deployment_rpm = model.get("model_info", {}).get("rpm", None)
+
+            if _deployment_rpm is not None:
+                if total_rpm is None:
+                    total_rpm = 0
+                total_rpm += _deployment_rpm  # type: ignore
+            # get model info
+            try:
+                model_info = litellm.get_model_info(model=litellm_params.model)
+            except Exception:
+                model_info = None
+            # get llm provider
+            model, llm_provider = "", ""
+            try:
+                model, llm_provider, _, _ = litellm.get_llm_provider(
+                    model=litellm_params.model,
+                    custom_llm_provider=litellm_params.custom_llm_provider,
+                )
+            except litellm.exceptions.BadRequestError as e:
+                verbose_router_logger.error(
+                    "litellm.router.py::get_model_group_info() - {}".format(str(e))
+                )
+
+            if model_info is None:
+                supported_openai_params = litellm.get_supported_openai_params(
+                    model=model, custom_llm_provider=llm_provider
+                )
+                if supported_openai_params is None:
+                    supported_openai_params = []
+                model_info = ModelMapInfo(
+                    key=model_group,
+                    max_tokens=None,
+                    max_input_tokens=None,
+                    max_output_tokens=None,
+                    input_cost_per_token=0,
+                    output_cost_per_token=0,
+                    litellm_provider=llm_provider,
+                    mode="chat",
+                    supported_openai_params=supported_openai_params,
+                    supports_system_messages=None,
+                )
+
+            if model_group_info is None:
+                model_group_info = ModelGroupInfo(
+                    model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
+                )
+            else:
+                # if max_input_tokens > curr
+                # if max_output_tokens > curr
+                # if input_cost_per_token > curr
+                # if output_cost_per_token > curr
+                # supports_parallel_function_calling == True
+                # supports_vision == True
+                # supports_function_calling == True
+                if llm_provider not in model_group_info.providers:
+                    model_group_info.providers.append(llm_provider)
+                if (
+                    model_info.get("max_input_tokens", None) is not None
+                    and model_info["max_input_tokens"] is not None
+                    and (
+                        model_group_info.max_input_tokens is None
+                        or model_info["max_input_tokens"]
+                        > model_group_info.max_input_tokens
                     )
-                except litellm.exceptions.BadRequestError as e:
-                    verbose_router_logger.error(
-                        "litellm.router.py::get_model_group_info() - {}".format(str(e))
+                ):
+                    model_group_info.max_input_tokens = model_info["max_input_tokens"]
+                if (
+                    model_info.get("max_output_tokens", None) is not None
+                    and model_info["max_output_tokens"] is not None
+                    and (
+                        model_group_info.max_output_tokens is None
+                        or model_info["max_output_tokens"]
+                        > model_group_info.max_output_tokens
                     )
+                ):
+                    model_group_info.max_output_tokens = model_info["max_output_tokens"]
+                if model_info.get("input_cost_per_token", None) is not None and (
+                    model_group_info.input_cost_per_token is None
+                    or model_info["input_cost_per_token"]
+                    > model_group_info.input_cost_per_token
+                ):
+                    model_group_info.input_cost_per_token = model_info[
+                        "input_cost_per_token"
+                    ]
+                if model_info.get("output_cost_per_token", None) is not None and (
+                    model_group_info.output_cost_per_token is None
+                    or model_info["output_cost_per_token"]
+                    > model_group_info.output_cost_per_token
+                ):
+                    model_group_info.output_cost_per_token = model_info[
+                        "output_cost_per_token"
+                    ]
+                if (
+                    model_info.get("supports_parallel_function_calling", None)
+                    is not None
+                    and model_info["supports_parallel_function_calling"] is True  # type: ignore
+                ):
+                    model_group_info.supports_parallel_function_calling = True
+                if (
+                    model_info.get("supports_vision", None) is not None
+                    and model_info["supports_vision"] is True  # type: ignore
+                ):
+                    model_group_info.supports_vision = True
+                if (
+                    model_info.get("supports_function_calling", None) is not None
+                    and model_info["supports_function_calling"] is True  # type: ignore
+                ):
+                    model_group_info.supports_function_calling = True
+                if (
+                    model_info.get("supported_openai_params", None) is not None
+                    and model_info["supported_openai_params"] is not None
+                ):
+                    model_group_info.supported_openai_params = model_info[
+                        "supported_openai_params"
+                    ]
 
-                if model_info is None:
-                    supported_openai_params = litellm.get_supported_openai_params(
-                        model=model, custom_llm_provider=llm_provider
-                    )
-                    if supported_openai_params is None:
-                        supported_openai_params = []
-                    model_info = ModelMapInfo(
-                        key=model_group,
-                        max_tokens=None,
-                        max_input_tokens=None,
-                        max_output_tokens=None,
-                        input_cost_per_token=0,
-                        output_cost_per_token=0,
-                        litellm_provider=llm_provider,
-                        mode="chat",
-                        supported_openai_params=supported_openai_params,
-                        supports_system_messages=None,
-                    )
+        if model_group_info is not None:
+            ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
+            if total_tpm is not None:
+                model_group_info.tpm = total_tpm
 
-                if model_group_info is None:
-                    model_group_info = ModelGroupInfo(
-                        model_group=user_facing_model_group_name, providers=[llm_provider], **model_info  # type: ignore
-                    )
-                else:
-                    # if max_input_tokens > curr
-                    # if max_output_tokens > curr
-                    # if input_cost_per_token > curr
-                    # if output_cost_per_token > curr
-                    # supports_parallel_function_calling == True
-                    # supports_vision == True
-                    # supports_function_calling == True
-                    if llm_provider not in model_group_info.providers:
-                        model_group_info.providers.append(llm_provider)
-                    if (
-                        model_info.get("max_input_tokens", None) is not None
-                        and model_info["max_input_tokens"] is not None
-                        and (
-                            model_group_info.max_input_tokens is None
-                            or model_info["max_input_tokens"]
-                            > model_group_info.max_input_tokens
-                        )
-                    ):
-                        model_group_info.max_input_tokens = model_info[
-                            "max_input_tokens"
-                        ]
-                    if (
-                        model_info.get("max_output_tokens", None) is not None
-                        and model_info["max_output_tokens"] is not None
-                        and (
-                            model_group_info.max_output_tokens is None
-                            or model_info["max_output_tokens"]
-                            > model_group_info.max_output_tokens
-                        )
-                    ):
-                        model_group_info.max_output_tokens = model_info[
-                            "max_output_tokens"
-                        ]
-                    if model_info.get("input_cost_per_token", None) is not None and (
-                        model_group_info.input_cost_per_token is None
-                        or model_info["input_cost_per_token"]
-                        > model_group_info.input_cost_per_token
-                    ):
-                        model_group_info.input_cost_per_token = model_info[
-                            "input_cost_per_token"
-                        ]
-                    if model_info.get("output_cost_per_token", None) is not None and (
-                        model_group_info.output_cost_per_token is None
-                        or model_info["output_cost_per_token"]
-                        > model_group_info.output_cost_per_token
-                    ):
-                        model_group_info.output_cost_per_token = model_info[
-                            "output_cost_per_token"
-                        ]
-                    if (
-                        model_info.get("supports_parallel_function_calling", None)
-                        is not None
-                        and model_info["supports_parallel_function_calling"] is True  # type: ignore
-                    ):
-                        model_group_info.supports_parallel_function_calling = True
-                    if (
-                        model_info.get("supports_vision", None) is not None
-                        and model_info["supports_vision"] is True  # type: ignore
-                    ):
-                        model_group_info.supports_vision = True
-                    if (
-                        model_info.get("supports_function_calling", None) is not None
-                        and model_info["supports_function_calling"] is True  # type: ignore
-                    ):
-                        model_group_info.supports_function_calling = True
-                    if (
-                        model_info.get("supported_openai_params", None) is not None
-                        and model_info["supported_openai_params"] is not None
-                    ):
-                        model_group_info.supported_openai_params = model_info[
-                            "supported_openai_params"
-                        ]
+            if total_rpm is not None:
+                model_group_info.rpm = total_rpm
 
-        ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
-        if total_tpm is not None and model_group_info is not None:
-            model_group_info.tpm = total_tpm
-
-        if total_rpm is not None and model_group_info is not None:
-            model_group_info.rpm = total_rpm
+            ## UPDATE WITH CONFIGURABLE CLIENTSIDE AUTH PARAMS FOR MODEL GROUP
+            if configurable_clientside_auth_params is not None:
+                model_group_info.configurable_clientside_auth_params = (
+                    configurable_clientside_auth_params
+                )
 
         return model_group_info
 

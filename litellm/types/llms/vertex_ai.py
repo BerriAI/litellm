@@ -153,6 +153,7 @@ class GenerationConfig(TypedDict, total=False):
     presence_penalty: float
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
+    response_schema: dict
     seed: int
 
 
@@ -283,7 +284,7 @@ class PromptFeedback(TypedDict):
 
 
 class GenerateContentResponseBody(TypedDict, total=False):
-    candidates: Required[List[Candidates]]
+    candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
 

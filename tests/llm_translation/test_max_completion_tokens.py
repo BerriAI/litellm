@@ -141,12 +141,12 @@ def test_all_model_configs():
         "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
     )
     assert VertexAILlama3Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3"
+        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
     assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params()
     assert VertexAIAi21Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3"
+        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
     from litellm.llms.fireworks_ai.chat.fireworks_ai_transformation import (
@@ -332,6 +332,7 @@ def test_all_model_configs():
         model="gemini-1.0-pro",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_output_tokens": 10}
 
     assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()
