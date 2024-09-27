@@ -1,97 +1,222 @@
 #### What this does ####
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
-import copy
 import traceback
+import os
+from typing import Optional
+import httpx
+import requests
+import uuid
 
-
-import litellm
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.types.utils import StandardLoggingPayload
 
 
-class LiteralAILogger:
+class LiteralAILogger(CustomBatchLogger):
     def __init__(
         self,
         literalai_api_key=None,
-        literalai_api_url=None,
-    ):
-        try:
-            from literalai import LiteralClient
-        except Exception as e:
-            raise Exception(
-                f"\033[91mLiteralAI not installed, try running 'pip install literalai' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
-            )
-    
-        self.client = LiteralClient(api_key=literalai_api_key, url=literalai_api_url)
-
-       
-    @staticmethod
-    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
-        """
-        Adds metadata from proxy request headers to the generation if keys start with "literalai_"
-        and overwrites litellm_params.metadata if already included.
-
-        For example if you want to append your trace to an existing `thread_id` via header, send
-        `headers: { ..., literalai_thread_id: thread_id }` via proxy request.
-        """
-        if litellm_params is None:
-            return metadata
-
-        if litellm_params.get("proxy_server_request") is None:
-            return metadata
-
-        if metadata is None:
-            metadata = {}
-
-        proxy_headers = (
-            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        literalai_api_url="https://cloud.getliteral.ai",
+        env=None,
+        **kwargs,
+    ):   
+        self.literalai_api_url = os.getenv("LITERAL_API_URL") or literalai_api_url
+        self.headers = {
+           "Content-Type": "application/json",
+            "x-api-key": literalai_api_key or os.getenv("LITERAL_API_KEY"),
+            "x-client-name": "litellm",
+        }
+        if env:
+            self.headers["x-env"] = env
+        self.async_httpx_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
+        batch_size = (
+            os.getenv("LITERAL_BATCH_SIZE", None)
+        )
+ 
+        super().__init__(**kwargs, batch_size=int(batch_size) if batch_size else None)
 
-        for metadata_param_key in proxy_headers:
-            if metadata_param_key.startswith("literalai_"):
-                trace_param_key = metadata_param_key.replace("literalai_", "", 1)
-                if trace_param_key in metadata:
-                    verbose_logger.warning(
-                        f"Overwriting LiteralAI `{trace_param_key}` from request header"
-                    )
-                else:
-                    verbose_logger.debug(
-                        f"Found LiteralAI `{trace_param_key}` in request header"
-                    )
-                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
 
-        return metadata
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            verbose_logger.debug(
+                "Literal AI Layer Logging - kwargs: %s, response_obj: %s",
+                kwargs,
+                response_obj,
+            )
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            self.log_queue.append(data)
+            verbose_logger.debug(
+                "Literal AI logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+            if len(self.log_queue) >= self.batch_size:
+                self._send_batch()
+        except Exception:
+            verbose_logger.exception(
+                "Literal AI Layer Error - error logging success event."
+            )
 
-    def create_step(
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        verbose_logger.info("Literal AI Failure Event Logging!")
+        try:
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            self.log_queue.append(data)
+            verbose_logger.debug(
+                "Literal AI logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+            if len(self.log_queue) >= self.batch_size:
+                self._send_batch()
+        except Exception:
+            verbose_logger.exception(
+                "Literal AI Layer Error - error logging failure event."
+            )
+
+
+    def _send_batch(self):
+        if not self.log_queue:
+            return
+
+        url = f"{self.literalai_api_url}/api/graphql"
+        query = self._steps_query_builder(self.log_queue)
+        variables = self._steps_variables_builder(self.log_queue)
+
+        try:
+            response = requests.post(
+                url=url,
+                json={
+                    "query": query,
+                    "variables": variables,
+                },
+                headers=self.headers,
+            )
+            response.raise_for_status()
+
+            if response.status_code >= 300:
+                verbose_logger.error(
+                    f"Literal AI Error: {response.status_code} - {response.text}"
+                )
+            else:
+                verbose_logger.debug(
+                    f"Batch of {len(self.log_queue)} runs successfully created"
+                )
+        except requests.exceptions.HTTPError as e:
+            verbose_logger.exception(
+                f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}"
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"Literal AI Layer Error - {traceback.format_exc()}"
+            )
+
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            verbose_logger.debug(
+                "Literal AI Async Layer Logging - kwargs: %s, response_obj: %s",
+                kwargs,
+                response_obj,
+            )
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            self.log_queue.append(data)
+            verbose_logger.debug(
+                "Literal AI logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+        except Exception:
+            verbose_logger.exception(
+                "Literal AI Layer Error - error logging async success event."
+            )
+
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        verbose_logger.info("Literal AI Failure Event Logging!")
+        try:
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            self.log_queue.append(data)
+            verbose_logger.debug(
+                "Literal AI logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+        except Exception:
+            verbose_logger.exception(
+                "Literal AI Layer Error - error logging async failure event."
+            )
+
+
+    async def async_send_batch(self):
+        if not self.log_queue:
+            return
+
+        url = f"{self.literalai_api_url}/api/graphql"
+        query = self._steps_query_builder(self.log_queue)
+        variables = self._steps_variables_builder(self.log_queue)
+
+        try:
+            response = await self.async_httpx_client.post(
+                url=url,
+                json={
+                    "query": query,
+                    "variables": variables,
+                },
+                headers=self.headers,
+            )
+            response.raise_for_status()
+
+            if response.status_code >= 300:
+                verbose_logger.error(
+                    f"Literal AI Error: {response.status_code} - {response.text}"
+                )
+            else:
+                verbose_logger.debug(
+                    f"Batch of {len(self.log_queue)} runs successfully created"
+                )
+        except httpx.HTTPStatusError as e:
+            verbose_logger.exception(
+                f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}"
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"Literal AI Layer Error - {traceback.format_exc()}"
+            )
+
+
+    def _prepare_log_data(
         self,
         kwargs,
         response_obj,
         start_time,
-        end_time,
-        user_id,
-        print_verbose,
-        level="DEFAULT",
-        status_message=None,
+        end_time
     ) -> dict:
-        try:
-            import uuid
-            from literalai.observability.step import StepDict
+            logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
 
-            print_verbose(
-                f"LiteralAI Logging - Enters logging function for model {kwargs}"
-            )
+            if logging_payload is None:
+                raise ValueError("standard_logging_object not found in kwargs")
+            metadata = logging_payload["metadata"]
             
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )
-            metadata = self.add_metadata_from_header(litellm_params, metadata)
-            metadata["user_id"] = user_id
             clean_metadata = redact_user_api_key_info(metadata=metadata)
 
-            settings = copy.deepcopy(kwargs.get("optional_params", {}))
+            settings = logging_payload["model_parameters"]
 
-            messages = kwargs.get("messages", None)
+            messages = logging_payload["messages"]
             
             prompt_id = None
             variables = None
@@ -115,20 +240,24 @@ class LiteralAILogger:
                     except:
                         # if casting value to str fails don't block logging
                         pass
-            step: StepDict =  {
+            step = {
                     "id": clean_metadata.get("step_id", str(uuid.uuid4())),
+                    "error": logging_payload["error_str"],
                     "name": kwargs.get("model", ""),
                     "threadId": clean_metadata.get("literalai_thread_id", None),
                     "parentId": clean_metadata.get("literalai_parent_id", None),
                     "rootRunId": clean_metadata.get("literalai_root_run_id", None),
                     "input": None,
                     "output": None,
-                    "type": "undefined",
+                    "type": "llm",
                     "tags": clean_metadata.get("tags", clean_metadata.get("literalai_tags", None)),
                     "startTime": str(start_time),
                     "endTime": str(end_time),
                     "metadata":  clean_metadata,
                     "generation": {
+                        "inputTokenCount": logging_payload["prompt_tokens"],
+                        "outputTokenCount": logging_payload["completion_tokens"],
+                        "tokenCount": logging_payload["total_tokens"],
                         "promptId": prompt_id,
                         "variables": variables,
                         "provider": kwargs.get("custom_llm_provider", "litellm"),
@@ -139,55 +268,81 @@ class LiteralAILogger:
                         "tools": tools,
                     }
                 }
-            if response_obj is not None and response_obj.get("id", None) is not None:
-                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
-                step["metadata"]["litellm_id"] = generation_id
-                step["generation"]["inputTokenCount"] = response_obj.usage.prompt_tokens
-                step["generation"]["outputTokenCount"] = response_obj.usage.completion_tokens
-                step["generation"]["tokenCount"] = response_obj.usage.prompt_tokens + response_obj.usage.completion_tokens
+            return step
 
-            if (
-                level == "ERROR"
-                and status_message is not None
-                and isinstance(status_message, str)
-            ):
-                step["error"] = status_message
-            elif response_obj is not None and (
-                kwargs.get("call_type", None) == "embedding"
-                or isinstance(response_obj, litellm.EmbeddingResponse)
-            ):
-                step["type"] = "embedding"
-                step["input"] = messages
-                step["output"] = response_obj.data
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ModelResponse
-            ):
-                step["type"] = "llm"
-                step["generation"]["messageCompletion"] = response_obj["choices"][0]["message"].json()
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.TextCompletionResponse
-            ):
-                step["type"] = "llm"
-                step["generation"]["completion"] = response_obj.choices[0].text
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.ImageResponse
-            ):
-                pass
-            elif response_obj is not None and isinstance(
-                response_obj, litellm.TranscriptionResponse
-            ):
-                pass
-            elif (
-                kwargs.get("call_type") is not None
-                and kwargs.get("call_type") == "pass_through_endpoint"
-                and response_obj is not None
-                and isinstance(response_obj, dict)
-            ):
-                pass
-            self.client.api.send_steps([step])
-            
-        except Exception as e:
-            verbose_logger.exception(
-                "Literal AI Layer Error(): Exception occured - {}".format(str(e))
-            )
 
+    def _steps_query_variables_builder(self, steps):
+        generated = ""
+        for id in range(len(steps)):
+            generated += f"""$id_{id}: String!
+            $threadId_{id}: String
+            $rootRunId_{id}: String
+            $type_{id}: StepType
+            $startTime_{id}: DateTime
+            $endTime_{id}: DateTime
+            $error_{id}: String
+            $input_{id}: Json
+            $output_{id}: Json
+            $metadata_{id}: Json
+            $parentId_{id}: String
+            $name_{id}: String
+            $tags_{id}: [String!]
+            $generation_{id}: GenerationPayloadInput
+            $scores_{id}: [ScorePayloadInput!]
+            $attachments_{id}: [AttachmentPayloadInput!]
+            """
+        return generated
+
+
+    def _steps_ingest_steps_builder(self, steps):
+        generated = ""
+        for id in range(len(steps)):
+            generated += f"""
+        step{id}: ingestStep(
+            id: $id_{id}
+            threadId: $threadId_{id}
+            rootRunId: $rootRunId_{id}
+            startTime: $startTime_{id}
+            endTime: $endTime_{id}
+            type: $type_{id}
+            error: $error_{id}
+            input: $input_{id}
+            output: $output_{id}
+            metadata: $metadata_{id}
+            parentId: $parentId_{id}
+            name: $name_{id}
+            tags: $tags_{id}
+            generation: $generation_{id}
+            scores: $scores_{id}
+            attachments: $attachments_{id}
+        ) {{
+            ok
+            message
+        }}
+    """
+        return generated
+
+
+    def _steps_query_builder(self, steps):
+        return f"""
+        mutation AddStep({self._steps_query_variables_builder(steps)}) {{
+        {self._steps_ingest_steps_builder(steps)}
+        }}
+        """
+
+    def _steps_variables_builder(self, steps):
+        def serialize_step(event, id):
+            result = {}
+
+            for key, value in event.items():
+                # Only keep the keys that are not None to avoid overriding existing values
+                if value is not None:
+                    result[f"{key}_{id}"] = value
+
+            return result
+        
+        variables = {}
+        for i in range(len(steps)):
+            step = steps[i]
+            variables.update(serialize_step(step, i))
+        return variables
