@@ -762,6 +762,7 @@ def test_supports_response_schema(model, expected_bool):
 
     assert expected_bool == response
 
+
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
@@ -771,13 +772,15 @@ def test_supports_response_schema(model, expected_bool):
         ("gemini-pro", True),
     ],
 )
-def test_supports_function_calling(model, expected_bool):
+def test_supports_function_calling_v2(model, expected_bool):
     """
     Unit test for 'supports_function_calling' helper function.
     """
     from litellm.utils import supports_function_calling
+
     response = supports_function_calling(model=model, custom_llm_provider=None)
     assert expected_bool == response
+
 
 @pytest.mark.parametrize(
     "model, expected_bool",
@@ -794,8 +797,10 @@ def test_supports_vision(model, expected_bool):
     Unit test for 'supports_vision' helper function.
     """
     from litellm.utils import supports_vision
+
     response = supports_vision(model=model, custom_llm_provider=None)
     assert expected_bool == response
+
 
 def test_usage_object_null_tokens():
     """
