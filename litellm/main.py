@@ -83,7 +83,8 @@ from .llms import (
 from .llms.AI21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
-from .llms.azure_ai import AzureAIChatCompletion, AzureAIEmbedding
+from .llms.azure_ai.chat import AzureAIChatCompletion
+from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.azure_text import AzureTextCompletion
 from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
 from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
