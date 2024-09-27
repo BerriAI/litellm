@@ -327,8 +327,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
             )
             # get user tpm/rpm limits
-            if _user_id_rate_limits is not None and isinstance(
-                _user_id_rate_limits, dict
+            if (
+                _user_id_rate_limits is not None
+                and isinstance(_user_id_rate_limits, dict)
+                and (
+                    _user_id_rate_limits.get("tpm_limit", None) is not None
+                    or _user_id_rate_limits.get("rpm_limit", None) is not None
+                )
             ):
                 user_tpm_limit = _user_id_rate_limits.get("tpm_limit", None)
                 user_rpm_limit = _user_id_rate_limits.get("rpm_limit", None)
