@@ -339,9 +339,15 @@ class InstanceVideo(TypedDict, total=False):
     videoSegmentConfig: Tuple[float, float, float]
 
 
+class InstanceImage(TypedDict, total=False):
+    gcsUri: Optional[str]
+    bytesBase64Encoded: Optional[str]
+    mimeType: Optional[str]
+
+
 class Instance(TypedDict, total=False):
     text: str
-    image: Dict[str, str]
+    image: InstanceImage
     video: InstanceVideo
 
 
