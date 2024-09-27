@@ -18,13 +18,13 @@ class AnthropicMessagesTool(TypedDict, total=False):
 
 
 class AnthropicMessagesTextParam(TypedDict, total=False):
-    type: Literal["text"]
-    text: str
+    type: Required[Literal["text"]]
+    text: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolUseParam(TypedDict):
-    type: Literal["tool_use"]
+    type: Required[Literal["tool_use"]]
     id: str
     name: str
     input: dict
@@ -58,8 +58,8 @@ class AnthropicImageParamSource(TypedDict):
 
 
 class AnthropicMessagesImageParam(TypedDict, total=False):
-    type: Literal["image"]
-    source: AnthropicImageParamSource
+    type: Required[Literal["image"]]
+    source: Required[AnthropicImageParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -291,9 +291,9 @@ class AnthropicResponse(BaseModel):
     """Billing and rate-limit usage."""
 
 
-class AnthropicChatCompletionUsageBlock(TypedDict, total=False):
-    prompt_tokens: Required[int]
-    completion_tokens: Required[int]
-    total_tokens: Required[int]
+from .openai import ChatCompletionUsageBlock
+
+
+class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int

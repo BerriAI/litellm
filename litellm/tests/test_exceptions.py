@@ -7,6 +7,8 @@ from typing import Any
 
 from openai import AuthenticationError, BadRequestError, OpenAIError, RateLimitError
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -884,6 +886,42 @@ def _pre_call_utils(
     return data, original_function, mapped_target
 
 
+def _pre_call_utils_httpx(
+    call_type: str,
+    data: dict,
+    client: Union[HTTPHandler, AsyncHTTPHandler],
+    sync_mode: bool,
+    streaming: Optional[bool],
+):
+    mapped_target: Any = client.client
+    if call_type == "embedding":
+        data["input"] = "Hello world!"
+
+        if sync_mode:
+            original_function = litellm.embedding
+        else:
+            original_function = litellm.aembedding
+    elif call_type == "chat_completion":
+        data["messages"] = [{"role": "user", "content": "Hello world"}]
+        if streaming is True:
+            data["stream"] = True
+
+        if sync_mode:
+            original_function = litellm.completion
+        else:
+            original_function = litellm.acompletion
+    elif call_type == "completion":
+        data["prompt"] = "Hello world"
+        if streaming is True:
+            data["stream"] = True
+        if sync_mode:
+            original_function = litellm.text_completion
+        else:
+            original_function = litellm.atext_completion
+
+    return data, original_function, mapped_target
+
+
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
@@ -1001,6 +1039,114 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
         except litellm.RateLimitError as e:
             exception_raised = True
             assert e.litellm_response_headers is not None
+            assert int(e.litellm_response_headers["retry-after"]) == cooldown_time
+
+        if exception_raised is False:
+            print(resp)
+        assert exception_raised
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize(
+    "provider, model, call_type",
+    [
+        ("anthropic", "claude-3-haiku-20240307", "chat_completion"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exception_with_headers_httpx(
+    sync_mode, provider, model, call_type, streaming
+):
+    """
+    User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
+    but Azure says to retry in at most 9s
+
+    ```
+    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
+    ```
+    """
+    print(f"Received args: {locals()}")
+    import openai
+
+    if sync_mode:
+        client = HTTPHandler()
+    else:
+        client = AsyncHTTPHandler()
+
+    data = {"model": model}
+    data, original_function, mapped_target = _pre_call_utils_httpx(
+        call_type=call_type,
+        data=data,
+        client=client,
+        sync_mode=sync_mode,
+        streaming=streaming,
+    )
+
+    cooldown_time = 30.0
+
+    def _return_exception(*args, **kwargs):
+        import datetime
+
+        from httpx import Headers, HTTPStatusError, Request, Response
+
+        # Create the Request object
+        request = Request("POST", "http://0.0.0.0:9000/chat/completions")
+
+        # Create the Response object with the necessary headers and status code
+        response = Response(
+            status_code=429,
+            headers=Headers(
+                {
+                    "date": "Sat, 21 Sep 2024 22:56:53 GMT",
+                    "server": "uvicorn",
+                    "retry-after": "30",
+                    "content-length": "30",
+                    "content-type": "application/json",
+                }
+            ),
+            request=request,
+        )
+
+        # Create and raise the HTTPStatusError exception
+        raise HTTPStatusError(
+            message="Error code: 429 - Rate Limit Error!",
+            request=request,
+            response=response,
+        )
+
+    with patch.object(
+        mapped_target,
+        "send",
+        side_effect=_return_exception,
+    ):
+        new_retry_after_mock_client = MagicMock(return_value=-1)
+
+        litellm.utils._get_retry_after_from_exception_header = (
+            new_retry_after_mock_client
+        )
+
+        exception_raised = False
+        try:
+            if sync_mode:
+                resp = original_function(**data, client=client)
+                if streaming:
+                    for chunk in resp:
+                        continue
+            else:
+                resp = await original_function(**data, client=client)
+
+                if streaming:
+                    async for chunk in resp:
+                        continue
+
+        except litellm.RateLimitError as e:
+            exception_raised = True
+            assert e.litellm_response_headers is not None
+            print("e.litellm_response_headers", e.litellm_response_headers)
             assert int(e.litellm_response_headers["retry-after"]) == cooldown_time
 
         if exception_raised is False:

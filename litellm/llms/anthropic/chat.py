@@ -71,12 +71,17 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
     ChatCompletionUserMessage,
+    OpenAIMessageContent,
 )
 from litellm.types.utils import Choices, GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ..base import BaseLLM
-from ..prompt_templates.factory import custom_prompt, prompt_factory
+from ..prompt_templates.factory import (
+    anthropic_messages_pt,
+    custom_prompt,
+    prompt_factory,
+)
 
 
 class AnthropicConstants(Enum):
@@ -87,9 +92,15 @@ class AnthropicConstants(Enum):
 
 
 class AnthropicError(Exception):
-    def __init__(self, status_code: int, message):
+    def __init__(
+        self,
+        status_code: int,
+        message,
+        headers: Optional[httpx.Headers] = None,
+    ):
         self.status_code = status_code
         self.message: str = message
+        self.headers = headers
         self.request = httpx.Request(
             method="POST", url="https://api.anthropic.com/v1/messages"
         )
@@ -224,8 +235,9 @@ class AnthropicConfig:
         Used to check if anthropic prompt caching headers need to be set.
         """
         for message in messages:
-            if message["content"] is not None and isinstance(message["content"], list):
-                for content in message["content"]:
+            _message_content = message.get("content")
+            if _message_content is not None and isinstance(_message_content, list):
+                for content in _message_content:
                     if "cache_control" in content:
                         return True
 
@@ -306,12 +318,13 @@ class AnthropicConfig:
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message
-                if isinstance(m["content"], str):
+                message_content = m.get("content")
+                if message_content and isinstance(message_content, str):
                     user_message = ChatCompletionUserMessage(
-                        role="user", content=m["content"]
+                        role="user", content=message_content
                     )
-                elif isinstance(m["content"], list):
-                    for content in m["content"]:
+                elif message_content and isinstance(message_content, list):
+                    for content in message_content:
                         if content["type"] == "text":
                             text_obj = ChatCompletionTextObject(
                                 type="text", text=content["text"]
@@ -684,8 +697,14 @@ async def make_call(
             api_base, headers=headers, data=data, stream=True, timeout=timeout
         )
     except httpx.HTTPStatusError as e:
+        error_headers = getattr(e, "headers", None)
+        error_response = getattr(e, "response", None)
+        if error_headers is None and error_response:
+            error_headers = getattr(error_response, "headers", None)
         raise AnthropicError(
-            status_code=e.response.status_code, message=await e.response.aread()
+            status_code=e.response.status_code,
+            message=await e.response.aread(),
+            headers=error_headers,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -726,8 +745,14 @@ def make_sync_call(
             api_base, headers=headers, data=data, stream=True, timeout=timeout
         )
     except httpx.HTTPStatusError as e:
+        error_headers = getattr(e, "headers", None)
+        error_response = getattr(e, "response", None)
+        if error_headers is None and error_response:
+            error_headers = getattr(error_response, "headers", None)
         raise AnthropicError(
-            status_code=e.response.status_code, message=e.response.read()
+            status_code=e.response.status_code,
+            message=e.response.read(),
+            headers=error_headers,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -736,7 +761,12 @@ def make_sync_call(
         raise AnthropicError(status_code=500, message=str(e))
 
     if response.status_code != 200:
-        raise AnthropicError(status_code=response.status_code, message=response.read())
+        response_headers = getattr(response, "headers", None)
+        raise AnthropicError(
+            status_code=response.status_code,
+            message=response.read(),
+            headers=response_headers,
+        )
 
     completion_stream = ModelResponseIterator(
         streaming_response=response.iter_lines(), sync_stream=True
@@ -763,7 +793,7 @@ class AnthropicChatCompletion(BaseLLM):
         response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -772,6 +802,14 @@ class AnthropicChatCompletion(BaseLLM):
         encoding,
         json_mode: bool,
     ) -> ModelResponse:
+        _hidden_params = {}
+        _response_headers = dict(response.headers)
+        if _response_headers is not None:
+            llm_response_headers = {
+                "{}-{}".format("llm_provider", k): v
+                for k, v in _response_headers.items()
+            }
+            _hidden_params["additional_headers"] = llm_response_headers
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -783,14 +821,21 @@ class AnthropicChatCompletion(BaseLLM):
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception as e:
+            response_headers = getattr(response, "headers", None)
             raise AnthropicError(
-                message=response.text, status_code=response.status_code
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), response.text
+                ),
+                status_code=response.status_code,
+                headers=response_headers,
             )
         if "error" in completion_response:
+            response_headers = getattr(response, "headers", None)
             raise AnthropicError(
                 message=str(completion_response["error"]),
                 status_code=response.status_code,
+                headers=response_headers,
             )
         else:
             text_content = ""
@@ -856,6 +901,8 @@ class AnthropicChatCompletion(BaseLLM):
         if "cache_read_input_tokens" in _usage:
             usage["cache_read_input_tokens"] = _usage["cache_read_input_tokens"]
         setattr(model_response, "usage", usage)  # type: ignore
+
+        model_response._hidden_params = _hidden_params
         return model_response
 
     async def acompletion_stream_function(
@@ -919,9 +966,9 @@ class AnthropicChatCompletion(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        client=None,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        async_handler = get_async_httpx_client(
+        async_handler = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
         )
 
@@ -937,7 +984,17 @@ class AnthropicChatCompletion(BaseLLM):
                 original_response=str(e),
                 additional_args={"complete_input_dict": data},
             )
-            raise e
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            error_text = getattr(e, "text", str(e))
+            error_response = getattr(e, "response", None)
+            if error_headers is None and error_response:
+                error_headers = getattr(error_response, "headers", None)
+            raise AnthropicError(
+                message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
 
         return self._process_response(
             model=model,
@@ -996,8 +1053,8 @@ class AnthropicChatCompletion(BaseLLM):
                 optional_params["system"] = anthropic_system_message_list
             # Format rest of message according to anthropic guidelines
             try:
-                messages = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="anthropic"
+                messages = anthropic_messages_pt(
+                    model=model, messages=messages, llm_provider="anthropic"
                 )
             except Exception as e:
                 raise AnthropicError(
@@ -1136,12 +1193,25 @@ class AnthropicChatCompletion(BaseLLM):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 else:
                     client = client
-                response = client.post(
-                    api_base, headers=headers, data=json.dumps(data), timeout=timeout
-                )
-                if response.status_code != 200:
+
+                try:
+                    response = client.post(
+                        api_base,
+                        headers=headers,
+                        data=json.dumps(data),
+                        timeout=timeout,
+                    )
+                except Exception as e:
+                    status_code = getattr(e, "status_code", 500)
+                    error_headers = getattr(e, "headers", None)
+                    error_text = getattr(e, "text", str(e))
+                    error_response = getattr(e, "response", None)
+                    if error_headers is None and error_response:
+                        error_headers = getattr(error_response, "headers", None)
                     raise AnthropicError(
-                        status_code=response.status_code, message=response.text
+                        message=error_text,
+                        status_code=status_code,
+                        headers=error_headers,
                     )
 
         return self._process_response(
@@ -1192,7 +1262,7 @@ class ModelResponseIterator:
         return False
 
     def _handle_usage(
-        self, anthropic_usage_chunk: dict
+        self, anthropic_usage_chunk: Union[dict, UsageDelta]
     ) -> AnthropicChatCompletionUsageBlock:
         special_fields = ["input_tokens", "output_tokens"]
 
@@ -1313,9 +1383,10 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
-                usage = self._handle_usage(
-                    anthropic_usage_chunk=message_start_block["message"]["usage"]
-                )
+                if "usage" in message_start_block["message"]:
+                    usage = self._handle_usage(
+                        anthropic_usage_chunk=message_start_block["message"]["usage"]
+                    )
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
