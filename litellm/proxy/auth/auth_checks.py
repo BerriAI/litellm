@@ -415,9 +415,10 @@ async def get_user_object(
                 raise Exception
 
         _response = LiteLLM_UserTable(**dict(response))
+        response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
 
         return _response
     except Exception:  # if user not in db
