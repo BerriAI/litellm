@@ -31,6 +31,7 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from ..prompt_templates.factory import custom_prompt, prompt_factory
+from .common_utils import drop_params_from_unprocessable_entity_error
 
 
 class OpenAIError(Exception):
@@ -831,27 +832,9 @@ class OpenAIChatCompletion(BaseLLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
-                        invalid_params: List[str] = []
-                        if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
-                            detail = e.body.get("detail")  # type: ignore
-                            if (
-                                isinstance(detail, List)
-                                and len(detail) > 0
-                                and isinstance(detail[0], dict)
-                            ):
-                                for error_dict in detail:
-                                    if (
-                                        error_dict.get("loc")
-                                        and isinstance(error_dict.get("loc"), list)
-                                        and len(error_dict.get("loc")) == 2
-                                    ):
-                                        invalid_params.append(error_dict["loc"][1])
-
-                        new_data = {}
-                        for k, v in optional_params.items():
-                            if k not in invalid_params:
-                                new_data[k] = v
-                        optional_params = new_data
+                        optional_params = drop_params_from_unprocessable_entity_error(
+                            e, optional_params
+                        )
                     else:
                         raise e
                     # e.message
