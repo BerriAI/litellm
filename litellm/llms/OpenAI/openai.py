@@ -413,7 +413,11 @@ class OpenAIConfig:
         return optional_params
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         """ """
         if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
@@ -421,11 +425,13 @@ class OpenAIConfig:
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
+                drop_params=drop_params,
             )
         return litellm.OpenAIGPTConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )
 
 
@@ -1215,7 +1221,6 @@ class OpenAIChatCompletion(BaseLLM):
         client: Optional[AsyncOpenAI] = None,
         max_retries=None,
     ):
-        response = None
         try:
             openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                 is_async=True,
@@ -1237,12 +1242,15 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(
+            returned_response: (
+                litellm.EmbeddingResponse
+            ) = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
                 _response_headers=headers,
             )  # type: ignore
+            return returned_response
         except OpenAIError as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1284,7 +1292,6 @@ class OpenAIChatCompletion(BaseLLM):
         aembedding=None,
     ):
         super().embedding()
-        exception_mapping_worked = False
         try:
             model = model
             data = {"model": model, "input": input, **optional_params}
@@ -1299,7 +1306,7 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             if aembedding is True:
-                response = self.aembedding(
+                async_response = self.aembedding(
                     data=data,
                     input=input,
                     logging_obj=logging_obj,
@@ -1310,7 +1317,7 @@ class OpenAIChatCompletion(BaseLLM):
                     client=client,
                     max_retries=max_retries,
                 )
-                return response
+                return async_response
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1335,12 +1342,13 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=sync_embedding_response,
             )
-            return convert_to_model_response_object(
+            response: litellm.EmbeddingResponse = convert_to_model_response_object(
                 response_object=sync_embedding_response.model_dump(),
                 model_response_object=model_response,
                 _response_headers=headers,
                 response_type="embedding",
             )  # type: ignore
+            return response
         except OpenAIError as e:
             raise e
         except Exception as e:

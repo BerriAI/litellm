@@ -3256,8 +3256,15 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
-    elif custom_llm_provider == "vertex_ai_beta":
+    elif custom_llm_provider == "vertex_ai_beta" or (
+        custom_llm_provider == "vertex_ai" and "gemini" in model
+    ):
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -3294,6 +3301,11 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
         supported_params = get_supported_openai_params(
@@ -3318,6 +3330,11 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
@@ -3727,6 +3744,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
@@ -3835,6 +3853,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )
     elif custom_llm_provider == "azure":
         supported_params = get_supported_openai_params(
@@ -11137,6 +11156,10 @@ def is_cached_message(message: AllMessageValues) -> bool:
 
 def is_base64_encoded(s: str) -> bool:
     try:
+        # Strip out the prefix if it exists
+        if s.startswith("data:"):
+            s = s.split(",")[1]
+
         # Try to decode the string
         decoded_bytes = base64.b64decode(s, validate=True)
         # Check if the original string can be re-encoded to the same string

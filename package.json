@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "prisma": "^5.17.0",
     "react-copy-to-clipboard": "^5.1.0"
   },
   "devDependencies": {

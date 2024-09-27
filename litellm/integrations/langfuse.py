@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import copy
+import inspect
 import os
 import traceback
 
@@ -204,6 +205,11 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["choices"][0]["message"].json()
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.HttpxBinaryResponseContent
+            ):
+                input = prompt
+                output = "speech-output"
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
@@ -549,7 +555,10 @@ class LangFuseLogger:
             generation_id = None
             usage = None
             if response_obj is not None:
-                if response_obj.get("id", None) is not None:
+                if (
+                    hasattr(response_obj, "id")
+                    and response_obj.get("id", None) is not None
+                ):
                     generation_id = litellm.utils.get_logging_id(
                         start_time, response_obj
                     )
@@ -571,8 +580,8 @@ class LangFuseLogger:
                 if _user_api_key_alias is not None:
                     generation_name = f"litellm:{_user_api_key_alias}"
 
-            if response_obj is not None and "system_fingerprint" in response_obj:
-                system_fingerprint = response_obj.get("system_fingerprint", None)
+            if response_obj is not None:
+                system_fingerprint = getattr(response_obj, "system_fingerprint", None)
             else:
                 system_fingerprint = None
 
@@ -668,21 +677,37 @@ def _add_prompt_to_generation_params(
         elif "version" in user_prompt and "prompt" in user_prompt:
             # prompts
             if isinstance(user_prompt["prompt"], str):
-                _prompt_obj = Prompt_Text(
-                    name=user_prompt["name"],
-                    prompt=user_prompt["prompt"],
-                    version=user_prompt["version"],
-                    config=user_prompt.get("config", None),
+                prompt_text_params = getattr(
+                    Prompt_Text, "model_fields", Prompt_Text.__fields__
                 )
+                _data = {
+                    "name": user_prompt["name"],
+                    "prompt": user_prompt["prompt"],
+                    "version": user_prompt["version"],
+                    "config": user_prompt.get("config", None),
+                }
+                if "labels" in prompt_text_params and "tags" in prompt_text_params:
+                    _data["labels"] = user_prompt.get("labels", []) or []
+                    _data["tags"] = user_prompt.get("tags", []) or []
+                _prompt_obj = Prompt_Text(**_data)  # type: ignore
                 generation_params["prompt"] = TextPromptClient(prompt=_prompt_obj)
 
             elif isinstance(user_prompt["prompt"], list):
-                _prompt_obj = Prompt_Chat(
-                    name=user_prompt["name"],
-                    prompt=user_prompt["prompt"],
-                    version=user_prompt["version"],
-                    config=user_prompt.get("config", None),
+                prompt_chat_params = getattr(
+                    Prompt_Chat, "model_fields", Prompt_Chat.__fields__
                 )
+                _data = {
+                    "name": user_prompt["name"],
+                    "prompt": user_prompt["prompt"],
+                    "version": user_prompt["version"],
+                    "config": user_prompt.get("config", None),
+                }
+                if "labels" in prompt_chat_params and "tags" in prompt_chat_params:
+                    _data["labels"] = user_prompt.get("labels", []) or []
+                    _data["tags"] = user_prompt.get("tags", []) or []
+
+                _prompt_obj = Prompt_Chat(**_data)  # type: ignore
+
                 generation_params["prompt"] = ChatPromptClient(prompt=_prompt_obj)
             else:
                 verbose_logger.error(

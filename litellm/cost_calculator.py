@@ -34,6 +34,7 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
+from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -400,48 +401,6 @@ def cost_per_token(
         )
 
 
-# Extract the number of billion parameters from the model name
-# only used for together_computer LLMs
-def get_model_params_and_category(model_name) -> str:
-    """
-    Helper function for calculating together ai pricing.
-
-    Returns
-    - str - model pricing category if mapped else received model name
-    """
-    import re
-
-    model_name = model_name.lower()
-    re_params_match = re.search(
-        r"(\d+b)", model_name
-    )  # catch all decimals like 3b, 70b, etc
-    category = None
-    if re_params_match is not None:
-        params_match = str(re_params_match.group(1))
-        params_match = params_match.replace("b", "")
-        if params_match is not None:
-            params_billion = float(params_match)
-        else:
-            return model_name
-        # Determine the category based on the number of parameters
-        if params_billion <= 4.0:
-            category = "together-ai-up-to-4b"
-        elif params_billion <= 8.0:
-            category = "together-ai-4.1b-8b"
-        elif params_billion <= 21.0:
-            category = "together-ai-8.1b-21b"
-        elif params_billion <= 41.0:
-            category = "together-ai-21.1b-41b"
-        elif params_billion <= 80.0:
-            category = "together-ai-41.1b-80b"
-        elif params_billion <= 110.0:
-            category = "together-ai-81.1b-110b"
-        if category is not None:
-            return category
-
-    return model_name
-
-
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
@@ -482,7 +441,7 @@ def _select_model_name_for_cost_calc(
     if isinstance(completion_response, str):
         return return_model
 
-    elif return_model is None:
+    elif return_model is None and hasattr(completion_response, "get"):
         return_model = completion_response.get("model", "")  # type: ignore
     hidden_params = getattr(completion_response, "_hidden_params", None)
 
@@ -721,7 +680,9 @@ def completion_cost(
         ):
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-            model = get_model_params_and_category(model)
+
+            model = get_model_params_and_category(model, call_type=CallTypes(call_type))
+
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
         elif (
