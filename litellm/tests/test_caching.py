@@ -2100,3 +2100,59 @@ async def test_redis_sentinel_caching():
 
     print(f"stored_val: {stored_val}")
     assert stored_val_2["id"] == response1.id
+
+
+@pytest.mark.asyncio
+async def test_redis_proxy_batch_redis_get_cache():
+    """
+    Tests batch_redis_get.py
+
+    - make 1st call -> expect miss
+    - make 2nd call -> expect hit
+    """
+
+    from litellm.caching import Cache, DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.batch_redis_get import _PROXY_BatchRedisRequests
+
+    litellm.cache = Cache(
+        type="redis",
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+        namespace="test_namespace",
+    )
+
+    batch_redis_get_obj = (
+        _PROXY_BatchRedisRequests()
+    )  # overrides the .async_get_cache method
+
+    user_api_key_cache = DualCache()
+
+    import uuid
+
+    batch_redis_get_obj.in_memory_cache = user_api_key_cache.in_memory_cache
+
+    messages = [{"role": "user", "content": "hi {}".format(uuid.uuid4())}]
+    # 1st call -> expect miss
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        mock_response="hello",
+    )
+
+    assert response is not None
+    assert "cache_key" not in response._hidden_params
+    print(response._hidden_params)
+
+    await asyncio.sleep(1)
+
+    # 2nd call -> expect hit
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        mock_response="hello",
+    )
+
+    print(response._hidden_params)
+    assert "cache_key" in response._hidden_params
