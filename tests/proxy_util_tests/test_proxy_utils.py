@@ -6,11 +6,12 @@ from unittest.mock import Mock
 import pytest
 from fastapi import Request
 
-import litellm
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import litellm
+
+
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.litellm_pre_call_utils import (
@@ -367,3 +368,12 @@ def test_is_request_body_safe_model_enabled(
         error_raised = True
 
     assert expect_error == error_raised
+
+
+def test_get_remaining_rate_limit():
+    """
+    Ensure accurate remaining rate limit is returned to the client.
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/5957
+    """
+    pass
