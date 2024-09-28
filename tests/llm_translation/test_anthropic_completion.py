@@ -16,16 +16,21 @@ load_dotenv()
 import io
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+# sys.path.insert(
+#     0, os.path.abspath("../..")
+# )  # Adds the parent directory to the system path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
-from litellm import AnthropicConfig, Router, adapter_completion
+from litellm import (
+    AnthropicConfig,
+    Router,
+    adapter_completion,
+    AnthropicExperimentalPassThroughConfig,
+)
 from litellm.adapters.anthropic_adapter import anthropic_adapter
 from litellm.types.llms.anthropic import AnthropicResponse
 
@@ -33,7 +38,7 @@ from litellm.types.llms.anthropic import AnthropicResponse
 def test_anthropic_completion_messages_translation():
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
 
-    translated_messages = AnthropicConfig().translate_anthropic_messages_to_openai(messages=messages)  # type: ignore
+    translated_messages = AnthropicExperimentalPassThroughConfig().translate_anthropic_messages_to_openai(messages=messages)  # type: ignore
 
     assert translated_messages == [{"role": "user", "content": "Hey, how's it going?"}]
 
