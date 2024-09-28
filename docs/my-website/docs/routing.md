@@ -167,7 +167,7 @@ Routes to **deployment with lowest TPM usage** for that minute.
 
 In production, we use Redis to track usage (TPM/RPM) across multiple deployments. This implementation uses **async redis calls** (redis.incr and redis.mget).
 
-For Azure, your RPM = TPM/6. 
+For Azure, [you get 6 RPM per 1000 TPM](https://stackoverflow.com/questions/77368844/what-is-the-request-per-minute-rate-limit-for-azure-openai-models-for-gpt-3-5-tu)
 
 <Tabs>
 <TabItem value="sdk" label="sdk">
