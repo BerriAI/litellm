@@ -16,9 +16,10 @@ from litellm import completion
 litellm.num_retries = 3
 litellm.success_callback = ["helicone"]
 os.environ["HELICONE_DEBUG"] = "True"
-os.environ['LITELLM_LOG'] = 'DEBUG'
+os.environ["LITELLM_LOG"] = "DEBUG"
 
 import pytest
+
 
 def pre_helicone_setup():
     """
@@ -89,6 +90,7 @@ def create_async_task(**completion_kwargs):
     completion_args.update(completion_kwargs)
     return asyncio.create_task(litellm.acompletion(**completion_args))
 
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     condition=not os.environ.get("OPENAI_API_KEY", False),
@@ -96,13 +98,12 @@ def create_async_task(**completion_kwargs):
 )
 async def test_helicone_logging_metadata():
     import uuid
+
     litellm.success_callback = ["helicone"]
 
     request_id = str(uuid.uuid4())
-    trace_common_metadata = {
-        "Helicone-Property-Request-Id": request_id
-    }
-  
+    trace_common_metadata = {"Helicone-Property-Request-Id": request_id}
+
     metadata = copy.deepcopy(trace_common_metadata)
     metadata["Helicone-Property-Conversation"] = "support_issue"
     metadata["Helicone-Auth"] = os.getenv("HELICONE_API_KEY")
