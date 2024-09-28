@@ -1173,7 +1173,12 @@ def test_turn_off_message_logging():
 ##### VALID JSON ######
 
 
-@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "azure/chatgpt-v-2"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "ft:gpt-3.5-turbo:my-org:custom_suffix:id"
+    ],  # "gpt-3.5-turbo", "azure/chatgpt-v-2",
+)
 @pytest.mark.parametrize(
     "turn_off_message_logging",
     [
@@ -1200,7 +1205,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
         _ = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            # mock_response="Going well!",
+            mock_response="Going well!",
         )
 
         time.sleep(2)

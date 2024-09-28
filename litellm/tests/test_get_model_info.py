@@ -62,3 +62,9 @@ def test_get_model_info_shows_supports_prompt_caching():
     info = litellm.get_model_info("deepseek/deepseek-chat")
     print("info", info)
     assert info.get("supports_prompt_caching") is True
+
+
+def test_get_model_info_finetuned_models():
+    info = litellm.get_model_info("ft:gpt-3.5-turbo:my-org:custom_suffix:id")
+    print("info", info)
+    assert info["input_cost_per_token"] == 0.000003
