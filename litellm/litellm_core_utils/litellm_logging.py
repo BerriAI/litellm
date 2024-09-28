@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.proxy._types import CommonProxyErrors
 from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -97,7 +98,9 @@ try:
         GenericAPILogger,
     )
 except Exception as e:
-    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
+    verbose_logger.debug(
+        f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
+    )
 
 _in_memory_loggers: List[Any] = []
 
@@ -2138,7 +2141,8 @@ def _init_custom_logger_compatible_class(
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
-) -> CustomLogger:
+    premium_user: bool = False,
+) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -2172,13 +2176,19 @@ def _init_custom_logger_compatible_class(
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
     elif logging_integration == "prometheus":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, PrometheusLogger):
-                return callback  # type: ignore
+        if premium_user:
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrometheusLogger):
+                    return callback  # type: ignore
 
-        _prometheus_logger = PrometheusLogger()
-        _in_memory_loggers.append(_prometheus_logger)
-        return _prometheus_logger  # type: ignore
+            _prometheus_logger = PrometheusLogger()
+            _in_memory_loggers.append(_prometheus_logger)
+            return _prometheus_logger  # type: ignore
+        else:
+            verbose_logger.warning(
+                f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
+            )
+            return None
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):
@@ -2409,6 +2419,7 @@ def get_standard_logging_object_payload(
             response_obj = init_response_obj
         else:
             response_obj = {}
+
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
@@ -2544,6 +2555,16 @@ def get_standard_logging_object_payload(
 
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
+        if response_obj is not None:
+            final_response_obj: Optional[Union[dict, str, list]] = response_obj
+        elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
+            final_response_obj = init_response_obj
+        else:
+            final_response_obj = None
+
+        if litellm.turn_off_message_logging:
+            final_response_obj = "redacted-by-litellm"
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
@@ -2567,9 +2588,7 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
-            response=(  # type: ignore
-                response_obj if len(response_obj.keys()) > 0 else init_response_obj  # type: ignore
-            ),
+            response=final_response_obj,
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,

@@ -339,7 +339,7 @@ def function_setup(
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                         callback, internal_usage_cache=None, llm_router=None
                     )
-                    if any(
+                    if callback is None or any(
                         isinstance(cb, type(callback))
                         for cb in litellm._async_success_callback
                     ):  # don't double add a callback
@@ -403,7 +403,7 @@ def function_setup(
                     )
 
                     # don't double add a callback
-                    if not any(
+                    if callback_class is not None and not any(
                         isinstance(cb, type(callback_class)) for cb in litellm.callbacks
                     ):
                         litellm.callbacks.append(callback_class)  # type: ignore
@@ -2120,50 +2120,67 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         return False
 
 
-def supports_function_calling(model: str) -> bool:
+def supports_function_calling(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
 
     Returns:
     bool: True if the model supports function calling, False otherwise.
 
     Raises:
-    Exception: If the given model is not found in model_prices_and_context_window.json.
+    Exception: If the given model is not found or there's an error in retrieval.
     """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
         if model_info.get("supports_function_calling", False) is True:
             return True
         return False
-    else:
+    except Exception as e:
         raise Exception(
-            f"Model not supports function calling. You passed model={model}."
+            f"Model not found or error in checking function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
 
 
-def supports_vision(model: str):
+def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """
     Check if the given model supports vision and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
 
     Returns:
     bool: True if the model supports vision, False otherwise.
-
-    Raises:
-    Exception: If the given model is not found in model_prices_and_context_window.json.
     """
-    if model in litellm.model_cost:
-        model_info = litellm.model_cost[model]
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
         if model_info.get("supports_vision", False) is True:
             return True
         return False
-    else:
+    except Exception as e:
+        verbose_logger.error(
+            f"Model not found or error in checking vision support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
         return False
 
 
@@ -4755,6 +4772,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             input_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
+            input_cost_per_query: Optional[float] # only for rerank models
             input_cost_per_image: Optional[float]  # only for vertex ai models
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
             input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -5029,6 +5047,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 input_cost_per_token_above_128k_tokens=_model_info.get(
                     "input_cost_per_token_above_128k_tokens", None
                 ),
+                input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None

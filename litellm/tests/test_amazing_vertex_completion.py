@@ -1931,8 +1931,6 @@ async def test_vertexai_multimodal_embedding():
         assert response.model == "multimodalembedding@001"
         assert len(response.data) == 1
         response_data = response.data[0]
-        assert "imageEmbedding" in response_data
-        assert "textEmbedding" in response_data
 
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
@@ -1987,7 +1985,128 @@ async def test_vertexai_multimodal_embedding_text_input():
         assert response.model == "multimodalembedding@001"
         assert len(response.data) == 1
         response_data = response.data[0]
-        assert "textEmbedding" in response_data
+        assert response_data["embedding"] == [0.4, 0.5, 0.6]
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding_image_in_input():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "image": {
+                    "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+                },
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+
+        assert response_data["embedding"] == [0.1, 0.2, 0.3]
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding_base64image_in_input():
+    import base64
+
+    import requests
+
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    url = "https://dummyimage.com/100/100/fff&text=Test+image"
+    response = requests.get(url)
+    file_data = response.content
+
+    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    base64_image = f"data:image/png;base64,{encoded_file}"
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "image": {"bytesBase64Encoded": base64_image},
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[base64_image],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+
+        assert response_data["embedding"] == [0.1, 0.2, 0.3]
 
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)

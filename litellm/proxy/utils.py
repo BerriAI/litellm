@@ -312,6 +312,7 @@ class ProxyLogging:
     def __init__(
         self,
         user_api_key_cache: DualCache,
+        premium_user: bool = False,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
@@ -334,6 +335,7 @@ class ProxyLogging:
             alert_types=self.alert_types,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
+        self.premium_user = premium_user
 
     def update_values(
         self,
@@ -394,7 +396,10 @@ class ProxyLogging:
                     callback,
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
+                    premium_user=self.premium_user,
                 )
+                if callback is None:
+                    continue
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)  # type: ignore
             if callback not in litellm.success_callback:
@@ -1174,9 +1179,9 @@ class PrismaClient:
                         "LiteLLM_VerificationTokenView Created in DB!"
                     )
                 else:
-                    should_create_views = await should_create_missing_views(db=self.db.db)  # type: ignore
+                    should_create_views = await should_create_missing_views(db=self.db)
                     if should_create_views:
-                        await create_missing_views(db=self.db)  # type: ignore
+                        await create_missing_views(db=self.db)
                     else:
                         # don't block execution if these views are missing
                         # Convert lists to sets for efficient difference calculation
