@@ -76,6 +76,11 @@ async def test_proxy_failure_metrics():
             in metrics
         )
 
+        assert (
+            'litellm_deployment_failure_responses_total{api_base="https://exampleopenaiendpoint-production.up.railway.app",api_key_alias="None",api_provider="openai",exception_class="RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="429",model_id="7499d31f98cd518cf54486d5a00deda6894239ce16d13543398dc8abf870b15f",requested_model="fake-azure-endpoint",team="None",team_alias="None"}'
+            in metrics
+        )
+
 
 @pytest.mark.asyncio
 async def test_proxy_success_metrics():
