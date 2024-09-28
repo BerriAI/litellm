@@ -45,11 +45,12 @@ def get_current_weather(location, unit="fahrenheit"):
 @pytest.mark.parametrize(
     "model",
     [
-        # "gpt-3.5-turbo-1106",
+        "gpt-3.5-turbo-1106",
         # "mistral/mistral-large-latest",
         # "claude-3-haiku-20240307",
         # "gemini/gemini-1.5-pro",
         "anthropic.claude-3-sonnet-20240229-v1:0",
+        "groq/llama3-8b-8192",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -153,6 +154,105 @@ def test_aaparallel_function_call(model):
 
 
 # test_parallel_function_call()
+
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        (
+            "anthropic.claude-3-sonnet-20240229-v1:0",
+            "bedrock",
+        ),
+        ("claude-3-haiku-20240307", "anthropic"),
+    ],
+)
+@pytest.mark.parametrize(
+    "messages, expected_error_msg",
+    [
+        (
+            [
+                {
+                    "role": "user",
+                    "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+                },
+                Message(
+                    content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            index=1,
+                            function=Function(
+                                arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
+                                name="get_current_weather",
+                            ),
+                            id="tooluse_Jj98qn6xQlOP_PiQr-w9iA",
+                            type="function",
+                        )
+                    ],
+                    function_call=None,
+                ),
+                {
+                    "tool_call_id": "tooluse_Jj98qn6xQlOP_PiQr-w9iA",
+                    "role": "tool",
+                    "name": "get_current_weather",
+                    "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+                },
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+                }
+            ],
+            False,
+        ),
+    ],
+)
+def test_parallel_function_call_anthropic_error_msg(
+    model, provider, messages, expected_error_msg
+):
+    """
+    Anthropic doesn't support tool calling without `tools=` param specified.
+
+    Ensure this error is thrown when `tools=` param is not specified. But tool call requests are made.
+
+    Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
+    """
+    try:
+        litellm.set_verbose = True
+
+        messages = messages
+
+        if expected_error_msg:
+            with pytest.raises(litellm.UnsupportedParamsError) as e:
+                second_response = litellm.completion(
+                    model=model,
+                    messages=messages,
+                    temperature=0.2,
+                    seed=22,
+                    drop_params=True,
+                )  # get a new response from the model where it can see the function response
+                print("second response\n", second_response)
+        else:
+            second_response = litellm.completion(
+                model=model,
+                messages=messages,
+                temperature=0.2,
+                seed=22,
+                drop_params=True,
+            )  # get a new response from the model where it can see the function response
+            print("second response\n", second_response)
+    except litellm.InternalServerError as e:
+        print(e)
+    except litellm.RateLimitError as e:
+        print(e)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_parallel_function_call_stream():

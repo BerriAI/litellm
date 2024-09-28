@@ -61,6 +61,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
         }
 
     mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
 
     litellm.set_verbose = True
     with patch(
@@ -466,6 +467,7 @@ async def test_litellm_anthropic_prompt_caching_system():
         }
 
     mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
 
     litellm.set_verbose = True
     with patch(
