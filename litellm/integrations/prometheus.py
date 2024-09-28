@@ -224,6 +224,12 @@ class PrometheusLogger(CustomLogger):
                 "api_base",
                 "api_provider",
             ]
+            team_and_key_labels = [
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+            ]
 
             # Metric for deployment state
             self.litellm_deployment_state = Gauge(
@@ -241,26 +247,23 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = Counter(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + team_and_key_labels,
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + EXCEPTION_LABELS,
+                labelnames=[REQUESTED_MODEL]
+                + _logged_llm_labels
+                + EXCEPTION_LABELS
+                + team_and_key_labels,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + team_and_key_labels,
             )
 
             # Deployment Latency tracking
-            team_and_key_labels = [
-                "hashed_api_key",
-                "api_key_alias",
-                "team",
-                "team_alias",
-            ]
             self.litellm_deployment_latency_per_output_token = Histogram(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
@@ -601,6 +604,9 @@ class PrometheusLogger(CustomLogger):
     def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
+            standard_logging_payload: StandardLoggingPayload = request_kwargs.get(
+                "standard_logging_object", {}
+            )
             _response_headers = request_kwargs.get("response_headers")
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             _metadata = _litellm_params.get("metadata", {})
@@ -632,6 +638,16 @@ class PrometheusLogger(CustomLogger):
                 exception_status=str(getattr(exception, "status_code", None)),
                 exception_class=exception.__class__.__name__,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -640,6 +656,16 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             pass
@@ -728,6 +754,16 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -736,6 +772,16 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             # Track deployment Latency
