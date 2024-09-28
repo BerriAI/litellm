@@ -4543,4 +4543,25 @@ async def test_completion_ai21_chat():
             }
         ],
     )
-    pass
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],  #
+)
+@pytest.mark.parametrize(
+    "stream",
+    [False, True],
+)
+def test_completion_response_ratelimit_headers(model, stream):
+    response = completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hello world"}],
+        stream=stream,
+    )
+    hidden_params = response._hidden_params
+    additional_headers = hidden_params.get("additional_headers", {})
+
+    print(additional_headers)
+    assert "x-ratelimit-remaining-requests" in additional_headers
+    assert "x-ratelimit-remaining-tokens" in additional_headers
