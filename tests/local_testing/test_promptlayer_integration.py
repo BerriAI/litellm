@@ -100,6 +100,7 @@ def test_promptlayer_logging_with_metadata_tags():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # def test_chat_openai():
 #     try:
 #         response = completion(model="replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1",

@@ -3,7 +3,7 @@ system_message_short = {
         "role": "system",
         "content": "You are a bot.",
     },
-    "count": 12
+    "count": 12,
 }
 
 system_message = {
@@ -11,7 +11,7 @@ system_message = {
         "role": "system",
         "content": "You are a helpful, pattern-following assistant that translates corporate jargon into plain English.",
     },
-    "count": 25
+    "count": 25,
 }
 
 system_message_long = {
@@ -19,7 +19,7 @@ system_message_long = {
         "role": "system",
         "content": "Assistant helps the company employees with their healthcare plan questions, and questions about the employee handbook. Be brief in your answers.",
     },
-    "count": 31
+    "count": 31,
 }
 
 system_message_unicode = {
@@ -27,7 +27,7 @@ system_message_unicode = {
         "role": "system",
         "content": "á",
     },
-    "count": 8
+    "count": 8,
 }
 
 system_message_with_name = {
@@ -36,7 +36,7 @@ system_message_with_name = {
         "name": "example_user",
         "content": "New synergies will help drive top-line growth.",
     },
-    "count": 20
+    "count": 20,
 }
 
 user_message = {
@@ -44,7 +44,7 @@ user_message = {
         "role": "user",
         "content": "Hello, how are you?",
     },
-    "count": 13
+    "count": 13,
 }
 
 user_message_unicode = {
@@ -52,7 +52,7 @@ user_message_unicode = {
         "role": "user",
         "content": "á",
     },
-    "count": 8
+    "count": 8,
 }
 
 user_message_perf = {
@@ -60,7 +60,7 @@ user_message_perf = {
         "role": "user",
         "content": "What happens in a performance review?",
     },
-    "count": 14
+    "count": 14,
 }
 
 assistant_message_perf = {
@@ -68,7 +68,7 @@ assistant_message_perf = {
         "role": "assistant",
         "content": "During the performance review at Contoso Electronics, the supervisor will discuss the employee's performance over the past year and provide feedback on areas for improvement. They will also provide an opportunity for the employee to discuss their goals and objectives for the upcoming year. The review is a two-way dialogue between managers and employees, and employees will receive a written summary of their performance review which will include a rating of their performance, feedback, and goals and objectives for the upcoming year [employee_handbook-3.pdf].",
     },
-    "count": 106
+    "count": 106,
 }
 
 assistant_message_perf_short = {
@@ -76,7 +76,7 @@ assistant_message_perf_short = {
         "role": "assistant",
         "content": "The supervisor will discuss the employee's performance and provide feedback on areas for improvement. They will also provide an opportunity for the employee to discuss their goals and objectives for the upcoming year. The review is a two-way dialogue between managers and employees, and employees will receive a written summary of their performance review which will include a rating of their performance, feedback, and goals for the upcoming year [employee_handbook-3.pdf].",
     },
-    "count": 91
+    "count": 91,
 }
 
 user_message_dresscode = {
@@ -84,7 +84,7 @@ user_message_dresscode = {
         "role": "user",
         "content": "Is there a dress code?",
     },
-    "count": 13
+    "count": 13,
 }
 
 assistant_message_dresscode = {
@@ -92,7 +92,7 @@ assistant_message_dresscode = {
         "role": "assistant",
         "content": "Yes, there is a dress code at Contoso Electronics. Look sharp! [employee_handbook-1.pdf]",
     },
-    "count": 30
+    "count": 30,
 }
 
 user_message_pm = {
@@ -100,7 +100,7 @@ user_message_pm = {
         "role": "user",
         "content": "What does a Product Manager do?",
     },
-    "count": 14
+    "count": 14,
 }
 
 text_and_image_message = {
@@ -117,9 +117,8 @@ text_and_image_message = {
             },
         ],
     },
-    "count": 266
+    "count": 266,
 }
-
 
 
 search_sources_toolchoice_auto = {
@@ -217,7 +216,12 @@ integer_enum = {
             "function": {
                 "name": "data_demonstration",
                 "description": "This is the main function description",
-                "parameters": {"type": "object", "properties": {"integer_enum": {"type": "integer", "enum": [-1, 1]}}},
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "integer_enum": {"type": "integer", "enum": [-1, 1]}
+                    },
+                },
             },
         }
     ],
@@ -237,7 +241,12 @@ integer_enum_tool_choice_name = {
             "function": {
                 "name": "data_demonstration",
                 "description": "This is the main function description",
-                "parameters": {"type": "object", "properties": {"integer_enum": {"type": "integer", "enum": [-1, 1]}}},
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "integer_enum": {"type": "integer", "enum": [-1, 1]}
+                    },
+                },
             },
         }
     ],
@@ -280,7 +289,10 @@ no_parameters_tool_choice_name = {
             },
         }
     ],
-    "tool_choice": {"type": "function", "function": {"name": "search_sources"}},  # 2 tokens for "search_sources"
+    "tool_choice": {
+        "type": "function",
+        "function": {"name": "search_sources"},
+    },  # 2 tokens for "search_sources"
     "count": 51,
 }
 
@@ -295,7 +307,10 @@ no_parameter_description_or_required = {
             "function": {
                 "name": "search_sources",
                 "description": "Retrieve sources from the Azure AI Search index",
-                "parameters": {"type": "object", "properties": {"search_query": {"type": "string"}}},
+                "parameters": {
+                    "type": "object",
+                    "properties": {"search_query": {"type": "string"}},
+                },
             },
         }
     ],
@@ -424,7 +439,12 @@ inner_object_with_enum_only = {
                         "object_1": {
                             "type": "object",
                             "description": "The object data type as a property",
-                            "properties": {"string_2a": {"type": "string", "enum": ["Happy", "Sad"]}},
+                            "properties": {
+                                "string_2a": {
+                                    "type": "string",
+                                    "enum": ["Happy", "Sad"],
+                                }
+                            },
                         }
                     },
                     "required": ["object_1"],
@@ -467,7 +487,10 @@ inner_object_with_enum = {
                             "type": "object",
                             "description": "The object data type as a property",
                             "properties": {
-                                "string_2a": {"type": "string", "enum": ["Happy", "Sad"]},
+                                "string_2a": {
+                                    "type": "string",
+                                    "enum": ["Happy", "Sad"],
+                                },
                                 "string_2b": {
                                     "type": "string",
                                     "description": "Description in a second object is lost",
@@ -517,14 +540,20 @@ inner_object_and_string = {
                             "type": "object",
                             "description": "The object data type as a property",
                             "properties": {
-                                "string_2a": {"type": "string", "enum": ["Happy", "Sad"]},
+                                "string_2a": {
+                                    "type": "string",
+                                    "enum": ["Happy", "Sad"],
+                                },
                                 "string_2b": {
                                     "type": "string",
                                     "description": "Description in a second object is lost",
                                 },
                             },
                         },
-                        "string_1": {"type": "string", "description": "Not required gets a question mark"},
+                        "string_1": {
+                            "type": "string",
+                            "description": "Not required gets a question mark",
+                        },
                     },
                     "required": ["object_1"],
                 },
@@ -677,12 +706,10 @@ MESSAGES_TEXT = [
     user_message_pm,
     assistant_message_perf,
     assistant_message_perf_short,
-    assistant_message_dresscode
+    assistant_message_dresscode,
 ]
 
-MESSAGES_WITH_IMAGES = [
-    text_and_image_message
-]
+MESSAGES_WITH_IMAGES = [text_and_image_message]
 
 MESSAGES_WITH_TOOLS = [
     inner_object,
@@ -704,4 +731,3 @@ MESSAGES_WITH_TOOLS = [
     no_type,
     null,
 ]
-
