@@ -9,6 +9,8 @@ load_dotenv()
 import io
 import os
 
+from tests.local_testing.test_streaming import streaming_format_tests
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -130,8 +132,6 @@ async def test_completion_sagemaker_messages_api(sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_sagemaker_stream(sync_mode, model):
     try:
-        from litellm.tests.test_streaming import streaming_format_tests
-
         litellm.set_verbose = False
         print("testing sagemaker")
         verbose_logger.setLevel(logging.DEBUG)
