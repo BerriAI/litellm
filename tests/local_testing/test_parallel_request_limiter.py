@@ -1203,3 +1203,95 @@ async def test_pre_call_hook_tpm_limits_per_model():
             "request limit reached Hit TPM limit for model: azure-model on api_key"
             in str(e)
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=1)
+async def test_post_call_success_hook_rpm_limits_per_model():
+    """
+    Test if openai-compatible x-ratelimit-* headers are added to the response
+    """
+    import logging
+    from litellm import ModelResponse
+
+    from litellm._logging import (
+        verbose_logger,
+        verbose_proxy_logger,
+        verbose_router_logger,
+    )
+
+    verbose_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_router_logger.setLevel(logging.DEBUG)
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        max_parallel_requests=100,
+        tpm_limit=900000,
+        rpm_limit=100000,
+        metadata={
+            "model_tpm_limit": {"azure-model": 1},
+            "model_rpm_limit": {"azure-model": 100},
+        },
+    )
+    local_cache = DualCache()
+    pl = ProxyLogging(user_api_key_cache=local_cache)
+    pl._init_litellm_callbacks()
+    print(f"litellm callbacks: {litellm.callbacks}")
+    parallel_request_handler = pl.max_parallel_request_limiter
+    model = "azure-model"
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": model},
+        call_type="",
+    )
+
+    kwargs = {
+        "model": model,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": _api_key,
+                "model_group": model,
+                "user_api_key_metadata": {
+                    "model_tpm_limit": {"azure-model": 1},
+                    "model_rpm_limit": {"azure-model": 100},
+                },
+            }
+        },
+    }
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(usage=litellm.Usage(total_tokens=11)),
+        start_time="",
+        end_time="",
+    )
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_hour = datetime.now().strftime("%H")
+    current_minute = datetime.now().strftime("%M")
+    precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+    request_count_api_key = f"{_api_key}::{model}::{precise_minute}::request_count"
+
+    print(f"request_count_api_key: {request_count_api_key}")
+    current_cache = parallel_request_handler.internal_usage_cache.get_cache(
+        key=request_count_api_key
+    )
+    print("current cache: ", current_cache)
+
+    response = ModelResponse()
+    await parallel_request_handler.async_post_call_success_hook(
+        data={}, user_api_key_dict=user_api_key_dict, response=response
+    )
+
+    hidden_params = getattr(response, "_hidden_params", {}) or {}
+    print(hidden_params)
+    assert "additional_headers" in hidden_params
+    assert "x-ratelimit-limit-requests" in hidden_params["additional_headers"]
+    assert "x-ratelimit-remaining-requests" in hidden_params["additional_headers"]
+    assert "x-ratelimit-limit-tokens" in hidden_params["additional_headers"]
+    assert "x-ratelimit-remaining-tokens" in hidden_params["additional_headers"]

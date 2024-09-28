@@ -1913,3 +1913,9 @@ class TeamInfoResponseObject(TypedDict):
     team_info: LiteLLM_TeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
+
+
+class CurrentItemRateLimit(TypedDict):
+    current_requests: int
+    current_tpm: int
+    current_rpm: int
