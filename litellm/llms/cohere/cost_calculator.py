@@ -1,12 +1,9 @@
 """
-Handles custom cost calculation for Azure AI models.
-
-Custom cost calculation for Azure AI models only requied for rerank.
+Custom cost calculator for Cohere rerank models
 """
 
 from typing import Tuple
 
-from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
@@ -20,7 +17,8 @@ def cost_per_query(model: str, num_queries: int = 1) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    model_info = get_model_info(model=model, custom_llm_provider="azure_ai")
+
+    model_info = get_model_info(model=model, custom_llm_provider="cohere")
 
     if (
         "input_cost_per_query" not in model_info

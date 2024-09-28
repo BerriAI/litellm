@@ -430,3 +430,22 @@ class AmazonConverseConfig:
             setattr(model_response, "trace", completion_response["trace"])
 
         return model_response
+
+    def _supported_cross_region_inference_region(self) -> List[str]:
+        """
+        Abbreviations of regions AWS Bedrock supports for cross region inference
+        """
+        return ["us", "eu"]
+
+    def _get_base_model(self, model: str) -> str:
+        """
+        Get the base model from the given model name.
+
+        Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+        AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+        """
+
+        potential_region = model.split(".", 1)[0]
+        if potential_region in self._supported_cross_region_inference_region():
+            return model.split(".", 1)[1]
+        return model
