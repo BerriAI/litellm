@@ -21,8 +21,8 @@ from litellm import (
     get_modified_max_tokens,
     token_counter,
 )
-from litellm.tests.large_text import text
-from litellm.tests.messages_with_counts import (
+from tests.local_testing.large_text import text
+from tests.local_testing.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
     MESSAGES_WITH_TOOLS,
