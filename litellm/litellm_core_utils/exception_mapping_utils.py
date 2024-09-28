@@ -1,4 +1,6 @@
 import json
+import os
+import threading
 import traceback
 from typing import Optional
 
@@ -2024,11 +2026,7 @@ def exception_type(  # type: ignore
             },
             exception=e,
         )
-        ## AUTH ERROR
-        if isinstance(e, AuthenticationError) and (
-            litellm.email or "LITELLM_EMAIL" in os.environ
-        ):
-            threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
+
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
