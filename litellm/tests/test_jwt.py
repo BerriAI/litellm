@@ -838,7 +838,12 @@ async def test_team_cache_update_called():
         cache.async_get_cache = mock_call_cache
         # Call the function under test
         await litellm.proxy.proxy_server.update_cache(
-            token=None, user_id=None, end_user_id=None, team_id="1234", response_cost=20
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id="1234",
+            response_cost=20,
+            parent_otel_span=None,
         )  # type: ignore
 
         await asyncio.sleep(3)
