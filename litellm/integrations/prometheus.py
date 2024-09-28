@@ -80,6 +80,10 @@ class PrometheusLogger(CustomLogger):
                 "Total latency (seconds) for a request to LiteLLM",
                 labelnames=[
                     "model",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "team",
+                    "team_alias",
                 ],
             )
 
@@ -88,6 +92,10 @@ class PrometheusLogger(CustomLogger):
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
                     "model",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "team",
+                    "team_alias",
                 ],
             )
 
@@ -448,14 +456,22 @@ class PrometheusLogger(CustomLogger):
                 kwargs.get("end_time") - api_call_start_time
             )
             api_call_total_time_seconds = api_call_total_time.total_seconds()
-            self.litellm_llm_api_latency_metric.labels(model).observe(
-                api_call_total_time_seconds
-            )
+            self.litellm_llm_api_latency_metric.labels(
+                model,
+                user_api_key,
+                user_api_key_alias,
+                user_api_team,
+                user_api_team_alias,
+            ).observe(api_call_total_time_seconds)
 
         # log metrics
-        self.litellm_request_total_latency_metric.labels(model).observe(
-            total_time_seconds
-        )
+        self.litellm_request_total_latency_metric.labels(
+            model,
+            user_api_key,
+            user_api_key_alias,
+            user_api_team,
+            user_api_team_alias,
+        ).observe(total_time_seconds)
 
         # set x-ratelimit headers
         self.set_llm_deployment_success_metrics(
