@@ -461,6 +461,9 @@ class RedisCache(BaseCache):
         """
         Use Redis Pipelines for bulk write operations
         """
+        # don't waste a network request if there's nothing to set
+        if len(cache_list) == 0:
+            return
         from redis.asyncio import Redis
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
