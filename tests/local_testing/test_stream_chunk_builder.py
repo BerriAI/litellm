@@ -16,7 +16,7 @@ import pytest
 from openai import OpenAI
 
 import litellm
-import litellm.tests.stream_chunk_testdata
+from tests.local_testing import stream_chunk_testdata
 from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()
@@ -200,7 +200,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 
 
 def test_stream_chunk_builder_litellm_mixed_calls():
-    response = stream_chunk_builder(litellm.tests.stream_chunk_testdata.chunks)
+    response = stream_chunk_builder(stream_chunk_testdata.chunks)
     assert (
         response.choices[0].message.content
         == "To answer your question about how many rows are in the 'users' table, I'll need to run a SQL query. Let me do that for you."
