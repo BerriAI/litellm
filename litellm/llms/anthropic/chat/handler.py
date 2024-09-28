@@ -660,15 +660,15 @@ class ModelResponseIterator:
             + anthropic_usage_chunk.get("output_tokens", 0),
         )
 
-        if "cache_creation_input_tokens" in anthropic_usage_chunk:
-            usage_block["cache_creation_input_tokens"] = anthropic_usage_chunk[
-                "cache_creation_input_tokens"
-            ]
+        cache_creation_input_tokens = anthropic_usage_chunk.get(
+            "cache_creation_input_tokens"
+        )
+        if cache_creation_input_tokens:
+            usage_block["cache_creation_input_tokens"] = cache_creation_input_tokens
 
-        if "cache_read_input_tokens" in anthropic_usage_chunk:
-            usage_block["cache_read_input_tokens"] = anthropic_usage_chunk[
-                "cache_read_input_tokens"
-            ]
+        cache_read_input_tokens = anthropic_usage_chunk.get("cache_read_input_tokens")
+        if cache_read_input_tokens:
+            usage_block["cache_read_input_tokens"] = cache_read_input_tokens
 
         return usage_block
 

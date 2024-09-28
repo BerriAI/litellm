@@ -82,7 +82,7 @@ class GroqChatConfig(OpenAIGPTConfig):
                 new_message = ChatCompletionAssistantMessage(role="assistant")
                 for k, v in _message.items():
                     if v is not None:
-                        new_message[k] = v
+                        new_message[k] = v  # type: ignore
                 messages[idx] = new_message
 
         return messages
