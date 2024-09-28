@@ -389,6 +389,9 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
+    verbose_proxy_logger.debug(
+        f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+    )
     return data
 
 

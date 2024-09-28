@@ -1012,9 +1012,8 @@ class Logging:
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
-                                != langFuseLogger.public_key
+                                self.langfuse_secret is not None
+                                and self.langfuse_secret != langFuseLogger.secret_key
                             )
                             or (
                                 self.langfuse_host is not None
@@ -1042,7 +1041,6 @@ class Logging:
                                     service_name="langfuse",
                                     logging_obj=temp_langfuse_logger,
                                 )
-
                         if temp_langfuse_logger is not None:
                             _response = temp_langfuse_logger.log_event(
                                 kwargs=kwargs,
