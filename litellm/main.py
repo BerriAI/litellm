@@ -959,6 +959,7 @@ def completion(
             extra_headers=extra_headers,
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
+            messages=messages,
             **non_default_params,
         )
 

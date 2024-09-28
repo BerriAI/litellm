@@ -102,16 +102,13 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesRequest(TypedDict, total=False):
-    model: Required[str]
-    messages: Required[
-        List[
-            Union[
-                AnthropicMessagesUserMessageParam,
-                AnthopicMessagesAssistantMessageParam,
-            ]
-        ]
-    ]
+AllAnthropicMessageValues = Union[
+    AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
+]
+
+
+class AnthropicMessageRequestBase(TypedDict, total=False):
+    messages: Required[List[AllAnthropicMessageValues]]
     max_tokens: Required[int]
     metadata: AnthropicMetadata
     stop_sequences: List[str]
@@ -123,6 +120,9 @@ class AnthropicMessagesRequest(TypedDict, total=False):
     top_k: int
     top_p: float
 
+
+class AnthropicMessagesRequest(AnthropicMessageRequestBase, total=False):
+    model: Required[str]
     # litellm param - used for tracking litellm proxy metadata in the request
     litellm_metadata: dict
 

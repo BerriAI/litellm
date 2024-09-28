@@ -2733,6 +2733,7 @@ def get_optional_params(
     parallel_tool_calls=None,
     drop_params=None,
     additional_drop_params=None,
+    messages: Optional[List[AllMessageValues]] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2812,6 +2813,7 @@ def get_optional_params(
         "parallel_tool_calls": None,
         "drop_params": None,
         "additional_drop_params": None,
+        "messages": None,
     }
 
     # filter out those parameters that were passed with non-default values
@@ -2824,6 +2826,7 @@ def get_optional_params(
             and k != "api_version"
             and k != "drop_params"
             and k != "additional_drop_params"
+            and k != "messages"
             and k in default_params
             and v != default_params[k]
             and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
@@ -2988,7 +2991,9 @@ def get_optional_params(
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.AnthropicConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            messages=messages,
         )
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
@@ -3338,6 +3343,7 @@ def get_optional_params(
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
+                messages=messages,
             )
         elif "ai21" in model:
             _check_valid_arg(supported_params=supported_params)
@@ -9137,3 +9143,15 @@ def is_base64_encoded(s: str) -> bool:
         return base64.b64encode(decoded_bytes).decode("utf-8") == s
     except Exception:
         return False
+
+
+def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
+    """
+    Returns true, if messages has tool call blocks.
+
+    Used for anthropic/bedrock message validation.
+    """
+    for message in messages:
+        if message.get("tool_calls") is not None:
+            return True
+    return False

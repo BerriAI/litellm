@@ -893,7 +893,10 @@ ALL_LITELLM_RESPONSE_TYPES = [
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic.chat import AnthropicConfig
+from .llms.anthropic.chat.handler import AnthropicConfig
+from .llms.anthropic.experimental_pass_through.transformation import (
+    AnthropicExperimentalPassThroughConfig,
+)
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion import AnthropicTextConfig
 from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
