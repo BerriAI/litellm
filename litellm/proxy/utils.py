@@ -35,7 +35,13 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import EmbeddingResponse, ImageResponse, ModelResponse, get_litellm_params
+from litellm import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    Router,
+    get_litellm_params,
+)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache

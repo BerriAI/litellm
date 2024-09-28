@@ -11,7 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
@@ -754,3 +754,63 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 "Parallel Request Limiter: Error getting user object", str(e)
             )
             return None
+
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
+    ):
+        """
+        Retrieve the key's remaining rate limits.
+        """
+        api_key = user_api_key_dict.api_key
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_hour = datetime.now().strftime("%H")
+        current_minute = datetime.now().strftime("%M")
+        precise_minute = f"{current_date}-{current_hour}-{current_minute}"
+        request_count_api_key = f"{api_key}::{precise_minute}::request_count"
+        current: Optional[CurrentItemRateLimit] = (
+            await self.internal_usage_cache.async_get_cache(
+                key=request_count_api_key,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+        )
+
+        key_remaining_rpm_limit: Optional[int] = None
+        key_rpm_limit: Optional[int] = None
+        key_remaining_tpm_limit: Optional[int] = None
+        key_tpm_limit: Optional[int] = None
+        if current is not None:
+            if user_api_key_dict.rpm_limit is not None:
+                key_remaining_rpm_limit = (
+                    user_api_key_dict.rpm_limit - current["current_rpm"]
+                )
+                key_rpm_limit = user_api_key_dict.rpm_limit
+            if user_api_key_dict.tpm_limit is not None:
+                key_remaining_tpm_limit = (
+                    user_api_key_dict.tpm_limit - current["current_tpm"]
+                )
+                key_tpm_limit = user_api_key_dict.tpm_limit
+
+        _hidden_params = getattr(response, "_hidden_params", {}) or {}
+        _additional_headers = _hidden_params.get("additional_headers", {}) or {}
+        if key_remaining_rpm_limit is not None:
+            _additional_headers["x-ratelimit-remaining-requests"] = (
+                key_remaining_rpm_limit
+            )
+        if key_rpm_limit is not None:
+            _additional_headers["x-ratelimit-limit-requests"] = key_rpm_limit
+        if key_remaining_tpm_limit is not None:
+            _additional_headers["x-ratelimit-remaining-tokens"] = (
+                key_remaining_tpm_limit
+            )
+        if key_tpm_limit is not None:
+            _additional_headers["x-ratelimit-limit-tokens"] = key_tpm_limit
+
+        setattr(
+            response,
+            "_hidden_params",
+            {**_hidden_params, "additional_headers": _additional_headers},
+        )
+
+        return await super().async_post_call_success_hook(
+            data, user_api_key_dict, response
+        )
