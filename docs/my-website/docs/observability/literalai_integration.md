@@ -23,7 +23,6 @@ import os
 os.environ["LITERAL_API_KEY"] = ""
 os.environ['OPENAI_API_KEY']= ""
 
-litellm.input_callback = ["literalai"] # Support other Literal AI decorators and prompt template binding
 litellm.success_callback = ["literalai"] # Log Input/Output to LiteralAI
 litellm.failure_callback = ["literalai"] # Log Errors to LiteralAI
 

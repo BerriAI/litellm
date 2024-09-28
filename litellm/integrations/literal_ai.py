@@ -216,7 +216,7 @@ class LiteralAILogger(CustomBatchLogger):
             prompt_id = None
             variables = None
     
-            for index, message in enumerate(messages):
+            for message in messages:
                 if literal_prompt := getattr(message, "__literal_prompt__", None):
                     prompt_id = literal_prompt.get("prompt_id")
                     variables = literal_prompt.get("variables")
@@ -225,14 +225,6 @@ class LiteralAILogger(CustomBatchLogger):
         
             tools = settings.pop("tools", None)
 
-            # only accepts str, int, bool, float for logging
-            for param, value in settings.items():
-                if not isinstance(value, (str, int, bool, float)):
-                    try:
-                        settings[param] = str(value)
-                    except:
-                        # if casting value to str fails don't block logging
-                        pass
             step = {
                     "id": metadata.get("step_id", str(uuid.uuid4())),
                     "error": logging_payload["error_str"],
