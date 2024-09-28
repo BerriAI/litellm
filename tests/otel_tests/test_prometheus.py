@@ -23,6 +23,22 @@ async def make_bad_chat_completion_request(session, key):
         return status, response_text
 
 
+async def make_good_chat_completion_request(session, key):
+    url = "http://0.0.0.0:4000/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": "fake-openai-endpoint",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+        return status, response_text
+
+
 @pytest.mark.asyncio
 async def test_proxy_failure_metrics():
     """
@@ -57,5 +73,40 @@ async def test_proxy_failure_metrics():
 
         assert (
             'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None",user="default_user_id"} 1.0'
+            in metrics
+        )
+
+
+@pytest.mark.asyncio
+async def test_proxy_success_metrics():
+    """
+    Make 1 good /chat/completions call to "openai/gpt-3.5-turbo"
+    GET /metrics
+    Assert the success metric is incremented by 1
+    """
+
+    async with aiohttp.ClientSession() as session:
+        # Make a good chat completion call
+        status, response_text = await make_good_chat_completion_request(
+            session, "sk-1234"
+        )
+
+        # Check if the request succeeded as expected
+        assert status == 200, f"Expected status 200, but got {status}"
+
+        # Get metrics
+        async with session.get("http://0.0.0.0:4000/metrics") as response:
+            metrics = await response.text()
+
+        print("/metrics", metrics)
+
+        # Check if the success metric is present and correct
+        assert (
+            'litellm_request_total_latency_metric_bucket{api_key_alias="None",hashed_api_key="86902de640d82ae809119315de7eb5e0ebc7844a0924a3a611621f3f590fca3d",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
+            in metrics
+        )
+
+        assert (
+            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",hashed_api_key="86902de640d82ae809119315de7eb5e0ebc7844a0924a3a611621f3f590fca3d",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
             in metrics
         )
