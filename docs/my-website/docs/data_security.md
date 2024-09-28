@@ -40,3 +40,31 @@ We value the security community's role in protecting our systems and users. To r
 - Provide any relevant additional information
 
 We'll review all reports promptly. Note that we don't currently offer a bug bounty program.
+
+### Legal/Compliance FAQs
+
+Legal Entity Name: Berrie AI Incorporated
+
+Company Phone Number: 7708783106 
+
+Number of employees in the company: 2
+
+Number of employees in security team: 2
+
+Point of contact email address for security incidents: krrish@berri.ai
+
+Point of contact email address for general security-related questions: krrish@berri.ai 
+
+Has the Vendor been audited / certified? Currently undergoing SOC-2 Certification from Drata 
+
+Has an information security management system been implemented? Yes - [CodeQL](https://codeql.github.com/)
+
+Is logging of key events - auth, creation, update changes occurring? Yes - we have [audit logs](https://docs.litellm.ai/docs/proxy/multiple_admins#1-switch-on-audit-logs)
+
+Does the Vendor have an established Cybersecurity incident management program? No 
+
+Not applicable - LiteLLM is self-hosted, this is the responsibility of the team hosting the proxy. We do provide [alerting](https://docs.litellm.ai/docs/proxy/alerting) and [monitoring](https://docs.litellm.ai/docs/proxy/prometheus) tools to help with this. 
+
+Does the vendor have a vulnerability disclosure policy in place? [Yes](https://github.com/BerriAI/litellm?tab=security-ov-file#security-vulnerability-reporting-guidelines)
+
+Does the vendor perform vulnerability scans? No 

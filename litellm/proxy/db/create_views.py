@@ -1,13 +1,8 @@
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from litellm import verbose_logger
 
-if TYPE_CHECKING:
-    from prisma import Prisma
-
-    _db = Prisma
-else:
-    _db = Any
+_db = Any
 
 
 async def create_missing_views(db: _db):
