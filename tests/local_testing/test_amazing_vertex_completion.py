@@ -8,6 +8,8 @@ load_dotenv()
 import io
 import os
 
+from tests.local_testing.test_streaming import streaming_format_tests
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -32,7 +34,7 @@ from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_stu
     _gemini_convert_messages_with_history,
 )
 from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
-from litellm.tests.test_streaming import streaming_format_tests
+
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -931,7 +933,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
-from litellm.tests.test_completion import response_format_tests
+from tests.local_testing.test_completion import response_format_tests
 
 
 @pytest.mark.parametrize(
