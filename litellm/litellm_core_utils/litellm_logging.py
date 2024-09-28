@@ -2189,6 +2189,8 @@ def _init_custom_logger_compatible_class(
                 f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
             )
             return None
+        else:
+            return None
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):
