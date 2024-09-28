@@ -257,9 +257,9 @@ class VertexMultimodalEmbedding(VertexLLM):
 
     def transform_embedding_response_to_openai(
         self, predictions: MultimodalPredictions
-    ) -> List[float]:
+    ) -> List[Embedding]:
 
-        openai_embeddings = []
+        openai_embeddings: List[Embedding] = []
         if "predictions" in predictions:
             for idx, _prediction in enumerate(predictions["predictions"]):
                 if _prediction:
@@ -278,13 +278,11 @@ class VertexMultimodalEmbedding(VertexLLM):
                         )
                         openai_embeddings.append(openai_embedding_object)
                     elif "videoEmbeddings" in _prediction:
-                        all_video_embeddings = []
                         for video_embedding in _prediction["videoEmbeddings"]:
                             openai_embedding_object = Embedding(
                                 embedding=video_embedding["embedding"],
                                 index=idx,
                                 object="embedding",
                             )
-                            all_video_embeddings.append(openai_embedding_object)
-                        openai_embeddings.append(all_video_embeddings)
+                            openai_embeddings.append(openai_embedding_object)
         return openai_embeddings
