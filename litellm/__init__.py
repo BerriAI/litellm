@@ -89,6 +89,7 @@ retry = True
 ### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
+groq_key: Optional[str] = None
 databricks_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
@@ -892,7 +893,11 @@ ALL_LITELLM_RESPONSE_TYPES = [
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic.chat import AnthropicConfig
+from .llms.anthropic.chat.handler import AnthropicConfig
+from .llms.anthropic.experimental_pass_through.transformation import (
+    AnthropicExperimentalPassThroughConfig,
+)
+from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion import AnthropicTextConfig
 from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
@@ -962,8 +967,8 @@ from .llms.OpenAI.openai import (
     OpenAITextCompletionConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
-    GroqConfig,
 )
+from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.OpenAI.chat.o1_transformation import (

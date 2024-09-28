@@ -1466,9 +1466,6 @@ class PrismaClient:
     ):
         args_passed_in = locals()
         start_time = time.time()
-        verbose_proxy_logger.debug(
-            f"PrismaClient: get_data - args_passed_in: {args_passed_in}"
-        )
         hashed_token: Optional[str] = None
         try:
             response: Any = None

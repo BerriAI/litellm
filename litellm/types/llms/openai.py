@@ -343,11 +343,14 @@ class ChatCompletionImageObject(TypedDict):
     image_url: Union[str, ChatCompletionImageUrlObject]
 
 
+OpenAIMessageContent = Union[
+    str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
+]
+
+
 class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
-    content: Union[
-        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
-    ]
+    content: OpenAIMessageContent
 
 
 class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):

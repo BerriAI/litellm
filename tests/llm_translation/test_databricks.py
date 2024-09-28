@@ -5,7 +5,11 @@ import pytest
 import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
+import os
 
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

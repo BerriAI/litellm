@@ -96,6 +96,7 @@ from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat import DatabricksChatCompletion
+from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
@@ -168,6 +169,7 @@ openai_text_completions = OpenAITextCompletion()
 openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
+groq_chat_completions = GroqChatCompletion()
 azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -958,6 +960,7 @@ def completion(
             extra_headers=extra_headers,
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
+            messages=messages,
             **non_default_params,
         )
 
@@ -1318,13 +1321,56 @@ def completion(
                     additional_args={"headers": headers},
                 )
             response = _response
+        elif custom_llm_provider == "groq":
+            api_base = (
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or get_secret("GROQ_API_BASE")
+                or "https://api.groq.com/openai/v1"
+            )
 
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
+                or litellm.groq_key
+                or get_secret("GROQ_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            ## LOAD CONFIG - if set
+            config = litellm.GroqChatConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in optional_params
+                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            response = groq_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                organization=organization,
+                custom_llm_provider=custom_llm_provider,
+            )
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
@@ -1431,6 +1477,7 @@ def completion(
                     original_response=response,
                     additional_args={"headers": headers},
                 )
+
         elif (
             "replicate" in model
             or custom_llm_provider == "replicate"
@@ -2933,6 +2980,7 @@ def batch_completion(
     deployment_id=None,
     request_timeout: Optional[int] = None,
     timeout: Optional[int] = 600,
+    max_workers:Optional[int]= 100,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -2956,6 +3004,7 @@ def batch_completion(
         user (str, optional): The user string for generating completions. Defaults to "".
         deployment_id (optional): The deployment ID for generating completions. Defaults to None.
         request_timeout (int, optional): The request timeout for generating completions. Defaults to None.
+        max_workers (int,optional): The maximum number of threads to use for parallel processing.
 
     Returns:
         list: A list of completion results.
@@ -3001,7 +3050,7 @@ def batch_completion(
             for i in range(0, len(lst), n):
                 yield lst[i : i + n]
 
-        with ThreadPoolExecutor(max_workers=100) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for sub_batch in chunks(batch_messages, 100):
                 for message_list in sub_batch:
                     kwargs_modified = args.copy()
