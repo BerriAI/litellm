@@ -35,7 +35,7 @@ spec:
         - name: db-ready
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "docker.io/bitnami/postgresql:16.1.0-debian-11-r20"
+          image: "{{ .Values.image.dbReadyImage }}:{{ .Values.image.dbReadyTag | default "latest" }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- if .Values.db.deployStandalone }}
