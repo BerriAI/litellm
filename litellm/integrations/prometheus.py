@@ -255,10 +255,16 @@ class PrometheusLogger(CustomLogger):
             )
 
             # Deployment Latency tracking
+            team_and_key_labels = [
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+            ]
             self.litellm_deployment_latency_per_output_token = Histogram(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
-                labelnames=_logged_llm_labels,
+                labelnames=_logged_llm_labels + team_and_key_labels,
             )
 
             self.litellm_deployment_successful_fallbacks = Counter(
@@ -760,6 +766,16 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    hashed_api_key=standard_logging_payload["metadata"][
+                        "user_api_key_hash"
+                    ],
+                    api_key_alias=standard_logging_payload["metadata"][
+                        "user_api_key_alias"
+                    ],
+                    team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                    team_alias=standard_logging_payload["metadata"][
+                        "user_api_key_team_alias"
+                    ],
                 ).observe(latency_per_token)
 
         except Exception as e:

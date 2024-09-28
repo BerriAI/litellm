@@ -102,11 +102,16 @@ async def test_proxy_success_metrics():
 
         # Check if the success metric is present and correct
         assert (
-            'litellm_request_total_latency_metric_bucket{api_key_alias="None",hashed_api_key="86902de640d82ae809119315de7eb5e0ebc7844a0924a3a611621f3f590fca3d",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
+            'litellm_request_total_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
             in metrics
         )
 
         assert (
-            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",hashed_api_key="86902de640d82ae809119315de7eb5e0ebc7844a0924a3a611621f3f590fca3d",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
+            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
+            in metrics
+        )
+
+        assert (
+            'litellm_deployment_latency_per_output_token_count{api_base="https://exampleopenaiendpoint-production.up.railway.app/",api_key_alias="None",api_provider="openai",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="gpt-3.5-turbo",model_id="0ea900ab10dbf66961498e7021009040f30e843fc14920c53e51d85cef62e0fe",team="None",team_alias="None"}'
             in metrics
         )
