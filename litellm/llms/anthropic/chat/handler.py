@@ -663,11 +663,15 @@ class ModelResponseIterator:
         cache_creation_input_tokens = anthropic_usage_chunk.get(
             "cache_creation_input_tokens"
         )
-        if cache_creation_input_tokens and isinstance(cache_creation_input_tokens, int):
+        if cache_creation_input_tokens is not None and isinstance(
+            cache_creation_input_tokens, int
+        ):
             usage_block["cache_creation_input_tokens"] = cache_creation_input_tokens
 
         cache_read_input_tokens = anthropic_usage_chunk.get("cache_read_input_tokens")
-        if cache_read_input_tokens and isinstance(cache_read_input_tokens, int):
+        if cache_read_input_tokens is not None and isinstance(
+            cache_read_input_tokens, int
+        ):
             usage_block["cache_read_input_tokens"] = cache_read_input_tokens
 
         return usage_block
