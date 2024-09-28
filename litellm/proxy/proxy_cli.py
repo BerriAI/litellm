@@ -196,6 +196,12 @@ def is_port_in_use(port):
     help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
 )
 @click.option(
+    "--run_hypercorn",
+    default=False,
+    is_flag=True,
+    help="Starts proxy via hypercorn, instead of uvicorn (supports HTTP/2)",
+)
+@click.option(
     "--ssl_keyfile_path",
     default=None,
     type=str,
@@ -240,6 +246,7 @@ def run_server(
     health,
     version,
     run_gunicorn,
+    run_hypercorn,
     ssl_keyfile_path,
     ssl_certfile_path,
 ):
@@ -668,7 +675,7 @@ def run_server(
         import litellm
         from litellm.proxy.proxy_server import app
 
-        if run_gunicorn == False:
+        if run_gunicorn == False and run_hypercorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -771,6 +778,27 @@ def run_server(
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn
+        elif run_hypercorn == True:
+            import asyncio
+
+            from hypercorn.asyncio import serve
+            from hypercorn.config import Config
+
+            print(  # noqa
+                f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n"  # noqa
+            )  # noqa
+            config = Config()
+            config.bind = [f"{host}:{port}"]
+
+            if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+                print(  # noqa
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+                )
+                config.certfile = ssl_certfile_path
+                config.keyfile = ssl_keyfile_path
+
+            # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
+            asyncio.run(serve(app, config))  # type: ignore
 
 
 if __name__ == "__main__":
