@@ -108,7 +108,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
+            python -m pytest -vv tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
           no_output_timeout: 120m
 
       # Store test results
@@ -180,7 +180,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest litellm/tests/ -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
@@ -210,7 +210,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest litellm/tests/ -vv -k "assistants" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing/ -vv -k "assistants" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
@@ -306,7 +306,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_python_38.py
 
   build_and_test:
     machine:
