@@ -44,6 +44,9 @@ class LangFuseLogger:
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+        self.langfuse_flush_interval = (
+            os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
+        )
 
         parameters = {
             "public_key": self.public_key,
@@ -51,7 +54,7 @@ class LangFuseLogger:
             "host": self.langfuse_host,
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
-            "flush_interval": flush_interval,  # flush interval in seconds
+            "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
         }
 
         if Version(langfuse.version.__version__) >= Version("2.6.0"):
