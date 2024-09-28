@@ -2050,12 +2050,19 @@ async def test_vertexai_multimodal_embedding_image_in_input():
 
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_base64image_in_input():
+    import base64
+
+    import requests
+
     load_vertex_ai_credentials()
     mock_response = AsyncMock()
 
-    image_path = "../proxy/cached_logo.jpg"
-    # Getting the base64 string
-    base64_image = encode_image(image_path)
+    url = "https://dummyimage.com/100/100/fff&text=Test+image"
+    response = requests.get(url)
+    file_data = response.content
+
+    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    base64_image = f"data:image/png;base64,{encoded_file}"
 
     def return_val():
         return {
