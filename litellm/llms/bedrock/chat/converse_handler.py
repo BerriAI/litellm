@@ -20,17 +20,9 @@ from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_ca
 
 BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
     "anthropic.claude-3-opus-20240229-v1:0",
-    "us.anthropic.claude-3-opus-20240229-v1:0",
-    "eu.anthropic.claude-3-opus-20240229-v1:0",
     "anthropic.claude-3-sonnet-20240229-v1:0",
-    "us.anthropic.claude-3-sonnet-20240229-v1:0",
-    "eu.anthropic.claude-3-sonnet-20240229-v1:0",
     "anthropic.claude-3-haiku-20240307-v1:0",
-    "us.anthropic.claude-3-haiku-20240307-v1:0",
-    "eu.anthropic.claude-3-haiku-20240307-v1:0",
     "anthropic.claude-v2",
     "anthropic.claude-v2:1",
     "anthropic.claude-v1",
@@ -43,6 +35,11 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-1-405b-instruct-v1:0",
     "meta.llama3-70b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
+    "meta.llama3-2-1b-instruct-v1:0",
+    "meta.llama3-2-3b-instruct-v1:0",
+    "meta.llama3-2-11b-instruct-v1:0",
+    "meta.llama3-2-90b-instruct-v1:0",
+    "meta.llama3-2-405b-instruct-v1:0",
 ]
 
 

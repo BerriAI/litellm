@@ -59,6 +59,7 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
+    input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models

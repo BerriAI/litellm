@@ -280,6 +280,9 @@ jobs:
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:

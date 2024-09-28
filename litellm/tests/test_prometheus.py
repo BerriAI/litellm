@@ -23,12 +23,16 @@ litellm.set_verbose = True
 import time
 
 
+@pytest.mark.skip(reason="duplicate test of logging with callbacks")
 @pytest.mark.asyncio()
 async def test_async_prometheus_success_logging():
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    pl = PrometheusLogger()
     run_id = str(uuid.uuid4())
+
     litellm.set_verbose = True
-    litellm.success_callback = ["prometheus"]
-    litellm.failure_callback = ["prometheus"]
+    litellm.callbacks = [pl]
 
     response = await litellm.acompletion(
         model="claude-instant-1.2",
@@ -54,12 +58,7 @@ async def test_async_prometheus_success_logging():
     await asyncio.sleep(3)
 
     # get prometheus logger
-    from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
-
-    for callback in _in_memory_loggers:
-        if isinstance(callback, PrometheusLogger):
-            test_prometheus_logger = callback
-
+    test_prometheus_logger = pl
     print("done with success request")
 
     print(
@@ -83,12 +82,15 @@ async def test_async_prometheus_success_logging():
 
 @pytest.mark.asyncio()
 async def test_async_prometheus_success_logging_with_callbacks():
+
+    pl = PrometheusLogger()
+
     run_id = str(uuid.uuid4())
     litellm.set_verbose = True
 
     litellm.success_callback = []
     litellm.failure_callback = []
-    litellm.callbacks = ["prometheus"]
+    litellm.callbacks = [pl]
 
     # Get initial metric values
     initial_metrics = {}
@@ -120,11 +122,7 @@ async def test_async_prometheus_success_logging_with_callbacks():
     await asyncio.sleep(3)
 
     # get prometheus logger
-    from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
-
-    for callback in _in_memory_loggers:
-        if isinstance(callback, PrometheusLogger):
-            test_prometheus_logger = callback
+    test_prometheus_logger = pl
 
     print("done with success request")
 

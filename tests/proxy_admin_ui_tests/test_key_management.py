@@ -125,7 +125,6 @@ async def test_regenerate_api_key(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
-    import uuid
 
     # generate new key
     key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
