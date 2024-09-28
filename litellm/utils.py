@@ -83,6 +83,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
+    OPENAI_RESPONSE_HEADERS,
     CallTypes,
     ChatCompletionDeltaToolCall,
     Choices,
@@ -5760,13 +5761,35 @@ def convert_to_model_response_object(
     received_args = locals()
 
     if _response_headers is not None:
+        openai_headers = {}
+        if "x-ratelimit-limit-requests" in _response_headers:
+            openai_headers["x-ratelimit-limit-requests"] = _response_headers[
+                "x-ratelimit-limit-requests"
+            ]
+        if "x-ratelimit-remaining-requests" in _response_headers:
+            openai_headers["x-ratelimit-remaining-requests"] = _response_headers[
+                "x-ratelimit-remaining-requests"
+            ]
+        if "x-ratelimit-limit-tokens" in _response_headers:
+            openai_headers["x-ratelimit-limit-tokens"] = _response_headers[
+                "x-ratelimit-limit-tokens"
+            ]
+        if "x-ratelimit-remaining-tokens" in _response_headers:
+            openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
+                "x-ratelimit-remaining-tokens"
+            ]
         llm_response_headers = {
             "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
         }
         if hidden_params is not None:
-            hidden_params["additional_headers"] = llm_response_headers
+            hidden_params["additional_headers"] = {
+                **llm_response_headers,
+                **openai_headers,
+            }
         else:
-            hidden_params = {"additional_headers": llm_response_headers}
+            hidden_params = {
+                "additional_headers": {**llm_response_headers, **openai_headers}
+            }
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     if (
         response_object is not None
@@ -6370,11 +6393,26 @@ class CustomStreamWrapper:
         self._hidden_params = {
             "model_id": (_model_info.get("id", None)),
         }  # returned as x-litellm-model-id response header in proxy
+
         if _response_headers is not None:
+            openai_headers = {}
+            processed_headers = {}
+            additional_headers = {}
+            for k, v in _response_headers.items():
+                if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
+                    openai_headers[k] = v
+                if k.startswith(
+                    "llm_provider-"
+                ):  # return raw provider headers (incl. openai-compatible ones)
+                    processed_headers[k] = v
+                else:
+                    additional_headers["{}-{}".format("llm_provider", k)] = v
             self._hidden_params["additional_headers"] = {
-                "{}-{}".format("llm_provider", k): v
-                for k, v in _response_headers.items()
+                **openai_headers,
+                **processed_headers,
+                **additional_headers,
             }
+
         self._response_headers = _response_headers
         self.response_id = None
         self.logging_loop = None

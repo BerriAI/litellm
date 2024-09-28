@@ -1355,3 +1355,13 @@ class CustomStreamingDecoder:
 
 class StandardPassThroughResponseObject(TypedDict):
     response: str
+
+
+OPENAI_RESPONSE_HEADERS = [
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+]
