@@ -276,7 +276,7 @@ def completion(
 
     from anthropic import AnthropicVertex
 
-    from litellm.llms.anthropic.chat import AnthropicChatCompletion
+    from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
     from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
@@ -367,7 +367,7 @@ async def async_completion(
 
     if client is None:
         vertex_ai_client = AsyncAnthropicVertex(
-            project_id=vertex_project, region=vertex_location, access_token=access_token
+            project_id=vertex_project, region=vertex_location, access_token=access_token  # type: ignore
         )
     else:
         vertex_ai_client = client
@@ -438,7 +438,7 @@ async def async_streaming(
 
     if client is None:
         vertex_ai_client = AsyncAnthropicVertex(
-            project_id=vertex_project, region=vertex_location, access_token=access_token
+            project_id=vertex_project, region=vertex_location, access_token=access_token  # type: ignore
         )
     else:
         vertex_ai_client = client

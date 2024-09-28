@@ -760,7 +760,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             return _user_id_rate_limits.model_dump()
         except Exception as e:
-            verbose_proxy_logger.exception(
+            verbose_proxy_logger.debug(
                 "Parallel Request Limiter: Error getting user object", str(e)
             )
             return None
