@@ -136,7 +136,7 @@ class AmazonConverseConfig:
         non_default_params: dict,
         optional_params: dict,
         drop_params: bool,
-        messages: Optional[List[AllMessageValues]],
+        messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "response_format":
