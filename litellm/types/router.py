@@ -482,7 +482,12 @@ class ModelGroupInfo(BaseModel):
     output_cost_per_token: Optional[float] = None
     mode: Optional[
         Literal[
-            "chat", "embedding", "completion", "image_generation", "audio_transcription"
+            "chat",
+            "embedding",
+            "completion",
+            "image_generation",
+            "audio_transcription",
+            "rerank",
         ]
     ] = Field(default="chat")
     tpm: Optional[int] = None
