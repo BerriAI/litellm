@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
+from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse
@@ -791,6 +792,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 key_tpm_limit = user_api_key_dict.tpm_limit
 
         _hidden_params = getattr(response, "_hidden_params", {}) or {}
+        if isinstance(_hidden_params, BaseModel):
+            _hidden_params = _hidden_params.model_dump()
         _additional_headers = _hidden_params.get("additional_headers", {}) or {}
         if key_remaining_rpm_limit is not None:
             _additional_headers["x-ratelimit-remaining-requests"] = (
