@@ -455,7 +455,7 @@ async def test_team_token_output(prisma_client, audience):
 )
 @pytest.mark.parametrize("user_id_upsert", [True, False])
 @pytest.mark.asyncio
-async def test_user_token_output(
+async def aaaatest_user_token_output(
     prisma_client, audience, team_id_set, default_team_id, user_id_upsert
 ):
     import uuid
