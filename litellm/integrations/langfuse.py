@@ -70,34 +70,34 @@ class LangFuseLogger:
         except:
             project_id = None
 
-        if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
-            upstream_langfuse_debug = (
-                str_to_bool(self.upstream_langfuse_debug)
-                if self.upstream_langfuse_debug is not None
+        if os.getenv("LANGFUSE_SECRET_KEY") is not None:
+            langfuse_debug = (
+                str_to_bool(self.langfuse_debug)
+                if self.langfuse_debug is not None
                 else None
             )
-            self.upstream_langfuse_secret_key = os.getenv(
-                "UPSTREAM_LANGFUSE_SECRET_KEY"
+            self.langfuse_secret_key = os.getenv(
+                "LANGFUSE_SECRET_KEY"
             )
-            self.upstream_langfuse_public_key = os.getenv(
-                "UPSTREAM_LANGFUSE_PUBLIC_KEY"
+            self.langfuse_public_key = os.getenv(
+                "LANGFUSE_PUBLIC_KEY"
             )
-            self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
-            self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
-            self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
-            self.upstream_langfuse = Langfuse(
-                public_key=self.upstream_langfuse_public_key,
-                secret_key=self.upstream_langfuse_secret_key,
-                host=self.upstream_langfuse_host,
-                release=self.upstream_langfuse_release,
+            self.langfuse_host = os.getenv("LANGFUSE_HOST")
+            self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
+            self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+            self.langfuse = Langfuse(
+                public_key=self.langfuse_public_key,
+                secret_key=self.langfuse_secret_key,
+                host=self.langfuse_host,
+                release=self.langfuse_release,
                 debug=(
-                    upstream_langfuse_debug
-                    if upstream_langfuse_debug is not None
+                    langfuse_debug
+                    if langfuse_debug is not None
                     else False
                 ),
             )
         else:
-            self.upstream_langfuse = None
+            self.langfuse = None
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
