@@ -791,29 +791,37 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )
                 key_tpm_limit = user_api_key_dict.tpm_limit
 
-        _hidden_params = getattr(response, "_hidden_params", {}) or {}
-        if isinstance(_hidden_params, BaseModel):
-            _hidden_params = _hidden_params.model_dump()
-        _additional_headers = _hidden_params.get("additional_headers", {}) or {}
-        if key_remaining_rpm_limit is not None:
-            _additional_headers["x-ratelimit-remaining-requests"] = (
-                key_remaining_rpm_limit
-            )
-        if key_rpm_limit is not None:
-            _additional_headers["x-ratelimit-limit-requests"] = key_rpm_limit
-        if key_remaining_tpm_limit is not None:
-            _additional_headers["x-ratelimit-remaining-tokens"] = (
-                key_remaining_tpm_limit
-            )
-        if key_tpm_limit is not None:
-            _additional_headers["x-ratelimit-limit-tokens"] = key_tpm_limit
+        if hasattr(response, "_hidden_params"):
+            _hidden_params = getattr(response, "_hidden_params")
+        else:
+            _hidden_params = None
+        if _hidden_params is not None and (
+            isinstance(_hidden_params, BaseModel) or isinstance(_hidden_params, dict)
+        ):
+            if isinstance(_hidden_params, BaseModel):
+                _hidden_params = _hidden_params.model_dump()
 
-        setattr(
-            response,
-            "_hidden_params",
-            {**_hidden_params, "additional_headers": _additional_headers},
-        )
+            _additional_headers = _hidden_params.get("additional_headers", {}) or {}
 
-        return await super().async_post_call_success_hook(
-            data, user_api_key_dict, response
-        )
+            if key_remaining_rpm_limit is not None:
+                _additional_headers["x-ratelimit-remaining-requests"] = (
+                    key_remaining_rpm_limit
+                )
+            if key_rpm_limit is not None:
+                _additional_headers["x-ratelimit-limit-requests"] = key_rpm_limit
+            if key_remaining_tpm_limit is not None:
+                _additional_headers["x-ratelimit-remaining-tokens"] = (
+                    key_remaining_tpm_limit
+                )
+            if key_tpm_limit is not None:
+                _additional_headers["x-ratelimit-limit-tokens"] = key_tpm_limit
+
+            setattr(
+                response,
+                "_hidden_params",
+                {**_hidden_params, "additional_headers": _additional_headers},
+            )
+
+            return await super().async_post_call_success_hook(
+                data, user_api_key_dict, response
+            )
