@@ -15,7 +15,10 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingMetadata
+from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingMetadata,
+    get_standard_logging_metadata,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import StandardLoggingPayload
 
@@ -851,12 +854,14 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _metadata = kwargs.get("metadata", {})
-        standard_metadata = StandardLoggingMetadata(**_metadata)
+        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
+            metadata=_metadata
+        )
         _new_model = kwargs.get("model")
         self.litellm_deployment_successful_fallbacks.labels(
             primary_model=original_model_group,
             fallback_model=_new_model,
-            hashed_api_key=standard_metadata["user_api_key_alias"],
+            hashed_api_key=standard_metadata["user_api_key_hash"],
             api_key_alias=standard_metadata["user_api_key_alias"],
             team=standard_metadata["user_api_key_team_id"],
             team_alias=standard_metadata["user_api_key_team_alias"],
@@ -877,7 +882,9 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         _metadata = kwargs.get("metadata", {})
-        standard_metadata = StandardLoggingMetadata(**_metadata)
+        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
+            metadata=_metadata
+        )
         self.litellm_deployment_failed_fallbacks.labels(
             primary_model=original_model_group,
             fallback_model=_new_model,
