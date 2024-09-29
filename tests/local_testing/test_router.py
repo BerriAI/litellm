@@ -2566,3 +2566,47 @@ def test_model_group_alias(hidden):
     else:
         assert len(models) == len(_model_list) + 1
         assert len(model_names) == len(_model_list) + 1
+
+
+@pytest.mark.parametrize("on_error", [True, False])
+@pytest.mark.asyncio
+async def test_router_response_headers(on_error):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "tpm": 100000,
+                    "rpm": 100000,
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "tpm": 500,
+                    "rpm": 500,
+                },
+            },
+        ]
+    )
+
+    response = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        mock_testing_rate_limit_error=on_error,
+    )
+
+    response_headers = response._hidden_params["additional_headers"]
+
+    print(response_headers)
+
+    assert response_headers["x-ratelimit-limit-requests"] == 100500
+    assert int(response_headers["x-ratelimit-remaining-requests"]) > 0
+    assert response_headers["x-ratelimit-limit-tokens"] == 100500
+    assert int(response_headers["x-ratelimit-remaining-tokens"]) > 0

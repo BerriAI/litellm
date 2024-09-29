@@ -9263,6 +9263,7 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
     openai_headers = {}
     processed_headers = {}
     additional_headers = {}
+
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
             openai_headers[k] = v
