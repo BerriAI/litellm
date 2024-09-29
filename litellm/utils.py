@@ -5911,7 +5911,9 @@ def convert_to_model_response_object(
                     ).total_seconds() * 1000
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                if model_response_object._hidden_params is None:
+                    model_response_object._hidden_params = {}
+                model_response_object._hidden_params.update(hidden_params)
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
