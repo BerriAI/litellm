@@ -4664,58 +4664,10 @@ class Router:
         """
         Add the most accurate rate limit headers for a given model response.
 
-        - if healthy_deployments > 1, return model group rate limit headers
-        - else return the model's rate limit headers
+        ## TODO: add model group rate limit headers
+        # - if healthy_deployments > 1, return model group rate limit headers
+        # - else return the model's rate limit headers
         """
-        if model_group is None:
-            return response
-
-        healthy_deployments, all_deployments = (
-            await self._async_get_healthy_deployments(model=model_group)
-        )
-
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        additional_headers = hidden_params.get("additional_headers", {}) or {}
-
-        if len(healthy_deployments) <= 1:
-            return (
-                response  # setting response headers is handled in wrappers in utils.py
-            )
-        else:
-            # return model group rate limit headers
-            model_group_info = self.get_model_group_info(model_group=model_group)
-            tpm_usage, rpm_usage = await self.get_model_group_usage(
-                model_group=model_group
-            )
-            model_group_remaining_rpm_limit: Optional[int] = None
-            model_group_rpm_limit: Optional[int] = None
-            model_group_remaining_tpm_limit: Optional[int] = None
-            model_group_tpm_limit: Optional[int] = None
-
-            if model_group_info is not None and model_group_info.rpm is not None:
-                model_group_rpm_limit = model_group_info.rpm
-                if rpm_usage is not None:
-                    model_group_remaining_rpm_limit = model_group_info.rpm - rpm_usage
-            if model_group_info is not None and model_group_info.tpm is not None:
-                model_group_tpm_limit = model_group_info.tpm
-                if tpm_usage is not None:
-                    model_group_remaining_tpm_limit = model_group_info.tpm - tpm_usage
-
-            if model_group_remaining_rpm_limit is not None:
-                additional_headers["x-ratelimit-remaining-requests"] = (
-                    model_group_remaining_rpm_limit
-                )
-            if model_group_rpm_limit is not None:
-                additional_headers["x-ratelimit-limit-requests"] = model_group_rpm_limit
-            if model_group_remaining_tpm_limit is not None:
-                additional_headers["x-ratelimit-remaining-tokens"] = (
-                    model_group_remaining_tpm_limit
-                )
-            if model_group_tpm_limit is not None:
-                additional_headers["x-ratelimit-limit-tokens"] = model_group_tpm_limit
-
-        hidden_params["additional_headers"] = additional_headers
-        setattr(response, "_hidden_params", hidden_params)
         return response
 
     def get_model_ids(self, model_name: Optional[str] = None) -> List[str]:
