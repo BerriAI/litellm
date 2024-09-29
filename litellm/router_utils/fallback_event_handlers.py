@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -113,17 +113,28 @@ async def log_success_fallback_event(
             _callback in litellm._known_custom_logger_compatible_callbacks
         ):
             try:
+                _callback_custom_logger: Optional[CustomLogger] = None
                 if _callback in litellm._known_custom_logger_compatible_callbacks:
-                    _callback = _init_custom_logger_compatible_class(
-                        _callback, llm_router=None, internal_usage_cache=None
+                    _callback_custom_logger = _init_custom_logger_compatible_class(
+                        logging_integration=_callback,  # type: ignore
+                        llm_router=None,
+                        internal_usage_cache=None,
                     )
-                    if _callback is None:
-                        verbose_router_logger.exception(
-                            f"{_callback} logger not found / initialized properly"
-                        )
-                        continue
+                elif isinstance(_callback, CustomLogger):
+                    _callback_custom_logger = _callback
+                else:
+                    verbose_router_logger.exception(
+                        f"{_callback} logger not found / initialized properly"
+                    )
+                    continue
 
-                await _callback.log_success_fallback_event(
+                if _callback_custom_logger is None:
+                    verbose_router_logger.exception(
+                        f"{_callback} logger not found / initialized properly, callback is None"
+                    )
+                    continue
+
+                await _callback_custom_logger.log_success_fallback_event(
                     original_model_group=original_model_group,
                     kwargs=kwargs,
                     original_exception=original_exception,
@@ -159,17 +170,28 @@ async def log_failure_fallback_event(
             _callback in litellm._known_custom_logger_compatible_callbacks
         ):
             try:
+                _callback_custom_logger: Optional[CustomLogger] = None
                 if _callback in litellm._known_custom_logger_compatible_callbacks:
-                    _callback = _init_custom_logger_compatible_class(
-                        _callback, llm_router=None, internal_usage_cache=None
+                    _callback_custom_logger = _init_custom_logger_compatible_class(
+                        logging_integration=_callback,  # type: ignore
+                        llm_router=None,
+                        internal_usage_cache=None,
                     )
-                    if _callback is None:
-                        verbose_router_logger.exception(
-                            f"{_callback} logger not found / initialized properly"
-                        )
-                        continue
+                elif isinstance(_callback, CustomLogger):
+                    _callback_custom_logger = _callback
+                else:
+                    verbose_router_logger.exception(
+                        f"{_callback} logger not found / initialized properly"
+                    )
+                    continue
 
-                await _callback.log_failure_fallback_event(
+                if _callback_custom_logger is None:
+                    verbose_router_logger.exception(
+                        f"{_callback} logger not found / initialized properly"
+                    )
+                    continue
+
+                await _callback_custom_logger.log_failure_fallback_event(
                     original_model_group=original_model_group,
                     kwargs=kwargs,
                     original_exception=original_exception,
