@@ -15,10 +15,6 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import (
-    StandardLoggingMetadata,
-    get_standard_logging_metadata,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import StandardLoggingPayload
 
@@ -848,6 +844,11 @@ class PrometheusLogger(CustomLogger):
         Logs a successful LLM fallback event on prometheus
 
         """
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingMetadata,
+            get_standard_logging_metadata,
+        )
+
         verbose_logger.debug(
             "Prometheus: log_success_fallback_event, original_model_group: %s, kwargs: %s",
             original_model_group,
@@ -875,6 +876,11 @@ class PrometheusLogger(CustomLogger):
         """
         Logs a failed LLM fallback event on prometheus
         """
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingMetadata,
+            get_standard_logging_metadata,
+        )
+
         verbose_logger.debug(
             "Prometheus: log_failure_fallback_event, original_model_group: %s, kwargs: %s",
             original_model_group,
