@@ -96,6 +96,7 @@ replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
 clarifai_key: Optional[str] = None
 maritalk_key: Optional[str] = None
+snowflake_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
@@ -359,6 +360,7 @@ cohere_chat_models: List = []
 mistral_chat_models: List = []
 anthropic_models: List = []
 empower_models: List = []
+snowflake_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
 vertex_vision_models: List = []
@@ -401,6 +403,8 @@ def add_known_models():
             anthropic_models.append(key)
         elif value.get("litellm_provider") == "empower":
             empower_models.append(key)
+        elif value.get("litellm_provider") == "snowflake":
+            snowflake_models.append(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -611,6 +615,23 @@ empower_models = [
     "empower/empower-functions-small",
 ]
 
+snowflake_models = [
+    "snowflake/llama3.1-8b",
+    "snowflake/llama3.1-70b",
+    "snowflake/llama3.1-405b",
+    "snowflake/llama3.2-3b",
+    "snowflake/llama3.2-1b",
+    "snowflake/mistral-large2",
+    "snowflake/mixtral-8x7b",
+    "snowflake/mistral-7b",
+    "snowflake/snowflake-arctic",
+    "snowflake/reka-flash",
+    "snowflake/reka-core",
+    "snowflake/jamba-instruct",
+    "snowflake/jamba-1.5-mini",
+    "snowflake/jamba-1.5-large",
+]
+
 together_ai_models: List = [
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
@@ -695,6 +716,7 @@ model_list = (
     + vertex_language_models
     + watsonx_models
     + gemini_models
+    + snowflake_models
 )
 
 
@@ -721,6 +743,7 @@ class LlmProviders(str, Enum):
     AZURE_AI = "azure_ai"
     SAGEMAKER = "sagemaker"
     SAGEMAKER_CHAT = "sagemaker_chat"
+    SNOWFLAKE = "snowflake"
     BEDROCK = "bedrock"
     VLLM = "vllm"
     NLP_CLOUD = "nlp_cloud"
@@ -785,6 +808,7 @@ models_by_provider: dict = {
     "watsonx": watsonx_models,
     "gemini": gemini_models,
     "fireworks_ai": fireworks_ai_models + fireworks_ai_embedding_models,
+    "snowflake": snowflake_models,
 }
 
 # mapping for those models which have larger equivalents

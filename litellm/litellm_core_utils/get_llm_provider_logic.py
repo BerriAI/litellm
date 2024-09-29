@@ -150,6 +150,14 @@ def get_llm_provider(
                     or "https://app.empower.dev/api/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("EMPOWER_API_KEY")
+            elif custom_llm_provider == "snowflake":
+                api_base = (
+                    api_base
+                    or get_secret("SNOWFLAKE_API_BASE")
+                    or f"""https://{get_secret("SNOWFLAKE_ACCOUNT")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
+                    or "https://<account_identifier>.snowflakecomputing.com/api/v2/cortex/inference:complete"
+                )  # type: ignore
+                dynamic_api_key = api_key or get_secret("EMPOWER_API_KEY")
             elif custom_llm_provider == "groq":
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = (
