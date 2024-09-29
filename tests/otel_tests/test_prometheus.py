@@ -39,6 +39,35 @@ async def make_good_chat_completion_request(session, key):
         return status, response_text
 
 
+async def make_chat_completion_request_with_fallback(session, key):
+    url = "http://0.0.0.0:4000/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": "fake-azure-endpoint",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "fallbacks": ["fake-openai-endpoint"],
+    }
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+    # make a request with a failed fallback
+    data = {
+        "model": "fake-azure-endpoint",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "fallbacks": ["unknown-model"],
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+    return
+
+
 @pytest.mark.asyncio
 async def test_proxy_failure_metrics():
     """
@@ -118,5 +147,34 @@ async def test_proxy_success_metrics():
 
         assert (
             'litellm_deployment_latency_per_output_token_count{api_base="https://exampleopenaiendpoint-production.up.railway.app/",api_key_alias="None",api_provider="openai",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="gpt-3.5-turbo",model_id="0ea900ab10dbf66961498e7021009040f30e843fc14920c53e51d85cef62e0fe",team="None",team_alias="None"}'
+            in metrics
+        )
+
+
+@pytest.mark.asyncio
+async def test_proxy_fallback_metrics():
+    """
+    Make 1 request with a client side fallback - check metrics
+    """
+
+    async with aiohttp.ClientSession() as session:
+        # Make a good chat completion call
+        await make_chat_completion_request_with_fallback(session, "sk-1234")
+
+        # Get metrics
+        async with session.get("http://0.0.0.0:4000/metrics") as response:
+            metrics = await response.text()
+
+        print("/metrics", metrics)
+
+        # Check if successful fallback metric is incremented
+        assert (
+            'litellm_deployment_successful_fallbacks_total{api_key_alias="None",exception_class="RateLimitError",exception_status="429",fallback_model="fake-openai-endpoint",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
+            in metrics
+        )
+
+        # Check if failed fallback metric is incremented
+        assert (
+            'litellm_deployment_failed_fallbacks_total{api_key_alias="None",exception_class="RateLimitError",exception_status="429",fallback_model="unknown-model",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
             in metrics
         )
