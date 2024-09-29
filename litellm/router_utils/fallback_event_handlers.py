@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.main import verbose_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -84,28 +85,84 @@ def run_sync_fallback(
 
 
 async def log_success_fallback_event(original_model_group: str, kwargs: dict):
+    """
+    Log a successful fallback event to all registered callbacks.
+
+    This function iterates through all callbacks, initializing _known_custom_logger_compatible_callbacks  if needed,
+    and calls the log_success_fallback_event method on CustomLogger instances.
+
+    Args:
+        original_model_group (str): The original model group before fallback.
+        kwargs (dict): kwargs for the request
+
+    Note:
+        Errors during logging are caught and reported but do not interrupt the process.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
     for _callback in litellm.callbacks:
-        if isinstance(_callback, CustomLogger):
+        if isinstance(_callback, CustomLogger) or (
+            _callback in litellm._known_custom_logger_compatible_callbacks
+        ):
             try:
+                if _callback in litellm._known_custom_logger_compatible_callbacks:
+                    _callback = _init_custom_logger_compatible_class(
+                        _callback, llm_router=None, internal_usage_cache=None
+                    )
+                    if _callback is None:
+                        verbose_router_logger.exception(
+                            f"{_callback} logger not found / initialized properly"
+                        )
+                        continue
+
                 await _callback.log_success_fallback_event(
                     original_model_group=original_model_group, kwargs=kwargs
                 )
             except Exception as e:
                 verbose_router_logger.error(
-                    f"Error in log_success_fallback_event: {(str(e))}"
+                    f"Error in log_success_fallback_event: {str(e)}"
                 )
-                pass
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict):
+    """
+    Log a failed fallback event to all registered callbacks.
+
+    This function iterates through all callbacks, initializing _known_custom_logger_compatible_callbacks if needed,
+    and calls the log_failure_fallback_event method on CustomLogger instances.
+
+    Args:
+        original_model_group (str): The original model group before fallback.
+        kwargs (dict): kwargs for the request
+
+    Note:
+        Errors during logging are caught and reported but do not interrupt the process.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
     for _callback in litellm.callbacks:
-        if isinstance(_callback, CustomLogger):
+        if isinstance(_callback, CustomLogger) or (
+            _callback in litellm._known_custom_logger_compatible_callbacks
+        ):
             try:
+                if _callback in litellm._known_custom_logger_compatible_callbacks:
+                    _callback = _init_custom_logger_compatible_class(
+                        _callback, llm_router=None, internal_usage_cache=None
+                    )
+                    if _callback is None:
+                        verbose_router_logger.exception(
+                            f"{_callback} logger not found / initialized properly"
+                        )
+                        continue
+
                 await _callback.log_failure_fallback_event(
                     original_model_group=original_model_group, kwargs=kwargs
                 )
             except Exception as e:
                 verbose_router_logger.error(
-                    f"Error in log_failure_fallback_event: {(str(e))}"
+                    f"Error in log_failure_fallback_event: {str(e)}"
                 )
-                pass
