@@ -1053,7 +1053,7 @@ class AzureChatCompletion(BaseLLM):
                 response_object=stringified_response,
                 model_response_object=model_response,
                 hidden_params={"headers": headers},
-                _response_headers=headers,
+                _response_headers=process_azure_headers(headers),
                 response_type="embedding",
             )
         except Exception as e:
@@ -1142,6 +1142,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = client
             ## COMPLETION CALL
             raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            headers = dict(raw_response.headers)
             response = raw_response.parse()
             ## LOGGING
             logging_obj.post_call(
@@ -1151,7 +1152,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding", _response_headers=process_azure_headers(headers))  # type: ignore
         except AzureOpenAIError as e:
             raise e
         except Exception as e:
