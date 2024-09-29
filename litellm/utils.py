@@ -1422,9 +1422,11 @@ def client(original_function):
                 or isinstance(result, EmbeddingResponse)
                 or isinstance(result, TranscriptionResponse)
             ):
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+                setattr(
+                    result,
+                    "_response_ms",
+                    (end_time - start_time).total_seconds() * 1000,
+                )  # return response latency in ms like openai
 
             ### POST-CALL RULES ###
             post_call_processing(
