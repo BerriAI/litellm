@@ -6,42 +6,17 @@ import Image from '@theme/IdealImage';
 
 Langfuse ([GitHub](https://github.com/langfuse/langfuse)) is an open-source LLM engineering platform for model [tracing](https://langfuse.com/docs/tracing), [prompt management](https://langfuse.com/docs/prompts/get-started), and application [evaluation](https://langfuse.com/docs/scores/overview). Langfuse helps teams to collaboratively debug, analyze, and iterate on their LLM applications. 
 
-## Monitoring LiteLLM with Langfuse
-
-You can integrate LiteLLM with Langfuse in three different ways:
-
-1. Using the LiteLLM Proxy with the OpenAI SDK Wrapper. This proxy standardizes over 100 models to the OpenAI API schema, and the Langfuse OpenAI SDK wrapper instruments the LLM calls.
-2. Enabling logging in the LiteLLM Proxy through the UI to send logs to Langfuse.
-3. Configuring the LiteLLM Python SDK to send logs to Langfuse by setting the appropriate environment variables.
-
 
 Example trace in Langfuse using multiple models via LiteLLM:
 <Image img={require('../../img/langfuse-example-trace-multiple-models-min.png')} />
 
-## 1. LiteLLM Proxy + Langfuse OpenAI SDK Wrapper
 
-:::info
-This is the recommended method to integrate LiteLLM with Langfuse. The Langfuse OpenAI SDK wrapper automatically records token counts, latencies, streaming response times (time to first token), API errors, and more.
-:::
+## Usage with LiteLLM Proxy (LLM Gateway)
 
-**How this works:**
-
-The [LiteLLM Proxy](https://docs.litellm.ai/docs/simple_proxy) standardizes 100+ models on the OpenAI API schema
-and the Langfuse OpenAI SDK wrapper ([Python](https://langfuse.com/docs/integrations/openai/python), [JS/TS](https://langfuse.com/docs/integrations/openai/js)) instruments the LLM calls.
-
-To see a full end-to-end example, check out the LiteLLM cookbook:
-
-- [Python Cookbook](https://langfuse.com/docs/integrations/litellm/example-proxy-python)
-- [JS/TS Cookbook](https://langfuse.com/docs/integrations/litellm/example-proxy-js)
+👉 [**Follow this link to start sending logs to langfuse with LiteLLM Proxy server**](../proxy/logging)
 
 
-## 2. Send Logs from LiteLLM Proxy to Langfuse
-
-By setting the callback to Langfuse in the LiteLLM UI you can instantly log your responses across all providers. For more information on how to setup the Proxy UI, see the [LiteLLM docs](../proxy/ui).
-
-<Image img={require('../../img/langfuse-litellm-ui.png')} />
-
-## 3. LiteLLM Python SDK
+## Usage with LiteLLM Python SDK
 
 ### Pre-Requisites
 Ensure you have run `pip install langfuse` for this integration
@@ -289,10 +264,6 @@ Setting `mask_input` to `True` will mask the input from being logged for this ca
 Setting `mask_output` to `True` will make the output from being logged for this call.
 
 Be aware that if you are continuing an existing trace, and you set `update_trace_keys` to include either `input` or `output` and you set the corresponding `mask_input` or `mask_output`, then that trace will have its existing input and/or output replaced with a redacted message.
-
-### Use with LiteLLM Proxy (LLM Gateway)
-
-👉 [**Follow this link to start sending logs to langfuse with LiteLLM Proxy server**](../proxy/logging)
 
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 

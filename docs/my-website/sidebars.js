@@ -254,11 +254,11 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
-        "observability/opentelemetry_integration",
         "observability/langfuse_integration",
-        "observability/logfire_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
+        "observability/opentelemetry_integration",
+        "observability/logfire_integration",
         "observability/arize_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
