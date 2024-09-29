@@ -1034,3 +1034,25 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
         assert json_data["options"]["wait_for_model"] is True
         assert json_data["parameters"]["top_p"] == 10
         assert json_data["parameters"]["top_k"] == 10
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "text-embedding-ada-002",
+        "azure/azure-embedding-model",
+    ],
+)
+def test_embedding_response_ratelimit_headers(model):
+    response = embedding(
+        model=model,
+        input=["Hello world"],
+    )
+    hidden_params = response._hidden_params
+    additional_headers = hidden_params.get("additional_headers", {})
+
+    print(additional_headers)
+    assert "x-ratelimit-remaining-requests" in additional_headers
+    assert int(additional_headers["x-ratelimit-remaining-requests"]) > 0
+    assert "x-ratelimit-remaining-tokens" in additional_headers
+    assert int(additional_headers["x-ratelimit-remaining-tokens"]) > 0
