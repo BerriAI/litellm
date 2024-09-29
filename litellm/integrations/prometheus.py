@@ -273,14 +273,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_successful_fallbacks = Counter(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                ["primary_model", "fallback_model"]
+                [REQUESTED_MODEL, "fallback_model"]
                 + team_and_key_labels
                 + EXCEPTION_LABELS,
             )
             self.litellm_deployment_failed_fallbacks = Counter(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                ["primary_model", "fallback_model"]
+                [REQUESTED_MODEL, "fallback_model"]
                 + team_and_key_labels
                 + EXCEPTION_LABELS,
             )
@@ -860,7 +860,7 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         self.litellm_deployment_successful_fallbacks.labels(
-            primary_model=original_model_group,
+            requested_model=original_model_group,
             fallback_model=_new_model,
             hashed_api_key=standard_metadata["user_api_key_hash"],
             api_key_alias=standard_metadata["user_api_key_alias"],
@@ -892,7 +892,7 @@ class PrometheusLogger(CustomLogger):
             metadata=_metadata
         )
         self.litellm_deployment_failed_fallbacks.labels(
-            primary_model=original_model_group,
+            requested_model=original_model_group,
             fallback_model=_new_model,
             hashed_api_key=standard_metadata["user_api_key_hash"],
             api_key_alias=standard_metadata["user_api_key_alias"],
