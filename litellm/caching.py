@@ -1860,7 +1860,6 @@ class DualCache(BaseCache):
 
         Returns - int - the incremented value
         """
-        traceback.print_stack()
         try:
             result: int = value
             if self.in_memory_cache is not None:
