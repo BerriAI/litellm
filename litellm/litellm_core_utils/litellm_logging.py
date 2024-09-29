@@ -2176,11 +2176,11 @@ def _init_custom_logger_compatible_class(
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
     elif logging_integration == "prometheus":
-        if premium_user:
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PrometheusLogger):
-                    return callback  # type: ignore
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrometheusLogger):
+                return callback  # type: ignore
 
+        if premium_user:
             _prometheus_logger = PrometheusLogger()
             _in_memory_loggers.append(_prometheus_logger)
             return _prometheus_logger  # type: ignore
