@@ -43,7 +43,7 @@ response = completion(
 
 ### Usage - LiteLLM Proxy Server
 
-Here's how to call OpenAI models with the LiteLLM Proxy Server
+Here's how to call Snowflake Cortex models with the LiteLLM Proxy Server
 
 ### 1. Save key in your environment
 
@@ -85,10 +85,10 @@ For a complete list of the latest models, visit the documentation (here)[https:/
 
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
-| mistral-large2 | `response = completion(model="mistral-large2", messages=messages)` |
+| mistral-large2  | `response = completion(model="mistral-large2", messages=messages)` |
 | mistral-large | `response = completion(model="mistral-large", messages=messages)` |
-| mixtral-8x7b         | `response = completion(model="mixtral-8x7b", messages=messages)` |
-| mistral-7b         | `response = completion(model="mistral-7b ", messages=messages)` |
+| mixtral-8x7b  | `response = completion(model="mixtral-8x7b", messages=messages)` |
+| mistral-7b  | `response = completion(model="mistral-7b ", messages=messages)` |
 | llama3.2-3b | `response = completion(model="llama3.2-3b", messages=messages)` |
 | llama3.2-1b | `response = completion(model="llama3.2-1b", messages=messages)` |
 | llama3.1-405b   | `response = completion(model="llama3.1-405b", messages=messages)` |
@@ -100,3 +100,6 @@ For a complete list of the latest models, visit the documentation (here)[https:/
 | reka-core | `response = completion(model="reka-core", messages=messages)` |
 | reka-flash | `response = completion(model="reka-flash", messages=messages)` |
 | snowflake-arctic | `response = completion(model="snowflake-arctic", messages=messages)` |
+| jamba-instruct | `response = completion(model="jamba-instruct", messages=messages)` |
+| jamba-1.5-large | `response = completion(model="jamba-1.5-large", messages=messages)` |
+| jamba-1.5-mini | `response = completion(model="jamba-1.5-mini", messages=messages)` |
