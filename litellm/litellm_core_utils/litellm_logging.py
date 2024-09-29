@@ -2176,11 +2176,11 @@ def _init_custom_logger_compatible_class(
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
     elif logging_integration == "prometheus":
-        if premium_user:
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PrometheusLogger):
-                    return callback  # type: ignore
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrometheusLogger):
+                return callback  # type: ignore
 
+        if premium_user:
             _prometheus_logger = PrometheusLogger()
             _in_memory_loggers.append(_prometheus_logger)
             return _prometheus_logger  # type: ignore
@@ -2478,31 +2478,7 @@ def get_standard_logging_object_payload(
                 }
             )
         # clean up litellm metadata
-        clean_metadata = StandardLoggingMetadata(
-            user_api_key_hash=None,
-            user_api_key_alias=None,
-            user_api_key_team_id=None,
-            user_api_key_user_id=None,
-            user_api_key_team_alias=None,
-            spend_logs_metadata=None,
-            requester_ip_address=None,
-            requester_metadata=None,
-        )
-        if isinstance(metadata, dict):
-            # Filter the metadata dictionary to include only the specified keys
-            clean_metadata = StandardLoggingMetadata(
-                **{  # type: ignore
-                    key: metadata[key]
-                    for key in StandardLoggingMetadata.__annotations__.keys()
-                    if key in metadata
-                }
-            )
-
-            if metadata.get("user_api_key") is not None:
-                if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                    clean_metadata["user_api_key_hash"] = metadata.get(
-                        "user_api_key"
-                    )  # this is the hash
+        clean_metadata = get_standard_logging_metadata(metadata=metadata)
 
         if litellm.cache is not None:
             cache_key = litellm.cache.get_cache_key(**kwargs)
@@ -2610,6 +2586,51 @@ def get_standard_logging_object_payload(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
+
+
+def get_standard_logging_metadata(
+    metadata: Optional[Dict[str, Any]]
+) -> StandardLoggingMetadata:
+    """
+    Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
+
+    Args:
+        metadata (Optional[Dict[str, Any]]): The original metadata dictionary.
+
+    Returns:
+        StandardLoggingMetadata: A StandardLoggingMetadata object containing the cleaned metadata.
+
+    Note:
+        - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
+        - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
+    """
+    # Initialize with default values
+    clean_metadata = StandardLoggingMetadata(
+        user_api_key_hash=None,
+        user_api_key_alias=None,
+        user_api_key_team_id=None,
+        user_api_key_user_id=None,
+        user_api_key_team_alias=None,
+        spend_logs_metadata=None,
+        requester_ip_address=None,
+        requester_metadata=None,
+    )
+    if isinstance(metadata, dict):
+        # Filter the metadata dictionary to include only the specified keys
+        clean_metadata = StandardLoggingMetadata(
+            **{  # type: ignore
+                key: metadata[key]
+                for key in StandardLoggingMetadata.__annotations__.keys()
+                if key in metadata
+            }
+        )
+
+        if metadata.get("user_api_key") is not None:
+            if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
+                clean_metadata["user_api_key_hash"] = metadata.get(
+                    "user_api_key"
+                )  # this is the hash
+    return clean_metadata
 
 
 def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
