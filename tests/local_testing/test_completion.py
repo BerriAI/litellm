@@ -3069,6 +3069,7 @@ def test_completion_azure():
             api_key="os.environ/AZURE_API_KEY",
         )
         print(f"response: {response}")
+        print(f"response hidden params: {response._hidden_params}")
         ## Test azure flag for backwards-compat
         # response = completion(
         #     model="chatgpt-v-2",
