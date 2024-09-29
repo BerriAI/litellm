@@ -368,12 +368,3 @@ def test_is_request_body_safe_model_enabled(
         error_raised = True
 
     assert expect_error == error_raised
-
-
-def test_get_remaining_rate_limit():
-    """
-    Ensure accurate remaining rate limit is returned to the client.
-
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/5957
-    """
-    pass
