@@ -46,6 +46,7 @@ const sidebars = {
         "proxy/enterprise",
         "proxy/user_keys",
         "proxy/configs",
+        "proxy/response_headers", 
         "proxy/reliability",
         {
           type: "category",
