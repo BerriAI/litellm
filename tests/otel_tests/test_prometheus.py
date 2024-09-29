@@ -5,6 +5,7 @@ Unit tests for prometheus metrics
 import pytest
 import aiohttp
 import asyncio
+import uuid
 
 
 async def make_bad_chat_completion_request(session, key):
@@ -29,9 +30,11 @@ async def make_good_chat_completion_request(session, key):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+
     data = {
         "model": "fake-openai-endpoint",
-        "messages": [{"role": "user", "content": "Hello"}],
+        "messages": [{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        "tags": ["teamB"],
     }
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -136,17 +139,17 @@ async def test_proxy_success_metrics():
 
         # Check if the success metric is present and correct
         assert (
-            'litellm_request_total_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
+            'litellm_request_total_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",team="None",team_alias="None"}'
             in metrics
         )
 
         assert (
-            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="gpt-3.5-turbo",team="None",team_alias="None"}'
+            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",team="None",team_alias="None"}'
             in metrics
         )
 
         assert (
-            'litellm_deployment_latency_per_output_token_count{api_base="https://exampleopenaiendpoint-production.up.railway.app/",api_key_alias="None",api_provider="openai",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="gpt-3.5-turbo",model_id="0ea900ab10dbf66961498e7021009040f30e843fc14920c53e51d85cef62e0fe",team="None",team_alias="None"}'
+            'litellm_deployment_latency_per_output_token_count{api_base="https://exampleopenaiendpoint-production.up.railway.app/",api_key_alias="None",api_provider="openai",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="fake",model_id="team-b-model",team="None",team_alias="None"}'
             in metrics
         )
 
