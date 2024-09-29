@@ -42,13 +42,17 @@ async def run_async_fallback(
             verbose_router_logger.info("Successful fallback b/w models.")
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
-                original_model_group=original_model_group, kwargs=kwargs
+                original_model_group=original_model_group,
+                kwargs=kwargs,
+                original_exception=original_exception,
             )
             return response
         except Exception as e:
             error_from_fallbacks = e
             await log_failure_fallback_event(
-                original_model_group=original_model_group, kwargs=kwargs
+                original_model_group=original_model_group,
+                kwargs=kwargs,
+                original_exception=original_exception,
             )
     raise error_from_fallbacks
 
@@ -84,7 +88,9 @@ def run_sync_fallback(
     raise error_from_fallbacks
 
 
-async def log_success_fallback_event(original_model_group: str, kwargs: dict):
+async def log_success_fallback_event(
+    original_model_group: str, kwargs: dict, original_exception: Exception
+):
     """
     Log a successful fallback event to all registered callbacks.
 
@@ -118,7 +124,9 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict):
                         continue
 
                 await _callback.log_success_fallback_event(
-                    original_model_group=original_model_group, kwargs=kwargs
+                    original_model_group=original_model_group,
+                    kwargs=kwargs,
+                    original_exception=original_exception,
                 )
             except Exception as e:
                 verbose_router_logger.error(
@@ -126,7 +134,9 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict):
                 )
 
 
-async def log_failure_fallback_event(original_model_group: str, kwargs: dict):
+async def log_failure_fallback_event(
+    original_model_group: str, kwargs: dict, original_exception: Exception
+):
     """
     Log a failed fallback event to all registered callbacks.
 
@@ -160,7 +170,9 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict):
                         continue
 
                 await _callback.log_failure_fallback_event(
-                    original_model_group=original_model_group, kwargs=kwargs
+                    original_model_group=original_model_group,
+                    kwargs=kwargs,
+                    original_exception=original_exception,
                 )
             except Exception as e:
                 verbose_router_logger.error(
