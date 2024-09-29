@@ -264,6 +264,12 @@ class PrometheusLogger(CustomLogger):
             )
 
             # Deployment Latency tracking
+            team_and_key_labels = [
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+            ]
             self.litellm_deployment_latency_per_output_token = Histogram(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
