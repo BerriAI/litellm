@@ -15,6 +15,7 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingMetadata
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import StandardLoggingPayload
 
@@ -273,12 +274,16 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_successful_fallbacks = Counter(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                ["primary_model", "fallback_model"],
+                ["primary_model", "fallback_model"]
+                + team_and_key_labels
+                + EXCEPTION_LABELS,
             )
             self.litellm_deployment_failed_fallbacks = Counter(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                ["primary_model", "fallback_model"],
+                ["primary_model", "fallback_model"]
+                + team_and_key_labels
+                + EXCEPTION_LABELS,
             )
 
             self.litellm_llm_api_failed_requests_metric = Counter(
@@ -832,26 +837,56 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_success_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
+        """
+
+        Logs a successful LLM fallback event on prometheus
+
+        """
         verbose_logger.debug(
             "Prometheus: log_success_fallback_event, original_model_group: %s, kwargs: %s",
             original_model_group,
             kwargs,
         )
+        _metadata = kwargs.get("metadata", {})
+        standard_metadata = StandardLoggingMetadata(**_metadata)
         _new_model = kwargs.get("model")
         self.litellm_deployment_successful_fallbacks.labels(
-            primary_model=original_model_group, fallback_model=_new_model
+            primary_model=original_model_group,
+            fallback_model=_new_model,
+            hashed_api_key=standard_metadata["user_api_key_alias"],
+            api_key_alias=standard_metadata["user_api_key_alias"],
+            team=standard_metadata["user_api_key_team_id"],
+            team_alias=standard_metadata["user_api_key_team_alias"],
+            exception_status=str(getattr(original_exception, "status_code", None)),
+            exception_class=str(original_exception.__class__.__name__),
         ).inc()
 
-    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_failure_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
+        """
+        Logs a failed LLM fallback event on prometheus
+        """
         verbose_logger.debug(
             "Prometheus: log_failure_fallback_event, original_model_group: %s, kwargs: %s",
             original_model_group,
             kwargs,
         )
         _new_model = kwargs.get("model")
+        _metadata = kwargs.get("metadata", {})
+        standard_metadata = StandardLoggingMetadata(**_metadata)
         self.litellm_deployment_failed_fallbacks.labels(
-            primary_model=original_model_group, fallback_model=_new_model
+            primary_model=original_model_group,
+            fallback_model=_new_model,
+            hashed_api_key=standard_metadata["user_api_key_hash"],
+            api_key_alias=standard_metadata["user_api_key_alias"],
+            team=standard_metadata["user_api_key_team_id"],
+            team_alias=standard_metadata["user_api_key_team_alias"],
+            exception_status=str(getattr(original_exception, "status_code", None)),
+            exception_class=str(original_exception.__class__.__name__),
         ).inc()
 
     def set_litellm_deployment_state(
