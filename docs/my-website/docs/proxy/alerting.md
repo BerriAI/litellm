@@ -310,43 +310,43 @@ LLM-related Alerts
 
 | Alert Type | Description | Default On |
 |------------|-------------|---------|
-| llm_exceptions | Alerts for LLM API exceptions | ✅ |
-| llm_too_slow | Notifications for LLM responses slower than the set threshold | ✅ |
-| llm_requests_hanging | Alerts for LLM requests that are not completing | ✅ |
-| cooldown_deployment | Alerts when a deployment is put into cooldown | ✅ |
-| new_model_added | Notifications when a new model is added to the system | ✅ |
-| outage_alerts | General alerts for system outages | ✅ |
-| region_outage_alerts | Specific alerts for regional outages | ✅ |
+| `llm_exceptions` | Alerts for LLM API exceptions | ✅ |
+| `llm_too_slow` | Notifications for LLM responses slower than the set threshold | ✅ |
+| `llm_requests_hanging` | Alerts for LLM requests that are not completing | ✅ |
+| `cooldown_deployment` | Alerts when a deployment is put into cooldown | ✅ |
+| `new_model_added` | Notifications when a new model is added to the system | ✅ |
+| `outage_alerts` | General alerts for system outages | ✅ |
+| `region_outage_alerts` | Specific alerts for regional outages | ✅ |
 
 Budget and Spend Alerts
 
 | Alert Type | Description | Default On|
 |------------|-------------|---------|
-| budget_alerts | Notifications related to budget limits or thresholds | ✅ |
-| spend_reports | Periodic reports on spending across teams or tags | ✅ |
-| failed_tracking_spend | Alerts when spend tracking fails | ✅ |
-| daily_reports | Daily summaries of system performance and usage | ✅ |
-| fallback_reports | Reports on fallback occurrences and performance | ✅ |
+| `budget_alerts` | Notifications related to budget limits or thresholds | ✅ |
+| `spend_reports` | Periodic reports on spending across teams or tags | ✅ |
+| `failed_tracking_spend` | Alerts when spend tracking fails | ✅ |
+| `daily_reports` | Daily summaries of system performance and usage | ✅ |
+| `fallback_reports` | Reports on fallback occurrences and performance | ✅ |
 
 Database Alerts
 
 | Alert Type | Description | Default On |
 |------------|-------------|---------|
-| db_exceptions | Notifications for database-related exceptions | ✅ |
+| `db_exceptions` | Notifications for database-related exceptions | ✅ |
 
 Management Endpoint Alerts - Virtual Key, Team, Internal User
 
 | Alert Type | Description | Default On |
 |------------|-------------|---------|
-| new_virtual_key_created | Notifications when a new virtual key is created | ❌ |
-| virtual_key_updated | Alerts when a virtual key is modified | ❌ |
-| virtual_key_deleted | Notifications when a virtual key is removed | ❌ |
-| new_team_created | Alerts for the creation of a new team | ❌ |
-| team_updated | Notifications when team details are modified | ❌ |
-| team_deleted | Alerts when a team is deleted | ❌ |
-| new_internal_user_created | Notifications for new internal user accounts | ❌ |
-| internal_user_updated | Alerts when an internal user's details are changed | ❌ |
-| internal_user_deleted | Notifications when an internal user account is removed | ❌ |
+| `new_virtual_key_created` | Notifications when a new virtual key is created | ❌ |
+| `virtual_key_updated` | Alerts when a virtual key is modified | ❌ |
+| `virtual_key_deleted` | Notifications when a virtual key is removed | ❌ |
+| `new_team_created` | Alerts for the creation of a new team | ❌ |
+| `team_updated` | Notifications when team details are modified | ❌ |
+| `team_deleted` | Alerts when a team is deleted | ❌ |
+| `new_internal_user_created` | Notifications for new internal user accounts | ❌ |
+| `internal_user_updated` | Alerts when an internal user's details are changed | ❌ |
+| `internal_user_deleted` | Notifications when an internal user account is removed | ❌ |
 
 
 ##  [BETA] Webhooks for Budget Alerts
