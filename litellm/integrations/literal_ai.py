@@ -5,6 +5,7 @@ import os
 from typing import Optional
 import httpx
 import uuid
+import asyncio
 
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -40,8 +41,8 @@ class LiteralAILogger(CustomBatchLogger):
         batch_size = (
             os.getenv("LITERAL_BATCH_SIZE", None)
         )
- 
-        super().__init__(**kwargs, batch_size=int(batch_size) if batch_size else None)
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock, batch_size=int(batch_size) if batch_size else None)
 
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
