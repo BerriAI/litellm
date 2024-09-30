@@ -24,7 +24,7 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 # It is used to encrypt / decrypt your LLM API Key credentials
 # We recommned - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
-echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
 source .env
 
@@ -684,7 +684,27 @@ docker run ghcr.io/berriai/litellm:main-latest \
 
 Provide an ssl certificate when starting litellm proxy server 
 
-### 3. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
+### 3. Using Http/2 with Hypercorn
+
+Use this if you want to run the proxy with hypercorn to support http/2
+
+**Usage**
+Pass the `--run_hypercorn` flag when starting the proxy
+
+```shell
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -p 4000:4000 \
+    -e LITELLM_LOG="DEBUG"\
+    -e SERVER_ROOT_PATH="/api/v1"\
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+    -e LITELLM_MASTER_KEY="sk-1234"\
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml
+    --run_hypercorn
+```
+
+### 4. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 

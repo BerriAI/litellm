@@ -3,20 +3,16 @@ import json
 import os
 import time
 import types
-import uuid
 from typing import Any, Callable, Coroutine, Iterable, List, Literal, Optional, Union
 
 import httpx  # type: ignore
-import requests
 from openai import AsyncAzureOpenAI, AzureOpenAI
-from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import (
     CustomStreamWrapper,
@@ -28,13 +24,6 @@ from litellm.utils import (
 )
 
 from ...types.llms.openai import (
-    Assistant,
-    AssistantEventHandler,
-    AssistantStreamManager,
-    AssistantToolParam,
-    AsyncAssistantEventHandler,
-    AsyncAssistantStreamManager,
-    AsyncCursorPage,
     Batch,
     CancelBatchRequest,
     ChatCompletionToolChoiceFunctionParam,
@@ -43,15 +32,10 @@ from ...types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     CreateBatchRequest,
     HttpxBinaryResponseContent,
-    MessageData,
-    OpenAICreateThreadParamsMessage,
-    OpenAIMessage,
     RetrieveBatchRequest,
-    Run,
-    SyncCursorPage,
-    Thread,
 )
 from ..base import BaseLLM
+from .common_utils import process_azure_headers
 
 azure_ad_cache = DualCache()
 
@@ -761,6 +745,7 @@ class AzureChatCompletion(BaseLLM):
                     response_object=stringified_response,
                     model_response_object=model_response,
                     convert_tool_call_to_json_mode=json_mode,
+                    _response_headers=headers,
                 )
         except AzureOpenAIError as e:
             raise e
@@ -953,6 +938,7 @@ class AzureChatCompletion(BaseLLM):
             model=model,
             custom_llm_provider="azure",
             logging_obj=logging_obj,
+            _response_headers=process_azure_headers(headers),
         )
         return streamwrapper
 
@@ -1067,7 +1053,7 @@ class AzureChatCompletion(BaseLLM):
                 response_object=stringified_response,
                 model_response_object=model_response,
                 hidden_params={"headers": headers},
-                _response_headers=headers,
+                _response_headers=process_azure_headers(headers),
                 response_type="embedding",
             )
         except Exception as e:
@@ -1156,6 +1142,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = client
             ## COMPLETION CALL
             raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            headers = dict(raw_response.headers)
             response = raw_response.parse()
             ## LOGGING
             logging_obj.post_call(
@@ -1165,7 +1152,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding", _response_headers=process_azure_headers(headers))  # type: ignore
         except AzureOpenAIError as e:
             raise e
         except Exception as e:

@@ -1,5 +1,15 @@
 model_list:
- - model_name: gpt-3.5-turbo
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json"
+  - model_name: text-embedding-ada-002
+    litellm_params:
+      model: openai/text-embedding-ada-002                          # The `openai/` prefix will call openai.chat.completions.create
+      api_key: os.environ/OPENAI_API_KEY
+ - model_name: db-openai-endpoint
    litellm_params:
      model: openai/gpt-3.5-turbo
      api_key: fake-key
@@ -23,11 +33,10 @@ general_settings:
     service_account_settings: 
         enforced_params: ["user"]
 
+
 litellm_settings:
-  cache: true
-  # callbacks: ["otel"]
+  drop_params: True
+  callbacks: ["otel"]
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
 
-
-general_settings:
-  service_account_settings:
-    enforced_params: ["user"]

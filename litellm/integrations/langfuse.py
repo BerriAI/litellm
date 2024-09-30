@@ -44,6 +44,9 @@ class LangFuseLogger:
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+        self.langfuse_flush_interval = (
+            os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
+        )
 
         parameters = {
             "public_key": self.public_key,
@@ -51,7 +54,7 @@ class LangFuseLogger:
             "host": self.langfuse_host,
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
-            "flush_interval": flush_interval,  # flush interval in seconds
+            "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
         }
 
         if Version(langfuse.version.__version__) >= Version("2.6.0"):
@@ -598,7 +601,7 @@ class LangFuseLogger:
                 "input": input if not mask_input else "redacted-by-litellm",
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
-                "metadata": clean_metadata,
+                "metadata": log_requester_metadata(clean_metadata),
                 "level": level,
                 "version": clean_metadata.pop("version", None),
             }
@@ -765,3 +768,15 @@ def log_provider_specific_information_as_span(
                 name="vertex_ai_grounding_metadata",
                 input=vertex_ai_grounding_metadata,
             )
+
+
+def log_requester_metadata(clean_metadata: dict):
+    returned_metadata = {}
+    requester_metadata = clean_metadata.get("requester_metadata") or {}
+    for k, v in clean_metadata.items():
+        if k not in requester_metadata:
+            returned_metadata[k] = v
+
+    returned_metadata.update({"requester_metadata": requester_metadata})
+
+    return returned_metadata

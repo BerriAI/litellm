@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.proxy._types import CommonProxyErrors
 from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -97,7 +98,9 @@ try:
         GenericAPILogger,
     )
 except Exception as e:
-    verbose_logger.debug(f"Exception import enterprise features {str(e)}")
+    verbose_logger.debug(
+        f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}"
+    )
 
 _in_memory_loggers: List[Any] = []
 
@@ -1012,9 +1015,8 @@ class Logging:
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
-                                != langFuseLogger.public_key
+                                self.langfuse_secret is not None
+                                and self.langfuse_secret != langFuseLogger.secret_key
                             )
                             or (
                                 self.langfuse_host is not None
@@ -1042,7 +1044,6 @@ class Logging:
                                     service_name="langfuse",
                                     logging_obj=temp_langfuse_logger,
                                 )
-
                         if temp_langfuse_logger is not None:
                             _response = temp_langfuse_logger.log_event(
                                 kwargs=kwargs,
@@ -2140,7 +2141,8 @@ def _init_custom_logger_compatible_class(
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
-) -> CustomLogger:
+    premium_user: Optional[bool] = None,
+) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -2178,9 +2180,17 @@ def _init_custom_logger_compatible_class(
             if isinstance(callback, PrometheusLogger):
                 return callback  # type: ignore
 
-        _prometheus_logger = PrometheusLogger()
-        _in_memory_loggers.append(_prometheus_logger)
-        return _prometheus_logger  # type: ignore
+        if premium_user:
+            _prometheus_logger = PrometheusLogger()
+            _in_memory_loggers.append(_prometheus_logger)
+            return _prometheus_logger  # type: ignore
+        elif premium_user is False:
+            verbose_logger.warning(
+                f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
+            )
+            return None
+        else:
+            return None
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):
@@ -2411,6 +2421,7 @@ def get_standard_logging_object_payload(
             response_obj = init_response_obj
         else:
             response_obj = {}
+
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
@@ -2467,31 +2478,7 @@ def get_standard_logging_object_payload(
                 }
             )
         # clean up litellm metadata
-        clean_metadata = StandardLoggingMetadata(
-            user_api_key_hash=None,
-            user_api_key_alias=None,
-            user_api_key_team_id=None,
-            user_api_key_user_id=None,
-            user_api_key_team_alias=None,
-            spend_logs_metadata=None,
-            requester_ip_address=None,
-            requester_metadata=None,
-        )
-        if isinstance(metadata, dict):
-            # Filter the metadata dictionary to include only the specified keys
-            clean_metadata = StandardLoggingMetadata(
-                **{  # type: ignore
-                    key: metadata[key]
-                    for key in StandardLoggingMetadata.__annotations__.keys()
-                    if key in metadata
-                }
-            )
-
-            if metadata.get("user_api_key") is not None:
-                if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                    clean_metadata["user_api_key_hash"] = metadata.get(
-                        "user_api_key"
-                    )  # this is the hash
+        clean_metadata = get_standard_logging_metadata(metadata=metadata)
 
         if litellm.cache is not None:
             cache_key = litellm.cache.get_cache_key(**kwargs)
@@ -2546,6 +2533,16 @@ def get_standard_logging_object_payload(
 
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
+        if response_obj is not None:
+            final_response_obj: Optional[Union[dict, str, list]] = response_obj
+        elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
+            final_response_obj = init_response_obj
+        else:
+            final_response_obj = None
+
+        if litellm.turn_off_message_logging:
+            final_response_obj = "redacted-by-litellm"
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
@@ -2569,9 +2566,7 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
-            response=(  # type: ignore
-                response_obj if len(response_obj.keys()) > 0 else init_response_obj  # type: ignore
-            ),
+            response=final_response_obj,
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
@@ -2591,6 +2586,51 @@ def get_standard_logging_object_payload(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
+
+
+def get_standard_logging_metadata(
+    metadata: Optional[Dict[str, Any]]
+) -> StandardLoggingMetadata:
+    """
+    Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
+
+    Args:
+        metadata (Optional[Dict[str, Any]]): The original metadata dictionary.
+
+    Returns:
+        StandardLoggingMetadata: A StandardLoggingMetadata object containing the cleaned metadata.
+
+    Note:
+        - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
+        - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
+    """
+    # Initialize with default values
+    clean_metadata = StandardLoggingMetadata(
+        user_api_key_hash=None,
+        user_api_key_alias=None,
+        user_api_key_team_id=None,
+        user_api_key_user_id=None,
+        user_api_key_team_alias=None,
+        spend_logs_metadata=None,
+        requester_ip_address=None,
+        requester_metadata=None,
+    )
+    if isinstance(metadata, dict):
+        # Filter the metadata dictionary to include only the specified keys
+        clean_metadata = StandardLoggingMetadata(
+            **{  # type: ignore
+                key: metadata[key]
+                for key in StandardLoggingMetadata.__annotations__.keys()
+                if key in metadata
+            }
+        )
+
+        if metadata.get("user_api_key") is not None:
+            if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
+                clean_metadata["user_api_key_hash"] = metadata.get(
+                    "user_api_key"
+                )  # this is the hash
+    return clean_metadata
 
 
 def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):

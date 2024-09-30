@@ -80,6 +80,10 @@ class PrometheusLogger(CustomLogger):
                 "Total latency (seconds) for a request to LiteLLM",
                 labelnames=[
                     "model",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "team",
+                    "team_alias",
                 ],
             )
 
@@ -88,6 +92,10 @@ class PrometheusLogger(CustomLogger):
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
                     "model",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "team",
+                    "team_alias",
                 ],
             )
 
@@ -216,6 +224,12 @@ class PrometheusLogger(CustomLogger):
                 "api_base",
                 "api_provider",
             ]
+            team_and_key_labels = [
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+            ]
 
             # Metric for deployment state
             self.litellm_deployment_state = Gauge(
@@ -233,35 +247,48 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_success_responses = Counter(
                 name="litellm_deployment_success_responses",
                 documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + team_and_key_labels,
             )
             self.litellm_deployment_failure_responses = Counter(
                 name="litellm_deployment_failure_responses",
                 documentation="LLM Deployment Analytics - Total number of failed LLM API calls for a specific LLM deploymeny. exception_status is the status of the exception from the llm api",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + EXCEPTION_LABELS,
+                labelnames=[REQUESTED_MODEL]
+                + _logged_llm_labels
+                + EXCEPTION_LABELS
+                + team_and_key_labels,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
-                labelnames=[REQUESTED_MODEL] + _logged_llm_labels,
+                labelnames=[REQUESTED_MODEL] + _logged_llm_labels + team_and_key_labels,
             )
 
             # Deployment Latency tracking
+            team_and_key_labels = [
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+            ]
             self.litellm_deployment_latency_per_output_token = Histogram(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
-                labelnames=_logged_llm_labels,
+                labelnames=_logged_llm_labels + team_and_key_labels,
             )
 
             self.litellm_deployment_successful_fallbacks = Counter(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                ["primary_model", "fallback_model"],
+                [REQUESTED_MODEL, "fallback_model"]
+                + team_and_key_labels
+                + EXCEPTION_LABELS,
             )
             self.litellm_deployment_failed_fallbacks = Counter(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                ["primary_model", "fallback_model"],
+                [REQUESTED_MODEL, "fallback_model"]
+                + team_and_key_labels
+                + EXCEPTION_LABELS,
             )
 
             self.litellm_llm_api_failed_requests_metric = Counter(
@@ -448,14 +475,22 @@ class PrometheusLogger(CustomLogger):
                 kwargs.get("end_time") - api_call_start_time
             )
             api_call_total_time_seconds = api_call_total_time.total_seconds()
-            self.litellm_llm_api_latency_metric.labels(model).observe(
-                api_call_total_time_seconds
-            )
+            self.litellm_llm_api_latency_metric.labels(
+                model,
+                user_api_key,
+                user_api_key_alias,
+                user_api_team,
+                user_api_team_alias,
+            ).observe(api_call_total_time_seconds)
 
         # log metrics
-        self.litellm_request_total_latency_metric.labels(model).observe(
-            total_time_seconds
-        )
+        self.litellm_request_total_latency_metric.labels(
+            model,
+            user_api_key,
+            user_api_key_alias,
+            user_api_team,
+            user_api_team_alias,
+        ).observe(total_time_seconds)
 
         # set x-ratelimit headers
         self.set_llm_deployment_success_metrics(
@@ -579,6 +614,9 @@ class PrometheusLogger(CustomLogger):
     def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
+            standard_logging_payload: StandardLoggingPayload = request_kwargs.get(
+                "standard_logging_object", {}
+            )
             _response_headers = request_kwargs.get("response_headers")
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             _metadata = _litellm_params.get("metadata", {})
@@ -610,6 +648,16 @@ class PrometheusLogger(CustomLogger):
                 exception_status=str(getattr(exception, "status_code", None)),
                 exception_class=exception.__class__.__name__,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -618,6 +666,16 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             pass
@@ -706,6 +764,16 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             self.litellm_deployment_total_requests.labels(
@@ -714,6 +782,16 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
                 requested_model=model_group,
+                hashed_api_key=standard_logging_payload["metadata"][
+                    "user_api_key_hash"
+                ],
+                api_key_alias=standard_logging_payload["metadata"][
+                    "user_api_key_alias"
+                ],
+                team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                team_alias=standard_logging_payload["metadata"][
+                    "user_api_key_team_alias"
+                ],
             ).inc()
 
             # Track deployment Latency
@@ -744,6 +822,16 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    hashed_api_key=standard_logging_payload["metadata"][
+                        "user_api_key_hash"
+                    ],
+                    api_key_alias=standard_logging_payload["metadata"][
+                        "user_api_key_alias"
+                    ],
+                    team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+                    team_alias=standard_logging_payload["metadata"][
+                        "user_api_key_team_alias"
+                    ],
                 ).observe(latency_per_token)
 
         except Exception as e:
@@ -754,26 +842,70 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_success_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
+        """
+
+        Logs a successful LLM fallback event on prometheus
+
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingMetadata,
+            get_standard_logging_metadata,
+        )
+
         verbose_logger.debug(
             "Prometheus: log_success_fallback_event, original_model_group: %s, kwargs: %s",
             original_model_group,
             kwargs,
         )
+        _metadata = kwargs.get("metadata", {})
+        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
+            metadata=_metadata
+        )
         _new_model = kwargs.get("model")
         self.litellm_deployment_successful_fallbacks.labels(
-            primary_model=original_model_group, fallback_model=_new_model
+            requested_model=original_model_group,
+            fallback_model=_new_model,
+            hashed_api_key=standard_metadata["user_api_key_hash"],
+            api_key_alias=standard_metadata["user_api_key_alias"],
+            team=standard_metadata["user_api_key_team_id"],
+            team_alias=standard_metadata["user_api_key_team_alias"],
+            exception_status=str(getattr(original_exception, "status_code", None)),
+            exception_class=str(original_exception.__class__.__name__),
         ).inc()
 
-    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_failure_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
+        """
+        Logs a failed LLM fallback event on prometheus
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingMetadata,
+            get_standard_logging_metadata,
+        )
+
         verbose_logger.debug(
             "Prometheus: log_failure_fallback_event, original_model_group: %s, kwargs: %s",
             original_model_group,
             kwargs,
         )
         _new_model = kwargs.get("model")
+        _metadata = kwargs.get("metadata", {})
+        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
+            metadata=_metadata
+        )
         self.litellm_deployment_failed_fallbacks.labels(
-            primary_model=original_model_group, fallback_model=_new_model
+            requested_model=original_model_group,
+            fallback_model=_new_model,
+            hashed_api_key=standard_metadata["user_api_key_hash"],
+            api_key_alias=standard_metadata["user_api_key_alias"],
+            team=standard_metadata["user_api_key_team_id"],
+            team_alias=standard_metadata["user_api_key_team_alias"],
+            exception_status=str(getattr(original_exception, "status_code", None)),
+            exception_class=str(original_exception.__class__.__name__),
         ).inc()
 
     def set_litellm_deployment_state(

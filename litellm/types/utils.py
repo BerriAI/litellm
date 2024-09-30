@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
-from pydantic import ConfigDict, Field, PrivateAttr
+from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -59,6 +59,7 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
+    input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -1354,3 +1355,13 @@ class CustomStreamingDecoder:
 
 class StandardPassThroughResponseObject(TypedDict):
     response: str
+
+
+OPENAI_RESPONSE_HEADERS = [
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+]

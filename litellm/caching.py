@@ -123,7 +123,7 @@ class InMemoryCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
         for cache_key, cache_value in cache_list:
             if ttl is not None:
                 self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
@@ -461,6 +461,9 @@ class RedisCache(BaseCache):
         """
         Use Redis Pipelines for bulk write operations
         """
+        # don't waste a network request if there's nothing to set
+        if len(cache_list) == 0:
+            return
         from redis.asyncio import Redis
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
@@ -2038,7 +2041,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
+                    cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
             verbose_logger.exception(
@@ -2398,12 +2401,12 @@ class Cache:
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         print_verbose(f"Hashed cache key (SHA-256): {hash_hex}")
-        if self.namespace is not None:
-            hash_hex = f"{self.namespace}:{hash_hex}"
-            print_verbose(f"Hashed Key with Namespace: {hash_hex}")
-        elif kwargs.get("metadata", {}).get("redis_namespace", None) is not None:
+        if kwargs.get("metadata", {}).get("redis_namespace", None) is not None:
             _namespace = kwargs.get("metadata", {}).get("redis_namespace", None)
             hash_hex = f"{_namespace}:{hash_hex}"
+            print_verbose(f"Hashed Key with Namespace: {hash_hex}")
+        elif self.namespace is not None:
+            hash_hex = f"{self.namespace}:{hash_hex}"
             print_verbose(f"Hashed Key with Namespace: {hash_hex}")
         return hash_hex
 

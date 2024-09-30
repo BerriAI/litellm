@@ -3,6 +3,9 @@ jobs:
   local_testing:
     docker:
       - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -105,7 +108,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
+            python -m pytest -vv tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
           no_output_timeout: 120m
 
       # Store test results
@@ -114,6 +117,9 @@ jobs:
   ui_endpoint_testing:
     docker:
       - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -152,6 +158,9 @@ jobs:
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
         - image: cimg/python:3.11
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -171,7 +180,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest litellm/tests/ -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
@@ -179,6 +188,9 @@ jobs:
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
         - image: cimg/python:3.11
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -198,7 +210,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest litellm/tests/ -vv -k "assistants" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing/ -vv -k "assistants" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
@@ -206,6 +218,9 @@ jobs:
   load_testing:
     docker:
       - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -233,6 +248,9 @@ jobs:
   llm_translation_testing:
     docker:
       - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -262,6 +280,9 @@ jobs:
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -285,7 +306,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_python_38.py
 
   build_and_test:
     machine:
@@ -398,7 +419,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation
           no_output_timeout: 120m
 
       # Store test results
