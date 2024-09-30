@@ -4,17 +4,17 @@ Handler for Snowflake's Cortex Complete endpoint
 
 import json
 import time
-import types
 from typing import Callable, Optional
 
 import httpx
 
+from litellm.llms.OpenAI.openai import OpenAIConfig
 from litellm.llms.snowflake.snowflake_utils import ModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ..base import BaseLLM
-from ..prompt_templates.factory import custom_prompt, prompt_factory
+
 
 
 class SnowflakeError(Exception):
@@ -26,52 +26,6 @@ class SnowflakeError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
-
-
-class SnowflakeTextConfig:
-    """
-    Reference: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api
-    """
-
-    max_tokens_to_sample: Optional[int] = None
-    stop_sequences: Optional[list] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    metadata: Optional[dict] = None
-
-    def __init__(
-        self,
-        max_tokens_to_sample: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[int] = None,
-        metadata: Optional[dict] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
 
 # makes headers for API call
 def validate_environment(api_key, user_headers):
@@ -202,7 +156,7 @@ class SnowflakeTextCompletion(BaseLLM):
 
         ## LOGGING
         logging_obj.post_call(
-            input=data["content"],
+            input=data["messages"],
             api_key=headers.get("Authorization"),
             original_response=response.text,
             additional_args={"complete_input_dict": data},
@@ -212,7 +166,7 @@ class SnowflakeTextCompletion(BaseLLM):
             model_response=model_response,
             response=response,
             encoding=encoding,
-            prompt=data["content"],
+            prompt=data["messages"],
             model=model,
         )
         return response
@@ -265,35 +219,23 @@ class SnowflakeTextCompletion(BaseLLM):
         client=None,
     ):
         headers = validate_environment(api_key, headers)
-        if model in custom_prompt_dict:
-            # check if the model has a registered custom prompt
-            model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
-            )
-        else:
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="snowflake"
-            )
 
         ## Load Config
-        config = SnowflakeTextConfig.get_config()
+        # config = SnowflakeTextConfig.get_config()
+        config = OpenAIConfig.get_config()
         for k, v in config.items():
-            if k not in optional_params:
-                optional_params[k] = v
+             if k not in optional_params:
+                 optional_params[k] = v
 
         data = {
             "model": model,
-            "messages": [{"content": prompt}],
+            "messages": messages,
             **optional_params,
         }
 
         ## LOGGING
         logging_obj.pre_call(
-            input=prompt,
+            input=messages[0]['content'],
             api_key=api_key,
             additional_args={
                 "complete_input_dict": data,
@@ -358,7 +300,7 @@ class SnowflakeTextCompletion(BaseLLM):
 
             ## LOGGING
             logging_obj.post_call(
-                input=prompt,
+                input=data["messages"],
                 api_key=api_key,
                 original_response=response.text,
                 additional_args={"complete_input_dict": data},
