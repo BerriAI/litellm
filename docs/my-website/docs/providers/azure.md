@@ -82,9 +82,6 @@ export AZURE_API_KEY=""
 
 ### 2. Start the proxy 
 
-<Tabs>
-<TabItem value="config" label="config.yaml">
-
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -94,27 +91,8 @@ model_list:
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env.
 ```
-</TabItem>
-<TabItem value="config-*" label="config.yaml (Entrata ID) use tenant_id, client_id, client_secret">
-
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_version: "2023-05-15"
-      tenant_id: os.environ/AZURE_TENANT_ID
-      client_id: os.environ/AZURE_CLIENT_ID
-      client_secret: os.environ/AZURE_CLIENT_SECRET
-```
-</TabItem>
-
-</Tabs>
 
 ### 3. Test it
-
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -360,6 +338,153 @@ response = speech(
 response.stream_to_file(speech_file_path)
 ```
 
+## **Authentication**
+
+
+### Entrata ID - use `azure_ad_token`
+
+This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
+
+Step 1 - Download Azure CLI 
+Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+```shell
+brew update && brew install azure-cli
+```
+Step 2 - Sign in using `az`
+```shell
+az login --output table
+```
+
+Step 3 - Generate azure ad token
+```shell
+az account get-access-token --resource https://cognitiveservices.azure.com
+```
+
+In this step you should see an `accessToken` generated
+```shell
+{
+  "accessToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSIsImtpZCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSJ9",
+  "expiresOn": "2023-11-14 15:50:46.000000",
+  "expires_on": 1700005846,
+  "subscription": "db38de1f-4bb3..",
+  "tenant": "bdfd79b3-8401-47..",
+  "tokenType": "Bearer"
+}
+```
+
+Step 4 - Make litellm.completion call with Azure AD token
+
+Set `azure_ad_token` = `accessToken` from step 3 or set `os.environ['AZURE_AD_TOKEN']`
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+
+```python
+response = litellm.completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token="", 									# your accessToken from step 3 
+    messages = [{"role": "user", "content": "good morning"}],
+)
+
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: os.environ/AZURE_AD_TOKEN
+```
+
+</TabItem>
+</Tabs>
+
+### Entrata ID - use tenant_id, client_id, client_secret
+
+Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      tenant_id: os.environ/AZURE_TENANT_ID
+      client_id: os.environ/AZURE_CLIENT_ID
+      client_secret: os.environ/AZURE_CLIENT_SECRET
+```
+
+Test it 
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Proxy Server
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+### Azure AD Token Refresh - `DefaultAzureCredential`
+
+Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
+
+
+response = completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token_provider=token_provider
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/your-deployment-name
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+
+litellm_settings:
+    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
+
+
 ## Advanced
 ### Azure API Load-Balancing
 
@@ -487,86 +612,3 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 print("\nTool Choice:\n", tool_calls)
 ```
-
-
-### Authentication with Azure Active Directory Tokens (Microsoft Entra ID)
-This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
-
-Step 1 - Download Azure CLI 
-Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
-```shell
-brew update && brew install azure-cli
-```
-Step 2 - Sign in using `az`
-```shell
-az login --output table
-```
-
-Step 3 - Generate azure ad token
-```shell
-az account get-access-token --resource https://cognitiveservices.azure.com
-```
-
-In this step you should see an `accessToken` generated
-```shell
-{
-  "accessToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSIsImtpZCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSJ9",
-  "expiresOn": "2023-11-14 15:50:46.000000",
-  "expires_on": 1700005846,
-  "subscription": "db38de1f-4bb3..",
-  "tenant": "bdfd79b3-8401-47..",
-  "tokenType": "Bearer"
-}
-```
-
-Step 4 - Make litellm.completion call with Azure AD token
-
-Set `azure_ad_token` = `accessToken` from step 3 or set `os.environ['AZURE_AD_TOKEN']`
-
-```python
-response = litellm.completion(
-    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
-    api_base = "",                                      # azure api base
-    api_version = "",                                   # azure api version
-    azure_ad_token="", 									# your accessToken from step 3 
-    messages = [{"role": "user", "content": "good morning"}],
-)
-
-```
-### Azure AD Token Refresh
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-
-token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
-
-
-response = completion(
-    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
-    api_base = "",                                      # azure api base
-    api_version = "",                                   # azure api version
-    azure_ad_token_provider=token_provider
-    messages = [{"role": "user", "content": "good morning"}],
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY config.yaml">
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/your-deployment-name
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-
-litellm_settings:
-    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
-```
-
-</TabItem>
-</Tabs>
