@@ -304,51 +304,6 @@ environment_variables:
 ```
 
 
-## **All Possible Alert Types**
-
-LLM-related Alerts
-
-| Alert Type | Description | Default On |
-|------------|-------------|---------|
-| `llm_exceptions` | Alerts for LLM API exceptions | ✅ |
-| `llm_too_slow` | Notifications for LLM responses slower than the set threshold | ✅ |
-| `llm_requests_hanging` | Alerts for LLM requests that are not completing | ✅ |
-| `cooldown_deployment` | Alerts when a deployment is put into cooldown | ✅ |
-| `new_model_added` | Notifications when a new model is added to litellm proxy through /model/new| ✅ |
-| `outage_alerts` | Alerts when a specific LLM deployment is facing an outage | ✅ |
-| `region_outage_alerts` | Alerts when a specfic LLM region is facing an outage. Example us-east-1 | ✅ |
-
-Budget and Spend Alerts
-
-| Alert Type | Description | Default On|
-|------------|-------------|---------|
-| `budget_alerts` | Notifications related to budget limits or thresholds | ✅ |
-| `spend_reports` | Periodic reports on spending across teams or tags | ✅ |
-| `failed_tracking_spend` | Alerts when spend tracking fails | ✅ |
-| `daily_reports` | Daily Spend reports | ✅ |
-| `fallback_reports` | Weekly Reports on LLM fallback occurrences | ✅ |
-
-Database Alerts
-
-| Alert Type | Description | Default On |
-|------------|-------------|---------|
-| `db_exceptions` | Notifications for database-related exceptions | ✅ |
-
-Management Endpoint Alerts - Virtual Key, Team, Internal User
-
-| Alert Type | Description | Default On |
-|------------|-------------|---------|
-| `new_virtual_key_created` | Notifications when a new virtual key is created | ❌ |
-| `virtual_key_updated` | Alerts when a virtual key is modified | ❌ |
-| `virtual_key_deleted` | Notifications when a virtual key is removed | ❌ |
-| `new_team_created` | Alerts for the creation of a new team | ❌ |
-| `team_updated` | Notifications when team details are modified | ❌ |
-| `team_deleted` | Alerts when a team is deleted | ❌ |
-| `new_internal_user_created` | Notifications for new internal user accounts | ❌ |
-| `internal_user_updated` | Alerts when an internal user's details are changed | ❌ |
-| `internal_user_deleted` | Notifications when an internal user account is removed | ❌ |
-
-
 ##  [BETA] Webhooks for Budget Alerts
 
 **Note**: This is a beta feature, so the spec might change.
@@ -403,7 +358,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 }
 ```
 
-## **API Spec for Webhook Event**
+### API Spec for Webhook Event
 
 - `spend` *float*: The current spend amount for the 'event_group'.
 - `max_budget` *float or null*: The maximum allowed budget for the 'event_group'. null if not set. 
@@ -456,3 +411,49 @@ general_settings:
         minor_outage_alert_threshold: 5 # number of errors to trigger a minor alert
         major_outage_alert_threshold: 10 # number of errors to trigger a major alert
 ```
+
+## **All Possible Alert Types**
+
+👉 [**Here is how you can set specific alert types**](#opting-into-specific-alert-types)
+
+LLM-related Alerts
+
+| Alert Type | Description | Default On |
+|------------|-------------|---------|
+| `llm_exceptions` | Alerts for LLM API exceptions | ✅ |
+| `llm_too_slow` | Notifications for LLM responses slower than the set threshold | ✅ |
+| `llm_requests_hanging` | Alerts for LLM requests that are not completing | ✅ |
+| `cooldown_deployment` | Alerts when a deployment is put into cooldown | ✅ |
+| `new_model_added` | Notifications when a new model is added to litellm proxy through /model/new| ✅ |
+| `outage_alerts` | Alerts when a specific LLM deployment is facing an outage | ✅ |
+| `region_outage_alerts` | Alerts when a specfic LLM region is facing an outage. Example us-east-1 | ✅ |
+
+Budget and Spend Alerts
+
+| Alert Type | Description | Default On|
+|------------|-------------|---------|
+| `budget_alerts` | Notifications related to budget limits or thresholds | ✅ |
+| `spend_reports` | Periodic reports on spending across teams or tags | ✅ |
+| `failed_tracking_spend` | Alerts when spend tracking fails | ✅ |
+| `daily_reports` | Daily Spend reports | ✅ |
+| `fallback_reports` | Weekly Reports on LLM fallback occurrences | ✅ |
+
+Database Alerts
+
+| Alert Type | Description | Default On |
+|------------|-------------|---------|
+| `db_exceptions` | Notifications for database-related exceptions | ✅ |
+
+Management Endpoint Alerts - Virtual Key, Team, Internal User
+
+| Alert Type | Description | Default On |
+|------------|-------------|---------|
+| `new_virtual_key_created` | Notifications when a new virtual key is created | ❌ |
+| `virtual_key_updated` | Alerts when a virtual key is modified | ❌ |
+| `virtual_key_deleted` | Notifications when a virtual key is removed | ❌ |
+| `new_team_created` | Alerts for the creation of a new team | ❌ |
+| `team_updated` | Notifications when team details are modified | ❌ |
+| `team_deleted` | Alerts when a team is deleted | ❌ |
+| `new_internal_user_created` | Notifications for new internal user accounts | ❌ |
+| `internal_user_updated` | Alerts when an internal user's details are changed | ❌ |
+| `internal_user_deleted` | Notifications when an internal user account is removed | ❌ |
