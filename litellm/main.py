@@ -3049,7 +3049,7 @@ def batch_completion(
             """Yield successive n-sized chunks from lst."""
             for i in range(0, len(lst), n):
                 yield lst[i : i + n]
-
+        args.pop("max_workers")
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for sub_batch in chunks(batch_messages, 100):
                 for message_list in sub_batch:
