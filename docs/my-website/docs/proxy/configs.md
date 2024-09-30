@@ -658,6 +658,34 @@ general_settings:
 }
 ```
 
+## Router Settings
+
+```yaml
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  redis_host: <your-redis-host>
+  redis_password: <your-redis-password>
+  redis_port: <your-redis-port>
+  enable_pre_call_check: true
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+  disable_cooldowns: True
+  retry_policy: {
+    "AuthenticationErrorRetries": 3,
+    "TimeoutErrorRetries": 3,
+    "RateLimitErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4,
+    "InternalServerErrorRetries": 4
+  }
+  allowed_fails_policy: {
+    "ContentPolicyViolationErrorAllowedFails": 1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+    "RateLimitErrorAllowedFails": 100 # Allow 100 RateLimitErrors before cooling down a deployment
+  }
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+  fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+  
+
 ## Extras
 
 
