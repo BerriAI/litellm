@@ -11,6 +11,10 @@ from litellm.caching import Cache
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
+    verbose_logger,
+    json_logs,
+    _turn_on_json,
+    log_level,
 )
 
 from litellm.types.guardrails import GuardrailItem
@@ -27,7 +31,7 @@ litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
 #############################################
-if set_verbose is True:
+if set_verbose == True:
     _turn_on_debug()
 #############################################
 ### Callbacks /Logging / Success / Failure Handlers ###
@@ -292,7 +296,7 @@ output_parse_pii: bool = False
 
 def get_model_cost_map(url: str):
     if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) is True
+        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
     ):
         import importlib.resources
@@ -305,13 +309,12 @@ def get_model_cost_map(url: str):
             return content
 
     try:
-        import httpx
-
-        response = httpx.get(url, timeout=5)
-        response.raise_for_status()
+        response = httpx.get(
+            url, timeout=5
+        )  # set a 5 second timeout for the get request
+        response.raise_for_status()  # Raise an exception if the request is unsuccessful
         content = response.json()
         return content
-
     except Exception:
         import importlib.resources
         import json
@@ -835,12 +838,49 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
+from .timeout import timeout
+from .cost_calculator import completion_cost
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
+    client,
+    exception_type,
+    get_optional_params,
+    get_response_string,
+    modify_integration,
+    token_counter,
+    create_pretrained_tokenizer,
+    create_tokenizer,
+    supports_function_calling,
+    supports_response_schema,
+    supports_parallel_function_calling,
+    supports_vision,
+    supports_system_messages,
+    get_litellm_params,
+    acreate,
+    get_model_list,
+    get_max_tokens,
+    get_model_info,
+    register_prompt_template,
+    validate_environment,
+    check_valid_key,
+    register_model,
+    encode,
+    decode,
+    _calculate_retry_after,
+    _should_retry,
+    get_supported_openai_params,
+    get_api_base,
+    get_first_chars_messages,
     ModelResponse,
     EmbeddingResponse,
     ImageResponse,
     TranscriptionResponse,
     TextCompletionResponse,
+    get_provider_fields,
+    ModelResponseListIterator,
 )
 
 ALL_LITELLM_RESPONSE_TYPES = [
@@ -851,15 +891,143 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
+from .types.utils import ImageObject
+from .llms.custom_llm import CustomLLM
+from .llms.huggingface_restapi import HuggingfaceConfig
+from .llms.anthropic.chat.handler import AnthropicConfig
+from .llms.anthropic.experimental_pass_through.transformation import (
+    AnthropicExperimentalPassThroughConfig,
+)
+from .llms.groq.stt.transformation import GroqSTTConfig
+from .llms.anthropic.completion import AnthropicTextConfig
+from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.predibase import PredibaseConfig
+from .llms.replicate import ReplicateConfig
+from .llms.cohere.completion import CohereConfig
+from .llms.clarifai import ClarifaiConfig
+from .llms.AI21.completion import AI21Config
+from .llms.AI21.chat import AI21ChatConfig
+from .llms.together_ai.chat import TogetherAIConfig
+from .llms.cloudflare import CloudflareConfig
+from .llms.palm import PalmConfig
+from .llms.gemini import GeminiConfig
+from .llms.nlp_cloud import NLPCloudConfig
+from .llms.aleph_alpha import AlephAlphaConfig
+from .llms.petals import PetalsConfig
+from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
+    GoogleAIStudioGeminiConfig,
+    VertexAIConfig,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
+    VertexAITextEmbeddingConfig,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+    VertexAIAnthropicConfig,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (
+    VertexAILlama3Config,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
+    VertexAIAi21Config,
+)
 
+from .llms.sagemaker.sagemaker import SagemakerConfig
+from .llms.ollama import OllamaConfig
+from .llms.ollama_chat import OllamaChatConfig
+from .llms.maritalk import MaritTalkConfig
+from .llms.bedrock.chat.invoke_handler import (
+    AmazonCohereChatConfig,
+    AmazonConverseConfig,
+    bedrock_tool_name_mappings,
+)
+from .llms.bedrock.chat.converse_handler import (
+    BEDROCK_CONVERSE_MODELS,
+)
+from .llms.bedrock.common_utils import (
+    AmazonTitanConfig,
+    AmazonAI21Config,
+    AmazonAnthropicConfig,
+    AmazonAnthropicClaude3Config,
+    AmazonCohereConfig,
+    AmazonLlamaConfig,
+    AmazonStabilityConfig,
+    AmazonMistralConfig,
+    AmazonBedrockGlobalConfig,
+)
+from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
+from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+    AmazonTitanMultimodalEmbeddingG1Config,
+)
+from .llms.bedrock.embed.amazon_titan_v2_transformation import (
+    AmazonTitanV2Config,
+)
+from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
+from .llms.OpenAI.openai import (
+    OpenAIConfig,
+    OpenAITextCompletionConfig,
+    MistralEmbeddingConfig,
+    DeepInfraConfig,
+)
+from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from .llms.mistral.mistral_chat_transformation import MistralConfig
+from .llms.OpenAI.chat.o1_transformation import (
+    OpenAIO1Config,
+)
+from .llms.OpenAI.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+)
+from .llms.nvidia_nim import NvidiaNimConfig
+from .llms.cerebras.chat import CerebrasConfig
+from .llms.sambanova.chat import SambanovaConfig
+from .llms.AI21.chat import AI21ChatConfig
+from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
+from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
+    FireworksAIEmbeddingConfig,
+)
+from .llms.volcengine import VolcEngineConfig
+from .llms.text_completion_codestral import MistralTextCompletionConfig
+from .llms.AzureOpenAI.azure import (
+    AzureOpenAIConfig,
+    AzureOpenAIError,
+    AzureOpenAIAssistantsAPIConfig,
+)
+from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *
+from .exceptions import (
+    AuthenticationError,
+    InvalidRequestError,
+    BadRequestError,
+    NotFoundError,
+    RateLimitError,
+    ServiceUnavailableError,
+    OpenAIError,
+    ContextWindowExceededError,
+    ContentPolicyViolationError,
+    BudgetExceededError,
+    APIError,
+    Timeout,
+    APIConnectionError,
+    UnsupportedParamsError,
+    APIResponseValidationError,
+    UnprocessableEntityError,
+    InternalServerError,
+    JSONSchemaValidationError,
+    LITELLM_EXCEPTION_TYPES,
+    MockException,
+)
+from .budget_manager import BudgetManager
+from .proxy.proxy_cli import run_server
+from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .rerank_api.main import *
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
+from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
@@ -868,6 +1036,7 @@ adapters: List[AdapterItem] = []
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
+from .types.utils import GenericStreamingChunk
 
 custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
