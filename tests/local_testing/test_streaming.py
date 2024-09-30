@@ -1145,7 +1145,7 @@ def test_completion_claude_stream_bad_key():
 
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # ""
 def test_vertex_ai_stream(provider):
-    from tests.local_testing.test_amazing_vertex_completion import (
+    from test_amazing_vertex_completion import (
         load_vertex_ai_credentials,
     )
 
@@ -3951,7 +3951,7 @@ def test_unit_test_perplexity_citations_chunk():
 @pytest.mark.flaky(retries=3, delay=1)
 def test_streaming_tool_calls_valid_json_str(model):
     if "vertex_ai" in model:
-        from tests.local_testing.test_amazing_vertex_completion import (
+        from test_amazing_vertex_completion import (
             load_vertex_ai_credentials,
         )
 
