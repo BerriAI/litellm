@@ -63,7 +63,6 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
-| `litellm_requests_metric`             | Number of requests made, per `"user", "key", "model", "team", "end-user"`          |
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 | `litellm_input_tokens`         | input tokens per `"user", "key", "model", "team", "end-user"`              |
@@ -170,3 +169,10 @@ litellm_settings:
 Link to Grafana Dashboards made by LiteLLM community 
 
 https://github.com/BerriAI/litellm/tree/main/cookbook/litellm_proxy_server/grafana_dashboard
+
+## Deprecated Metrics 
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_llm_api_failed_requests_metric`             | **deprecated** use `litellm_proxy_failed_requests_metric` |
+| `litellm_requests_metric`             | **deprecated** use `litellm_proxy_total_requests_metric` |
