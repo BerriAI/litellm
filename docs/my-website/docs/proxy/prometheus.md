@@ -137,11 +137,14 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_request_total_latency_metric`             | Total latency (seconds) for a request to LiteLLM Proxy Server - tracked for labels `litellm_call_id`, `model`, `user_api_key`, `user_api_key_alias`, `user_api_team`, `user_api_team_alias` |
 | `litellm_llm_api_latency_metric`             | Latency (seconds) for just the LLM API call - tracked for labels `litellm_call_id`, `model`, `user_api_key`, `user_api_key_alias`, `user_api_team`, `user_api_team_alias` |
 
-## Budget Metrics
+## Virtual Key - Budget, Rate Limit Metrics
+Metrics used to track LiteLLM Proxy Budgeting and Rate limiting logic
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) Labels: `"team_id", "team_alias"`|
 | `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM) Labels: `"hashed_api_key", "api_key_alias"`|
+| `litellm_remaining_api_key_requests_for_model`                | Remaining Requests for a LiteLLM virtual API key, only if a model-specific rate limit (rpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
+| `litellm_remaining_api_key_tokens_for_model`                | Remaining Tokens for a LiteLLM virtual API key, only if a model-specific token limit (tpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
 
 
 
