@@ -308,6 +308,28 @@ jobs:
             ls
             python -m pytest -vv tests/local_testing/test_python_38.py
 
+  check_code_quality:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project/litellm
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install ruff
+            pip install pylint  
+      - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+      - run: ruff check .
+      - run: ruff format . --check
+      - run: pylint .
+    
+
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
