@@ -140,8 +140,8 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 ## Budget Metrics
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
-| `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) |
-| `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM)|
+| `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) Labels: `"team_id", "team_alias"`|
+| `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM) Labels: `"hashed_api_key", "api_key_alias"`|
 
 
 
