@@ -49,6 +49,7 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -338,7 +339,6 @@ class ProxyLogging:
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
-            alert_types=self.alert_types,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
         self.premium_user = premium_user
@@ -705,10 +705,7 @@ class ProxyLogging:
         extra_kwargs = {}
         alerting_metadata = {}
         if request_data is not None:
-
-            _url = await self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
-                request_data=request_data
-            )
+            _url = await _add_langfuse_trace_id_to_alert(request_data=request_data)
 
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
@@ -744,7 +741,7 @@ class ProxyLogging:
         Currently only logs exceptions to sentry
         """
         ### ALERTING ###
-        if "db_exceptions" not in self.alert_types:
+        if AlertType.db_exceptions not in self.alert_types:
             return
         if isinstance(original_exception, HTTPException):
             if isinstance(original_exception.detail, str):
@@ -761,7 +758,7 @@ class ProxyLogging:
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
                 level="High",
-                alert_type="db_exceptions",
+                alert_type=AlertType.db_exceptions,
                 request_data={},
             )
         )
@@ -796,7 +793,7 @@ class ProxyLogging:
         await self.update_request_status(
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
-        if "llm_exceptions" in self.alert_types and not isinstance(
+        if AlertType.llm_exceptions in self.alert_types and not isinstance(
             original_exception, HTTPException
         ):
             """
@@ -813,7 +810,7 @@ class ProxyLogging:
                 self.alerting_handler(
                     message=f"LLM API call failed: `{exception_str}`",
                     level="High",
-                    alert_type="llm_exceptions",
+                    alert_type=AlertType.llm_exceptions,
                     request_data=request_data,
                 )
             )

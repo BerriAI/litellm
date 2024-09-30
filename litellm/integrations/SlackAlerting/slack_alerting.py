@@ -87,7 +87,7 @@ class SlackAlerting(CustomBatchLogger):
         self,
         alerting: Optional[List] = None,
         alerting_threshold: Optional[float] = None,
-        alert_types: Optional[AlertType] = None,
+        alert_types: Optional[List[AlertType]] = None,
         alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
         alerting_args: Optional[Dict] = None,
         llm_router: Optional[litellm.Router] = None,

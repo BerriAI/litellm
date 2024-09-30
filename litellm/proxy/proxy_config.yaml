@@ -7,5 +7,9 @@ model_list:
 
 general_settings:
   alerting: ["slack"]
+  alert_types: [
+    "new_virtual_key_created",
+    "internal_user_updated",
+  ]
 
 
