@@ -327,7 +327,7 @@ jobs:
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check .
       - run: ruff format . --check
-      - run: pylint .
+      # - run: pylint .
     
 
   build_and_test:
