@@ -6038,7 +6038,8 @@ async def end_user_info(
         )
 
     user_info = await prisma_client.db.litellm_endusertable.find_first(
-        where={"user_id": end_user_id}
+        where={"user_id": end_user_id},
+        include={"litellm_budget_table": True}
     )
 
     if user_info is None:
@@ -6281,7 +6282,9 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    response = await prisma_client.db.litellm_endusertable.find_many()
+    response = await prisma_client.db.litellm_endusertable.find_many(
+        include={"litellm_budget_table": True}
+    )
 
     returned_response: List[LiteLLM_EndUserTable] = []
     for item in response:
