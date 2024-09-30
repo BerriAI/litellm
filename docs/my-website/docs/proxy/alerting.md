@@ -314,9 +314,9 @@ LLM-related Alerts
 | `llm_too_slow` | Notifications for LLM responses slower than the set threshold | ✅ |
 | `llm_requests_hanging` | Alerts for LLM requests that are not completing | ✅ |
 | `cooldown_deployment` | Alerts when a deployment is put into cooldown | ✅ |
-| `new_model_added` | Notifications when a new model is added to the system | ✅ |
-| `outage_alerts` | General alerts for system outages | ✅ |
-| `region_outage_alerts` | Specific alerts for regional outages | ✅ |
+| `new_model_added` | Notifications when a new model is added to litellm proxy through /model/new| ✅ |
+| `outage_alerts` | Alerts when a specific LLM deployment is facing an outage | ✅ |
+| `region_outage_alerts` | Alerts when a specfic LLM region is facing an outage. Example us-east-1 | ✅ |
 
 Budget and Spend Alerts
 
@@ -325,8 +325,8 @@ Budget and Spend Alerts
 | `budget_alerts` | Notifications related to budget limits or thresholds | ✅ |
 | `spend_reports` | Periodic reports on spending across teams or tags | ✅ |
 | `failed_tracking_spend` | Alerts when spend tracking fails | ✅ |
-| `daily_reports` | Daily summaries of system performance and usage | ✅ |
-| `fallback_reports` | Reports on fallback occurrences and performance | ✅ |
+| `daily_reports` | Daily Spend reports | ✅ |
+| `fallback_reports` | Weekly Reports on LLM fallback occurrences | ✅ |
 
 Database Alerts
 
