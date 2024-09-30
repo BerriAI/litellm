@@ -9,4 +9,5 @@ This folder contains the Slack Alerting integration for LiteLLM Gateway.
 - `types.py`: This file contains the AlertType enum which is used to define the different types of alerts that can be sent to Slack.
 - `utils.py`: This file contains common utils used specifically for slack alerting
 
-
+## Further Reading
+- [Doc setting up Alerting on LiteLLM Proxy (Gateway)](https://docs.litellm.ai/docs/proxy/alerting)
