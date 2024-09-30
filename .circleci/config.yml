@@ -327,7 +327,7 @@ jobs:
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check .
       - run: ruff format . --check
-      # - run: pylint .
+      - run: pylint .
     
 
   build_and_test:
@@ -837,6 +837,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - check_code_quality:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - ui_endpoint_testing:
           filters:
             branches:
@@ -898,6 +904,7 @@ workflows:
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
+            - check_code_quality
           filters:
             branches:
               only:
