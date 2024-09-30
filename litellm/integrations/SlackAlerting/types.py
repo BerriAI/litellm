@@ -167,3 +167,27 @@ class AlertType(str, Enum):
     new_internal_user_created = "new_internal_user_created"
     internal_user_updated = "internal_user_updated"
     internal_user_deleted = "internal_user_deleted"
+
+
+DEFAULT_ALERT_TYPES: List[AlertType] = [
+    # LLM related alerts
+    AlertType.llm_exceptions,
+    AlertType.llm_too_slow,
+    AlertType.llm_requests_hanging,
+    # Budget and spend alerts
+    AlertType.budget_alerts,
+    AlertType.spend_reports,
+    AlertType.failed_tracking_spend,
+    # Database alerts
+    AlertType.db_exceptions,
+    # Report alerts
+    AlertType.daily_reports,
+    # Deployment alerts
+    AlertType.cooldown_deployment,
+    AlertType.new_model_added,
+    # Outage alerts
+    AlertType.outage_alerts,
+    AlertType.region_outage_alerts,
+    # Fallback alerts
+    AlertType.fallback_reports,
+]
