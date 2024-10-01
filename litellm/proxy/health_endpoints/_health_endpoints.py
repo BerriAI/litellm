@@ -171,19 +171,19 @@ async def health_services_endpoint(
 
                         test_message = "default test message"
                         if alert_type == AlertType.llm_exceptions:
-                            test_message = f"LLM Exception test alert"
+                            test_message = "LLM Exception test alert"
                         elif alert_type == AlertType.llm_too_slow:
-                            test_message = f"LLM Too Slow test alert"
+                            test_message = "LLM Too Slow test alert"
                         elif alert_type == AlertType.llm_requests_hanging:
-                            test_message = f"LLM Requests Hanging test alert"
+                            test_message = "LLM Requests Hanging test alert"
                         elif alert_type == AlertType.budget_alerts:
-                            test_message = f"Budget Alert test alert"
+                            test_message = "Budget Alert test alert"
                         elif alert_type == AlertType.db_exceptions:
-                            test_message = f"DB Exception test alert"
+                            test_message = "DB Exception test alert"
                         elif alert_type == AlertType.outage_alerts:
-                            test_message = f"Outage Alert Exception test alert"
+                            test_message = "Outage Alert Exception test alert"
                         elif alert_type == AlertType.daily_reports:
-                            test_message = f"Daily Reports test alert"
+                            test_message = "Daily Reports test alert"
                         else:
                             test_message = "Budget Alert test alert"
 
