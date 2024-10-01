@@ -26,7 +26,13 @@ from typing import (
     overload,
 )
 
-import backoff
+try:
+    import backoff
+except ImportError:
+    raise ImportError(
+        "backoff is not installed. Please install it via 'pip install backoff'"
+    )
+
 import httpx
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel

@@ -3,9 +3,10 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import datetime
+import json
 import os
 import traceback
-from typing import Literal, Union
+from typing import Literal, Optional, Union
 
 import dotenv
 import requests
@@ -14,7 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.utils import StandardLoggingPayload
 
 #### What this does ####
 #    On success + failure, log events to Supabase
@@ -259,17 +260,11 @@ class ClickhouseLogger:
             )
             # follows the same params as langfuse.py
 
-            payload = get_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-                end_user_id=None,
+            payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
             )
-            metadata = payload.get("metadata", "") or ""
-            request_tags = payload.get("request_tags", "") or ""
-            payload["metadata"] = str(metadata)
-            payload["request_tags"] = str(request_tags)
+            if payload is None:
+                return
             # Build the initial payload
 
             verbose_logger.debug(f"\nClickhouse Logger - Logging payload = {payload}")
