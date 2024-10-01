@@ -324,6 +324,7 @@ jobs:
             python -m pip install --upgrade pip
             pip install ruff
             pip install pylint  
+            pip install .
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check .
       - run: ruff format . --check
