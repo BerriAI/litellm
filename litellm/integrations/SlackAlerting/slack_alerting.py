@@ -1630,7 +1630,7 @@ Model Info:
                 start_date=start_date.strftime("%Y-%m-%d"),
                 end_date=todays_date.strftime("%Y-%m-%d"),
             )
-            if _resp is None:
+            if _resp is None or _resp == ([], []):
                 return
 
             spend_per_team, spend_per_tag = _resp
