@@ -1365,3 +1365,11 @@ OPENAI_RESPONSE_HEADERS = [
     "x-ratelimit-reset-requests",
     "x-ratelimit-reset-tokens",
 ]
+
+
+class LoggingCallbackDynamicParams(TypedDict, total=False):
+    langfuse_public_key: Optional[str]
+    langfuse_secret: Optional[str]
+    langfuse_host: Optional[str]
+    gcs_bucket_name: Optional[str]
+    gcs_path_service_account: Optional[str]
