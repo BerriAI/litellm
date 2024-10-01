@@ -83,6 +83,14 @@ We'll review all reports promptly. Note that we don't currently offer a bug boun
 
 ## Legal/Compliance FAQs
 
+### Procurement Options
+
+1. Invoicing
+2. AWS Marketplace
+3. Azure Marketplace
+
+### Vendor Information
+
 Legal Entity Name: Berrie AI Incorporated
 
 Company Phone Number: 7708783106 
@@ -112,3 +120,4 @@ Does the vendor perform vulnerability scans? No
 Signer Name: Krish Amit Dholakia
 
 Signer Email: krrish@berri.ai
+
