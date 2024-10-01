@@ -1,10 +1,12 @@
 import types
-from typing import Literal, Optional
+from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
 import litellm
 from litellm.utils import Usage
+
+from .types import *
 
 
 class VertexAITextEmbeddingConfig(BaseModel):
@@ -98,10 +100,63 @@ class VertexAITextEmbeddingConfig(BaseModel):
                 optional_params[mapped_params[param]] = value
         return optional_params
 
-    async def transform_vertex_response_to_openai(
+    def transform_openai_request_to_vertex_embedding_request(
+        self, input: Union[list, str], optional_params: dict
+    ) -> VertexEmbeddingRequest:
+        """
+        Transforms an openai request to a vertex embedding request.
+        """
+        vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
+        vertex_text_embedding_input_list: List[TextEmbeddingInput] = []
+        task_type: Optional[TaskType] = optional_params.get("task_type")
+        title = optional_params.get("title")
+
+        if isinstance(input, str):
+            input = [input]  # Convert single string to list for uniform processing
+
+        for text in input:
+            embedding_input = self.create_embedding_input(
+                content=text, task_type=task_type, title=title
+            )
+            vertex_text_embedding_input_list.append(embedding_input)
+
+        vertex_request["instances"] = vertex_text_embedding_input_list
+        vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+
+        return vertex_request
+
+    def create_embedding_input(
+        self,
+        content: str,
+        task_type: Optional[TaskType] = None,
+        title: Optional[str] = None,
+    ) -> TextEmbeddingInput:
+        """
+        Creates a TextEmbeddingInput object.
+
+        Vertex requires a List of TextEmbeddingInput objects. This helper function creates a single TextEmbeddingInput object.
+
+        Args:
+            content (str): The content to be embedded.
+            task_type (Optional[TaskType]): The type of task to be performed".
+            title (Optional[str]): The title of the document to be embedded
+
+        Returns:
+            TextEmbeddingInput: A TextEmbeddingInput object.
+        """
+        text_embedding_input = TextEmbeddingInput(content=content)
+        if task_type is not None:
+            text_embedding_input["task_type"] = task_type
+        if title is not None:
+            text_embedding_input["title"] = title
+        return text_embedding_input
+
+    def transform_vertex_response_to_openai(
         self, response: dict, model: str, model_response: litellm.EmbeddingResponse
     ) -> litellm.EmbeddingResponse:
-
+        """
+        Transforms a vertex embedding response to an openai response.
+        """
         _predictions = response["predictions"]
 
         embedding_response = []
