@@ -92,7 +92,7 @@ class MyCustomHandler(CustomLogger):
             print("openai client=", kwargs.get("client"))
             self.openai_client = kwargs.get("client")
 
-        except:
+        except Exception:
             pass
 
 

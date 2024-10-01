@@ -23,6 +23,9 @@ import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.exception_mapping_utils import (
+    _add_key_name_and_team_to_alert,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -219,7 +222,7 @@ class SlackAlerting(CustomBatchLogger):
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata: dict = kwargs["litellm_params"]["metadata"]
-                request_info = litellm.utils._add_key_name_and_team_to_alert(
+                request_info = _add_key_name_and_team_to_alert(
                     request_info=request_info, metadata=_metadata
                 )
 
@@ -281,7 +284,7 @@ class SlackAlerting(CustomBatchLogger):
                 return_val += 1
 
             return return_val
-        except Exception as e:
+        except Exception:
             return 0
 
     async def send_daily_reports(self, router) -> bool:
@@ -455,7 +458,7 @@ class SlackAlerting(CustomBatchLogger):
             try:
                 messages = str(messages)
                 messages = messages[:100]
-            except:
+            except Exception:
                 messages = ""
 
             if (
@@ -508,7 +511,7 @@ class SlackAlerting(CustomBatchLogger):
                     _metadata: dict = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
 
-                    request_info = litellm.utils._add_key_name_and_team_to_alert(
+                    request_info = _add_key_name_and_team_to_alert(
                         request_info=request_info, metadata=_metadata
                     )
 
@@ -846,7 +849,7 @@ class SlackAlerting(CustomBatchLogger):
 
         ## MINOR OUTAGE ALERT SENT ##
         if (
-            outage_value["minor_alert_sent"] == False
+            outage_value["minor_alert_sent"] is False
             and len(outage_value["alerts"])
             >= self.alerting_args.minor_outage_alert_threshold
             and len(_deployment_set) > 1  # make sure it's not just 1 bad deployment
@@ -871,7 +874,7 @@ class SlackAlerting(CustomBatchLogger):
 
         ## MAJOR OUTAGE ALERT SENT ##
         elif (
-            outage_value["major_alert_sent"] == False
+            outage_value["major_alert_sent"] is False
             and len(outage_value["alerts"])
             >= self.alerting_args.major_outage_alert_threshold
             and len(_deployment_set) > 1  # make sure it's not just 1 bad deployment
@@ -941,7 +944,7 @@ class SlackAlerting(CustomBatchLogger):
             if provider is None:
                 try:
                     model, provider, _, _ = litellm.get_llm_provider(model=model)
-                except Exception as e:
+                except Exception:
                     provider = ""
             api_base = litellm.get_api_base(
                 model=model, optional_params=deployment.litellm_params
@@ -976,7 +979,7 @@ class SlackAlerting(CustomBatchLogger):
 
             ## MINOR OUTAGE ALERT SENT ##
             if (
-                outage_value["minor_alert_sent"] == False
+                outage_value["minor_alert_sent"] is False
                 and len(outage_value["alerts"])
                 >= self.alerting_args.minor_outage_alert_threshold
             ):
@@ -998,7 +1001,7 @@ class SlackAlerting(CustomBatchLogger):
                 # set to true
                 outage_value["minor_alert_sent"] = True
             elif (
-                outage_value["major_alert_sent"] == False
+                outage_value["major_alert_sent"] is False
                 and len(outage_value["alerts"])
                 >= self.alerting_args.major_outage_alert_threshold
             ):
@@ -1024,7 +1027,7 @@ class SlackAlerting(CustomBatchLogger):
             await self.internal_usage_cache.async_set_cache(
                 key=deployment_id, value=outage_value
             )
-        except Exception as e:
+        except Exception:
             pass
 
     async def model_added_alert(
@@ -1177,7 +1180,6 @@ Model Info:
                 if user_row is not None:
                     recipient_email = user_row.user_email
 
-            key_name = webhook_event.key_alias
             key_token = webhook_event.token
             key_budget = webhook_event.max_budget
             base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
@@ -1221,14 +1223,14 @@ Model Info:
                     extra=webhook_event.model_dump(),
                 )
 
-            payload = webhook_event.model_dump_json()
+            webhook_event.model_dump_json()
             email_event = {
                 "to": recipient_email,
                 "subject": f"LiteLLM: {event_name}",
                 "html": email_html_content,
             }
 
-            response = await send_email(
+            await send_email(
                 receiver_email=email_event["to"],
                 subject=email_event["subject"],
                 html=email_event["html"],
@@ -1292,14 +1294,14 @@ Model Info:
             The LiteLLM team <br />
             """
 
-        payload = webhook_event.model_dump_json()
+        webhook_event.model_dump_json()
         email_event = {
             "to": recipient_email,
             "subject": f"LiteLLM: {event_name}",
             "html": email_html_content,
         }
 
-        response = await send_email(
+        await send_email(
             receiver_email=email_event["to"],
             subject=email_event["subject"],
             html=email_event["html"],
@@ -1446,7 +1448,6 @@ Model Info:
                 response_s: timedelta = end_time - start_time
 
                 final_value = response_s
-                total_tokens = 0
 
                 if isinstance(response_obj, litellm.ModelResponse) and (
                     hasattr(response_obj, "usage")
@@ -1505,7 +1506,7 @@ Model Info:
                     await self.region_outage_alerts(
                         exception=kwargs["exception"], deployment_id=model_id
                     )
-        except Exception as e:
+        except Exception:
             pass
 
     async def _run_scheduler_helper(self, llm_router) -> bool:

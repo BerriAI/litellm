@@ -1,6 +1,7 @@
-import requests
-import time
 import os
+import time
+
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -72,7 +73,7 @@ def create_job_and_poll(request_num):
     print(job_response.text)
     print("\nResponse from creating job", job_response.text)
     job_response = job_response.json()
-    job_id = job_response["id"]
+    job_response["id"]
     polling_url = job_response["url"]
     polling_url = f"{base_url}{polling_url}"
     print(f"\nCreated Job {request_num}, Polling Url {polling_url}")

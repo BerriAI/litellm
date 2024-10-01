@@ -19,7 +19,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
-from litellm.proxy.utils import DBClient
 from litellm.caching import DualCache
 from litellm.router import (
     Deployment,
@@ -47,13 +46,12 @@ def prisma_client():
     os.environ["DATABASE_URL"] = modified_url
     os.environ["STORE_MODEL_IN_DB"] = "true"
 
-    # Assuming DBClient is a class that needs to be instantiated
+    # Assuming PrismaClient is a class that needs to be instantiated
     prisma_client = PrismaClient(
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.custom_db_client = None
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )

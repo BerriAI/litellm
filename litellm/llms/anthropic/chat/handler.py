@@ -607,7 +607,6 @@ class ModelResponseIterator:
     def _handle_usage(
         self, anthropic_usage_chunk: Union[dict, UsageDelta]
     ) -> AnthropicChatCompletionUsageBlock:
-        special_fields = ["input_tokens", "output_tokens"]
 
         usage_block = AnthropicChatCompletionUsageBlock(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
@@ -683,7 +682,7 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
-                content_block_stop = ContentBlockStop(**chunk)  # type: ignore
+                ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
                 if is_empty:

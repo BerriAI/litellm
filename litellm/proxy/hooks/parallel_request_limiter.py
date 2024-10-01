@@ -664,7 +664,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 if global_max_parallel_requests is not None:
                     # get value from cache
                     _key = "global_max_parallel_requests"
-                    current_global_requests = (
+                    (
                         await self.internal_usage_cache.async_get_cache(
                             key=_key,
                             local_only=True,

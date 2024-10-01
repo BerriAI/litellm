@@ -223,7 +223,7 @@ async def test_create_vertex_fine_tune_jobs():
         assert create_fine_tuning_response.id is not None
         assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
         assert create_fine_tuning_response.object == "fine_tuning.job"
-    except:
+    except Exception:
         pass
 
 

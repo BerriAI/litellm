@@ -195,7 +195,7 @@ async def test_add_and_delete_models():
         try:
             await chat_completion(session=session, key=key, model=model_name)
             pytest.fail(f"Expected call to fail.")
-        except:
+        except Exception:
             pass
 
 

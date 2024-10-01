@@ -111,7 +111,7 @@ def test_s3_logging():
             # cleanup s3 bucket in test
             for key in most_recent_keys:
                 s3.delete_object(Bucket=bucket_name, Key=key)
-        except:
+        except Exception:
             # don't let cleanup fail a test
             pass
     except Exception as e:

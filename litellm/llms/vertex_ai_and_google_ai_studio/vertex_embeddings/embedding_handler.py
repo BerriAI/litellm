@@ -1,7 +1,7 @@
 import json
 import os
 import types
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -53,7 +53,7 @@ class VertexEmbedding(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ):
-        if aembedding == True:
+        if aembedding is True:
             return self.async_embedding(
                 model=model,
                 input=input,

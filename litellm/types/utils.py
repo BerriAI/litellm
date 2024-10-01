@@ -260,7 +260,7 @@ class HiddenParams(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -366,7 +366,7 @@ class Message(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -736,7 +736,7 @@ class ModelResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -825,7 +825,7 @@ class EmbeddingResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -876,7 +876,7 @@ class TextChoices(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1026,7 +1026,7 @@ class ImageObject(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1079,7 +1079,7 @@ class ImageResponse(OpenAIImageResponse):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1112,7 +1112,7 @@ class TranscriptionResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
