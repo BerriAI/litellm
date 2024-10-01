@@ -28,7 +28,6 @@ from .types import *
 
 class VertexEmbedding(VertexBase):
     def __init__(self) -> None:
-        self.VertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
         super().__init__()
 
     def embedding(
@@ -96,7 +95,7 @@ class VertexEmbedding(VertexBase):
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
         vertex_request: VertexEmbeddingRequest = (
-            self.VertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
                 input=input, optional_params=optional_params
             )
         )
@@ -135,7 +134,7 @@ class VertexEmbedding(VertexBase):
         )
 
         model_response = (
-            self.VertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
+            litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
                 response=_json_response, model=model, model_response=model_response
             )
         )
@@ -188,7 +187,7 @@ class VertexEmbedding(VertexBase):
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
         vertex_request: VertexEmbeddingRequest = (
-            self.VertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
                 input=input, optional_params=optional_params
             )
         )
@@ -229,7 +228,7 @@ class VertexEmbedding(VertexBase):
         )
 
         model_response = (
-            self.VertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
+            litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
                 response=_json_response, model=model, model_response=model_response
             )
         )
