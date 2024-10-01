@@ -1698,8 +1698,14 @@ class ProxyConfig:
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.success_callback.append(callback)
                             if "prometheus" in callback:
+                                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                                    callback,
+                                    internal_usage_cache=None,
+                                    llm_router=llm_router,
+                                    premium_user=premium_user,
+                                )
+                                litellm.success_callback.append("prometheus")
                                 verbose_proxy_logger.debug(
                                     "Starting Prometheus Metrics on /metrics"
                                 )
@@ -1708,6 +1714,8 @@ class ProxyConfig:
                                 # Add prometheus asgi middleware to route /metrics requests
                                 metrics_app = make_asgi_app()
                                 app.mount("/metrics", metrics_app)
+                            else:
+                                litellm.success_callback.append(callback)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
