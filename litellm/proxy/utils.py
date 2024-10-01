@@ -49,6 +49,7 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.SlackAlerting.types import DEFAULT_ALERT_TYPES
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -334,7 +335,7 @@ class ProxyLogging:
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
-        self.alert_types: List[AlertType] = list(get_args(AlertType))
+        self.alert_types: List[AlertType] = DEFAULT_ALERT_TYPES
         self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
@@ -644,9 +645,11 @@ class ProxyLogging:
     async def failed_tracking_alert(self, error_message: str):
         if self.alerting is None:
             return
-        await self.slack_alerting_instance.failed_tracking_alert(
-            error_message=error_message
-        )
+
+        if self.slack_alerting_instance:
+            await self.slack_alerting_instance.failed_tracking_alert(
+                error_message=error_message
+            )
 
     async def budget_alerts(
         self,

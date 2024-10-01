@@ -1,15 +1,11 @@
 model_list:
   - model_name: db-openai-endpoint
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-5
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings:
   alerting: ["slack"]
-  alert_types: [
-    "new_virtual_key_created",
-    "internal_user_updated",
-  ]
 
 
