@@ -1861,15 +1861,40 @@ async def test_gemini_pro_async_function_calling():
 
 
 @pytest.mark.flaky(retries=3, delay=1)
-def test_vertexai_embedding():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_vertexai_embedding(sync_mode):
     try:
         load_vertex_ai_credentials()
-        # litellm.set_verbose = True
-        response = embedding(
-            model="textembedding-gecko@001",
-            input=["good morning from litellm", "this is another item"],
-        )
-        print(f"response:", response)
+        litellm.set_verbose = True
+
+        input_text = ["good morning from litellm", "this is another item"]
+
+        if sync_mode:
+            response = litellm.embedding(
+                model="textembedding-gecko@001", input=input_text
+            )
+        else:
+            response = await litellm.aembedding(
+                model="textembedding-gecko@001", input=input_text
+            )
+
+        print(f"response: {response}")
+
+        # Assert that the response is not None
+        assert response is not None
+
+        # Assert that the response contains embeddings
+        assert hasattr(response, "data")
+        assert len(response.data) == len(input_text)
+
+        # Assert that each embedding is a non-empty list of floats
+        for embedding in response.data:
+            assert "embedding" in embedding
+            assert isinstance(embedding["embedding"], list)
+            assert len(embedding["embedding"]) > 0
+            assert all(isinstance(x, float) for x in embedding["embedding"])
+
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
