@@ -248,7 +248,7 @@ def print_verbose(
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
             print(print_statement)  # noqa
-    except:
+    except Exception:
         pass
 
 
@@ -461,7 +461,7 @@ def function_setup(
         if add_breadcrumb:
             try:
                 details_to_log = copy.deepcopy(kwargs)
-            except:
+            except Exception:
                 details_to_log = kwargs
 
             if litellm.turn_off_message_logging:
@@ -1077,7 +1077,7 @@ def client(original_function):
         model = ""
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
-        except:
+        except Exception:
             if (
                 call_type != CallTypes.aimage_generation.value  # model optional
                 and call_type != CallTypes.atext_completion.value  # can also be engine
@@ -1557,7 +1557,7 @@ def client(original_function):
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         return await litellm.acompletion_with_retries(*args, **kwargs)
-                    except:
+                    except Exception:
                         pass
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
@@ -4266,7 +4266,7 @@ def get_first_chars_messages(kwargs: dict) -> str:
         _messages = kwargs.get("messages")
         _messages = str(_messages)[:100]
         return _messages
-    except:
+    except Exception:
         return ""
 
 
@@ -4864,7 +4864,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             # Get custom_llm_provider
             try:
                 split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-            except:
+            except Exception:
                 pass
             combined_model_name = model
             stripped_model_name = _strip_model_name(model=model)
@@ -5335,7 +5335,7 @@ def validate_environment(
     ## EXTRACT LLM PROVIDER - if model name provided
     try:
         _, custom_llm_provider, _, _ = get_llm_provider(model=model)
-    except:
+    except Exception:
         custom_llm_provider = None
     # # check if llm provider part of model name
     # if model.split("/",1)[0] in litellm.provider_list:
@@ -6022,7 +6022,7 @@ def prompt_token_calculator(model, messages):
     if "claude" in model:
         try:
             import anthropic
-        except:
+        except Exception:
             Exception("Anthropic import failed please run `pip install anthropic`")
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
@@ -6044,7 +6044,7 @@ def valid_model(model):
         else:
             messages = [{"role": "user", "content": "Hello World"}]
             litellm.completion(model=model, messages=messages)
-    except:
+    except Exception:
         raise BadRequestError(message="", model=model, llm_provider="")
 
 
@@ -6291,7 +6291,7 @@ def get_all_keys(llm_provider=None):
                 return "it worked!"
             return None
         return None
-    except:
+    except Exception:
         print_verbose(
             f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}"
         )
@@ -6332,7 +6332,7 @@ def get_model_list():
             # threading.Thread(target=get_all_keys, args=(missing_llm_provider)).start()
             return model_list
         return []  # return empty list by default
-    except:
+    except Exception:
         print_verbose(
             f"[Non-Blocking Error] get_model_list error - {traceback.format_exc()}"
         )
@@ -6743,7 +6743,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_maritalk_chunk(self, chunk):  # fake streaming
@@ -6758,7 +6758,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_nlp_cloud_chunk(self, chunk):
@@ -6796,7 +6796,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_cohere_chunk(self, chunk):
@@ -6822,7 +6822,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_cohere_chat_chunk(self, chunk):
@@ -6845,7 +6845,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_azure_chunk(self, chunk):
@@ -6879,7 +6879,7 @@ class CustomStreamWrapper:
                     "is_finished": is_finished,
                     "finish_reason": finish_reason,
                 }
-            except:
+            except Exception:
                 raise ValueError(
                     f"Unable to parse response. Original response: {chunk}"
                 )
@@ -6910,7 +6910,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_openai_chat_completion_chunk(self, chunk):
@@ -7468,7 +7468,7 @@ class CustomStreamWrapper:
                             self.received_finish_reason = chunk.parts[
                                 0
                             ].finish_reason.name
-                    except:
+                    except Exception:
                         if chunk.parts[0].finish_reason.name == "SAFETY":
                             raise Exception(
                                 f"The response was blocked by VertexAI. {str(chunk)}"
@@ -8964,7 +8964,7 @@ def get_valid_models() -> List[str]:
                 models_for_provider = litellm.models_by_provider.get(provider, [])
                 valid_models.extend(models_for_provider)
         return valid_models
-    except:
+    except Exception:
         return []  # NON-Blocking
 
 
@@ -9083,7 +9083,7 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         else:
             print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")
         print_verbose("\n")  # new line after
-    except:
+    except Exception:
         # This should always be non blocking
         pass
 
@@ -9094,7 +9094,7 @@ def get_logging_id(start_time, response_obj):
             "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + response_obj.get("id")
         )
         return response_id
-    except:
+    except Exception:
         return None
 
 
@@ -9144,7 +9144,7 @@ def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
             )
 
         return request_info
-    except:
+    except Exception:
         return request_info
 
 
