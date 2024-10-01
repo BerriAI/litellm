@@ -235,7 +235,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
         assert e.code == str(403)
 
 
-from tests.local_testing.test_custom_callback_input import CompletionCustomHandler
+from test_custom_callback_input import CompletionCustomHandler
 
 
 @mock_patch_acompletion()
@@ -815,7 +815,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
-from tests.local_testing.test_key_generate_prisma import prisma_client
+from test_key_generate_prisma import prisma_client
 
 
 @pytest.mark.parametrize(
