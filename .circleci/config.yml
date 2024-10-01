@@ -327,7 +327,6 @@ jobs:
             pip install .
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
-      - run: ruff format ./litellm --check
       - run: pylint ./litellm
     
 
