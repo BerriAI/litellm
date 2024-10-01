@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
+from litellm.integrations.SlackAlerting.types import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
@@ -108,23 +109,6 @@ class LitellmTableNames(enum.Enum):
     USER_TABLE_NAME = "LiteLLM_UserTable"
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
-
-
-AlertType = Literal[
-    "llm_exceptions",
-    "llm_too_slow",
-    "llm_requests_hanging",
-    "budget_alerts",
-    "db_exceptions",
-    "daily_reports",
-    "spend_reports",
-    "cooldown_deployment",
-    "new_model_added",
-    "outage_alerts",
-    "region_outage_alerts",
-    "fallback_reports",
-    "failed_tracking_spend",
-]
 
 
 def hash_token(token: str):
