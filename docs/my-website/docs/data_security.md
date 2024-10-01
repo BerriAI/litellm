@@ -83,6 +83,14 @@ We'll review all reports promptly. Note that we don't currently offer a bug boun
 
 ## Legal/Compliance FAQs
 
+### Procurement Options
+
+1. Invoicing
+2. AWS Marketplace
+3. Azure Marketplace
+
+### Vendor Information
+
 Legal Entity Name: Berrie AI Incorporated
 
 Company Phone Number: 7708783106 
@@ -108,3 +116,8 @@ Not applicable - LiteLLM is self-hosted, this is the responsibility of the team 
 Does the vendor have a vulnerability disclosure policy in place? [Yes](https://github.com/BerriAI/litellm?tab=security-ov-file#security-vulnerability-reporting-guidelines)
 
 Does the vendor perform vulnerability scans? No 
+
+Signer Name: Krish Amit Dholakia
+
+Signer Email: krrish@berri.ai
+

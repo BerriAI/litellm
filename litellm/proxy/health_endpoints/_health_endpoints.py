@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    AlertType,
     CallInfo,
     ProxyErrorTypes,
     ProxyException,
@@ -159,13 +160,6 @@ async def health_services_endpoint(
                     for (
                         alert_type
                     ) in proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url:
-                        """
-                        "llm_exceptions",
-                        "llm_too_slow",
-                        "llm_requests_hanging",
-                        "budget_alerts",
-                        "db_exceptions",
-                        """
                         # only test alert if it's in active alert types
                         if (
                             proxy_logging_obj.slack_alerting_instance.alert_types
@@ -176,20 +170,20 @@ async def health_services_endpoint(
                             continue
 
                         test_message = "default test message"
-                        if alert_type == "llm_exceptions":
-                            test_message = "LLM Exception test alert"
-                        elif alert_type == "llm_too_slow":
-                            test_message = "LLM Too Slow test alert"
-                        elif alert_type == "llm_requests_hanging":
-                            test_message = "LLM Requests Hanging test alert"
-                        elif alert_type == "budget_alerts":
-                            test_message = "Budget Alert test alert"
-                        elif alert_type == "db_exceptions":
-                            test_message = "DB Exception test alert"
-                        elif alert_type == "outage_alerts":
-                            test_message = "Outage Alert Exception test alert"
-                        elif alert_type == "daily_reports":
-                            test_message = "Daily Reports test alert"
+                        if alert_type == AlertType.llm_exceptions:
+                            test_message = f"LLM Exception test alert"
+                        elif alert_type == AlertType.llm_too_slow:
+                            test_message = f"LLM Too Slow test alert"
+                        elif alert_type == AlertType.llm_requests_hanging:
+                            test_message = f"LLM Requests Hanging test alert"
+                        elif alert_type == AlertType.budget_alerts:
+                            test_message = f"Budget Alert test alert"
+                        elif alert_type == AlertType.db_exceptions:
+                            test_message = f"DB Exception test alert"
+                        elif alert_type == AlertType.outage_alerts:
+                            test_message = f"Outage Alert Exception test alert"
+                        elif alert_type == AlertType.daily_reports:
+                            test_message = f"Daily Reports test alert"
                         else:
                             test_message = "Budget Alert test alert"
 
@@ -200,7 +194,7 @@ async def health_services_endpoint(
                     await proxy_logging_obj.alerting_handler(
                         message="This is a test slack alert message",
                         level="Low",
-                        alert_type="budget_alerts",
+                        alert_type=AlertType.budget_alerts,
                     )
 
                 if prisma_client is not None:

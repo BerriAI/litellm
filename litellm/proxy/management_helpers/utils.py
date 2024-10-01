@@ -227,25 +227,27 @@ async def send_management_endpoint_alert(
     - An internal user is created, updated, or deleted
     - A team is created, updated, or deleted
     """
+    from litellm.integrations.SlackAlerting.types import AlertType
     from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
 
     if premium_user is not True:
         return
 
     management_function_to_event_name = {
-        "generate_key_fn": "New Virtual Key Created",
-        "update_key_fn": "Virtual Key Updated",
-        "delete_key_fn": "Virtual Key Deleted",
+        "generate_key_fn": AlertType.new_virtual_key_created,
+        "update_key_fn": AlertType.virtual_key_updated,
+        "delete_key_fn": AlertType.virtual_key_deleted,
         # Team events
-        "new_team": "New Team Created",
-        "update_team": "Team Updated",
-        "delete_team": "Team Deleted",
+        "new_team": AlertType.new_team_created,
+        "update_team": AlertType.team_updated,
+        "delete_team": AlertType.team_deleted,
         # Internal User events
-        "new_user": "New Internal User Created",
-        "user_update": "Internal User Updated",
-        "delete_user": "Internal User Deleted",
+        "new_user": AlertType.new_internal_user_created,
+        "user_update": AlertType.internal_user_updated,
+        "delete_user": AlertType.internal_user_deleted,
     }
 
+    # Check if alerting is enabled
     if (
         proxy_logging_obj is not None
         and proxy_logging_obj.slack_alerting_instance is not None
@@ -253,6 +255,8 @@ async def send_management_endpoint_alert(
 
         # Virtual Key Events
         if function_name in management_function_to_event_name:
+            _event_name: AlertType = management_function_to_event_name[function_name]
+
             key_event = VirtualKeyEvent(
                 created_by_user_id=user_api_key_dict.user_id or "Unknown",
                 created_by_user_role=user_api_key_dict.user_role or "Unknown",
@@ -260,9 +264,12 @@ async def send_management_endpoint_alert(
                 request_kwargs=request_kwargs,
             )
 
-            event_name = management_function_to_event_name[function_name]
+            # replace all "_" with " " and capitalize
+            event_name = _event_name.replace("_", " ").title()
             await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
-                key_event=key_event, event_name=event_name
+                key_event=key_event,
+                event_name=event_name,
+                alert_type=_event_name,
             )
 
 
