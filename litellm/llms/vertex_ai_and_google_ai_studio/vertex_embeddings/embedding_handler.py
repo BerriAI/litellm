@@ -53,7 +53,7 @@ class VertexEmbedding(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ):
-        if aembedding == True:
+        if aembedding is True:
             return self.async_embedding(
                 model=model,
                 input=input,
@@ -140,7 +140,7 @@ class VertexEmbedding(VertexBase):
         )
 
         return model_response
-      
+
     async def async_embedding(
         self,
         model: str,
