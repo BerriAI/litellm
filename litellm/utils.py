@@ -69,7 +69,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     _is_non_openai_azure_model,
     get_llm_provider,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -550,7 +549,7 @@ def function_setup(
         else:
             messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] == True else False
-        logging_obj: LiteLLMLoggingObj = LiteLLMLoggingObj(
+        logging_obj = litellm.litellm_core_utils.litellm_logging.Logging(
             model=model,
             messages=messages,
             stream=stream,
@@ -563,6 +562,7 @@ def function_setup(
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
             kwargs=kwargs,
         )
+
         ## check if metadata is passed in
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:

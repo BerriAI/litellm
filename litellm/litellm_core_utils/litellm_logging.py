@@ -213,7 +213,6 @@ class Logging:
         dynamic_failure_callbacks=None,
         dynamic_async_success_callbacks=None,
         kwargs: Optional[Dict] = None,
-        logging_callback_dynamic_params: Optional[LoggingCallbackDynamicParams] = None,
     ):
         if messages is not None:
             if isinstance(messages, str):

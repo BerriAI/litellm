@@ -263,3 +263,34 @@ async def test_basic_gcs_logger_failure():
     # Delete Object from GCS
     print("deleting object from GCS")
     await gcs_logger.delete_gcs_object(object_name=object_name)
+
+
+@pytest.mark.asyncio
+async def test_basic_gcs_logging_per_request():
+    import logging
+    from litellm._logging import verbose_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+    # load_vertex_ai_credentials()
+    gcs_logger = GCSBucketLogger()
+    print("GCSBucketLogger", gcs_logger)
+    litellm.callbacks = [gcs_logger]
+
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            messages=[{"role": "user", "content": "This is a test"}],
+            max_tokens=10,
+            user="ishaan-2",
+            # gcs_bucket_name = "gs://test-bucket-ishaan",
+            # gcs_path_service_account = "gs://test-bucket-ishaan/adroit-crow-413218-bc47f303efc9.json"
+        )
+    except:
+        pass
+
+    await asyncio.sleep(5)
+
+    # Get the current date
+    # Get the current date
+    current_date = datetime.now().strftime("%Y-%m-%d")
