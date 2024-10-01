@@ -918,7 +918,7 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
+from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
