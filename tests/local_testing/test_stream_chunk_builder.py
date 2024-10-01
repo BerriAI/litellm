@@ -16,7 +16,7 @@ import pytest
 from openai import OpenAI
 
 import litellm
-from tests.local_testing import stream_chunk_testdata
+import stream_chunk_testdata
 from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()

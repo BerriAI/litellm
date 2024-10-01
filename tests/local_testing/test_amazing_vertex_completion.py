@@ -8,7 +8,7 @@ load_dotenv()
 import io
 import os
 
-from tests.local_testing.test_streaming import streaming_format_tests
+from test_streaming import streaming_format_tests
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -933,7 +933,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
-from tests.local_testing.test_completion import response_format_tests
+from test_completion import response_format_tests
 
 
 @pytest.mark.parametrize(
