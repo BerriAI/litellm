@@ -242,7 +242,7 @@ async def generate_key_fn(
             event = WebhookEvent(
                 event="key_created",
                 event_group="key",
-                event_message=f"API Key Created",
+                event_message="API Key Created",
                 token=response.get("token", ""),
                 spend=response.get("spend", 0.0),
                 max_budget=response.get("max_budget", 0.0),
@@ -574,7 +574,7 @@ async def delete_key_fn(
 
         try:
             assert len(keys) == number_deleted_keys["deleted_keys"]
-        except Exception as e:
+        except Exception:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -647,7 +647,7 @@ async def info_key_fn_v2(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         if data is None:
             raise HTTPException(
@@ -667,7 +667,7 @@ async def info_key_fn_v2(
         for k in key_info:
             try:
                 k = k.model_dump()  # noqa
-            except:
+            except Exception:
                 # if using pydantic v1
                 k = k.dict()
             filtered_key_info.append(k)
@@ -732,9 +732,9 @@ async def info_key_fn(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if key == None:
+        if key is None:
             key = user_api_key_dict.api_key
         key_info = await prisma_client.get_data(token=key)
         if key_info is None:
@@ -745,7 +745,7 @@ async def info_key_fn(
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
             key_info = key_info.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
         key_info.pop("token")
@@ -814,15 +814,14 @@ async def generate_key_helper_fn(
     send_invite_email: Optional[bool] = None,
 ):
     from litellm.proxy.proxy_server import (
-        custom_db_client,
         litellm_proxy_budget_name,
         premium_user,
         prisma_client,
     )
 
-    if prisma_client is None and custom_db_client is None:
+    if prisma_client is None:
         raise Exception(
-            f"Connect Proxy to database to generate keys - https://docs.litellm.ai/docs/proxy/virtual_keys "
+            "Connect Proxy to database to generate keys - https://docs.litellm.ai/docs/proxy/virtual_keys "
         )
 
     if token is None:
@@ -933,7 +932,7 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["permissions"], str):
             if (
                 "get_spend_routes" in saved_token["permissions"]
-                and premium_user != True
+                and premium_user is not True
             ):
                 raise ValueError(
                     "get_spend_routes permission is only available for LiteLLM Enterprise users"

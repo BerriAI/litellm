@@ -1,14 +1,19 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-from pydantic import BaseModel
-import dotenv, os, requests, random
-from typing import Optional, Union, List, Dict
-from datetime import datetime
+import os
+import random
 import traceback
+from datetime import datetime
+from typing import Dict, List, Optional, Union
+
+import dotenv
+import requests
+from pydantic import BaseModel
+
 from litellm import token_counter
+from litellm._logging import verbose_router_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_router_logger
 from litellm.utils import print_verbose
 
 
@@ -17,10 +22,10 @@ class LiteLLMBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -187,7 +192,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         )
         try:
             input_tokens = token_counter(messages=messages, text=input)
-        except:
+        except Exception:
             input_tokens = 0
         verbose_router_logger.debug(f"input_tokens={input_tokens}")
         # -----------------------

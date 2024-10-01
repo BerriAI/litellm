@@ -2,6 +2,7 @@ import sys
 from typing import Any, Dict, List, Optional, get_args
 
 import litellm
+from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.utils import get_instance_fn
@@ -59,9 +60,15 @@ def initialize_callbacks_on_proxy(
                         presidio_logging_only
                     )  # validate boolean given
 
-                params = {
+                _presidio_params = {}
+                if "presidio" in callback_specific_params and isinstance(
+                    callback_specific_params["presidio"], dict
+                ):
+                    _presidio_params = callback_specific_params["presidio"]
+
+                params: Dict[str, Any] = {
                     "logging_only": presidio_logging_only,
-                    **callback_specific_params.get("presidio", {}),
+                    **_presidio_params,
                 }
                 pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
@@ -70,7 +77,7 @@ def initialize_callbacks_on_proxy(
                     _ENTERPRISE_LlamaGuard,
                 )
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use Llama Guard"
                         + CommonProxyErrors.not_premium_user.value
@@ -83,7 +90,7 @@ def initialize_callbacks_on_proxy(
                     _ENTERPRISE_SecretDetection,
                 )
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use secret hiding"
                         + CommonProxyErrors.not_premium_user.value
@@ -96,7 +103,7 @@ def initialize_callbacks_on_proxy(
                     _ENTERPRISE_OpenAI_Moderation,
                 )
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use OpenAI Moderations Check"
                         + CommonProxyErrors.not_premium_user.value
@@ -126,7 +133,7 @@ def initialize_callbacks_on_proxy(
                     _ENTERPRISE_GoogleTextModeration,
                 )
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use Google Text Moderation"
                         + CommonProxyErrors.not_premium_user.value
@@ -137,7 +144,7 @@ def initialize_callbacks_on_proxy(
             elif isinstance(callback, str) and callback == "llmguard_moderations":
                 from enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMGuard
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use Llm Guard"
                         + CommonProxyErrors.not_premium_user.value
@@ -150,7 +157,7 @@ def initialize_callbacks_on_proxy(
                     _ENTERPRISE_BlockedUserList,
                 )
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use ENTERPRISE BlockedUser"
                         + CommonProxyErrors.not_premium_user.value
@@ -165,7 +172,7 @@ def initialize_callbacks_on_proxy(
                     _ENTERPRISE_BannedKeywords,
                 )
 
-                if premium_user != True:
+                if premium_user is not True:
                     raise Exception(
                         "Trying to use ENTERPRISE BannedKeyword"
                         + CommonProxyErrors.not_premium_user.value
@@ -212,7 +219,7 @@ def initialize_callbacks_on_proxy(
                         and isinstance(v, str)
                         and v.startswith("os.environ/")
                     ):
-                        azure_content_safety_params[k] = litellm.get_secret(v)
+                        azure_content_safety_params[k] = get_secret(v)
 
                 azure_content_safety_obj = _PROXY_AzureContentSafety(
                     **azure_content_safety_params,

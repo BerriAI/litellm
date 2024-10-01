@@ -476,7 +476,7 @@ def get_llm_provider(
         elif model == "*":
             custom_llm_provider = "openai"
         if custom_llm_provider is None or custom_llm_provider == "":
-            if litellm.suppress_debug_info == False:
+            if litellm.suppress_debug_info is False:
                 print()  # noqa
                 print(  # noqa
                     "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa

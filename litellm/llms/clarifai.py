@@ -130,7 +130,7 @@ def process_response(
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
 
-    except Exception as e:
+    except Exception:
         raise ClarifaiError(
             message=traceback.format_exc(), status_code=response.status_code, url=model
         )
@@ -219,7 +219,7 @@ async def async_completion(
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
 
-    except Exception as e:
+    except Exception:
         raise ClarifaiError(
             message=traceback.format_exc(), status_code=response.status_code, url=model
         )
@@ -251,9 +251,9 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    optional_params: dict,
     custom_prompt_dict={},
     acompletion=False,
-    optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -268,20 +268,12 @@ def completion(
             optional_params[k] = v
 
     custom_llm_provider, orig_model_name = get_prompt_model_name(model)
-    if custom_llm_provider == "anthropic":
-        prompt = prompt_factory(
-            model=orig_model_name,
-            messages=messages,
-            api_key=api_key,
-            custom_llm_provider="clarifai",
-        )
-    else:
-        prompt = prompt_factory(
-            model=orig_model_name,
-            messages=messages,
-            api_key=api_key,
-            custom_llm_provider=custom_llm_provider,
-        )
+    prompt: str = prompt_factory(  # type: ignore
+        model=orig_model_name,
+        messages=messages,
+        api_key=api_key,
+        custom_llm_provider="clarifai",
+    )
     # print(prompt); exit(0)
 
     data = {
@@ -300,7 +292,7 @@ def completion(
             "api_base": model,
         },
     )
-    if acompletion == True:
+    if acompletion is True:
         return async_completion(
             model=model,
             prompt=prompt,
@@ -331,7 +323,7 @@ def completion(
             status_code=response.status_code, message=response.text, url=model
         )
 
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         completion_stream = response.iter_lines()
         stream_response = CustomStreamWrapper(
             completion_stream=completion_stream,

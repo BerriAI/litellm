@@ -1,17 +1,19 @@
 # test time it takes to make 100 concurrent embedding requests to OpenaI
 
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-
 
 import litellm
 
@@ -33,7 +35,7 @@ import time
 # Function to make concurrent calls to OpenAI API
 def make_openai_completion(question):
     try:
-        start_time = time.time()
+        time.time()
         import openai
 
         client = openai.OpenAI(
@@ -44,7 +46,7 @@ def make_openai_completion(question):
             input=[question],
         )
         print(response)
-        end_time = time.time()
+        time.time()
 
         # Log the request details
         # with open("request_log.txt", "a") as log_file:
@@ -53,7 +55,7 @@ def make_openai_completion(question):
         #     )
 
         return response
-    except Exception as e:
+    except Exception:
         # Log exceptions for failed calls
         # with open("error_log.txt", "a") as error_log_file:
         #     error_log_file.write(
@@ -91,7 +93,7 @@ end_time = time.time()
 duration = end_time - start_time
 
 
-print(f"Load test Summary:")
+print("Load test Summary:")
 print(f"Total Requests: {concurrent_calls}")
 print(f"Successful Calls: {successful_calls}")
 print(f"Failed Calls: {failed_calls}")

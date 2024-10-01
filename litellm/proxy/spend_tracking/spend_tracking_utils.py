@@ -54,7 +54,7 @@ def get_logging_payload(
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
     usage = response_obj.get("usage", None) or {}
-    if type(usage) == litellm.Usage:
+    if isinstance(usage, litellm.Usage):
         usage = dict(usage)
     id = response_obj.get("id", kwargs.get("litellm_call_id"))
     api_key = metadata.get("user_api_key", "")

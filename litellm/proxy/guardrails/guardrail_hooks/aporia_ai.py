@@ -152,7 +152,6 @@ class AporiaGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.types.guardrails import GuardrailEventHooks
 
         """
         Use this for the post call moderation with Guardrails
@@ -188,7 +187,6 @@ class AporiaGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.types.guardrails import GuardrailEventHooks
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:

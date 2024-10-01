@@ -1,9 +1,10 @@
 # mypy: ignore-errors
-import openai
 import uuid
 
+import openai
+
 client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-example_traceparent = f"00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01"
+example_traceparent = "00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01"
 extra_headers = {"traceparent": example_traceparent}
 _trace_id = example_traceparent.split("-")[1]
 

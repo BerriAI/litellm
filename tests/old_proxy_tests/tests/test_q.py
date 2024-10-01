@@ -1,6 +1,7 @@
-import requests
-import time
 import os
+import time
+
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -48,7 +49,7 @@ job_response = requests.post(
         "messages": [
             {
                 "role": "system",
-                "content": f"You are a helpful assistant. What is your name",
+                "content": "You are a helpful assistant. What is your name",
             },
         ],
     },

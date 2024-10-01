@@ -260,7 +260,7 @@ class AmazonAnthropicConfig:
                 optional_params["top_p"] = value
             if param == "stop":
                 optional_params["stop_sequences"] = value
-            if param == "stream" and value == True:
+            if param == "stream" and value is True:
                 optional_params["stream"] = value
         return optional_params
 
