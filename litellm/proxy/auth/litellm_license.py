@@ -98,7 +98,7 @@ class LicenseCheck:
             elif self._verify(license_str=self.license_str) is True:
                 return True
             return False
-        except Exception as e:
+        except Exception:
             return False
 
     def verify_license_without_api_request(self, public_key, license_key):

@@ -1,7 +1,8 @@
-from locust import HttpUser, task, between, events
 import json
 import time
 import uuid
+
+from locust import HttpUser, between, events, task
 
 
 class MyUser(HttpUser):
@@ -11,7 +12,7 @@ class MyUser(HttpUser):
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer sk-1234",
+            "Authorization": "Bearer sk-1234",
             # Include any additional headers you may need for authentication, etc.
         }
 
@@ -30,6 +31,6 @@ class MyUser(HttpUser):
         }
 
         # Make a POST request to the "chat/completions" endpoint
-        response = self.client.post("chat/completions", json=payload, headers=headers)
+        self.client.post("chat/completions", json=payload, headers=headers)
 
         # Print or log the response if needed

@@ -1963,7 +1963,7 @@ def test_completion_watsonx_stream():
 #                 break
 #         if complete_response.strip() == "":
 #             raise Exception("Empty response received")
-#     except:
+#     except Exception:
 #         pytest.fail(f"error occurred: {traceback.format_exc()}")
 # test_maritalk_streaming()
 # test on openai completion call
@@ -1997,7 +1997,7 @@ def ai21_completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except:
+    except Exception:
         pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
@@ -2021,7 +2021,7 @@ def ai21_completion_call_bad_key():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except:
+    except Exception:
         pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
@@ -2148,7 +2148,7 @@ def test_openai_chat_completion_complete_response_call():
             complete_response=True,
         )
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2282,7 +2282,7 @@ def test_openai_text_completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2315,7 +2315,7 @@ def test_together_ai_completion_call_mistral():
         if complete_response == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2396,7 +2396,7 @@ def test_together_ai_completion_call_starcoder_bad_key():
         print(f"complete response: {complete_response}")
     except BadRequestError as e:
         pass
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2467,7 +2467,7 @@ async def ai21_async_completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2498,7 +2498,7 @@ async def completion_call():
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except:
+    except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
@@ -2735,7 +2735,7 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     elif idx != 0:  # second chunk
         try:
             decision = validate_second_function_call_chunk_structure(data=chunk)
-        except:  # check if it's the last chunk (returns an empty delta {} )
+        except Exception:  # check if it's the last chunk (returns an empty delta {} )
             decision = validate_final_function_call_chunk_structure(data=chunk)
             finished = True
     if "content" in chunk["choices"][0]["delta"]:
@@ -3751,7 +3751,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         chunk_dict = {}
         try:
             chunk_dict = chunk.model_dump(exclude_none=True)
-        except:
+        except Exception:
             chunk_dict = chunk.dict(exclude_none=True)
 
         chunk_dict.pop("created")

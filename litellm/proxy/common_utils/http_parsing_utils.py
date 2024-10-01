@@ -29,10 +29,10 @@ async def _read_request_body(request: Optional[Request]) -> dict:
         body_str = body.decode()
         try:
             request_data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             request_data = json.loads(body_str)
         return request_data
-    except:
+    except Exception:
         return {}
 
 

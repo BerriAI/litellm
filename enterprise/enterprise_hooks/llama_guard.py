@@ -58,7 +58,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     def set_custom_prompt_template(self, messages: list):
