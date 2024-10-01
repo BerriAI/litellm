@@ -667,7 +667,7 @@ async def info_key_fn_v2(
         for k in key_info:
             try:
                 k = k.model_dump()  # noqa
-            except:
+            except Exception:
                 # if using pydantic v1
                 k = k.dict()
             filtered_key_info.append(k)
@@ -745,7 +745,7 @@ async def info_key_fn(
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
             key_info = key_info.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             key_info = key_info.dict()
         key_info.pop("token")

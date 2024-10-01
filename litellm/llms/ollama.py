@@ -172,7 +172,7 @@ def _convert_image(image):
 
     try:
         from PIL import Image
-    except:
+    except Exception:
         raise Exception(
             "ollama image conversion failed please run `pip install Pillow`"
         )
@@ -184,7 +184,7 @@ def _convert_image(image):
         image_data = Image.open(io.BytesIO(base64.b64decode(image)))
         if image_data.format in ["JPEG", "PNG"]:
             return image
-    except:
+    except Exception:
         return orig
     jpeg_image = io.BytesIO()
     image_data.convert("RGB").save(jpeg_image, "JPEG")

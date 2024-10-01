@@ -21,7 +21,7 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -247,7 +247,7 @@ class LowestCostLoggingHandler(CustomLogger):
 
         try:
             input_tokens = token_counter(messages=messages, text=input)
-        except:
+        except Exception:
             input_tokens = 0
 
         # randomly sample from all_deployments, incase all deployments have latency=0.0

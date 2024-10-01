@@ -293,7 +293,7 @@ def get_secret(
                         return secret_value_as_bool
                     else:
                         return secret
-            except:
+            except Exception:
                 return secret
         else:
             secret = os.environ.get(secret_name)

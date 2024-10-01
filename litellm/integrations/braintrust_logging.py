@@ -165,7 +165,7 @@ class BraintrustLogger(CustomLogger):
                 metadata = copy.deepcopy(
                     metadata
                 )  # Avoid modifying the original metadata
-            except:
+            except Exception:
                 new_metadata = {}
                 for key, value in metadata.items():
                     if (

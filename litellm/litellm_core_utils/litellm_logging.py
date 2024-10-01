@@ -52,18 +52,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     _get_base_model_from_metadata,
-    add_breadcrumb,
-    capture_exception,
-    customLogger,
-    liteDebuggerClient,
-    logfireLogger,
-    lunaryLogger,
     print_verbose,
-    prometheusLogger,
     prompt_token_calculator,
-    promptLayerLogger,
-    supabaseClient,
-    weightsBiasesLogger,
 )
 
 from ..integrations.aispend import AISpendLogger
@@ -71,7 +61,6 @@ from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
-from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -423,7 +412,7 @@ class Logging:
                     elif callback == "sentry" and add_breadcrumb:
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -528,7 +517,7 @@ class Logging:
                         verbose_logger.debug("reaches sentry breadcrumbing")
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -2656,3 +2645,11 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         litellm_params["metadata"] = metadata
 
     return litellm_params
+
+
+# integration helper function
+def modify_integration(integration_name, integration_params):
+    global supabaseClient
+    if integration_name == "supabase":
+        if "table_name" in integration_params:
+            Supabase.supabase_table_name = integration_params["table_name"]

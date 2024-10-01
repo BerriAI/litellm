@@ -32,23 +32,23 @@ class LiteLLMBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
 
 class SlackAlertingArgsEnum(Enum):
-    daily_report_frequency: int = 12 * 60 * 60
-    report_check_interval: int = 5 * 60
-    budget_alert_ttl: int = 24 * 60 * 60
-    outage_alert_ttl: int = 1 * 60
-    region_outage_alert_ttl: int = 1 * 60
-    minor_outage_alert_threshold: int = 1 * 5
-    major_outage_alert_threshold: int = 1 * 10
-    max_outage_alert_list_size: int = 1 * 10
+    daily_report_frequency = 12 * 60 * 60
+    report_check_interval = 5 * 60
+    budget_alert_ttl = 24 * 60 * 60
+    outage_alert_ttl = 1 * 60
+    region_outage_alert_ttl = 1 * 60
+    minor_outage_alert_threshold = 1 * 5
+    major_outage_alert_threshold = 1 * 10
+    max_outage_alert_list_size = 1 * 10
 
 
 class SlackAlertingArgs(LiteLLMBase):

@@ -178,7 +178,7 @@ def completion(
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise NLPCloudError(message=response.text, status_code=response.status_code)
         if "error" in completion_response:
             raise NLPCloudError(
@@ -191,7 +191,7 @@ def completion(
                     model_response.choices[0].message.content = (  # type: ignore
                         completion_response["generated_text"]
                     )
-            except:
+            except Exception:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),
                     status_code=response.status_code,

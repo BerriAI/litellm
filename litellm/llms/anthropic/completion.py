@@ -114,7 +114,7 @@ class AnthropicTextCompletion(BaseLLM):
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise AnthropicError(
                 message=response.text, status_code=response.status_code
             )

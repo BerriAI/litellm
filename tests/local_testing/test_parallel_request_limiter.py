@@ -830,7 +830,7 @@ async def test_bad_router_call():
             stream=True,
             metadata={"user_api_key": _api_key},
         )
-    except:
+    except Exception:
         pass
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(  # type: ignore
@@ -906,7 +906,7 @@ async def test_bad_router_tpm_limit():
             stream=True,
             metadata={"user_api_key": _api_key},
         )
-    except:
+    except Exception:
         pass
     await asyncio.sleep(1)  # success is done in a separate thread
 
@@ -1006,7 +1006,7 @@ async def test_bad_router_tpm_limit_per_model():
                 },
             },
         )
-    except:
+    except Exception:
         pass
     await asyncio.sleep(1)  # success is done in a separate thread
 

@@ -679,7 +679,7 @@ class PrometheusLogger(CustomLogger):
             ).inc()
 
             pass
-        except:
+        except Exception:
             pass
 
     def set_llm_deployment_success_metrics(

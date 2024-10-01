@@ -25,7 +25,7 @@ class DynamoDBWrapper(CustomDB):
 
     def __init__(self, database_arguments: DynamoDBArgs):
         from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials, StaticCredentials
+        from aiodynamo.credentials import Credentials
         from aiodynamo.expressions import F, UpdateExpression, Value
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiodynamo.http.httpx import HTTPX

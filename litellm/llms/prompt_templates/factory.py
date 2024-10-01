@@ -451,7 +451,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             return True
 
         # This will be raised if Jinja attempts to render the system message and it can't
-        except:
+        except Exception:
             return False
 
     try:
@@ -1953,7 +1953,7 @@ def amazon_titan_pt(
 def _load_image_from_url(image_url):
     try:
         from PIL import Image
-    except:
+    except Exception:
         raise Exception("image conversion failed please run `pip install Pillow`")
     from io import BytesIO
 
@@ -2018,7 +2018,7 @@ def _gemini_vision_convert_messages(messages: list):
             else:
                 try:
                     from PIL import Image
-                except:
+                except Exception:
                     raise Exception(
                         "gemini image conversion failed please run `pip install Pillow`"
                     )
@@ -2066,7 +2066,7 @@ def gemini_text_image_pt(messages: list):
     """
     try:
         import google.generativeai as genai  # type: ignore
-    except:
+    except Exception:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
         )

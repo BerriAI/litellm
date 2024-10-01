@@ -241,7 +241,7 @@ def read_tgi_conv_models():
         # Cache the set for future use
         conv_models_cache = conv_models
         return tgi_models, conv_models
-    except:
+    except Exception:
         return set(), set()
 
 
@@ -418,7 +418,7 @@ class Huggingface(BaseLLM):
             prompt_tokens = len(
                 encoding.encode(input_text)
             )  ##[TODO] use the llama2 tokenizer here
-        except:
+        except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
         output_text = model_response["choices"][0]["message"].get("content", "")
@@ -430,7 +430,7 @@ class Huggingface(BaseLLM):
                         model_response["choices"][0]["message"].get("content", "")
                     )
                 )  ##[TODO] use the llama2 tokenizer here
-            except:
+            except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
         else:
@@ -692,7 +692,7 @@ class Huggingface(BaseLLM):
                         completion_response = response.json()
                         if isinstance(completion_response, dict):
                             completion_response = [completion_response]
-                    except:
+                    except Exception:
                         import traceback
 
                         raise HuggingfaceError(

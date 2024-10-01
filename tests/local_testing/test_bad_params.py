@@ -125,7 +125,7 @@ def test_completion_function_call_openai():
             ],
         )
         print(f"response: {response}")
-    except:
+    except Exception:
         pass
 
 
@@ -150,7 +150,7 @@ def test_completion_with_no_provider():
 # try:
 #     response = completion(model="gpt-3.5-turbo", messages=messages)
 #     print(f"response: {response}")
-# except:
+# except Exception:
 #     print(f"error occurred: {traceback.format_exc()}")
 #     pass
 # os.environ["OPENAI_API_KEY"] = str(temp_key)  # this passes linting#5

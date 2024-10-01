@@ -3770,7 +3770,7 @@ class Router:
                 # should cool down for all other errors
                 return True
 
-        except:
+        except Exception:
             # Catch all - if any exceptions default to cooling down
             return True
 
@@ -3816,7 +3816,7 @@ class Router:
             )
             if type(_all_deployments) == dict:
                 return []
-        except:
+        except Exception:
             pass
 
         unhealthy_deployments = _get_cooldown_deployments(litellm_router_instance=self)
@@ -4265,7 +4265,7 @@ class Router:
                 return item
             else:
                 return None
-        except:
+        except Exception:
             return None
 
     def get_deployment(self, model_id: str) -> Optional[Deployment]:
@@ -5158,7 +5158,7 @@ class Router:
                         dep["litellm_params"]["model"] = model
                         provider_deployments.append(dep)
                     return model, provider_deployments
-            except:
+            except Exception:
                 # get_llm_provider raises exception when provider is unknown
                 pass
 

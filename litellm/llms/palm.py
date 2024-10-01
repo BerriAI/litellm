@@ -102,7 +102,7 @@ def completion(
 ):
     try:
         import google.generativeai as palm  # type: ignore
-    except:
+    except Exception:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
         )
@@ -174,7 +174,7 @@ def completion(
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
-    except:
+    except Exception:
         raise PalmError(
             status_code=400,
             message=f"No response received. Original response - {response}",

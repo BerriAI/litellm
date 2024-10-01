@@ -6026,8 +6026,8 @@ def prompt_token_calculator(model, messages):
             Exception("Anthropic import failed please run `pip install anthropic`")
         from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
-        anthropic = Anthropic()
-        num_tokens = anthropic.count_tokens(text)
+        anthropic_obj = Anthropic()
+        num_tokens = anthropic_obj.count_tokens(text)
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
@@ -6187,14 +6187,6 @@ def _calculate_retry_after(
     jitter = 1 - 0.25 * random.random()
     timeout = sleep_seconds * jitter
     return timeout if timeout >= min_timeout else min_timeout
-
-
-# integration helper function
-def modify_integration(integration_name, integration_params):
-    global supabaseClient
-    if integration_name == "supabase":
-        if "table_name" in integration_params:
-            Supabase.supabase_table_name = integration_params["table_name"]
 
 
 # custom prompt helper function
@@ -8999,7 +8991,7 @@ def transform_logprobs(hf_response):
             token_info["token_logprobs"].append(token_logprob)
 
             # stub this to work with llm eval harness
-            top_alt_tokens = {"": -1, "": -2, "": -3}
+            top_alt_tokens = {"": -1, "": -2, "": -3}  # noqa: F601
             token_info["top_logprobs"].append(top_alt_tokens)
 
         # For each element in the 'tokens' list, extract the relevant information
@@ -9124,28 +9116,6 @@ def _get_base_model_from_metadata(model_call_details=None):
 
         return _get_base_model_from_litellm_call_metadata(metadata=metadata)
     return None
-
-
-def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
-    """
-    Internal helper function for litellm proxy
-    Add the Key Name + Team Name to the error
-    Only gets added if the metadata contains the user_api_key_alias and user_api_key_team_alias
-
-    [Non-Blocking helper function]
-    """
-    try:
-        _api_key_name = metadata.get("user_api_key_alias", None)
-        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", None)
-        if _api_key_name is not None:
-            request_info = (
-                f"\n\nKey Name: `{_api_key_name}`\nTeam: `{_user_api_key_team_alias}`"
-                + request_info
-            )
-
-        return request_info
-    except Exception:
-        return request_info
 
 
 class ModelResponseIterator:

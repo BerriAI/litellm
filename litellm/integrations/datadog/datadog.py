@@ -245,12 +245,12 @@ class DataDogLogger(CustomBatchLogger):
         usage = dict(usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
-        except:
+        except Exception:
             response_time = None
 
         try:
             response_obj = dict(response_obj)
-        except:
+        except Exception:
             response_obj = response_obj
 
         # Clean Metadata before logging - never log raw metadata

@@ -38,7 +38,7 @@ class MyCustomHandler(CustomLogger):
             for method in methods:
                 print_verbose(f" - {method}")
             print_verbose(f"{reset_color_code}")
-        except:
+        except Exception:
             pass
 
     def log_pre_api_call(self, model, messages, kwargs):

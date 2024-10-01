@@ -304,7 +304,7 @@ def completion(
     """
     try:
         import vertexai
-    except:
+    except Exception:
         raise VertexAIError(
             status_code=400,
             message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
@@ -738,7 +738,7 @@ def completion(
         else:
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None:
                 if hasattr(response_obj, "usage_metadata") and hasattr(
                     response_obj.usage_metadata, "prompt_token_count"
@@ -983,7 +983,7 @@ async def async_completion(
         else:
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None and (
                 hasattr(response_obj, "usage_metadata")
                 and hasattr(response_obj.usage_metadata, "prompt_token_count")

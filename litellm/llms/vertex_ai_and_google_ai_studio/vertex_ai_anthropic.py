@@ -268,7 +268,7 @@ def completion(
 ):
     try:
         import vertexai
-    except:
+    except Exception:
         raise VertexAIError(
             status_code=400,
             message="""vertexai import failed please run `pip install -U google-cloud-aiplatform "anthropic[vertex]"`""",

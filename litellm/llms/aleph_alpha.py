@@ -279,7 +279,7 @@ def completion(
                     )
                     choices_list.append(choice_obj)
                 model_response.choices = choices_list  # type: ignore
-            except:
+            except Exception:
                 raise AlephAlphaError(
                     message=json.dumps(completion_response),
                     status_code=response.status_code,

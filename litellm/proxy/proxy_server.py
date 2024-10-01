@@ -62,8 +62,6 @@ try:
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
-import random
-
 list_of_messages = [
     "'The thing I wish you improved is...'",
     "'A feature I really want is...'",
@@ -262,11 +260,10 @@ from litellm.types.router import RouterGeneralSettings
 
 try:
     from litellm._version import version
-except:
+except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
 import json
-import logging
 from typing import Union
 
 from fastapi import (
@@ -443,7 +440,7 @@ try:
                 return RedirectResponse(new_path)
             return await call_next(request)
 
-except:
+except Exception:
     pass
 app.add_middleware(
     CORSMiddleware,
@@ -521,7 +518,7 @@ db_writer_client: Optional[HTTPHandler] = None
 def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
     try:
         return pydantic_obj.model_dump()  # type: ignore
-    except:
+    except Exception:
         # if using pydantic v1
         return pydantic_obj.dict()
 
@@ -717,7 +714,7 @@ async def _PROXY_failure_handler(
         _status_code = "500"
         try:
             _status_code = str(_exception.status_code)
-        except:
+        except Exception:
             # Don't let this fail logging the exception to the dB
             pass
 
@@ -1013,7 +1010,7 @@ async def update_database(
                                 team_member_key, 0
                             )
                         )
-                    except:
+                    except Exception:
                         pass
             except Exception as e:
                 verbose_proxy_logger.info(
@@ -1731,7 +1728,7 @@ class ProxyConfig:
                     ):  # run through pydantic validation
                         try:
                             TeamDefaultSettings(**team_setting)
-                        except:
+                        except Exception:
                             raise Exception(
                                 f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting}"
                             )
@@ -2509,7 +2506,7 @@ def data_generator(response):
         verbose_proxy_logger.debug("returned chunk: %s", chunk)
         try:
             yield f"data: {json.dumps(chunk.dict())}\n\n"
-        except:
+        except Exception:
             yield f"data: {json.dumps(chunk)}\n\n"
 
 
@@ -2694,7 +2691,7 @@ def get_litellm_model_info(model: dict = {}):
             model_to_lookup = model_info.get("base_model", None)
         litellm_model_info = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
-    except:
+    except Exception:
         # this should not block returning on /model/info
         # if litellm does not have info on the model it should return {}
         return {}
@@ -3119,7 +3116,7 @@ async def chat_completion(
         body_str = body.decode()
         try:
             data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             data = json.loads(body_str)
 
         verbose_proxy_logger.debug(
@@ -3392,7 +3389,7 @@ async def completion(
         body_str = body.decode()
         try:
             data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             data = json.loads(body_str)
 
         data["model"] = (
@@ -4986,7 +4983,7 @@ async def create_batch(
         body_str = body.decode()
         try:
             data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             data = json.loads(body_str)
 
         verbose_proxy_logger.debug(
@@ -6220,7 +6217,6 @@ async def list_team(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
         litellm_proxy_admin_name,
         prisma_client,
@@ -6748,7 +6744,7 @@ async def add_new_model(
                         litellm_model_name=_orignal_litellm_model_name,
                         passed_model_info=model_params.model_info,
                     )
-            except:
+            except Exception:
                 pass
 
         else:
@@ -7551,7 +7547,7 @@ async def model_info_v1(
             litellm_model = litellm_params.get("model", None)
             try:
                 litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except:
+            except Exception:
                 litellm_model_info = {}
         # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
         if litellm_model_info == {}:
@@ -7565,7 +7561,7 @@ async def model_info_v1(
                 litellm_model_info = litellm.get_model_info(
                     model=litellm_model, custom_llm_provider=split_model[0]
                 )
-            except:
+            except Exception:
                 litellm_model_info = {}
         for k, v in litellm_model_info.items():
             if k not in model_info:
@@ -8512,7 +8508,6 @@ async def claim_onboarding_link(data: InvitationClaim):
 @app.get("/get_image", include_in_schema=False)
 def get_image():
     """Get logo to show on admin UI"""
-    from fastapi.responses import FileResponse
 
     # get current_dir
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -8822,8 +8817,6 @@ async def update_config(config_info: ConfigYAML):
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
-        import base64
-
         # Load existing config
         config = await proxy_config.get_config()
         verbose_proxy_logger.debug("Loaded config: %s", config)
@@ -8974,7 +8967,7 @@ async def update_config_general_settings(
 
     try:
         ConfigGeneralSettings(**{data.field_name: data.field_value})
-    except:
+    except Exception:
         raise HTTPException(
             status_code=400,
             detail={
@@ -9593,7 +9586,7 @@ async def shutdown_event():
 
             if langFuseLogger is not None:
                 langFuseLogger.Langfuse.flush()
-        except:
+        except Exception:
             # [DO NOT BLOCK shutdown events for this]
             pass
 

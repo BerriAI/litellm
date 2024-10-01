@@ -9,7 +9,7 @@
 #     ### OPTIONAL DEPENDENCIES ###  - pip install redis and celery only when a user opts into using the async endpoints which require both
 #     from celery import Celery
 #     import redis
-# except:
+# except Exception:
 #     import sys
 
 #     subprocess.check_call([sys.executable, "-m", "pip", "install", "redis", "celery"])

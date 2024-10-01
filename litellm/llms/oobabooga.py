@@ -91,7 +91,7 @@ def completion(
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise OobaboogaError(
                 message=response.text, status_code=response.status_code
             )
@@ -103,7 +103,7 @@ def completion(
         else:
             try:
                 model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
-            except:
+            except Exception:
                 raise OobaboogaError(
                     message=json.dumps(completion_response),
                     status_code=response.status_code,

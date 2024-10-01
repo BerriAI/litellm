@@ -2361,7 +2361,7 @@ async def test_proxy_load_test_db(prisma_client):
             print(f"len responses: {len(spend_logs)}")
             assert len(spend_logs) == n
             print(n, time.time() - start_time, len(spend_logs))
-        except:
+        except Exception:
             print(n, time.time() - start_time, 0)
         raise Exception(f"it worked! key={key.key}")
     except Exception as e:

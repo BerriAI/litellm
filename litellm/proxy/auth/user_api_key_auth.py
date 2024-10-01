@@ -721,9 +721,9 @@ async def user_api_key_auth(
 
             if config != {}:
                 model_list = config.get("model_list", [])
-                llm_model_list = model_list
+                new_model_list = model_list
                 verbose_proxy_logger.debug(
-                    f"\n new llm router model list {llm_model_list}"
+                    f"\n new llm router model list {new_model_list}"
                 )
             if (
                 len(valid_token.models) == 0

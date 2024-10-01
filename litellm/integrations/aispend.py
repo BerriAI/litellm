@@ -162,6 +162,6 @@ class AISpendLogger:
             ]
 
             print_verbose(f"AISpend Logging - final data object: {data}")
-        except:
+        except Exception:
             print_verbose(f"AISpend Logging Error - {traceback.format_exc()}")
             pass

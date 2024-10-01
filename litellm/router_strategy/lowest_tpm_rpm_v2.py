@@ -345,7 +345,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
         try:
             input_tokens = token_counter(messages=messages, text=input)
-        except:
+        except Exception:
             input_tokens = 0
         verbose_router_logger.debug(f"input_tokens={input_tokens}")
         # -----------------------

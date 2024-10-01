@@ -299,11 +299,11 @@ def run_server(
         return
     if model and "ollama" in model and api_base is None:
         run_ollama_serve()
+    import requests
+
     if test_async is True:
         import concurrent
         import time
-
-        import requests  # type: ignore
 
         api_base = f"http://{host}:{port}"
 
@@ -372,7 +372,6 @@ def run_server(
         print(f"Failed Calls: {failed_calls}")  # noqa
         return
     if health is not False:
-        import requests
 
         print("\nLiteLLM: Health Testing models in config")  # noqa
         response = requests.get(url=f"http://{host}:{port}/health")
@@ -455,7 +454,7 @@ def run_server(
                 pass
             else:
                 import gunicorn.app.base
-        except:
+        except Exception:
             raise ImportError(
                 "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
             )
@@ -509,7 +508,7 @@ def run_server(
                 import asyncio
 
                 import yaml  # type: ignore
-            except:
+            except Exception:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
@@ -673,7 +672,6 @@ def run_server(
             port = random.randint(1024, 49152)
 
         import litellm
-        from litellm.proxy.proxy_server import app
 
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
@@ -695,8 +693,6 @@ def run_server(
                 else:
                     uvicorn.run(app, host=host, port=port)  # run uvicorn
         elif run_gunicorn is True:
-            import gunicorn.app.base
-
             # Gunicorn Application Class
             class StandaloneApplication(gunicorn.app.base.BaseApplication):
                 def __init__(self, app, options=None):

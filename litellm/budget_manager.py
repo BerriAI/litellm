@@ -40,7 +40,7 @@ class BudgetManager:
                 import logging
 
                 logging.info(print_statement)
-        except:
+        except Exception:
             pass
 
     def load_data(self):

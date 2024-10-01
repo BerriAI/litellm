@@ -337,5 +337,5 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass

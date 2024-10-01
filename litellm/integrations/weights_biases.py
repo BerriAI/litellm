@@ -167,7 +167,7 @@ try:
             trace = self.results_to_trace_tree(request, response, results, time_elapsed)
             return trace
 
-except:
+except Exception:
     imported_openAIResponse = False
 
 
@@ -185,7 +185,7 @@ class WeightsBiasesLogger:
     def __init__(self):
         try:
             import wandb
-        except:
+        except Exception:
             raise Exception(
                 "\033[91m wandb not installed, try running 'pip install wandb' to fix this error\033[0m"
             )

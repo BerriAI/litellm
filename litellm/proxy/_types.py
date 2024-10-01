@@ -151,7 +151,7 @@ class LiteLLMBase(BaseModel):
     def fields_set(self):
         try:
             return self.model_fields_set  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.__fields_set__
 

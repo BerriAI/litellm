@@ -33,7 +33,7 @@ def print_verbose(print_statement):
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
-    except:
+    except Exception:
         pass
 
 
@@ -148,7 +148,7 @@ class InMemoryCache(BaseCache):
             original_cached_response = self.cache_dict[key]
             try:
                 cached_response = json.loads(original_cached_response)
-            except:
+            except Exception:
                 cached_response = original_cached_response
             return cached_response
         return None
@@ -686,7 +686,7 @@ class RedisCache(BaseCache):
             cached_response = json.loads(
                 cached_response
             )  # Convert string to dictionary
-        except:
+        except Exception:
             cached_response = ast.literal_eval(cached_response)
         return cached_response
 
@@ -971,7 +971,6 @@ class RedisSemanticCache(BaseCache):
             },
             "fields": {
                 "text": [{"name": "response"}],
-                "text": [{"name": "prompt"}],
                 "vector": [
                     {
                         "name": "litellm_embedding",
@@ -1025,7 +1024,7 @@ class RedisSemanticCache(BaseCache):
             cached_response = json.loads(
                 cached_response
             )  # Convert string to dictionary
-        except:
+        except Exception:
             cached_response = ast.literal_eval(cached_response)
         return cached_response
 
@@ -1394,7 +1393,7 @@ class QdrantSemanticCache(BaseCache):
             cached_response = json.loads(
                 cached_response
             )  # Convert string to dictionary
-        except:
+        except Exception:
             cached_response = ast.literal_eval(cached_response)
         return cached_response
 
@@ -2457,7 +2456,7 @@ class Cache:
                     cached_response = json.loads(
                         cached_response  # type: ignore
                     )  # Convert string to dictionary
-            except:
+            except Exception:
                 cached_response = ast.literal_eval(cached_response)  # type: ignore
             return cached_response
         return cached_result
@@ -2699,7 +2698,7 @@ class DiskCache(BaseCache):
         if original_cached_response:
             try:
                 cached_response = json.loads(original_cached_response)  # type: ignore
-            except:
+            except Exception:
                 cached_response = original_cached_response
             return cached_response
         return None

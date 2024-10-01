@@ -12,7 +12,6 @@ from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 
 import litellm
-from litellm import client
 from litellm.llms.AzureOpenAI import assistants
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (

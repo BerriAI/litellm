@@ -116,7 +116,7 @@ class LogfireLogger:
             id = response_obj.get("id", str(uuid.uuid4()))
             try:
                 response_time = (end_time - start_time).total_seconds()
-            except:
+            except Exception:
                 response_time = None
 
             # Clean Metadata before logging - never log raw metadata

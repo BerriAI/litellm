@@ -23,6 +23,9 @@ import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.exception_mapping_utils import (
+    _add_key_name_and_team_to_alert,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -258,7 +261,7 @@ class SlackAlerting(CustomBatchLogger):
                 and "metadata" in kwargs["litellm_params"]
             ):
                 _metadata: dict = kwargs["litellm_params"]["metadata"]
-                request_info = litellm.utils._add_key_name_and_team_to_alert(
+                request_info = _add_key_name_and_team_to_alert(
                     request_info=request_info, metadata=_metadata
                 )
 
@@ -494,7 +497,7 @@ class SlackAlerting(CustomBatchLogger):
             try:
                 messages = str(messages)
                 messages = messages[:100]
-            except:
+            except Exception:
                 messages = ""
 
             if (
@@ -547,7 +550,7 @@ class SlackAlerting(CustomBatchLogger):
                     _metadata: dict = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
 
-                    request_info = litellm.utils._add_key_name_and_team_to_alert(
+                    request_info = _add_key_name_and_team_to_alert(
                         request_info=request_info, metadata=_metadata
                     )
 

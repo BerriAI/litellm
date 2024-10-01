@@ -2,24 +2,22 @@
 
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
-
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
-
-from typing import Literal, Union
+import datetime
+import os
 import traceback
+from typing import Literal, Union
 
+import dotenv
+import requests
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 #### What this does ####
 #    On success + failure, log events to Supabase
-
-import dotenv, os
-import requests
-import traceback
-import datetime, subprocess, sys
-import litellm, uuid
-from litellm._logging import print_verbose, verbose_logger
 
 
 def create_client():
@@ -260,13 +258,13 @@ class ClickhouseLogger:
                 f"ClickhouseLogger Logging - Enters logging function for model {kwargs}"
             )
             # follows the same params as langfuse.py
-            from litellm.proxy.utils import get_logging_payload
 
             payload = get_logging_payload(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
+                end_user_id=None,
             )
             metadata = payload.get("metadata", "") or ""
             request_tags = payload.get("request_tags", "") or ""

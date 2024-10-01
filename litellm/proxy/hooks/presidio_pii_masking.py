@@ -108,7 +108,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def check_pii(self, text: str, output_parse_pii: bool) -> str:

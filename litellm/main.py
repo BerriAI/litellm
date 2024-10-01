@@ -151,7 +151,6 @@ from .types.utils import (
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     Choices,
-    CustomStreamWrapper,
     EmbeddingResponse,
     ImageResponse,
     Message,
@@ -160,8 +159,6 @@ from litellm.utils import (
     TextCompletionResponse,
     TextCompletionStreamWrapper,
     TranscriptionResponse,
-    get_secret,
-    read_config_args,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -5340,7 +5337,7 @@ def print_verbose(print_statement):
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
-    except:
+    except Exception:
         pass
 
 
@@ -5411,7 +5408,9 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
         response["usage"]["prompt_tokens"] = token_counter(
             model=model, messages=messages
         )
-    except:  # don't allow this failing to block a complete streaming response from being returned
+    except (
+        Exception
+    ):  # don't allow this failing to block a complete streaming response from being returned
         print_verbose("token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(

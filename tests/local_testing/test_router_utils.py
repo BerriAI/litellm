@@ -80,6 +80,6 @@ def test_returned_settings():
         assert settings["retry_after"] == 5
         assert settings["cooldown_time"] == 30
 
-    except:
+    except Exception:
         print(traceback.format_exc())
         pytest.fail("An error occurred - " + traceback.format_exc())

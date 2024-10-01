@@ -888,7 +888,7 @@ async def get_global_spend_provider(
                             litellm_params=_deployment.litellm_params,
                         )
                         provider_spend_mapping[_provider] += row["spend"]
-                    except:
+                    except Exception:
                         pass
 
         for provider, spend in provider_spend_mapping.items():

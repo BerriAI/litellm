@@ -274,7 +274,7 @@ class CodestralTextCompletion(BaseLLM):
             )
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise TextCompletionCodestralError(message=response.text, status_code=422)
 
         _original_choices = completion_response.get("choices", [])

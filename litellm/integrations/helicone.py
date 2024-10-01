@@ -187,6 +187,6 @@ class HeliconeLogger:
                     f"Helicone Logging - Error Request was not successful. Status Code: {response.status_code}"
                 )
                 print_verbose(f"Helicone Logging - Error {response.text}")
-        except:
+        except Exception:
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
             pass

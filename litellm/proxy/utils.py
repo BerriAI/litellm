@@ -30,7 +30,6 @@ import backoff
 import httpx
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
-from typing_extensions import overload
 
 import litellm
 import litellm.litellm_core_utils
@@ -1105,7 +1104,7 @@ class PrismaClient:
             if isinstance(v, dict):
                 try:
                     db_data[k] = json.dumps(v)
-                except:
+                except Exception:
                     # This avoids Prisma retrying this 5 times, and making 5 clients
                     db_data[k] = "failed-to-serialize-json"
         return db_data
@@ -2083,7 +2082,7 @@ class PrismaClient:
                         data_json = self.jsonify_object(
                             data=t.model_dump(exclude_none=True)
                         )
-                    except:
+                    except Exception:
                         data_json = self.jsonify_object(data=t.dict(exclude_none=True))
                     batcher.litellm_verificationtoken.update(
                         where={"token": t.token},  # type: ignore
@@ -2109,7 +2108,7 @@ class PrismaClient:
                         data_json = self.jsonify_object(
                             data=user.model_dump(exclude_none=True)
                         )
-                    except:
+                    except Exception:
                         data_json = self.jsonify_object(data=user.dict())
                     batcher.litellm_usertable.upsert(
                         where={"user_id": user.user_id},  # type: ignore
@@ -2138,7 +2137,7 @@ class PrismaClient:
                         data_json = self.jsonify_object(
                             data=team.model_dump(exclude_none=True)
                         )
-                    except:
+                    except Exception:
                         data_json = self.jsonify_object(
                             data=team.dict(exclude_none=True)
                         )

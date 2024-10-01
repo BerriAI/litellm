@@ -237,7 +237,7 @@ async def test_enduser_tpm_limits_non_master_key():
                 user=end_user_id,
             )
             passed += 1
-        except:
+        except Exception:
             pass
     print("Passed requests=", passed)
 
@@ -281,7 +281,7 @@ async def test_enduser_tpm_limits_with_master_key():
                 user=end_user_id,
             )
             passed += 1
-        except:
+        except Exception:
             pass
     print("Passed requests=", passed)
 

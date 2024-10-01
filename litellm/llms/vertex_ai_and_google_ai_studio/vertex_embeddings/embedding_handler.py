@@ -123,7 +123,7 @@ def embedding(
     # logic for parsing in - calling - parsing out model embedding calls
     try:
         import vertexai
-    except:
+    except Exception:
         raise VertexAIError(
             status_code=400,
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
