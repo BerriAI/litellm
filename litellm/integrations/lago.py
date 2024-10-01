@@ -11,7 +11,7 @@ import dotenv
 import httpx
 
 import litellm
-from litellm import print_verbose, verbose_logger
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
@@ -160,7 +160,7 @@ class LagoLogger(CustomLogger):
         except Exception as e:
             error_response = getattr(e, "response", None)
             if error_response is not None and hasattr(error_response, "text"):
-                print_verbose(f"\nError Message: {error_response.text}")
+                verbose_logger.debug(f"\nError Message: {error_response.text}")
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -200,5 +200,5 @@ class LagoLogger(CustomLogger):
             verbose_logger.debug(f"Logged Lago Object: {response.text}")
         except Exception as e:
             if response is not None and hasattr(response, "text"):
-                print_verbose(f"\nError Message: {response.text}")
+                verbose_logger.debug(f"\nError Message: {response.text}")
             raise e
