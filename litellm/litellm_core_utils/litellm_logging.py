@@ -2422,7 +2422,7 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         usage = response_obj.get("usage", None) or {}
-        if type(usage) == litellm.Usage:
+        if type(usage) is litellm.Usage:
             usage = dict(usage)
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 

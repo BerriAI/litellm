@@ -3814,7 +3814,7 @@ class Router:
             _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
                 model=model,
             )
-            if type(_all_deployments) == dict:
+            if isinstance(_all_deployments, dict):
                 return []
         except Exception:
             pass
@@ -3843,7 +3843,7 @@ class Router:
             _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
                 model=model,
             )
-            if type(_all_deployments) == dict:
+            if isinstance(_all_deployments, dict):
                 return [], _all_deployments
         except Exception:
             pass

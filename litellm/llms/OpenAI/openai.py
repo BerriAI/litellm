@@ -1541,7 +1541,7 @@ class OpenAITextCompletion(BaseLLM):
             if (
                 len(messages) > 0
                 and "content" in messages[0]
-                and type(messages[0]["content"]) == list
+                and isinstance(messages[0]["content"], list)
             ):
                 prompt = messages[0]["content"]
             else:

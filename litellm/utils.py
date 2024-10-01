@@ -289,10 +289,10 @@ class Rules:
         for rule in litellm.post_call_rules:
             if callable(rule):
                 decision = rule(input)
-                if type(decision) == bool:
+                if isinstance(decision, bool):
                     if decision is False:
                         raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model)  # type: ignore
-                elif type(decision) == dict:
+                elif isinstance(decision, dict):
                     decision_val = decision.get("decision", True)
                     decision_message = decision.get(
                         "message", "LLM Response failed post-call-rule check"
@@ -585,7 +585,7 @@ def function_setup(
 
 
 def client(original_function):
-    global liteDebuggerClient, get_all_keys
+    global liteDebuggerClient
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
@@ -6639,7 +6639,7 @@ class CustomStreamWrapper:
 
     def handle_predibase_chunk(self, chunk):
         try:
-            if type(chunk) != str:
+            if not isinstance(chunk, str):
                 chunk = chunk.decode(
                     "utf-8"
                 )  # DO NOT REMOVE this: This is required for HF inference API + Streaming
@@ -6682,7 +6682,7 @@ class CustomStreamWrapper:
 
     def handle_huggingface_chunk(self, chunk):
         try:
-            if type(chunk) != str:
+            if not isinstance(chunk, str):
                 chunk = chunk.decode(
                     "utf-8"
                 )  # DO NOT REMOVE this: This is required for HF inference API + Streaming

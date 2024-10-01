@@ -397,7 +397,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
             # If format is JSON, this was a function call
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
-                first_chunk = await anext(streamwrapper)
+                first_chunk = await anext(streamwrapper)  # noqa F821
                 chunk_choice = first_chunk.choices[0]
                 if (
                     isinstance(chunk_choice, StreamingChoices)

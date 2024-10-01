@@ -1275,7 +1275,7 @@ def completion(
             if (
                 len(messages) > 0
                 and "content" in messages[0]
-                and type(messages[0]["content"]) == list
+                and isinstance(messages[0]["content"], list)
             ):
                 # text-davinci-003 can accept a string or array, if it's an array, assume the array is set in messages[0]['content']
                 # https://platform.openai.com/docs/api-reference/completions/create
@@ -4098,7 +4098,6 @@ def text_completion(
     *args,
     **kwargs,
 ):
-    global print_verbose
     import copy
 
     """
@@ -4187,12 +4186,12 @@ def text_completion(
                 kwargs["top_n_tokens"] = 3
 
         # processing prompt - users can pass raw tokens to OpenAI Completion()
-        if type(prompt) == list:
+        if isinstance(prompt, list):
             import concurrent.futures
 
             tokenizer = tiktoken.encoding_for_model("text-davinci-003")
             ## if it's a 2d list - each element in the list is a text_completion() request
-            if len(prompt) > 0 and type(prompt[0]) == list:
+            if len(prompt) > 0 and isinstance(prompt[0], list):
                 responses = [None for x in prompt]  # init responses
 
                 def process_prompt(i, individual_prompt):
@@ -4291,7 +4290,7 @@ def text_completion(
         raw_response = response._hidden_params.get("original_response", None)
         transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
     except Exception as e:
-        print_verbose(f"LiteLLM non blocking exception: {e}")
+        verbose_logger.exception(f"LiteLLM non blocking exception: {e}")
 
     if isinstance(response, TextCompletionResponse):
         return response

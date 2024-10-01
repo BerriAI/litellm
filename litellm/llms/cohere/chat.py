@@ -288,7 +288,7 @@ def completion(
 
         ## Tool calling response
         cohere_tools_response = completion_response.get("tool_calls", None)
-        if cohere_tools_response is not None and cohere_tools_response is not []:
+        if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
             tool_calls = []
             for tool in cohere_tools_response:
