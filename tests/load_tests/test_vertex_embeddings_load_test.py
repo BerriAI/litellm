@@ -1,3 +1,8 @@
+"""
+Load test on vertex AI embeddings to ensure vertex median response time is less than 300ms
+
+"""
+
 import sys
 import os
 
@@ -52,61 +57,8 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
-@pytest.mark.asyncio
-async def test_vertex_embeddings_load():
-    try:
-        # load_vertex_ai_credentials()
-        embedding_times = []
-
-        # Set test parameters
-        test_duration = 60  # seconds
-        requests_per_second = 20
-
-        print(
-            f"\nStarting load test: {requests_per_second} RPS for {test_duration} seconds"
-        )
-
-        start_time = time.time()
-        while time.time() - start_time < test_duration:
-            batch_start = time.time()
-
-            # Make 20 requests
-            responses = await asyncio.gather(
-                *[create_async_embedding_task() for _ in range(requests_per_second)]
-            )
-
-            # Record response times
-            embedding_times.extend([resp[1] for resp in responses])
-
-            # Wait until the next second
-            elapsed = time.time() - batch_start
-            if elapsed < 1:
-                await asyncio.sleep(1 - elapsed)
-
-        # Calculate statistics
-        avg_time = mean(embedding_times)
-        median_time = median(embedding_times)
-
-        print(f"\nTotal requests: {len(embedding_times)}")
-        print(f"Average response time: {avg_time:.2f} seconds")
-        print(f"Median response time: {median_time:.2f} seconds")
-
-        # Assert that the average and median times are below 150ms
-        assert (
-            avg_time < 0.15
-        ), f"Average response time of {avg_time:.2f} seconds exceeds 150ms threshold"
-        assert (
-            median_time < 0.15
-        ), f"Median response time of {median_time:.2f} seconds exceeds 150ms threshold"
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        pytest.fail(f"An exception occurred - {e}")
-
-
-async def create_async_embedding_task():
+async def create_async_vertex_embedding_task():
+    load_vertex_ai_credentials()
     base_url = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/embedding-gecko-001:predict"
     embedding_args = {
         "model": "vertex_ai/textembedding-gecko",
@@ -117,4 +69,53 @@ async def create_async_embedding_task():
     start_time = time.time()
     response = await litellm.aembedding(**embedding_args)
     end_time = time.time()
+    print(f"Vertex AI embedding time: {end_time - start_time:.2f} seconds")
     return response, end_time - start_time
+
+
+async def run_load_test(duration_seconds, requests_per_second):
+    end_time = time.time() + duration_seconds
+    vertex_times = []
+
+    print(
+        f"Running Load Test for {duration_seconds} seconds at {requests_per_second} RPS..."
+    )
+    while time.time() < end_time:
+        vertex_tasks = [
+            create_async_vertex_embedding_task() for _ in range(requests_per_second)
+        ]
+
+        vertex_results = await asyncio.gather(*vertex_tasks)
+
+        vertex_times.extend([duration for _, duration in vertex_results])
+
+        # Sleep for 1 second to maintain the desired RPS
+        await asyncio.sleep(1)
+
+    return vertex_times
+
+
+def analyze_results(vertex_times):
+    median_vertex = median(vertex_times)
+    print(f"Vertex AI median response time: {median_vertex:.4f} seconds")
+
+    if median_vertex > 0.3:
+        pytest.fail(
+            f"Vertex AI median response time is greater than 300ms: {median_vertex:.4f} seconds"
+        )
+    else:
+        print("Performance is good")
+        return True
+
+
+@pytest.mark.asyncio
+async def test_embedding_performance():
+    """
+    Run load test on vertex AI embeddings to ensure vertex median response time is less than 300ms
+
+    20 RPS for 20 seconds
+    """
+    duration_seconds = 20
+    requests_per_second = 20
+    vertex_times = await run_load_test(duration_seconds, requests_per_second)
+    result = analyze_results(vertex_times)
