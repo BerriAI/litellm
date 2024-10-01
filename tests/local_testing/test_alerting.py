@@ -101,7 +101,7 @@ async def test_get_api_base():
     await _pl.alerting_handler(
         message=slow_message + request_info,
         level="Low",
-        alert_type="llm_too_slow",
+        alert_type=AlertType.llm_too_slow,
     )
     print("passed test_get_api_base")
 
@@ -119,7 +119,7 @@ def test_init():
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
         alerting=["slack"],
-        alert_types=["llm_exceptions"],
+        alert_types=[AlertType.llm_exceptions],
         internal_usage_cache=DualCache(),
     )
     assert slack_alerting.alerting_threshold == 32
@@ -712,7 +712,7 @@ async def test_region_outage_alerting_called(
     If multiple calls fail, outage alert is sent
     """
     slack_alerting = SlackAlerting(
-        alerting=["webhook"], alert_types=["region_outage_alerts"]
+        alerting=["webhook"], alert_types=[AlertType.region_outage_alerts]
     )
 
     litellm.callbacks = [slack_alerting]
