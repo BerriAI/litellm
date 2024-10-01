@@ -3,7 +3,7 @@ import os
 import urllib
 import urllib.parse
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 
 class PrismaWrapper:

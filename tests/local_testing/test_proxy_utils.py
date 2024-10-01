@@ -10,6 +10,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+from unittest.mock import AsyncMock, MagicMock, patch
+import builtins
 
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -368,3 +370,42 @@ def test_is_request_body_safe_model_enabled(
         error_raised = True
 
     assert expect_error == error_raised
+
+
+def test_update_schema():
+    """
+    Checks if 'disable_prisma_schema_update' is True, then we should:
+    - not update the schema.
+    - check if the schema is up to date.
+    """
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.caching import DualCache
+
+    database_url = os.getenv("DATABASE_URL")
+    if database_url is None:
+        raise Exception("DATABASE_URL is not set")
+    pl_obj = ProxyLogging(user_api_key_cache=DualCache(), premium_user=True)
+
+    # Define a custom function to raise ImportError only for 'prisma'
+    def custom_import(name, *args, **kwargs):
+        if name == "prisma":
+            raise ImportError("Simulated import error for prisma")
+        return original_import(name, *args, **kwargs)
+
+    # Store the original __import__ function
+    original_import = builtins.__import__
+
+    with patch("builtins.__import__", side_effect=custom_import):
+        with patch(
+            "litellm.proxy.utils.check_prisma_schema_diff", autospec=True
+        ) as mock_update_schema:
+            try:
+                _ = PrismaClient(
+                    database_url=database_url,
+                    proxy_logging_obj=pl_obj,
+                    disable_prisma_schema_update=True,
+                )
+            except ImportError:
+                pass
+
+            mock_update_schema.assert_called()

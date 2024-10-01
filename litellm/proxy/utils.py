@@ -69,11 +69,13 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     UserAPIKeyAuth,
 )
+from litellm.proxy.db.check_migration import check_prisma_schema_diff
 from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
 )
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.db.update_schema import update_schema
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
@@ -1038,6 +1040,7 @@ class PrismaClient:
         database_url: str,
         proxy_logging_obj: ProxyLogging,
         http_client: Optional[Any] = None,
+        disable_prisma_schema_update: bool = False,
     ):
         verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
@@ -1049,26 +1052,13 @@ class PrismaClient:
         )
         try:
             from prisma import Prisma  # type: ignore
-        except Exception as e:
-            os.environ["DATABASE_URL"] = database_url
-            # Save the current working directory
-            original_dir = os.getcwd()
-            # set the working directory to where this script is
-            abspath = os.path.abspath(__file__)
-            dname = os.path.dirname(abspath)
-            os.chdir(dname)
 
-            try:
-                subprocess.run(["prisma", "generate"])
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-            except Exception as e:
-                raise Exception(
-                    f"Unable to run prisma commands. Run `pip install prisma` Got Exception: {(str(e))}"
-                )
-            finally:
-                os.chdir(original_dir)
+        except Exception:
+            if disable_prisma_schema_update:
+                # just check if the schema is up to date
+                check_prisma_schema_diff(db_url=database_url)
+            else:
+                update_schema(db_url=database_url)
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
