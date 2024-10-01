@@ -22,3 +22,8 @@ class OllamaToolCallFunction(
 
 class OllamaToolCall(TypedDict):
     function: OllamaToolCallFunction
+
+
+class OllamaVisionModelObject(TypedDict):
+    prompt: str
+    images: list[str]

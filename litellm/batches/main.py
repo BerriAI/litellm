@@ -131,7 +131,7 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
-
+        api_base: Optional[str] = None
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -296,7 +296,7 @@ def retrieve_batch(
         )
 
         _is_async = kwargs.pop("aretrieve_batch", False) is True
-
+        api_base: Optional[str] = None
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there

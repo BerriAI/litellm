@@ -106,6 +106,7 @@ from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
     map_system_message_pt,
+    ollama_pt,
     prompt_factory,
     stringify_json_tool_call_content,
 )
@@ -2586,31 +2587,31 @@ def completion(
             if model in custom_prompt_dict:
                 # check if the model has a registered custom prompt
                 model_prompt_details = custom_prompt_dict[model]
-                prompt = custom_prompt(
+                ollama_prompt = custom_prompt(
                     role_dict=model_prompt_details["roles"],
                     initial_prompt_value=model_prompt_details["initial_prompt_value"],
                     final_prompt_value=model_prompt_details["final_prompt_value"],
                     messages=messages,
                 )
             else:
-                prompt = prompt_factory(
-                    model=model,
-                    messages=messages,
-                    custom_llm_provider=custom_llm_provider,
-                )
-                if isinstance(prompt, dict):
+                modified_prompt = ollama_pt(model=model, messages=messages)
+                if isinstance(modified_prompt, dict):
                     # for multimode models - ollama/llava prompt_factory returns a dict {
                     #     "prompt": prompt,
                     #     "images": images
                     # }
-                    prompt, images = prompt["prompt"], prompt["images"]
+                    ollama_prompt, images = (
+                        modified_prompt["prompt"],
+                        modified_prompt["images"],
+                    )
                     optional_params["images"] = images
-
+                else:
+                    ollama_prompt = modified_prompt
             ## LOGGING
             generator = ollama.get_ollama_response(
                 api_base=api_base,
                 model=model,
-                prompt=prompt,
+                prompt=ollama_prompt,
                 optional_params=optional_params,
                 logging_obj=logging,
                 acompletion=acompletion,

@@ -26,6 +26,7 @@ from litellm.types.completion import (
 )
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
+from litellm.types.llms.ollama import OllamaVisionModelObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -166,7 +167,9 @@ def convert_to_ollama_image(openai_image_url: str):
 
 def ollama_pt(
     model, messages
-):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
+) -> Union[
+    str, OllamaVisionModelObject
+]:  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
     if "instruct" in model:
         prompt = custom_prompt(
             role_dict={
