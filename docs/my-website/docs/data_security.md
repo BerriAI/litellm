@@ -108,3 +108,7 @@ Not applicable - LiteLLM is self-hosted, this is the responsibility of the team 
 Does the vendor have a vulnerability disclosure policy in place? [Yes](https://github.com/BerriAI/litellm?tab=security-ov-file#security-vulnerability-reporting-guidelines)
 
 Does the vendor perform vulnerability scans? No 
+
+Signer Name: Krish Amit Dholakia
+
+Signer Email: krrish@berri.ai
