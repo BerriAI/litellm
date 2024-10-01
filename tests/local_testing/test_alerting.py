@@ -14,6 +14,8 @@ from typing import Optional
 
 import httpx
 
+from litellm.integrations.SlackAlerting.types import AlertType
+
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
@@ -829,6 +831,7 @@ async def test_langfuse_trace_id():
     - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 
     litellm.success_callback = ["langfuse"]
 
@@ -856,11 +859,11 @@ async def test_langfuse_trace_id():
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
         alerting=["slack"],
-        alert_types=["llm_exceptions"],
+        alert_types=[AlertType.llm_exceptions],
         internal_usage_cache=DualCache(),
     )
 
-    trace_url = await slack_alerting._add_langfuse_trace_id_to_alert(
+    trace_url = await _add_langfuse_trace_id_to_alert(
         request_data={"litellm_logging_obj": litellm_logging_obj}
     )
 
