@@ -24,7 +24,7 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -592,7 +592,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         try:
             assert deployment is not None
             return deployment
-        except Exception as e:
+        except Exception:
             ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
             deployment_dict = {}
             for index, _deployment in enumerate(healthy_deployments):

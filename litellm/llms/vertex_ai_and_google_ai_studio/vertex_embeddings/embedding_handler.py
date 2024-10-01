@@ -1,7 +1,7 @@
 import json
 import os
 import types
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union, cast
 
 from pydantic import BaseModel
 
@@ -112,8 +112,8 @@ def embedding(
     print_verbose,
     model_response: litellm.EmbeddingResponse,
     optional_params: dict,
+    logging_obj: Any,
     api_key: Optional[str] = None,
-    logging_obj=None,
     encoding=None,
     vertex_project=None,
     vertex_location=None,
@@ -130,6 +130,7 @@ def embedding(
         )
 
     import google.auth  # type: ignore
+    from google.auth.credentials import Credentials
     from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
@@ -152,7 +153,9 @@ def embedding(
             f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
         )
         vertexai.init(
-            project=vertex_project, location=vertex_location, credentials=creds
+            project=vertex_project,
+            location=vertex_location,
+            credentials=cast(Credentials, creds),
         )
     except Exception as e:
         raise VertexAIError(status_code=401, message=str(e))
@@ -175,7 +178,7 @@ def embedding(
     except Exception as e:
         raise VertexAIError(status_code=422, message=str(e))
 
-    if aembedding == True:
+    if aembedding is True:
         return async_embedding(
             model=model,
             client=llm_model,
@@ -233,10 +236,10 @@ async def async_embedding(
     model: str,
     input: Union[list, str],
     model_response: litellm.EmbeddingResponse,
-    logging_obj=None,
-    optional_params=None,
+    logging_obj: Any,
+    client: Any,
+    optional_params: dict,
     encoding=None,
-    client=None,
 ):
     """
     Async embedding implementation

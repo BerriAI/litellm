@@ -13,6 +13,7 @@ import requests
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.completion import ChatCompletionMessageToolCallParam
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
@@ -181,7 +182,7 @@ class HuggingfaceConfig:
         return optional_params
 
     def get_hf_api_key(self) -> Optional[str]:
-        return litellm.utils.get_secret("HUGGINGFACE_API_KEY")
+        return get_secret_str("HUGGINGFACE_API_KEY")
 
 
 def output_parser(generated_text: str):
@@ -372,7 +373,7 @@ class Huggingface(BaseLLM):
                 ]["finish_reason"]
                 sum_logprob = 0
                 for token in completion_response[0]["details"]["tokens"]:
-                    if token["logprob"] != None:
+                    if token["logprob"] is not None:
                         sum_logprob += token["logprob"]
                 setattr(model_response.choices[0].message, "_logprob", sum_logprob)  # type: ignore
             if "best_of" in optional_params and optional_params["best_of"] > 1:
@@ -386,7 +387,7 @@ class Huggingface(BaseLLM):
                     ):
                         sum_logprob = 0
                         for token in item["tokens"]:
-                            if token["logprob"] != None:
+                            if token["logprob"] is not None:
                                 sum_logprob += token["logprob"]
                         if len(item["generated_text"]) > 0:
                             message_obj = Message(
@@ -559,7 +560,7 @@ class Huggingface(BaseLLM):
                         True
                         if "stream" in optional_params
                         and isinstance(optional_params["stream"], bool)
-                        and optional_params["stream"] == True  # type: ignore
+                        and optional_params["stream"] is True  # type: ignore
                         else False
                     ),
                 }
@@ -595,7 +596,7 @@ class Huggingface(BaseLLM):
                     data["stream"] = (  # type: ignore
                         True  # type: ignore
                         if "stream" in optional_params
-                        and optional_params["stream"] == True
+                        and optional_params["stream"] is True
                         else False
                     )
                 input_text = prompt
@@ -631,7 +632,7 @@ class Huggingface(BaseLLM):
                     ### ASYNC COMPLETION
                     return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, input_text=input_text, model=model, optional_params=optional_params, timeout=timeout)  # type: ignore
             ### SYNC STREAMING
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 response = requests.post(
                     completion_url,
                     headers=headers,

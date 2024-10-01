@@ -246,7 +246,7 @@ def print_verbose(
             verbose_logger.info(print_statement)
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
-        if litellm.set_verbose == True and logger_only == False:
+        if litellm.set_verbose is True and logger_only is False:
             print(print_statement)  # noqa
     except:
         pass
@@ -548,7 +548,7 @@ def function_setup(
             messages = kwargs.get("input", "speech")
         else:
             messages = "default-message-value"
-        stream = True if "stream" in kwargs and kwargs["stream"] == True else False
+        stream = True if "stream" in kwargs and kwargs["stream"] is True else False
         logging_obj = litellm.litellm_core_utils.litellm_logging.Logging(
             model=model,
             messages=messages,
@@ -706,13 +706,13 @@ def client(original_function):
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
-            kwargs.get("acompletion", False) == True
-            or kwargs.get("aembedding", False) == True
-            or kwargs.get("aimg_generation", False) == True
-            or kwargs.get("amoderation", False) == True
-            or kwargs.get("atext_completion", False) == True
-            or kwargs.get("atranscription", False) == True
-            or kwargs.get("arerank", False) == True
+            kwargs.get("acompletion", False) is True
+            or kwargs.get("aembedding", False) is True
+            or kwargs.get("aimg_generation", False) is True
+            or kwargs.get("amoderation", False) is True
+            or kwargs.get("atext_completion", False) is True
+            or kwargs.get("atranscription", False) is True
+            or kwargs.get("arerank", False) is True
         ):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
@@ -722,14 +722,14 @@ def client(original_function):
                 )
                 if previous_models is not None:
                     if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception(f"Max retries per request hit!")
+                        raise Exception("Max retries per request hit!")
 
             # MODEL CALL
             result = original_function(*args, **kwargs)
-            if "stream" in kwargs and kwargs["stream"] == True:
+            if "stream" in kwargs and kwargs["stream"] is True:
                 if (
                     "complete_response" in kwargs
-                    and kwargs["complete_response"] == True
+                    and kwargs["complete_response"] is True
                 ):
                     chunks = []
                     for idx, chunk in enumerate(result):
@@ -803,15 +803,15 @@ def client(original_function):
                             kwargs.get("caching", None) is None
                             and litellm.cache is not None
                         )
-                        or kwargs.get("caching", False) == True
+                        or kwargs.get("caching", False) is True
                     )
-                    and kwargs.get("cache", {}).get("no-cache", False) != True
+                    and kwargs.get("cache", {}).get("no-cache", False) is not True
                 )
-                and kwargs.get("aembedding", False) != True
-                and kwargs.get("atext_completion", False) != True
-                and kwargs.get("acompletion", False) != True
-                and kwargs.get("aimg_generation", False) != True
-                and kwargs.get("atranscription", False) != True
+                and kwargs.get("aembedding", False) is not True
+                and kwargs.get("atext_completion", False) is not True
+                and kwargs.get("acompletion", False) is not True
+                and kwargs.get("aimg_generation", False) is not True
+                and kwargs.get("atranscription", False) is not True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose("INSIDE CHECKING CACHE")
@@ -1057,7 +1057,8 @@ def client(original_function):
                 )  # DO NOT MAKE THREADED - router retry fallback relies on this!
                 if hasattr(e, "message"):
                     if (
-                        liteDebuggerClient and liteDebuggerClient.dashboard_url != None
+                        liteDebuggerClient
+                        and liteDebuggerClient.dashboard_url is not None
                     ):  # make it easy to get to the debugger logs if you've initialized it
                         e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
@@ -1107,9 +1108,9 @@ def client(original_function):
 
             if (
                 (kwargs.get("caching", None) is None and litellm.cache is not None)
-                or kwargs.get("caching", False) == True
+                or kwargs.get("caching", False) is True
             ) and (
-                kwargs.get("cache", {}).get("no-cache", False) != True
+                kwargs.get("cache", {}).get("no-cache", False) is not True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose("INSIDE CHECKING CACHE")
@@ -1211,7 +1212,7 @@ def client(original_function):
                         if call_type == CallTypes.acompletion.value and isinstance(
                             cached_result, dict
                         ):
-                            if kwargs.get("stream", False) == True:
+                            if kwargs.get("stream", False) is True:
                                 cached_result = convert_to_streaming_response_async(
                                     response_object=cached_result,
                                 )
@@ -1230,7 +1231,7 @@ def client(original_function):
                             call_type == CallTypes.atext_completion.value
                             and isinstance(cached_result, dict)
                         ):
-                            if kwargs.get("stream", False) == True:
+                            if kwargs.get("stream", False) is True:
                                 cached_result = convert_to_streaming_response_async(
                                     response_object=cached_result,
                                 )
@@ -1264,7 +1265,7 @@ def client(original_function):
                                 response_type="audio_transcription",
                                 hidden_params=hidden_params,
                             )
-                        if kwargs.get("stream", False) == False:
+                        if kwargs.get("stream", False) is False:
                             # LOG SUCCESS
                             asyncio.create_task(
                                 logging_obj.async_success_handler(
@@ -1440,7 +1441,7 @@ def client(original_function):
                     str(original_function.__name__)
                     in litellm.cache.supported_call_types
                 )
-                and (kwargs.get("cache", {}).get("no-store", False) != True)
+                and (kwargs.get("cache", {}).get("no-store", False) is not True)
             ):
                 if (
                     isinstance(result, litellm.ModelResponse)
@@ -1715,7 +1716,7 @@ def openai_token_counter(
                                 num_tokens += calculage_img_tokens(
                                     data=image_url_str, mode="auto"
                                 )
-    elif text is not None and count_response_tokens == True:
+    elif text is not None and count_response_tokens is True:
         # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
         num_tokens = len(encoding.encode(text, disallowed_special=()))
         return num_tokens
@@ -4201,7 +4202,6 @@ def get_api_base(
     except Exception as e:
         verbose_logger.debug("Error occurred in getting api base - {}".format(str(e)))
         custom_llm_provider = None
-        dynamic_api_key = None
         dynamic_api_base = None
 
     if dynamic_api_base is not None:
@@ -4709,7 +4709,7 @@ def get_max_tokens(model: str) -> Optional[int]:
                 return max_position_embeddings
             else:
                 return None
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             return None
 
     try:
@@ -4845,7 +4845,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 return max_position_embeddings
             else:
                 return None
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             return None
 
     try:
@@ -5714,7 +5714,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
             tool_calls=choice["message"].get("tool_calls", None),
         )
         finish_reason = choice.get("finish_reason", None)
-        if finish_reason == None:
+        if finish_reason is None:
             # gpt-4 vision can return 'finish_reason' or 'finish_details'
             finish_reason = choice.get("finish_details")
         logprobs = choice.get("logprobs", None)
@@ -6005,7 +6005,7 @@ def convert_to_model_response_object(
                 model_response_object._response_headers = _response_headers
 
             return model_response_object
-    except Exception as e:
+    except Exception:
         raise Exception(
             f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
         )
@@ -6065,9 +6065,9 @@ def check_valid_key(model: str, api_key: str):
             model=model, messages=messages, api_key=api_key, max_tokens=10
         )
         return True
-    except AuthenticationError as e:
+    except AuthenticationError:
         return False
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -6160,7 +6160,7 @@ def _get_retry_after_from_exception_header(
 
         return retry_after
 
-    except Exception as e:
+    except Exception:
         retry_after = -1
 
 
@@ -6264,11 +6264,11 @@ def get_all_keys(llm_provider=None):
         )
         if user_email:
             time_delta = 0
-            if last_fetched_at_keys != None:
+            if last_fetched_at_keys is not None:
                 current_time = time.time()
                 time_delta = current_time - last_fetched_at_keys
             if (
-                time_delta > 300 or last_fetched_at_keys == None or llm_provider
+                time_delta > 300 or last_fetched_at_keys is None or llm_provider
             ):  # if the llm provider is passed in , assume this happening due to an AuthError for that provider
                 # make the api call
                 last_fetched_at = time.time()
@@ -6781,7 +6781,7 @@ class CustomStreamWrapper:
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        except Exception as e:
+        except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_aleph_alpha_chunk(self, chunk):
@@ -6835,7 +6835,7 @@ class CustomStreamWrapper:
             finish_reason = ""
             if "text" in data_json:
                 text = data_json["text"]
-            elif "is_finished" in data_json and data_json["is_finished"] == True:
+            elif "is_finished" in data_json and data_json["is_finished"] is True:
                 is_finished = data_json["is_finished"]
                 finish_reason = data_json["finish_reason"]
             else:
@@ -6922,7 +6922,6 @@ class CustomStreamWrapper:
             finish_reason = None
             logprobs = None
             usage = None
-            original_chunk = None  # this is used for function/tool calling
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
                     str_line.choices[0].delta is not None
@@ -6930,7 +6929,7 @@ class CustomStreamWrapper:
                 ):
                     text = str_line.choices[0].delta.content
                 else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
-                    original_chunk = str_line
+                    pass
                 if str_line.choices[0].finish_reason:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
@@ -7084,7 +7083,7 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
-            if json_chunk["done"] == True:
+            if json_chunk["done"] is True:
                 text = ""
                 is_finished = True
                 finish_reason = "stop"
@@ -7119,7 +7118,7 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
-            if json_chunk["done"] == True:
+            if json_chunk["done"] is True:
                 text = ""
                 is_finished = True
                 finish_reason = "stop"
@@ -7159,7 +7158,7 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         elif isinstance(chunk, dict):
-            if chunk["is_finished"] == True:
+            if chunk["is_finished"] is True:
                 finish_reason = "stop"
             else:
                 finish_reason = ""
@@ -7259,7 +7258,7 @@ class CustomStreamWrapper:
                 .get("text", "")
                 .get("raw", "")
             )
-            prompt_tokens = len(
+            len(
                 encoding.encode(
                     data_json.get("outputs", "")[0]
                     .get("input", "")
@@ -7268,7 +7267,7 @@ class CustomStreamWrapper:
                     .get("raw", "")
                 )
             )
-            completion_tokens = len(encoding.encode(text))
+            len(encoding.encode(text))
             return {
                 "text": text,
                 "is_finished": True,
@@ -7459,7 +7458,7 @@ class CustomStreamWrapper:
                             raise Exception("An unknown error occurred with the stream")
                         self.received_finish_reason = "stop"
             elif self.custom_llm_provider == "gemini":
-                if hasattr(chunk, "parts") == True:
+                if hasattr(chunk, "parts") is True:
                     try:
                         if len(chunk.parts) > 0:
                             completion_obj["content"] = chunk.parts[0].text
@@ -7533,7 +7532,7 @@ class CustomStreamWrapper:
 
                     if response_obj["is_finished"]:
                         self.received_finish_reason = response_obj["finish_reason"]
-                elif hasattr(chunk, "candidates") == True:
+                elif hasattr(chunk, "candidates") is True:
                     try:
                         try:
                             completion_obj["content"] = chunk.text
@@ -7588,7 +7587,7 @@ class CustomStreamWrapper:
                             self.received_finish_reason = chunk.candidates[
                                 0
                             ].finish_reason.name
-                    except Exception as e:
+                    except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":
                             raise Exception(
                                 f"The response was blocked by VertexAI. {str(chunk)}"
@@ -7905,7 +7904,7 @@ class CustomStreamWrapper:
                             print_verbose(
                                 f"new delta: {model_response.choices[0].delta}"
                             )
-                        except Exception as e:
+                        except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
                     if (
@@ -7967,14 +7966,14 @@ class CustomStreamWrapper:
                                     if isinstance(choice, BaseModel):
                                         try:
                                             choice_json = choice.model_dump()
-                                        except Exception as e:
+                                        except Exception:
                                             choice_json = choice.dict()
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
                                         print_verbose(f"choice_json: {choice_json}")
                                         choices.append(StreamingChoices(**choice_json))
-                                except Exception as e:
+                                except Exception:
                                     choices.append(StreamingChoices())
                             print_verbose(f"choices in streaming: {choices}")
                             model_response.choices = choices
@@ -8066,7 +8065,7 @@ class CustomStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            traceback_exception = traceback.format_exc()
+            traceback.format_exc()
             e.message = str(e)
             raise exception_type(
                 model=self.model,
@@ -8107,7 +8106,7 @@ class CustomStreamWrapper:
                 ),
                 loop=self.logging_loop,
             )
-            result = future.result()
+            future.result()
         else:
             asyncio.run(
                 self.logging_obj.async_success_handler(
@@ -8555,7 +8554,7 @@ class TextCompletionStreamWrapper:
             # only pass usage when stream_options["include_usage"] is True
             if (
                 self.stream_options
-                and self.stream_options.get("include_usage", False) == True
+                and self.stream_options.get("include_usage", False) is True
             ):
                 response["usage"] = chunk.get("usage", None)
 
@@ -8567,7 +8566,7 @@ class TextCompletionStreamWrapper:
 
     def __next__(self):
         # model_response = ModelResponse(stream=True, model=self.model)
-        response = TextCompletionResponse()
+        TextCompletionResponse()
         try:
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
@@ -8649,7 +8648,7 @@ def read_config_args(config_path) -> dict:
     try:
         import os
 
-        current_path = os.getcwd()
+        os.getcwd()
         with open(config_path, "r") as config_file:
             config = json.load(config_file)
 
@@ -8675,7 +8674,7 @@ def completion_with_fallbacks(**kwargs):
     litellm_call_id = str(uuid.uuid4())
 
     # max time to process a request with fallbacks: default 45s
-    while response == None and time.time() - start_time < 45:
+    while response is None and time.time() - start_time < 45:
         for model in fallbacks:
             # loop thru all models
             try:
@@ -8711,7 +8710,7 @@ def completion_with_fallbacks(**kwargs):
                 }  # combine the openai + litellm params at the same level
                 response = litellm.completion(**kwargs, model=model)
                 print_verbose(f"response: {response}")
-                if response != None:
+                if response is not None:
                     return response
 
             except Exception as e:
@@ -9044,19 +9043,19 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         # we've already printed this for acompletion, don't print for completion
         if (
             "acompletion" in kwargs
-            and kwargs["acompletion"] == True
+            and kwargs["acompletion"] is True
             and original_function.__name__ == "completion"
         ):
             return
         elif (
             "aembedding" in kwargs
-            and kwargs["aembedding"] == True
+            and kwargs["aembedding"] is True
             and original_function.__name__ == "embedding"
         ):
             return
         elif (
             "aimg_generation" in kwargs
-            and kwargs["aimg_generation"] == True
+            and kwargs["aimg_generation"] is True
             and original_function.__name__ == "img_generation"
         ):
             return
@@ -9151,7 +9150,7 @@ def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
 
 class ModelResponseIterator:
     def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
-        if convert_to_delta == True:
+        if convert_to_delta is True:
             self.model_response = ModelResponse(stream=True)
             _delta = self.model_response.choices[0].delta  # type: ignore
             _delta.content = model_response.choices[0].message.content  # type: ignore

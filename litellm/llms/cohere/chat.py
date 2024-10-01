@@ -268,7 +268,7 @@ def completion(
     if response.status_code != 200:
         raise CohereError(message=response.text, status_code=response.status_code)
 
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         return response.iter_lines()
     else:
         ## LOGGING
@@ -283,7 +283,7 @@ def completion(
         completion_response = response.json()
         try:
             model_response.choices[0].message.content = completion_response["text"]  # type: ignore
-        except Exception as e:
+        except Exception:
             raise CohereError(message=response.text, status_code=response.status_code)
 
         ## Tool calling response

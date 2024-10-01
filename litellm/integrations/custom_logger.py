@@ -12,7 +12,12 @@ from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.services import ServiceLoggerPayload
-from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
+from litellm.types.utils import (
+    AdapterCompletionStreamWrapper,
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+)
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -140,8 +145,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
+        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+    ) -> Any:
         pass
 
     async def async_logging_hook(

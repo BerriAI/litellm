@@ -30,16 +30,16 @@ async def generate_key_fn(data: GenerateKeyRequest):
 
     # Unpacking variables
     team_id = data_json.get("team_id")
-    duration = data_json.get("duration")
-    models = data_json.get("models")
-    aliases = data_json.get("aliases")
-    config = data_json.get("config")
-    spend = data_json.get("spend")
-    user_id = data_json.get("user_id")
-    max_parallel_requests = data_json.get("max_parallel_requests")
-    metadata = data_json.get("metadata")
-    tpm_limit = data_json.get("tpm_limit")
-    rpm_limit = data_json.get("rpm_limit")
+    data_json.get("duration")
+    data_json.get("models")
+    data_json.get("aliases")
+    data_json.get("config")
+    data_json.get("spend")
+    data_json.get("user_id")
+    data_json.get("max_parallel_requests")
+    data_json.get("metadata")
+    data_json.get("tpm_limit")
+    data_json.get("rpm_limit")
 
     if team_id is not None and len(team_id) > 0:
         return {

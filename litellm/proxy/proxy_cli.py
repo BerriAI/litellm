@@ -48,7 +48,7 @@ def run_ollama_serve():
         command = ["ollama", "serve"]
 
         with open(os.devnull, "w") as devnull:
-            process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+            subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
         print(  # noqa
             f"""
@@ -293,7 +293,7 @@ def run_server(
                     load_google_kms,
                     save_worker_config,
                 )
-    if version == True:
+    if version is True:
         pkg_version = importlib.metadata.version("litellm")  # type: ignore
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
         return
@@ -328,7 +328,7 @@ def run_server(
                     print("\n RESPONSE FROM POLLING JOB", polling_response)  # noqa
                     status = polling_response["status"]
                     if status == "finished":
-                        llm_response = polling_response["result"]
+                        polling_response["result"]
                         break
                     print(  # noqa
                         f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}"  # noqa
@@ -371,21 +371,21 @@ def run_server(
         print(f"Successful Calls: {successful_calls}")  # noqa
         print(f"Failed Calls: {failed_calls}")  # noqa
         return
-    if health != False:
+    if health is not False:
         import requests
 
         print("\nLiteLLM: Health Testing models in config")  # noqa
         response = requests.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))  # noqa
         return
-    if test != False:
+    if test is not False:
         request_model = model or "gpt-3.5-turbo"
         click.echo(
             f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
         )
         import openai
 
-        if test == True:  # flag value set
+        if test is True:  # flag value set
             api_base = f"http://{host}:{port}"
         else:
             api_base = test
@@ -522,7 +522,7 @@ def run_server(
             if (
                 litellm_settings is not None
                 and "json_logs" in litellm_settings
-                and litellm_settings["json_logs"] == True
+                and litellm_settings["json_logs"] is True
             ):
                 import litellm
 
@@ -675,7 +675,7 @@ def run_server(
         import litellm
         from litellm.proxy.proxy_server import app
 
-        if run_gunicorn == False and run_hypercorn == False:
+        if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -694,7 +694,7 @@ def run_server(
                     )  # run uvicorn w/ json
                 else:
                     uvicorn.run(app, host=host, port=port)  # run uvicorn
-        elif run_gunicorn == True:
+        elif run_gunicorn is True:
             import gunicorn.app.base
 
             # Gunicorn Application Class
@@ -725,7 +725,7 @@ def run_server(
                     )
                     print()  # noqa
                     print(  # noqa
-                        f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                        '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
                     )
                     print(  # noqa
                         f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
@@ -778,7 +778,7 @@ def run_server(
             StandaloneApplication(
                 app=app, options=gunicorn_options
             ).run()  # Run gunicorn
-        elif run_hypercorn == True:
+        elif run_hypercorn is True:
             import asyncio
 
             from hypercorn.asyncio import serve

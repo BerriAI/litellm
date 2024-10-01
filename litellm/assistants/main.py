@@ -96,7 +96,7 @@ def get_assistants(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -280,7 +280,7 @@ def create_assistants(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -464,7 +464,7 @@ def delete_assistant(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -649,7 +649,7 @@ def create_thread(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -805,7 +805,7 @@ def get_thread(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -991,7 +991,7 @@ def add_message(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -1149,7 +1149,7 @@ def get_messages(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout
@@ -1347,7 +1347,7 @@ def run_thread(
     if (
         timeout is not None
         and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
+        and supports_httpx_timeout(custom_llm_provider) is False
     ):
         read_timeout = timeout.read or 600
         timeout = read_timeout  # default 10 min timeout

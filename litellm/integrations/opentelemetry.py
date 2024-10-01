@@ -98,7 +98,7 @@ class OpenTelemetry(CustomLogger):
             import logging
 
             logging.basicConfig(level=logging.DEBUG)
-            logger = logging.getLogger(__name__)
+            logging.getLogger(__name__)
 
             # Enable OpenTelemetry logging
             otel_exporter_logger = logging.getLogger("opentelemetry.sdk.trace.export")
@@ -520,7 +520,7 @@ class OpenTelemetry(CustomLogger):
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
         from litellm.proxy._types import SpanAttributes
 
-        optional_params = kwargs.get("optional_params", {})
+        kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
         custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
 
@@ -769,6 +769,6 @@ class OpenTelemetry(CustomLogger):
                     management_endpoint_span.set_attribute(f"request.{key}", value)
 
             _exception = logging_payload.exception
-            management_endpoint_span.set_attribute(f"exception", str(_exception))
+            management_endpoint_span.set_attribute("exception", str(_exception))
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)

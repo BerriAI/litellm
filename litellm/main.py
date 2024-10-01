@@ -213,7 +213,7 @@ class LiteLLM:
 class Chat:
     def __init__(self, params, router_obj: Optional[Any]):
         self.params = params
-        if self.params.get("acompletion", False) == True:
+        if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
             self.completions: Union[AsyncCompletions, Completions] = AsyncCompletions(
                 self.params, router_obj=router_obj
@@ -836,10 +836,10 @@ def completion(
         model_response = ModelResponse()
         setattr(model_response, "usage", litellm.Usage())
         if (
-            kwargs.get("azure", False) == True
+            kwargs.get("azure", False) is True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
             custom_llm_provider = "azure"
-        if deployment_id != None:  # azure llms
+        if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
@@ -1155,7 +1155,7 @@ def completion(
                 client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1303,16 +1303,16 @@ def completion(
             )
 
             if (
-                optional_params.get("stream", False) == False
-                and acompletion == False
-                and text_completion == False
+                optional_params.get("stream", False) is False
+                and acompletion is False
+                and text_completion is False
             ):
                 # convert to chat completion response
                 _response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                     response_object=_response, model_response_object=model_response
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1518,7 +1518,7 @@ def completion(
                 acompletion=acompletion,
             )
 
-            if optional_params.get("stream", False) == True:
+            if optional_params.get("stream", False) is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1565,7 +1565,7 @@ def completion(
                 custom_prompt_dict=custom_prompt_dict,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 ## LOGGING
                 logging.post_call(
@@ -1574,7 +1574,7 @@ def completion(
                     original_response=model_response,
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1653,7 +1653,7 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1690,7 +1690,7 @@ def completion(
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     response,
@@ -1699,7 +1699,7 @@ def completion(
                     logging_obj=logging,
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1739,7 +1739,7 @@ def completion(
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1787,7 +1787,7 @@ def completion(
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1835,7 +1835,7 @@ def completion(
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1874,7 +1874,7 @@ def completion(
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1915,7 +1915,7 @@ def completion(
             )
             if (
                 "stream" in optional_params
-                and optional_params["stream"] == True
+                and optional_params["stream"] is True
                 and acompletion is False
             ):
                 # don't try to access stream object,
@@ -1942,7 +1942,7 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -2094,7 +2094,7 @@ def completion(
                 logging_obj=logging,
             )
             # fake palm streaming
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # fake streaming for palm
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
@@ -2389,7 +2389,7 @@ def completion(
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -2526,7 +2526,7 @@ def completion(
             )
             if (
                 "stream" in optional_params
-                and optional_params["stream"] == True
+                and optional_params["stream"] is True
                 and not isinstance(response, CustomStreamWrapper)
             ):
                 # don't try to access stream object,
@@ -2562,7 +2562,7 @@ def completion(
             )
 
             if (
-                "stream" in optional_params and optional_params["stream"] == True
+                "stream" in optional_params and optional_params["stream"] is True
             ):  ## [BETA]
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
@@ -2617,7 +2617,7 @@ def completion(
                 model_response=model_response,
                 encoding=encoding,
             )
-            if acompletion is True or optional_params.get("stream", False) == True:
+            if acompletion is True or optional_params.get("stream", False) is True:
                 return generator
 
             response = generator
@@ -2700,7 +2700,7 @@ def completion(
                 api_key=api_key,
                 logging_obj=logging,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     response,
@@ -2709,7 +2709,7 @@ def completion(
                     logging_obj=logging,
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -2742,7 +2742,7 @@ def completion(
                 logging_obj=logging,
             )
             if inspect.isgenerator(model_response) or (
-                "stream" in optional_params and optional_params["stream"] == True
+                "stream" in optional_params and optional_params["stream"] is True
             ):
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
@@ -2770,7 +2770,7 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging,
             )
-            if stream == True:  ## [BETA]
+            if stream is True:  ## [BETA]
                 # Fake streaming for petals
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
@@ -2785,7 +2785,7 @@ def completion(
             import requests
 
             url = litellm.api_base or api_base or ""
-            if url == None or url == "":
+            if url is None or url == "":
                 raise ValueError(
                     "api_base not set. Set api_base or litellm.api_base for custom endpoints"
                 )
@@ -2980,7 +2980,7 @@ def batch_completion(
     deployment_id=None,
     request_timeout: Optional[int] = None,
     timeout: Optional[int] = 600,
-    max_workers:Optional[int]= 100,
+    max_workers: Optional[int] = 100,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -3144,10 +3144,10 @@ def batch_completion_models(*args, **kwargs):
                     try:
                         result = future.result()
                         return result
-                    except Exception as e:
+                    except Exception:
                         # if model 1 fails, continue with response from model 2, model3
                         print_verbose(
-                            f"\n\ngot an exception, ignoring, removing from futures"
+                            "\n\ngot an exception, ignoring, removing from futures"
                         )
                         print_verbose(futures)
                         new_futures = {}
@@ -3188,9 +3188,6 @@ def batch_completion_models_all_responses(*args, **kwargs):
     import concurrent.futures
 
     # ANSI escape codes for colored output
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    RESET = "\033[0m"
 
     if "model" in kwargs:
         kwargs.pop("model")
@@ -3519,7 +3516,7 @@ def embedding(
 
             if api_base is None:
                 raise ValueError(
-                    f"No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env"
+                    "No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env"
                 )
 
             ## EMBEDDING CALL
@@ -4133,7 +4130,7 @@ def text_completion(
         Your example of how to use this function goes here.
     """
     if "engine" in kwargs:
-        if model == None:
+        if model is None:
             # only use engine when model not passed
             model = kwargs["engine"]
         kwargs.pop("engine")
@@ -4186,7 +4183,7 @@ def text_completion(
 
     if custom_llm_provider == "huggingface":
         # if echo == True, for TGI llms we need to set top_n_tokens to 3
-        if echo == True:
+        if echo is True:
             # for tgi llms
             if "top_n_tokens" not in kwargs:
                 kwargs["top_n_tokens"] = 3
@@ -4810,12 +4807,12 @@ def transcription(
     Allows router to load balance between them
     """
     atranscription = kwargs.get("atranscription", False)
-    litellm_call_id = kwargs.get("litellm_call_id", None)
-    logger_fn = kwargs.get("logger_fn", None)
-    proxy_server_request = kwargs.get("proxy_server_request", None)
-    model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
-    tags = kwargs.pop("tags", [])
+    kwargs.get("litellm_call_id", None)
+    kwargs.get("logger_fn", None)
+    kwargs.get("proxy_server_request", None)
+    kwargs.get("model_info", None)
+    kwargs.get("metadata", {})
+    kwargs.pop("tags", [])
 
     drop_params = kwargs.get("drop_params", None)
     client: Optional[
@@ -4993,7 +4990,7 @@ def speech(
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
-    tags = kwargs.pop("tags", [])
+    kwargs.pop("tags", [])
 
     optional_params = {}
     if response_format is not None:
@@ -5347,7 +5344,7 @@ def print_verbose(print_statement):
 
 
 def config_completion(**kwargs):
-    if litellm.config_path != None:
+    if litellm.config_path is not None:
         config_args = read_config_args(litellm.config_path)
         # overwrite any args passed in with config args
         return completion(**kwargs, **config_args)
@@ -5405,16 +5402,16 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     response["choices"][0]["text"] = combined_content
 
     if len(combined_content) > 0:
-        completion_output = combined_content
+        pass
     else:
-        completion_output = ""
+        pass
     # # Update usage information if needed
     try:
         response["usage"]["prompt_tokens"] = token_counter(
             model=model, messages=messages
         )
     except:  # don't allow this failing to block a complete streaming response from being returned
-        print_verbose(f"token_counter failed, assuming prompt tokens is 0")
+        print_verbose("token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(
         model=model,

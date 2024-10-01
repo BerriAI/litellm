@@ -205,7 +205,7 @@ async def new_team(
             if member.user_id == user_api_key_dict.user_id:
                 creating_user_in_list = True
 
-        if creating_user_in_list == False:
+        if creating_user_in_list is False:
             data.members_with_roles.append(
                 Member(role="admin", user_id=user_api_key_dict.user_id)
             )
@@ -292,7 +292,7 @@ async def new_team(
 
     try:
         return team_row.model_dump()
-    except Exception as e:
+    except Exception:
         return team_row.dict()
 
 
@@ -1013,7 +1013,7 @@ async def team_info(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
-                    "error": f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                    "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
                 },
             )
         if team_id is None:

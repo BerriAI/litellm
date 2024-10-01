@@ -96,7 +96,7 @@ def completion(
     api_key,
     encoding,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -167,7 +167,7 @@ def completion(
             choice_obj = Choices(index=idx + 1, message=message_obj)
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
-    except Exception as e:
+    except Exception:
         raise PalmError(
             message=traceback.format_exc(), status_code=response.status_code
         )

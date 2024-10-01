@@ -62,7 +62,7 @@ def get_error_message(error_obj) -> Optional[str]:
 
         # If all else fails, return None
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -910,7 +910,7 @@ def exception_type(  # type: ignore
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints",
+                        message="SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints",
                         model=model,
                         llm_provider="sagemaker",
                         response=original_exception.response,
@@ -1122,7 +1122,7 @@ def exception_type(  # type: ignore
                     # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"GeminiException - Invalid api key",
+                        message="GeminiException - Invalid api key",
                         model=model,
                         llm_provider="palm",
                         response=original_exception.response,
@@ -2067,11 +2067,11 @@ def exception_logging(
                 logger_fn(
                     model_call_details
                 )  # Expectation: any logger function passed in by the user should accept a dict object
-            except Exception as e:
+            except Exception:
                 verbose_logger.debug(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                 )
-    except Exception as e:
+    except Exception:
         verbose_logger.debug(
             f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
         )

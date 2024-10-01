@@ -1263,7 +1263,6 @@ class OpenAIChatCompletion(BaseLLM):
         client=None,
         aimg_generation=None,
     ):
-        exception_mapping_worked = False
         data = {}
         try:
             model = model
@@ -1272,7 +1271,7 @@ class OpenAIChatCompletion(BaseLLM):
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
-            if aimg_generation == True:
+            if aimg_generation is True:
                 response = self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
                 return response
 
@@ -1311,7 +1310,6 @@ class OpenAIChatCompletion(BaseLLM):
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
 
-            exception_mapping_worked = True
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -2413,7 +2411,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         aget_assistants=None,
     ):
-        if aget_assistants is not None and aget_assistants == True:
+        if aget_assistants is not None and aget_assistants is True:
             return self.async_get_assistants(
                 api_key=api_key,
                 api_base=api_base,
@@ -2470,7 +2468,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         async_create_assistants=None,
     ):
-        if async_create_assistants is not None and async_create_assistants == True:
+        if async_create_assistants is not None and async_create_assistants is True:
             return self.async_create_assistants(
                 api_key=api_key,
                 api_base=api_base,
@@ -2527,7 +2525,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         async_delete_assistants=None,
     ):
-        if async_delete_assistants is not None and async_delete_assistants == True:
+        if async_delete_assistants is not None and async_delete_assistants is True:
             return self.async_delete_assistant(
                 api_key=api_key,
                 api_base=api_base,
@@ -2629,7 +2627,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         a_add_message: Optional[bool] = None,
     ):
-        if a_add_message is not None and a_add_message == True:
+        if a_add_message is not None and a_add_message is True:
             return self.a_add_message(
                 thread_id=thread_id,
                 message_data=message_data,
@@ -2727,7 +2725,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         aget_messages=None,
     ):
-        if aget_messages is not None and aget_messages == True:
+        if aget_messages is not None and aget_messages is True:
             return self.async_get_messages(
                 thread_id=thread_id,
                 api_key=api_key,
@@ -2838,7 +2836,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         openai_api.create_thread(messages=[message])
         ```
         """
-        if acreate_thread is not None and acreate_thread == True:
+        if acreate_thread is not None and acreate_thread is True:
             return self.async_create_thread(
                 metadata=metadata,
                 api_key=api_key,
@@ -2934,7 +2932,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         aget_thread=None,
     ):
-        if aget_thread is not None and aget_thread == True:
+        if aget_thread is not None and aget_thread is True:
             return self.async_get_thread(
                 thread_id=thread_id,
                 api_key=api_key,
@@ -3117,8 +3115,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         arun_thread=None,
         event_handler: Optional[AssistantEventHandler] = None,
     ):
-        if arun_thread is not None and arun_thread == True:
-            if stream is not None and stream == True:
+        if arun_thread is not None and arun_thread is True:
+            if stream is not None and stream is True:
                 _client = self.async_get_openai_client(
                     api_key=api_key,
                     api_base=api_base,
@@ -3163,7 +3161,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        if stream is not None and stream == True:
+        if stream is not None and stream is True:
             return self.run_thread_stream(
                 client=openai_client,
                 thread_id=thread_id,

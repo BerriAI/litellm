@@ -27,7 +27,7 @@ class LogfireLogger:
     # Class variables or attributes
     def __init__(self):
         try:
-            verbose_logger.debug(f"in init logfire logger")
+            verbose_logger.debug("in init logfire logger")
             import logfire
 
             # only setting up logfire if we are sending to logfire

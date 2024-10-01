@@ -5,7 +5,7 @@ import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple, cast
 
 from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -31,6 +31,8 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
     ChatCompletionFunctionMessage,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionUserMessage,
@@ -438,7 +440,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
     def _is_system_in_template():
         try:
             # Try rendering the template with a system message
-            response = template.render(
+            template.render(
                 messages=[{"role": "system", "content": "test"}],
                 eos_token="<eos>",
                 bos_token="<bos>",
@@ -450,6 +452,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             return False
 
     try:
+        rendered_text = ""
         # Render the template with the provided values
         if _is_system_in_template():
             rendered_text = template.render(
@@ -460,8 +463,8 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             )
         else:
             # treat a system message as a user message, if system not in template
+            reformatted_messages = []
             try:
-                reformatted_messages = []
                 for message in messages:
                     if message["role"] == "system":
                         reformatted_messages.append(
@@ -556,30 +559,31 @@ def get_model_info(token, model):
             return None, None
         else:
             return None, None
-    except Exception as e:  # safely fail a prompt template request
+    except Exception:  # safely fail a prompt template request
         return None, None
 
 
-def format_prompt_togetherai(messages, prompt_format, chat_template):
-    if prompt_format is None:
-        return default_pt(messages)
+## OLD TOGETHER AI FLOW
+# def format_prompt_togetherai(messages, prompt_format, chat_template):
+#     if prompt_format is None:
+#         return default_pt(messages)
 
-    human_prompt, assistant_prompt = prompt_format.split("{prompt}")
+#     human_prompt, assistant_prompt = prompt_format.split("{prompt}")
 
-    if chat_template is not None:
-        prompt = hf_chat_template(
-            model=None, messages=messages, chat_template=chat_template
-        )
-    elif prompt_format is not None:
-        prompt = custom_prompt(
-            role_dict={},
-            messages=messages,
-            initial_prompt_value=human_prompt,
-            final_prompt_value=assistant_prompt,
-        )
-    else:
-        prompt = default_pt(messages)
-    return prompt
+#     if chat_template is not None:
+#         prompt = hf_chat_template(
+#             model=None, messages=messages, chat_template=chat_template
+#         )
+#     elif prompt_format is not None:
+#         prompt = custom_prompt(
+#             role_dict={},
+#             messages=messages,
+#             initial_prompt_value=human_prompt,
+#             final_prompt_value=assistant_prompt,
+#         )
+#     else:
+#         prompt = default_pt(messages)
+#     return prompt
 
 
 ### IBM Granite
@@ -1063,7 +1067,7 @@ def convert_to_gemini_tool_call_invoke(
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
                     "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
-                        tool
+                        message
                     )
                 )
         return _parts_list
@@ -1216,12 +1220,14 @@ def convert_function_to_anthropic_tool_invoke(
     function_call: Union[dict, ChatCompletionToolCallFunctionChunk],
 ) -> List[AnthropicMessagesToolUseParam]:
     try:
+        _name = get_attribute_or_key(function_call, "name") or ""
+        _arguments = get_attribute_or_key(function_call, "arguments")
         anthropic_tool_invoke = [
             AnthropicMessagesToolUseParam(
                 type="tool_use",
                 id=str(uuid.uuid4()),
-                name=get_attribute_or_key(function_call, "name"),
-                input=json.loads(get_attribute_or_key(function_call, "arguments")),
+                name=_name,
+                input=json.loads(_arguments) if _arguments else {},
             )
         ]
         return anthropic_tool_invoke
@@ -1349,8 +1355,9 @@ def anthropic_messages_pt(
             ):
                 for m in user_message_types_block["content"]:
                     if m.get("type", "") == "image_url":
+                        m = cast(ChatCompletionImageObject, m)
                         image_chunk = convert_to_anthropic_image_obj(
-                            m["image_url"]["url"]
+                            openai_image_url=m["image_url"]["url"]  # type: ignore
                         )
 
                         _anthropic_content_element = AnthropicMessagesImageParam(
@@ -1362,21 +1369,31 @@ def anthropic_messages_pt(
                             ),
                         )
 
-                        anthropic_content_element = add_cache_control_to_content(
+                        _content_element = add_cache_control_to_content(
                             anthropic_content_element=_anthropic_content_element,
-                            orignal_content_element=m,
+                            orignal_content_element=dict(m),
                         )
-                        user_content.append(anthropic_content_element)
+
+                        if "cache_control" in _content_element:
+                            _anthropic_content_element["cache_control"] = (
+                                _content_element["cache_control"]
+                            )
+                        user_content.append(_anthropic_content_element)
                     elif m.get("type", "") == "text":
-                        _anthropic_text_content_element = {
-                            "type": "text",
-                            "text": m["text"],
-                        }
-                        anthropic_content_element = add_cache_control_to_content(
-                            anthropic_content_element=_anthropic_text_content_element,
-                            orignal_content_element=m,
+                        m = cast(ChatCompletionTextObject, m)
+                        _anthropic_text_content_element = AnthropicMessagesTextParam(
+                            type="text",
+                            text=m["text"],
                         )
-                        user_content.append(anthropic_content_element)
+                        _content_element = add_cache_control_to_content(
+                            anthropic_content_element=_anthropic_text_content_element,
+                            orignal_content_element=dict(m),
+                        )
+                        _content_element = cast(
+                            AnthropicMessagesTextParam, _content_element
+                        )
+
+                        user_content.append(_content_element)
             elif (
                 user_message_types_block["role"] == "tool"
                 or user_message_types_block["role"] == "function"
@@ -1390,12 +1407,17 @@ def anthropic_messages_pt(
                     "type": "text",
                     "text": user_message_types_block["content"],
                 }
-                anthropic_content_element = add_cache_control_to_content(
+                _content_element = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_content_text_element,
-                    orignal_content_element=user_message_types_block,
+                    orignal_content_element=dict(user_message_types_block),
                 )
 
-                user_content.append(anthropic_content_element)
+                if "cache_control" in _content_element:
+                    _anthropic_content_text_element["cache_control"] = _content_element[
+                        "cache_control"
+                    ]
+
+                user_content.append(_anthropic_content_text_element)
 
             msg_i += 1
 
@@ -1417,11 +1439,14 @@ def anthropic_messages_pt(
                         anthropic_message = AnthropicMessagesTextParam(
                             type="text", text=m.get("text")
                         )
-                        anthropic_message = add_cache_control_to_content(
+                        _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
-                            orignal_content_element=m,
+                            orignal_content_element=dict(m),
                         )
-                        assistant_content.append(anthropic_message)
+
+                        assistant_content.append(
+                            cast(AnthropicMessagesTextParam, _cached_message)
+                        )
             elif (
                 "content" in assistant_content_block
                 and isinstance(assistant_content_block["content"], str)
@@ -1430,16 +1455,22 @@ def anthropic_messages_pt(
                 ]  # don't pass empty text blocks. anthropic api raises errors.
             ):
 
-                _anthropic_text_content_element = {
-                    "type": "text",
-                    "text": assistant_content_block["content"],
-                }
-
-                anthropic_content_element = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_text_content_element,
-                    orignal_content_element=assistant_content_block,
+                _anthropic_text_content_element = AnthropicMessagesTextParam(
+                    type="text",
+                    text=assistant_content_block["content"],
                 )
-                assistant_content.append(anthropic_content_element)
+
+                _content_element = add_cache_control_to_content(
+                    anthropic_content_element=_anthropic_text_content_element,
+                    orignal_content_element=dict(assistant_content_block),
+                )
+
+                if "cache_control" in _content_element:
+                    _anthropic_text_content_element["cache_control"] = _content_element[
+                        "cache_control"
+                    ]
+
+                assistant_content.append(_anthropic_text_content_element)
 
             assistant_tool_calls = assistant_content_block.get("tool_calls")
             if (
@@ -1564,30 +1595,6 @@ def get_system_prompt(messages):
         for idx in reversed(system_prompt_indices):
             messages.pop(idx)
     return system_prompt, messages
-
-
-def convert_to_documents(
-    observations: Any,
-) -> List[MutableMapping]:
-    """Converts observations into a 'document' dict"""
-    documents: List[MutableMapping] = []
-    if isinstance(observations, str):
-        # strings are turned into a key/value pair and a key of 'output' is added.
-        observations = [{"output": observations}]
-    elif isinstance(observations, Mapping):
-        # single mappings are transformed into a list to simplify the rest of the code.
-        observations = [observations]
-    elif not isinstance(observations, Sequence):
-        # all other types are turned into a key/value pair within a list
-        observations = [{"output": observations}]
-
-    for doc in observations:
-        if not isinstance(doc, Mapping):
-            # types that aren't Mapping are turned into a key/value pair.
-            doc = {"output": doc}
-        documents.append(doc)
-
-    return documents
 
 
 from litellm.types.llms.cohere import (
@@ -2331,7 +2338,7 @@ def _convert_to_bedrock_tool_call_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
-    name = message.get("name", "")
+    message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
     tool_result_content_block = BedrockToolResultContentBlock(text=content_str)
@@ -2575,7 +2582,7 @@ def function_call_prompt(messages: list, functions: list):
             message["content"] += f""" {function_prompt}"""
             function_added_to_prompt = True
 
-    if function_added_to_prompt == False:
+    if function_added_to_prompt is False:
         messages.append({"role": "system", "content": f"""{function_prompt}"""})
 
     return messages
@@ -2692,11 +2699,6 @@ def prompt_factory(
         )
     elif custom_llm_provider == "anthropic_xml":
         return anthropic_messages_pt_xml(messages=messages)
-    elif custom_llm_provider == "together_ai":
-        prompt_format, chat_template = get_model_info(token=api_key, model=model)
-        return format_prompt_togetherai(
-            messages=messages, prompt_format=prompt_format, chat_template=chat_template
-        )
     elif custom_llm_provider == "gemini":
         if (
             model == "gemini-pro-vision"
@@ -2810,7 +2812,7 @@ def prompt_factory(
             )
         else:
             return hf_chat_template(original_model_name, messages)
-    except Exception as e:
+    except Exception:
         return default_pt(
             messages=messages
         )  # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)

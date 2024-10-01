@@ -1326,7 +1326,7 @@ class Logging:
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
-                            f"success callbacks: Running Custom Callback Function"
+                            "success callbacks: Running Custom Callback Function"
                         )
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1400,7 +1400,7 @@ class Logging:
                     self.model_call_details["response_cost"] = 0.0
                 else:
                     # check if base_model set on azure
-                    base_model = _get_base_model_from_metadata(
+                    _get_base_model_from_metadata(
                         model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
@@ -1483,7 +1483,7 @@ class Logging:
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) == True:
+            if litellm_params.get("no-log", False) is True:
                 # proxy cost tracking cal backs should run
                 if not (
                     isinstance(callback, CustomLogger)
@@ -1492,7 +1492,7 @@ class Logging:
                     print_verbose("no-log request, skipping logging")
                     continue
             try:
-                if kwargs.get("no-log", False) == True:
+                if kwargs.get("no-log", False) is True:
                     print_verbose("no-log request, skipping logging")
                     continue
                 if (
@@ -1641,7 +1641,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except Exception as e:
+            except Exception:
                 verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
