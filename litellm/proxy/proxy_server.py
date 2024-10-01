@@ -116,7 +116,6 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.SlackAlerting.slack_alerting import (
     SlackAlerting,
     SlackAlertingArgs,
@@ -505,7 +504,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger: Optional[OpenTelemetry] = None
+open_telemetry_logger: Optional[Any] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
