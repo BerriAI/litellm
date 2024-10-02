@@ -2554,7 +2554,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
-        parameters = tool.get("function", {}).get("parameters", None)
+        parameters = tool.get("function", {}).get("parameters", {
+            "type": "object",
+            "properties": {}
+        })
         name = tool.get("function", {}).get("name", "")
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
