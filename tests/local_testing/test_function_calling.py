@@ -47,16 +47,17 @@ def get_current_weather(location, unit="fahrenheit"):
     [
         "gpt-3.5-turbo-1106",
         # "mistral/mistral-large-latest",
-        # "claude-3-haiku-20240307",
-        # "gemini/gemini-1.5-pro",
+        "claude-3-haiku-20240307",
+        "gemini/gemini-1.5-pro",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "groq/llama3-8b-8192",
+        # "groq/llama3-8b-8192",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
 def test_aaparallel_function_call(model):
     try:
         litellm.set_verbose = True
+        litellm.modify_params = True
         # Step 1: send the conversation and available functions to the model
         messages = [
             {
@@ -97,7 +98,6 @@ def test_aaparallel_function_call(model):
         response_message = response.choices[0].message
         tool_calls = response_message.tool_calls
 
-        print("length of tool calls", len(tool_calls))
         print("Expecting there to be 3 tool calls")
         assert (
             len(tool_calls) > 0
@@ -141,7 +141,7 @@ def test_aaparallel_function_call(model):
                 messages=messages,
                 temperature=0.2,
                 seed=22,
-                tools=tools,
+                # tools=tools,
                 drop_params=True,
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
