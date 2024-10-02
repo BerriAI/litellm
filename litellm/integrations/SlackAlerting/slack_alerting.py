@@ -1683,7 +1683,7 @@ Model Info:
                 end_date=last_day_of_month.strftime("%Y-%m-%d"),
             )
 
-            if _resp is None:
+            if _resp is None or _resp == ([], []):
                 return
 
             monthly_spend_per_team, monthly_spend_per_tag = _resp
