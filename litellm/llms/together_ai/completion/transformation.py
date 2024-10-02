@@ -6,7 +6,7 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
-from typing import List, Union
+from typing import List, Union, cast
 
 from litellm.llms.OpenAI.completion.utils import is_tokens_or_list_of_tokens
 from litellm.types.llms.openai import (
@@ -41,6 +41,6 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         elif isinstance(initial_prompt, list):
             raise ValueError("TogetherAI does not support multiple prompts.")
         else:
-            together_prompt = initial_prompt
+            together_prompt = cast(str, initial_prompt)
 
         return together_prompt
