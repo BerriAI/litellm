@@ -112,7 +112,6 @@ async def user_api_key_auth(
     ),
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
-        custom_db_client,
         general_settings,
         jwt_handler,
         litellm_proxy_admin_name,
@@ -476,7 +475,7 @@ async def user_api_key_auth(
             )
 
         if route == "/user/auth":
-            if general_settings.get("allow_user_auth", False) == True:
+            if general_settings.get("allow_user_auth", False) is True:
                 return UserAPIKeyAuth()
             else:
                 raise HTTPException(
@@ -597,7 +596,7 @@ async def user_api_key_auth(
         ## VALIDATE MASTER KEY ##
         try:
             assert isinstance(master_key, str)
-        except Exception as e:
+        except Exception:
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -648,7 +647,7 @@ async def user_api_key_auth(
             )
 
         if (
-            prisma_client is None and custom_db_client is None
+            prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise Exception("No connected db.")
 
@@ -722,9 +721,9 @@ async def user_api_key_auth(
 
             if config != {}:
                 model_list = config.get("model_list", [])
-                llm_model_list = model_list
+                new_model_list = model_list
                 verbose_proxy_logger.debug(
-                    f"\n new llm router model list {llm_model_list}"
+                    f"\n new llm router model list {new_model_list}"
                 )
             if (
                 len(valid_token.models) == 0

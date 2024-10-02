@@ -56,8 +56,8 @@ class GCSBucketLogger(GCSBucketBase):
                 response_obj,
             )
 
-            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            start_time.strftime("%Y-%m-%d %H:%M:%S")
+            end_time.strftime("%Y-%m-%d %H:%M:%S")
             headers = await self.construct_request_headers()
 
             logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
@@ -103,8 +103,8 @@ class GCSBucketLogger(GCSBucketBase):
                 response_obj,
             )
 
-            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            start_time.strftime("%Y-%m-%d %H:%M:%S")
+            end_time.strftime("%Y-%m-%d %H:%M:%S")
             headers = await self.construct_request_headers()
 
             logging_payload: Optional[StandardLoggingPayload] = kwargs.get(

@@ -89,7 +89,7 @@ class _PROXY_AzureContentSafety(
         # Analyze text
         try:
             response = await self.client.analyze_text(request)
-        except self.azure_http_error as e:
+        except self.azure_http_error:
             verbose_proxy_logger.debug(
                 "Error in Azure Content-Safety: %s", traceback.format_exc()
             )

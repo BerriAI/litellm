@@ -33,7 +33,7 @@ def test_pre_call_rule():
             messages=[{"role": "user", "content": "say something inappropriate"}],
         )
         pytest.fail(f"Completion call should have been failed. ")
-    except:
+    except Exception:
         pass
 
     ### async completion

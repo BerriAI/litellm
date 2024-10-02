@@ -2,9 +2,11 @@
 Utils used for slack alerting
 """
 
+import asyncio
 from typing import Dict, List, Optional, Union
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
 
@@ -49,3 +51,37 @@ def process_slack_alerting_variables(
             alert_to_webhook_url[alert_type] = _webhook_value_str
 
     return alert_to_webhook_url
+
+
+async def _add_langfuse_trace_id_to_alert(
+    request_data: Optional[dict] = None,
+) -> Optional[str]:
+    """
+    Returns langfuse trace url
+
+    - check:
+    -> existing_trace_id
+    -> trace_id
+    -> litellm_call_id
+    """
+    # do nothing for now
+    if (
+        request_data is not None
+        and request_data.get("litellm_logging_obj", None) is not None
+    ):
+        trace_id: Optional[str] = None
+        litellm_logging_obj: Logging = request_data["litellm_logging_obj"]
+
+        for _ in range(3):
+            trace_id = litellm_logging_obj._get_trace_id(service_name="langfuse")
+            if trace_id is not None:
+                break
+            await asyncio.sleep(3)  # wait 3s before retrying for trace id
+
+        _langfuse_object = litellm_logging_obj._get_callback_object(
+            service_name="langfuse"
+        )
+        if _langfuse_object is not None:
+            base_url = _langfuse_object.Langfuse.base_url
+            return f"{base_url}/trace/{trace_id}"
+    return None

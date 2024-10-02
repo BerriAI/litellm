@@ -140,7 +140,7 @@ async def test_users_budgets_reset():
             try:
                 assert reset_at_init_value != reset_at_new_value
                 break
-            except:
+            except Exception:
                 i + 1
         assert reset_at_init_value != reset_at_new_value
 

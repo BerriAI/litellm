@@ -18,10 +18,10 @@ class LiteLLMBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -37,7 +37,7 @@ class LowestCostLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.model_list = model_list
 
-    async def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update usage on success
@@ -75,21 +75,20 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 response_ms: timedelta = end_time - start_time
 
-                final_value = response_ms
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
-                    completion_tokens = response_obj.usage.completion_tokens
-                    total_tokens = response_obj.usage.total_tokens
-                    final_value = float(response_ms.total_seconds() / completion_tokens)
+                    _usage = getattr(response_obj, "usage", None)
+                    if _usage is not None and isinstance(_usage, litellm.Usage):
+                        completion_tokens = _usage.completion_tokens
+                        total_tokens = _usage.total_tokens
+                        float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
                 # ------------
 
-                request_count_dict = (
-                    await self.router_cache.async_get_cache(key=cost_key) or {}
-                )
+                request_count_dict = self.router_cache.get_cache(key=cost_key) or {}
 
                 # check local result first
 
@@ -109,16 +108,14 @@ class LowestCostLoggingHandler(CustomLogger):
                     request_count_dict[id][precise_minute].get("rpm", 0) + 1
                 )
 
-                await self.router_cache.async_set_cache(
-                    key=cost_key, value=request_count_dict
-                )
+                self.router_cache.set_cache(key=cost_key, value=request_count_dict)
 
                 ### TESTING ###
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.router_strategy.lowest_cost.py::log_success_event(): Exception occured - {}".format(
                     str(e)
                 )
             )
@@ -164,13 +161,15 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 response_ms: timedelta = end_time - start_time
 
-                final_value = response_ms
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
-                    completion_tokens = response_obj.usage.completion_tokens
-                    total_tokens = response_obj.usage.total_tokens
-                    final_value = float(response_ms.total_seconds() / completion_tokens)
+                    _usage = getattr(response_obj, "usage", None)
+                    if _usage is not None and isinstance(_usage, litellm.Usage):
+                        completion_tokens = _usage.completion_tokens
+                        total_tokens = _usage.total_tokens
+
+                        float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
@@ -228,14 +227,12 @@ class LowestCostLoggingHandler(CustomLogger):
         # -----------------------
         # Find lowest used model
         # ----------------------
-        lowest_cost = float("inf")
+        float("inf")
 
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_hour = datetime.now().strftime("%H")
         current_minute = datetime.now().strftime("%M")
         precise_minute = f"{current_date}-{current_hour}-{current_minute}"
-
-        deployment = None
 
         if request_count_dict is None:  # base case
             return
@@ -250,7 +247,7 @@ class LowestCostLoggingHandler(CustomLogger):
 
         try:
             input_tokens = token_counter(messages=messages, text=input)
-        except:
+        except Exception:
             input_tokens = 0
 
         # randomly sample from all_deployments, incase all deployments have latency=0.0

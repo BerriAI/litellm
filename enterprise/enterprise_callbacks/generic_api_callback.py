@@ -97,7 +97,7 @@ class GenericAPILogger:
             for key, value in payload.items():
                 try:
                     payload[key] = str(value)
-                except:
+                except Exception:
                     # non blocking if it can't cast to a str
                     pass
 

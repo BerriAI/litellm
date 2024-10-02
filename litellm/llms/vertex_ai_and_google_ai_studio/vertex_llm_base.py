@@ -303,3 +303,16 @@ class VertexBase(BaseLLM):
             raise RuntimeError("Could not resolve API token from the environment")
 
         return self._credentials.token, project_id or self.project_id
+
+    def set_headers(
+        self, auth_header: Optional[str], extra_headers: Optional[dict]
+    ) -> dict:
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if auth_header is not None:
+            headers["Authorization"] = f"Bearer {auth_header}"
+        if extra_headers is not None:
+            headers.update(extra_headers)
+
+        return headers

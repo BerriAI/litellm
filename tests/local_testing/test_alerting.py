@@ -14,6 +14,8 @@ from typing import Optional
 
 import httpx
 
+from litellm.integrations.SlackAlerting.types import AlertType
+
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
@@ -99,7 +101,7 @@ async def test_get_api_base():
     await _pl.alerting_handler(
         message=slow_message + request_info,
         level="Low",
-        alert_type="llm_too_slow",
+        alert_type=AlertType.llm_too_slow,
     )
     print("passed test_get_api_base")
 
@@ -117,7 +119,7 @@ def test_init():
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
         alerting=["slack"],
-        alert_types=["llm_exceptions"],
+        alert_types=[AlertType.llm_exceptions],
         internal_usage_cache=DualCache(),
     )
     assert slack_alerting.alerting_threshold == 32
@@ -414,7 +416,7 @@ async def test_send_llm_exception_to_slack():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-    except:
+    except Exception:
         pass
 
     await router.acompletion(
@@ -710,7 +712,7 @@ async def test_region_outage_alerting_called(
     If multiple calls fail, outage alert is sent
     """
     slack_alerting = SlackAlerting(
-        alerting=["webhook"], alert_types=["region_outage_alerts"]
+        alerting=["webhook"], alert_types=[AlertType.region_outage_alerts]
     )
 
     litellm.callbacks = [slack_alerting]
@@ -817,7 +819,7 @@ async def test_alerting():
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
-    except:
+    except Exception:
         pass
     finally:
         await asyncio.sleep(3)
@@ -829,6 +831,7 @@ async def test_langfuse_trace_id():
     - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 
     litellm.success_callback = ["langfuse"]
 
@@ -856,11 +859,11 @@ async def test_langfuse_trace_id():
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
         alerting=["slack"],
-        alert_types=["llm_exceptions"],
+        alert_types=[AlertType.llm_exceptions],
         internal_usage_cache=DualCache(),
     )
 
-    trace_url = await slack_alerting._add_langfuse_trace_id_to_alert(
+    trace_url = await _add_langfuse_trace_id_to_alert(
         request_data={"litellm_logging_obj": litellm_logging_obj}
     )
 

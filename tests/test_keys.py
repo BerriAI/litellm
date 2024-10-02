@@ -634,7 +634,7 @@ async def test_key_with_budgets():
             try:
                 assert reset_at_init_value != reset_at_new_value
                 break
-            except:
+            except Exception:
                 i + 1
                 await asyncio.sleep(10)
         assert reset_at_init_value != reset_at_new_value

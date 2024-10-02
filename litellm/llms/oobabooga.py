@@ -39,8 +39,8 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    optional_params: dict,
     custom_prompt_dict={},
-    optional_params=None,
     litellm_params=None,
     logger_fn=None,
     default_max_tokens_to_sample=None,
@@ -77,7 +77,7 @@ def completion(
         data=json.dumps(data),
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         return response.iter_lines()
     else:
         ## LOGGING
@@ -91,7 +91,7 @@ def completion(
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise OobaboogaError(
                 message=response.text, status_code=response.status_code
             )
@@ -103,7 +103,7 @@ def completion(
         else:
             try:
                 model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
-            except:
+            except Exception:
                 raise OobaboogaError(
                     message=json.dumps(completion_response),
                     status_code=response.status_code,

@@ -52,18 +52,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     _get_base_model_from_metadata,
-    add_breadcrumb,
-    capture_exception,
-    customLogger,
-    liteDebuggerClient,
-    logfireLogger,
-    lunaryLogger,
     print_verbose,
-    prometheusLogger,
     prompt_token_calculator,
-    promptLayerLogger,
-    supabaseClient,
-    weightsBiasesLogger,
 )
 
 from ..integrations.aispend import AISpendLogger
@@ -71,7 +61,6 @@ from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
-from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -423,7 +412,7 @@ class Logging:
                     elif callback == "sentry" and add_breadcrumb:
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -528,7 +517,7 @@ class Logging:
                         verbose_logger.debug("reaches sentry breadcrumbing")
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -1326,7 +1315,7 @@ class Logging:
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
-                            f"success callbacks: Running Custom Callback Function"
+                            "success callbacks: Running Custom Callback Function"
                         )
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1400,7 +1389,7 @@ class Logging:
                     self.model_call_details["response_cost"] = 0.0
                 else:
                     # check if base_model set on azure
-                    base_model = _get_base_model_from_metadata(
+                    _get_base_model_from_metadata(
                         model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
@@ -1483,7 +1472,7 @@ class Logging:
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) == True:
+            if litellm_params.get("no-log", False) is True:
                 # proxy cost tracking cal backs should run
                 if not (
                     isinstance(callback, CustomLogger)
@@ -1492,7 +1481,7 @@ class Logging:
                     print_verbose("no-log request, skipping logging")
                     continue
             try:
-                if kwargs.get("no-log", False) == True:
+                if kwargs.get("no-log", False) is True:
                     print_verbose("no-log request, skipping logging")
                     continue
                 if (
@@ -1641,7 +1630,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except Exception as e:
+            except Exception:
                 verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
@@ -2433,7 +2422,7 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         usage = response_obj.get("usage", None) or {}
-        if type(usage) == litellm.Usage:
+        if type(usage) is litellm.Usage:
             usage = dict(usage)
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
@@ -2656,3 +2645,11 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         litellm_params["metadata"] = metadata
 
     return litellm_params
+
+
+# integration helper function
+def modify_integration(integration_name, integration_params):
+    global supabaseClient
+    if integration_name == "supabase":
+        if "table_name" in integration_params:
+            Supabase.supabase_table_name = integration_params["table_name"]

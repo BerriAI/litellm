@@ -296,7 +296,7 @@ async def test_async_custom_handler_completion():
                 messages=messages,
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         assert (
             customHandler_failure.async_failure == True
@@ -352,7 +352,7 @@ async def test_async_custom_handler_embedding():
                 input=["hello world"],
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         assert (
             customHandler_embedding.async_failure_embedding == True

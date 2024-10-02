@@ -59,7 +59,7 @@ async def test_cooldown_badrequest_error():
             messages=[{"role": "user", "content": "gm"}],
             bad_param=200,
         )
-    except:
+    except Exception:
         pass
 
     await asyncio.sleep(3)  # wait for deployment to get cooled-down

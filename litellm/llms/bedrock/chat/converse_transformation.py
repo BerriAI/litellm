@@ -251,9 +251,7 @@ class AmazonConverseConfig:
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
-        json_mode: Optional[bool] = inference_params.pop(
-            "json_mode", None
-        )  # used for handling json_schema
+        inference_params.pop("json_mode", None)  # used for handling json_schema
         ## TRANSFORMATION ##
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
