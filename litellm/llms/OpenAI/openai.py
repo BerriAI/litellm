@@ -30,6 +30,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from ..prompt_templates.common_utils import convert_content_list_to_str
 from ..prompt_templates.factory import custom_prompt, prompt_factory
 from .common_utils import drop_params_from_unprocessable_entity_error
 
@@ -420,6 +421,19 @@ class OpenAITextCompletionConfig:
             and v is not None
         }
 
+    def _transform_prompt(self, messages: List[AllMessageValues]) -> AllPromptValues:
+        if len(messages) == 1:
+            openai_prompt: AllPromptValues = ""
+            for m in messages:
+                content = convert_content_list_to_str(m)
+                openai_prompt += content
+        else:
+            openai_prompt = []
+            for m in messages:
+                content = convert_content_list_to_str(m)
+                openai_prompt.append(content)
+        return openai_prompt
+
     def convert_to_chat_model_response_object(
         self,
         response_object: Optional[TextCompletionResponse] = None,
@@ -459,6 +473,7 @@ class OpenAITextCompletionConfig:
 
 
 class OpenAIChatCompletion(BaseLLM):
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -1502,6 +1517,8 @@ class OpenAIChatCompletion(BaseLLM):
 
 
 class OpenAITextCompletion(BaseLLM):
+    openai_text_completion_global_config = OpenAITextCompletionConfig()
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -1518,7 +1535,7 @@ class OpenAITextCompletion(BaseLLM):
         model_response: ModelResponse,
         api_key: str,
         model: str,
-        messages: list,
+        messages: List[AllMessageValues],
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
@@ -1531,23 +1548,17 @@ class OpenAITextCompletion(BaseLLM):
         organization: Optional[str] = None,
         headers: Optional[dict] = None,
     ):
-        super().completion()
         try:
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message="Missing model or messages")
 
-            if (
-                len(messages) > 0
-                and "content" in messages[0]
-                and isinstance(messages[0]["content"], list)
-            ):
-                prompt = messages[0]["content"]
-            else:
-                prompt = [message["content"] for message in messages]  # type: ignore
-
             # don't send max retries to the api, if set
+
+            prompt = self.openai_text_completion_global_config._transform_prompt(
+                messages
+            )
 
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries = data.pop("max_retries", 2)

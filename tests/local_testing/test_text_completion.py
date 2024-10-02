@@ -4019,7 +4019,7 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
-@pytest.mark.skip(reason="Skip flaky tgai test")
+@pytest.mark.flaky(retries=6, delay=1)
 def test_async_text_completion_together_ai():
     litellm.set_verbose = True
     print("test_async_text_completion")
@@ -4032,6 +4032,8 @@ def test_async_text_completion_together_ai():
                 max_tokens=10,
             )
             print(f"response: {response}")
+        except litellm.RateLimitError as e:
+            print(e)
         except litellm.Timeout as e:
             print(e)
         except Exception as e:
