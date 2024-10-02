@@ -1,7 +1,8 @@
 from collections.abc import Iterable
+from typing import List
 
 
-def is_tokens_or_list_of_tokens(value):
+def is_tokens_or_list_of_tokens(value: List):
     # Check if it's a list of integers (tokens)
     if isinstance(value, list) and all(isinstance(item, int) for item in value):
         return True
