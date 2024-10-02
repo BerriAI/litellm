@@ -4,7 +4,7 @@ import os
 import time
 import traceback
 import types
-from typing import Any, Callable, Coroutine, Iterable, Literal, Optional, Union
+from typing import Any, Callable, Coroutine, Iterable, Literal, Optional, Union, cast
 
 import httpx
 import openai
@@ -33,6 +33,7 @@ from ..base import BaseLLM
 from ..prompt_templates.common_utils import convert_content_list_to_str
 from ..prompt_templates.factory import custom_prompt, prompt_factory
 from .common_utils import drop_params_from_unprocessable_entity_error
+from .completion.utils import is_tokens_or_list_of_tokens
 
 
 class OpenAIError(Exception):
@@ -421,17 +422,29 @@ class OpenAITextCompletionConfig:
             and v is not None
         }
 
-    def _transform_prompt(self, messages: List[AllMessageValues]) -> AllPromptValues:
-        if len(messages) == 1:
-            openai_prompt: AllPromptValues = ""
-            for m in messages:
-                content = convert_content_list_to_str(m)
+    def _transform_prompt(
+        self,
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+    ) -> AllPromptValues:
+        if len(messages) == 1:  # base case
+            message_content = messages[0].get("content")
+            if message_content and is_tokens_or_list_of_tokens(message_content):
+                openai_prompt: AllPromptValues = cast(AllPromptValues, message_content)
+            else:
+                openai_prompt = ""
+                content = convert_content_list_to_str(
+                    cast(AllMessageValues, messages[0])
+                )
                 openai_prompt += content
         else:
-            openai_prompt = []
+            prompt_str_list: List[str] = []
             for m in messages:
-                content = convert_content_list_to_str(m)
-                openai_prompt.append(content)
+                try:  # expect list of int/list of list of int to be a 1 message array only.
+                    content = convert_content_list_to_str(cast(AllMessageValues, m))
+                    prompt_str_list.append(content)
+                except Exception as e:
+                    raise e
+            openai_prompt = prompt_str_list
         return openai_prompt
 
     def convert_to_chat_model_response_object(
