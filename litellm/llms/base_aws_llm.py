@@ -177,7 +177,7 @@ class BaseAWSLLM(BaseLLM):
                     RoleSessionName=aws_session_name,
                     WebIdentityToken=oidc_token,
                     DurationSeconds=3600,
-                    Policy='{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"},"StringLike":{"aws:UserAgent":"litellm/*"}}}]}',
+                    Policy='{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*::foundation-model/*","arn:aws:bedrock:*:*:provisioned-model/*","arn:aws:bedrock:*:*:imported-model/*","arn:aws:bedrock:*:*:inference-profile/*"],"Condition":{"Bool":{"aws:SecureTransport":"true"},"StringLike":{"aws:UserAgent":"litellm/*"}}}]}',
                 )
 
                 iam_creds_dict = {
