@@ -273,7 +273,11 @@ class AnthropicConfig:
                     anthropic_tools.append(tool)
                 else:  # assume openai tool call
                     new_tool = tool["function"]
-                    new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
+                    parameters = new_tool.pop("parameters", {
+                        "type": "object",
+                        "properties": {},
+                    })
+                    new_tool["input_schema"] = parameters  # rename key
                     if "cache_control" in tool:
                         new_tool["cache_control"] = tool["cache_control"]
                     anthropic_tools.append(new_tool)
