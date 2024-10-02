@@ -643,7 +643,7 @@ def _resolve_pydantic_type(typ) -> List:
 
 
 def prisma_setup(database_url: Optional[str]):
-    global prisma_client, proxy_logging_obj, user_api_key_cache
+    global prisma_client, proxy_logging_obj, user_api_key_cache, general_settings
 
     if database_url is not None:
         try:
@@ -1818,7 +1818,6 @@ class ProxyConfig:
             use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
             load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
             ### ALERTING ###
-
             proxy_logging_obj.update_values(
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
@@ -1826,6 +1825,10 @@ class ProxyConfig:
                 alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
                 alerting_args=general_settings.get("alerting_args", None),
                 redis_cache=redis_usage_cache,
+                disable_prisma_schema_update=general_settings.get(
+                    "disable_prisma_schema_update"
+                )
+                or False,
             )
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)

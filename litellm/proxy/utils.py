@@ -323,6 +323,7 @@ class ProxyLogging:
         self,
         user_api_key_cache: DualCache,
         premium_user: bool = False,
+        disable_prisma_schema_update: bool = False,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
@@ -345,6 +346,7 @@ class ProxyLogging:
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
         self.premium_user = premium_user
+        self.disable_prisma_schema_update = disable_prisma_schema_update
 
     def update_values(
         self,
@@ -354,6 +356,7 @@ class ProxyLogging:
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
         alert_to_webhook_url: Optional[dict] = None,
+        disable_prisma_schema_update: Optional[bool] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -389,6 +392,9 @@ class ProxyLogging:
 
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
+
+        if disable_prisma_schema_update is not None:
+            self.disable_prisma_schema_update = disable_prisma_schema_update
 
     def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
         self.service_logging_obj = ServiceLogging()
@@ -1040,7 +1046,6 @@ class PrismaClient:
         database_url: str,
         proxy_logging_obj: ProxyLogging,
         http_client: Optional[Any] = None,
-        disable_prisma_schema_update: bool = False,
     ):
         verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
@@ -1052,9 +1057,8 @@ class PrismaClient:
         )
         try:
             from prisma import Prisma  # type: ignore
-
         except Exception:
-            if disable_prisma_schema_update:
+            if proxy_logging_obj.disable_prisma_schema_update:
                 # just check if the schema is up to date
                 check_prisma_schema_diff(db_url=database_url)
             else:

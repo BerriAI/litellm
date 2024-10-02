@@ -7,6 +7,7 @@ import sys
 import traceback
 import urllib.parse as urlparse
 from datetime import datetime
+from typing import Optional
 
 import click
 from dotenv import load_dotenv
@@ -462,6 +463,8 @@ def run_server(
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
+        database_url: Optional[str] = None
+        general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
         if iam_token_db_auth:
@@ -509,7 +512,7 @@ def run_server(
                 import asyncio
 
                 import yaml  # type: ignore
-            except:
+            except Exception:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
@@ -531,6 +534,7 @@ def run_server(
                 litellm._turn_on_json()
             ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
+
             if general_settings is None:
                 general_settings = {}
             if general_settings:
@@ -619,16 +623,17 @@ def run_server(
             os.getenv("DATABASE_URL", None) is not None
             or os.getenv("DIRECT_URL", None) is not None
         ):
-            try:
-                from litellm.secret_managers.main import get_secret
+            from litellm.proxy.db.prisma_router import route_prisma_request
+            from litellm.secret_managers.main import get_secret_str
 
+            try:
                 if os.getenv("DATABASE_URL", None) is not None:
                     ### add connection pool + pool timeout args
                     params = {
                         "connection_limit": db_connection_pool_limit,
                         "pool_timeout": db_connection_timeout,
                     }
-                    database_url = get_secret("DATABASE_URL", default_value=None)
+                    database_url = get_secret_str("DATABASE_URL", default_value=None)
                     modified_url = append_query_params(database_url, params)
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
@@ -646,25 +651,13 @@ def run_server(
             except FileNotFoundError:
                 is_prisma_runnable = False
 
-            if is_prisma_runnable:
-                for _ in range(4):
-                    # run prisma db push, before starting server
-                    # Save the current working directory
-                    original_dir = os.getcwd()
-                    # set the working directory to where this script is
-                    abspath = os.path.abspath(__file__)
-                    dname = os.path.dirname(abspath)
-                    os.chdir(dname)
-                    try:
-                        subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
-                        break  # Exit the loop if the subprocess succeeds
-                    except subprocess.CalledProcessError as e:
-                        import time
-
-                        print(f"Error: {e}")  # noqa
-                        time.sleep(random.randrange(start=1, stop=5))
-                    finally:
-                        os.chdir(original_dir)
+            if is_prisma_runnable and database_url is not None:
+                route_prisma_request(
+                    disable_prisma_schema_update=general_settings.get(
+                        "disable_prisma_schema_update", False
+                    ),
+                    database_url=database_url,  # already set in os.environ
+                )
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

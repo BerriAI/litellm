@@ -1,27 +1,32 @@
 """Module for updating the Prisma schema."""
 
 import os
+import random
 import subprocess
+from typing import Optional
 
 
-def update_schema(db_url: str) -> None:
+def update_schema(db_url: Optional[str] = None) -> None:
     """Update the Prisma schema."""
-    os.environ["DATABASE_URL"] = db_url
-    # Save the current working directory
-    original_dir = os.getcwd()
-    # set the working directory to where this script is
-    abspath = os.path.abspath(__file__)
-    dname = os.path.dirname(abspath)
-    os.chdir(dname)
+    if db_url is not None:
+        os.environ["DATABASE_URL"] = db_url
+    for _ in range(4):
+        # run prisma db push, before starting server
+        # Save the current working directory
+        original_dir = os.getcwd()
+        # set the working directory to where this script is
+        abspath = os.path.abspath(__file__)
+        print("ABSPATH", abspath)  # noqa: T201
+        dname = os.path.dirname(abspath)
+        parent_dname = os.path.dirname(dname)
+        os.chdir(parent_dname)
+        try:
+            subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
+            break  # Exit the loop if the subprocess succeeds
+        except subprocess.CalledProcessError as e:
+            import time
 
-    try:
-        subprocess.run(["prisma", "generate"])
-        subprocess.run(
-            ["prisma", "db", "push", "--accept-data-loss"]
-        )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-    except Exception as e:
-        raise Exception(
-            f"Unable to run prisma commands. Run `pip install prisma` Got Exception: {(str(e))}"
-        )
-    finally:
-        os.chdir(original_dir)
+            print(f"Error: {e}")  # noqa
+            time.sleep(random.randrange(start=1, stop=5))
+        finally:
+            os.chdir(original_dir)
