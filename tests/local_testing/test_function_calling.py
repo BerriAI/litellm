@@ -445,3 +445,29 @@ def test_groq_parallel_function_call():
                 print("second response\n", second_response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "claude-3-haiku-20240307",
+    ],
+)
+def test_anthropic_function_call_with_no_schema(model):
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/6012
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in New York",
+            },
+        }
+    ]
+    messages = [
+        {"role": "user", "content": "What is the current temperature in New York?"}
+    ]
+    completion(model=model, messages=messages, tools=tools, tool_choice="auto")

@@ -283,31 +283,18 @@ class AnthropicConfig:
                     anthropic_tools.append(tool)
                 else:  # assume openai tool call
                     new_tool = tool["function"]
-                    parameters = new_tool.pop("parameters", {
-                        "type": "object",
-                        "properties": {},
-                    })
+                    parameters = new_tool.pop(
+                        "parameters",
+                        {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    )
                     new_tool["input_schema"] = parameters  # rename key
                     if "cache_control" in tool:
                         new_tool["cache_control"] = tool["cache_control"]
                     anthropic_tools.append(new_tool)
             optional_params["tools"] = anthropic_tools
-        # elif litellm.modify_params:
-        #     """
-        #     Set `litellm.modify_params = True` to add dummy tool to the request.
-        #     Prevents Anthropic from raising error when tool_use block exists but no tools are provided.
-        #     """
-        #     anthropic_tools = [
-        #         AnthropicMessagesTool(
-        #             name="dummy-tool",  # prevents error when no tools are provided. Relevant issues: https://github.com/BerriAI/litellm/issues/6012,
-        #             description="",
-        #             input_schema={
-        #                 "type": "object",
-        #                 "properties": {},
-        #             },
-        #         )
-        #     ]
-        #     optional_params["tools"] = anthropic_tools
 
         data = {
             "messages": anthropic_messages,

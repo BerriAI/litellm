@@ -9263,7 +9263,7 @@ def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
     """
     Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
 
-    Relevent Issues: https://github.com/BerriAI/litellm/issues/6012
+    Relevent Issues: https://github.com/BerriAI/litellm/issues/5388, https://github.com/BerriAI/litellm/issues/5747
     """
     return [
         ChatCompletionToolParam(
