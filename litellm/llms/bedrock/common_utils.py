@@ -191,7 +191,7 @@ class AmazonAnthropicConfig:
 
     Supported Params for the Amazon / Anthropic models:
 
-    - `max_tokens_to_sample` (integer) max tokens,
+    - `max_tokens` (integer) max tokens,
     - `temperature` (float) model temperature,
     - `top_k` (integer) top k,
     - `top_p` (integer) top p,
@@ -199,7 +199,7 @@ class AmazonAnthropicConfig:
     - `anthropic_version` (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
     """
 
-    max_tokens_to_sample: Optional[int] = litellm.max_tokens
+    max_tokens: Optional[int] = litellm.max_tokens
     stop_sequences: Optional[list] = None
     temperature: Optional[float] = None
     top_k: Optional[int] = None
@@ -208,7 +208,7 @@ class AmazonAnthropicConfig:
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[int] = None,
+        max_tokens: Optional[int] = None,
         stop_sequences: Optional[list] = None,
         temperature: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -253,7 +253,7 @@ class AmazonAnthropicConfig:
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_tokens_to_sample"] = value
+                optional_params["max_tokens"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
