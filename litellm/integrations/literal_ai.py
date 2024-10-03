@@ -112,10 +112,8 @@ class LiteralAILogger(CustomBatchLogger):
                 verbose_logger.debug(
                     f"Batch of {len(self.log_queue)} runs successfully created"
                 )
-        except Exception as e:
-            verbose_logger.exception(
-                f"Literal AI Layer Error - {traceback.format_exc()}"
-            )
+        except Exception:
+            verbose_logger.exception("Literal AI Layer Error")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -186,10 +184,8 @@ class LiteralAILogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"Literal AI HTTP Error: {e.response.status_code} - {e.response.text}"
             )
-        except Exception as e:
-            verbose_logger.exception(
-                f"Literal AI Layer Error - {traceback.format_exc()}"
-            )
+        except Exception:
+            verbose_logger.exception("Literal AI Layer Error")
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> dict:
         logging_payload: Optional[StandardLoggingPayload] = kwargs.get(

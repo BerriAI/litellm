@@ -44,7 +44,7 @@ async def test_literalai_queue_logging():
 
         # Now make calls to exceed the batch size
         for _ in range(3):
-            response = await litellm.acompletion(
+            await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Test message"}],
                 max_tokens=10,
@@ -70,4 +70,3 @@ async def test_literalai_queue_logging():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
