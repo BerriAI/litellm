@@ -123,7 +123,7 @@ def replicate_test_completion():
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 n=2,
             )
-        except:
+        except Exception:
             pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -258,7 +258,7 @@ def togetherai_test_completion():
                 n=2,
             )
             pytest.fail(f"Error not raised when n=2 passed to provider")
-        except:
+        except Exception:
             pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -314,7 +314,7 @@ def nlp_cloud_test_completion():
                 n=2,
             )
             pytest.fail(f"Error not raised when n=2 passed to provider")
-        except:
+        except Exception:
             pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

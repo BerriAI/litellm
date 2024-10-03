@@ -17,7 +17,7 @@ else:
 
 try:
     from litellm._version import version
-except:
+except Exception:
     version = "0.0.0"
 
 headers = {

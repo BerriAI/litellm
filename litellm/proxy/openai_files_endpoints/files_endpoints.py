@@ -26,7 +26,7 @@ from fastapi import (
 )
 
 import litellm
-from litellm import CreateFileRequest, FileContentRequest
+from litellm import CreateFileRequest, FileContentRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import FileObject
 from litellm.proxy._types import *
@@ -50,7 +50,7 @@ def set_files_config(config):
         if isinstance(element, dict):
             for key, value in element.items():
                 if isinstance(value, str) and value.startswith("os.environ/"):
-                    element[key] = litellm.get_secret(value)
+                    element[key] = get_secret_str(value)
 
     files_config = config
 
@@ -76,7 +76,7 @@ def get_first_json_object(file_content_bytes: bytes) -> Optional[dict]:
         # Parse the JSON object from the first line
         json_object = json.loads(first_line)
         return json_object
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 
@@ -209,9 +209,9 @@ async def create_file(
             llm_provider_config = get_files_provider_config(
                 custom_llm_provider=custom_llm_provider
             )
-
-            # add llm_provider_config to data
-            _create_file_request.update(llm_provider_config)
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                _create_file_request.update(llm_provider_config)
 
             # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
             response = await litellm.acreate_file(**_create_file_request)  # type: ignore

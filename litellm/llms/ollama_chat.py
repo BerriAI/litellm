@@ -4,7 +4,7 @@ import traceback
 import types
 import uuid
 from itertools import chain
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import aiohttp
 import httpx
@@ -15,6 +15,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.utils import StreamingChoices
 
 
 class OllamaError(Exception):
@@ -216,10 +217,10 @@ def get_ollama_response(
     model_response: litellm.ModelResponse,
     messages: list,
     optional_params: dict,
+    model: str,
+    logging_obj: Any,
     api_base="http://localhost:11434",
     api_key: Optional[str] = None,
-    model="llama2",
-    logging_obj=None,
     acompletion: bool = False,
     encoding=None,
 ):
@@ -252,10 +253,13 @@ def get_ollama_response(
             for tool in m["tool_calls"]:
                 typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
                 if typed_tool["type"] == "function":
+                    arguments = {}
+                    if "arguments" in typed_tool["function"]:
+                        arguments = json.loads(typed_tool["function"]["arguments"])
                     ollama_tool_call = OllamaToolCall(
                         function=OllamaToolCallFunction(
-                            name=typed_tool["function"]["name"],
-                            arguments=json.loads(typed_tool["function"]["arguments"]),
+                            name=typed_tool["function"].get("name") or "",
+                            arguments=arguments,
                         )
                     )
                     new_tools.append(ollama_tool_call)
@@ -401,12 +405,16 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
             # If format is JSON, this was a function call
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
-                first_chunk = next(streamwrapper)
-                response_content = "".join(
-                    chunk.choices[0].delta.content
-                    for chunk in chain([first_chunk], streamwrapper)
-                    if chunk.choices[0].delta.content
-                )
+                content_chunks = []
+                for chunk in streamwrapper:
+                    chunk_choice = chunk.choices[0]
+                    if (
+                        isinstance(chunk_choice, StreamingChoices)
+                        and hasattr(chunk_choice, "delta")
+                        and hasattr(chunk_choice.delta, "content")
+                    ):
+                        content_chunks.append(chunk_choice.delta.content)
+                response_content = "".join(content_chunks)
 
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
@@ -422,7 +430,7 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
                         }
                     ],
                 )
-                model_response = first_chunk
+                model_response = content_chunks[0]
                 model_response.choices[0].delta = delta  # type: ignore
                 model_response.choices[0].finish_reason = "tool_calls"
                 yield model_response
@@ -462,15 +470,28 @@ async def ollama_async_streaming(
             # If format is JSON, this was a function call
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
-                first_chunk = await anext(streamwrapper)
-                first_chunk_content = first_chunk.choices[0].delta.content or ""
-                response_content = first_chunk_content + "".join(
-                    [
-                        chunk.choices[0].delta.content
-                        async for chunk in streamwrapper
-                        if chunk.choices[0].delta.content
-                    ]
-                )
+                first_chunk = await anext(streamwrapper)  # noqa F821
+                chunk_choice = first_chunk.choices[0]
+                if (
+                    isinstance(chunk_choice, StreamingChoices)
+                    and hasattr(chunk_choice, "delta")
+                    and hasattr(chunk_choice.delta, "content")
+                ):
+                    first_chunk_content = chunk_choice.delta.content or ""
+                else:
+                    first_chunk_content = ""
+
+                content_chunks = []
+                async for chunk in streamwrapper:
+                    chunk_choice = chunk.choices[0]
+                    if (
+                        isinstance(chunk_choice, StreamingChoices)
+                        and hasattr(chunk_choice, "delta")
+                        and hasattr(chunk_choice.delta, "content")
+                    ):
+                        content_chunks.append(chunk_choice.delta.content)
+                response_content = first_chunk_content + "".join(content_chunks)
+
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
                     content=None,

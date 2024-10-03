@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, has_tool_call_blocks
+from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
 
 from ...prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
 from ..common_utils import BedrockError, get_bedrock_tool_name
@@ -213,11 +213,16 @@ class AmazonConverseConfig:
             and messages is not None
             and has_tool_call_blocks(messages)
         ):
-            raise litellm.UnsupportedParamsError(
-                message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param to enable tool calling.",
-                model="",
-                llm_provider="anthropic",
-            )
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="bedrock",
+                )
         return optional_params
 
     def _transform_request(
@@ -251,9 +256,7 @@ class AmazonConverseConfig:
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
-        json_mode: Optional[bool] = inference_params.pop(
-            "json_mode", None
-        )  # used for handling json_schema
+        inference_params.pop("json_mode", None)  # used for handling json_schema
         ## TRANSFORMATION ##
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(

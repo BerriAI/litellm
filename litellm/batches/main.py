@@ -22,7 +22,7 @@ import litellm
 from litellm import client
 from litellm.llms.AzureOpenAI.azure import AzureBatchesAPI
 from litellm.llms.OpenAI.openai import OpenAIBatchesAPI
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.openai import (
     Batch,
     CancelBatchRequest,
@@ -131,7 +131,7 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
-
+        api_base: Optional[str] = None
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -165,27 +165,30 @@ def create_batch(
                 _is_async=_is_async,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("AZURE_API_BASE")
+            )
             api_version = (
                 optional_params.api_version
                 or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
-            )  # type: ignore
+                or get_secret_str("AZURE_API_VERSION")
+            )
 
             api_key = (
                 optional_params.api_key
                 or litellm.api_key
                 or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
-            )  # type: ignore
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )
 
             extra_body = optional_params.get("extra_body", {})
-            azure_ad_token: Optional[str] = None
             if extra_body is not None:
-                azure_ad_token = extra_body.pop("azure_ad_token", None)
+                extra_body.pop("azure_ad_token", None)
             else:
-                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             response = azure_batches_instance.create_batch(
                 _is_async=_is_async,
@@ -293,7 +296,7 @@ def retrieve_batch(
         )
 
         _is_async = kwargs.pop("aretrieve_batch", False) is True
-
+        api_base: Optional[str] = None
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -327,27 +330,30 @@ def retrieve_batch(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("AZURE_API_BASE")
+            )
             api_version = (
                 optional_params.api_version
                 or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
-            )  # type: ignore
+                or get_secret_str("AZURE_API_VERSION")
+            )
 
             api_key = (
                 optional_params.api_key
                 or litellm.api_key
                 or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
-            )  # type: ignore
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )
 
             extra_body = optional_params.get("extra_body", {})
-            azure_ad_token: Optional[str] = None
             if extra_body is not None:
-                azure_ad_token = extra_body.pop("azure_ad_token", None)
+                extra_body.pop("azure_ad_token", None)
             else:
-                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             response = azure_batches_instance.retrieve_batch(
                 _is_async=_is_async,
@@ -384,7 +390,7 @@ async def alist_batches(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+):
     """
     Async: List your organization's batches.
     """
@@ -482,27 +488,26 @@ def list_batches(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
             api_version = (
                 optional_params.api_version
                 or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
-            )  # type: ignore
+                or get_secret_str("AZURE_API_VERSION")
+            )
 
             api_key = (
                 optional_params.api_key
                 or litellm.api_key
                 or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
-            )  # type: ignore
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )
 
             extra_body = optional_params.get("extra_body", {})
-            azure_ad_token: Optional[str] = None
             if extra_body is not None:
-                azure_ad_token = extra_body.pop("azure_ad_token", None)
+                extra_body.pop("azure_ad_token", None)
             else:
-                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             response = azure_batches_instance.list_batches(
                 _is_async=_is_async,

@@ -43,7 +43,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.45.0
+            pip install openai==1.51.0
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
@@ -299,6 +299,27 @@ jobs:
             ls
             python -m pytest -vv tests/local_testing/test_python_38.py
 
+  check_code_quality:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project/litellm
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install ruff
+            pip install pylint  
+            pip install .
+      - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+      - run: ruff check ./litellm
+    
+
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -353,7 +374,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -446,7 +467,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -554,7 +575,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -722,7 +743,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -806,6 +827,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - check_code_quality:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - ui_endpoint_testing:
           filters:
             branches:
@@ -867,6 +894,7 @@ workflows:
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
+            - check_code_quality
           filters:
             branches:
               only:

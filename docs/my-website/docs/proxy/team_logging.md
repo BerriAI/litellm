@@ -201,6 +201,9 @@ Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a
 
 :::
 
+<Tabs>
+<TabItem label="Langfuse" value="langfuse">
+
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
@@ -208,7 +211,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{
     "metadata": {
         "logging": [{
-            "callback_name": "langfuse", # "otel", "langfuse", "lunary"
+            "callback_name": "langfuse", # "otel", "gcs_bucket"
             "callback_type": "success", # "success", "failure", "success_and_failure"
             "callback_vars": {
                 "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY", # [RECOMMENDED] reference key in proxy environment
@@ -223,6 +226,30 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 <iframe width="840" height="500" src="https://www.youtube.com/embed/8iF0Hvwk0YU" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+</TabItem>
+<TabItem label="GCS Bucket" value="gcs_bucket">
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "logging": [{
+            "callback_name": "gcs_bucket", # "otel", "gcs_bucket"
+            "callback_type": "success", # "success", "failure", "success_and_failure"
+            "callback_vars": {
+                "gcs_bucket_name": "my-gcs-bucket",
+                "gcs_path_service_account": "os.environ/GCS_SERVICE_ACCOUNT"
+            }
+        }]
+    }
+}'
+
+```
+
+</TabItem>
+</Tabs>
 
 ---
 

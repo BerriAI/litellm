@@ -49,7 +49,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
     def __init__(self):
         try:
             from google.cloud import language_v1
-        except:
+        except Exception:
             raise Exception(
                 "Missing google.cloud package. Run `pip install --upgrade google-cloud-language`"
             )
@@ -90,7 +90,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def async_moderation_hook(

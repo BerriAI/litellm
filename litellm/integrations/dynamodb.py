@@ -1,12 +1,16 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import dotenv, os
-import requests  # type: ignore
+import datetime
+import os
 import traceback
-import datetime, subprocess, sys
-import litellm, uuid
-from litellm._logging import print_verbose
+import uuid
+from typing import Any
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
 
 
 class DyanmoDBLogger:
@@ -16,7 +20,7 @@ class DyanmoDBLogger:
         # Instance variables
         import boto3
 
-        self.dynamodb = boto3.resource(
+        self.dynamodb: Any = boto3.resource(
             "dynamodb", region_name=os.environ["AWS_REGION_NAME"]
         )
         if litellm.dynamodb_table_name is None:
@@ -67,7 +71,7 @@ class DyanmoDBLogger:
             for key, value in payload.items():
                 try:
                     payload[key] = str(value)
-                except:
+                except Exception:
                     # non blocking if it can't cast to a str
                     pass
 
@@ -84,6 +88,6 @@ class DyanmoDBLogger:
                 f"DynamoDB Layer Logging - final response object: {response_obj}"
             )
             return response
-        except:
+        except Exception:
             print_verbose(f"DynamoDB Layer Error - {traceback.format_exc()}")
             pass

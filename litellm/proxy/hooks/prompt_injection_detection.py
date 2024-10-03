@@ -79,7 +79,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
         if (
             self.prompt_injection_params is not None
-            and self.prompt_injection_params.llm_api_check == True
+            and self.prompt_injection_params.llm_api_check is True
         ):
             if self.llm_router is None:
                 raise Exception(
@@ -146,7 +146,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             - check if user id part of call
             - check if user id part of blocked list
             """
-            self.print_verbose(f"Inside Prompt Injection Detection Pre-Call Hook")
+            self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
             try:
                 assert call_type in [
                     "completion",
@@ -156,7 +156,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "moderation",
                     "audio_transcription",
                 ]
-            except Exception as e:
+            except Exception:
                 self.print_verbose(
                     f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
                 )
@@ -244,7 +244,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
         # 3. check if llm api check turned on
         if (
-            self.prompt_injection_params.llm_api_check == True
+            self.prompt_injection_params.llm_api_check is True
             and self.prompt_injection_params.llm_api_name is not None
             and self.llm_router is not None
         ):
@@ -270,7 +270,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
                     is_prompt_attack = True
 
-        if is_prompt_attack == True:
+        if is_prompt_attack is True:
             raise HTTPException(
                 status_code=400,
                 detail={
