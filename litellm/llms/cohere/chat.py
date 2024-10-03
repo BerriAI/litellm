@@ -268,7 +268,7 @@ def completion(
     if response.status_code != 200:
         raise CohereError(message=response.text, status_code=response.status_code)
 
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         return response.iter_lines()
     else:
         ## LOGGING
@@ -283,12 +283,12 @@ def completion(
         completion_response = response.json()
         try:
             model_response.choices[0].message.content = completion_response["text"]  # type: ignore
-        except Exception as e:
+        except Exception:
             raise CohereError(message=response.text, status_code=response.status_code)
 
         ## Tool calling response
         cohere_tools_response = completion_response.get("tool_calls", None)
-        if cohere_tools_response is not None and cohere_tools_response is not []:
+        if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
             tool_calls = []
             for tool in cohere_tools_response:

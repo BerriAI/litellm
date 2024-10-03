@@ -123,7 +123,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -160,7 +160,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -214,7 +214,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
             assert isinstance(kwargs["response_cost"], (float, type(None)))
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -253,7 +253,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -318,7 +318,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["log_event_type"], str)
             assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
             assert isinstance(kwargs["response_cost"], (float, type(None)))
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -351,7 +351,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -384,7 +384,7 @@ def test_chat_openai_stream():
             )
             for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -425,7 +425,7 @@ async def test_async_chat_openai_stream():
             )
             async for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -465,7 +465,7 @@ def test_chat_azure_stream():
             )
             for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -506,7 +506,7 @@ async def test_async_chat_azure_stream():
             )
             async for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -569,7 +569,7 @@ def test_chat_bedrock_stream():
             )
             for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -613,7 +613,7 @@ async def test_async_chat_bedrock_stream():
             )
             async for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -657,7 +657,7 @@ async def test_async_chat_sagemaker_stream():
             )
             async for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -776,7 +776,7 @@ async def test_async_text_completion_bedrock():
             )
             async for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -815,7 +815,7 @@ async def test_async_text_completion_openai_stream():
             )
             async for chunk in response:
                 continue
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
@@ -849,7 +849,7 @@ async def test_async_embedding_openai():
                 input=["good morning from litellm"],
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
@@ -885,7 +885,7 @@ def test_amazing_sync_embedding():
                 input=["good morning from litellm"],
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
         print(f"customHandler_failure.states: {customHandler_failure.states}")
@@ -919,7 +919,7 @@ async def test_async_embedding_azure():
                 input=["good morning from litellm"],
                 api_key="my-bad-key",
             )
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
@@ -959,7 +959,7 @@ async def test_async_embedding_bedrock():
                 input=["good morning from litellm"],
                 aws_region_name="my-bad-region",
             )
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
@@ -1126,7 +1126,7 @@ def test_image_generation_openai():
                 model="dall-e-2",
                 api_key="my-bad-api-key",
             )
-        except:
+        except Exception:
             pass
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
         print(f"customHandler_failure.states: {customHandler_failure.states}")

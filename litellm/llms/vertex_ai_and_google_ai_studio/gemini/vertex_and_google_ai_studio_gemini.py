@@ -176,7 +176,7 @@ class VertexAIConfig:
             if param == "top_p":
                 optional_params["top_p"] = value
             if (
-                param == "stream" and value == True
+                param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
             if param == "n":
@@ -1313,7 +1313,6 @@ class ModelResponseIterator:
 
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")

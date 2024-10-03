@@ -54,7 +54,7 @@ class DataDogLogger(CustomBatchLogger):
         `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
         """
         try:
-            verbose_logger.debug(f"Datadog: in init datadog logger")
+            verbose_logger.debug("Datadog: in init datadog logger")
             # check if the correct env variables are set
             if os.getenv("DD_API_KEY", None) is None:
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
@@ -245,12 +245,12 @@ class DataDogLogger(CustomBatchLogger):
         usage = dict(usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
-        except:
+        except Exception:
             response_time = None
 
         try:
             response_obj = dict(response_obj)
-        except:
+        except Exception:
             response_obj = response_obj
 
         # Clean Metadata before logging - never log raw metadata

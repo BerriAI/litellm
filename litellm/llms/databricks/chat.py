@@ -113,7 +113,7 @@ class DatabricksConfig:
                 optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["n"] = value
-            if param == "stream" and value == True:
+            if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
@@ -564,7 +564,7 @@ class DatabricksChatCompletion(BaseLLM):
                         status_code=e.response.status_code,
                         message=e.response.text,
                     )
-                except httpx.TimeoutException as e:
+                except httpx.TimeoutException:
                     raise DatabricksError(
                         status_code=408, message="Timeout error occurred."
                     )
@@ -614,7 +614,7 @@ class DatabricksChatCompletion(BaseLLM):
                     status_code=e.response.status_code,
                     message=response.text if response else str(e),
                 )
-            except httpx.TimeoutException as e:
+            except httpx.TimeoutException:
                 raise DatabricksError(
                     status_code=408, message="Timeout error occurred."
                 )
@@ -669,7 +669,7 @@ class DatabricksChatCompletion(BaseLLM):
             additional_args={"complete_input_dict": data, "api_base": api_base},
         )
 
-        if aembedding == True:
+        if aembedding is True:
             return self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, headers=headers)  # type: ignore
         if client is None or isinstance(client, AsyncHTTPHandler):
             self.client = HTTPHandler(timeout=timeout)  # type: ignore
@@ -692,7 +692,7 @@ class DatabricksChatCompletion(BaseLLM):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise DatabricksError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
             raise DatabricksError(status_code=500, message=str(e))

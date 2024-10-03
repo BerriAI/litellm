@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
+    _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -41,7 +42,7 @@ class GalileoObserve(CustomLogger):
         self.batch_size = 1
         self.base_url = os.getenv("GALILEO_BASE_URL", None)
         self.project_id = os.getenv("GALILEO_PROJECT_ID", None)
-        self.headers = None
+        self.headers: Optional[Dict[str, str]] = None
         self.async_httpx_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -54,7 +55,7 @@ class GalileoObserve(CustomLogger):
             "accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
         }
-        galileo_login_response = self.async_httpx_handler.post(
+        galileo_login_response = litellm.module_level_client.post(
             url=f"{self.base_url}/login",
             headers=headers,
             data={
@@ -94,13 +95,9 @@ class GalileoObserve(CustomLogger):
         return output
 
     async def async_log_success_event(
-        self,
-        kwargs,
-        start_time,
-        end_time,
-        response_obj,
+        self, kwargs: Any, response_obj: Any, start_time: Any, end_time: Any
     ):
-        verbose_logger.debug(f"On Async Success")
+        verbose_logger.debug("On Async Success")
 
         _latency_ms = int((end_time - start_time).total_seconds() * 1000)
         _call_type = kwargs.get("call_type", "litellm")
@@ -116,26 +113,27 @@ class GalileoObserve(CustomLogger):
             response_obj=response_obj, kwargs=kwargs
         )
 
-        request_record = LLMResponse(
-            latency_ms=_latency_ms,
-            status_code=200,
-            input_text=input_text,
-            output_text=output_text,
-            node_type=_call_type,
-            model=kwargs.get("model", "-"),
-            num_input_tokens=num_input_tokens,
-            num_output_tokens=num_output_tokens,
-            created_at=start_time.strftime(
-                "%Y-%m-%dT%H:%M:%S"
-            ),  # timestamp str constructed in "%Y-%m-%dT%H:%M:%S" format
-        )
+        if output_text is not None:
+            request_record = LLMResponse(
+                latency_ms=_latency_ms,
+                status_code=200,
+                input_text=input_text,
+                output_text=output_text,
+                node_type=_call_type,
+                model=kwargs.get("model", "-"),
+                num_input_tokens=num_input_tokens,
+                num_output_tokens=num_output_tokens,
+                created_at=start_time.strftime(
+                    "%Y-%m-%dT%H:%M:%S"
+                ),  # timestamp str constructed in "%Y-%m-%dT%H:%M:%S" format
+            )
 
-        # dump to dict
-        request_dict = request_record.model_dump()
-        self.in_memory_records.append(request_dict)
+            # dump to dict
+            request_dict = request_record.model_dump()
+            self.in_memory_records.append(request_dict)
 
-        if len(self.in_memory_records) >= self.batch_size:
-            await self.flush_in_memory_records()
+            if len(self.in_memory_records) >= self.batch_size:
+                await self.flush_in_memory_records()
 
     async def flush_in_memory_records(self):
         verbose_logger.debug("flushing in memory records")
@@ -159,4 +157,4 @@ class GalileoObserve(CustomLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        verbose_logger.debug(f"On Async Failure")
+        verbose_logger.debug("On Async Failure")

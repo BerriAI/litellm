@@ -128,14 +128,14 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
     def fields_set(self):
         try:
             return self.model_fields_set  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.__fields_set__
 

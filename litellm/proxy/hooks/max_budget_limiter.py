@@ -26,7 +26,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
         call_type: str,
     ):
         try:
-            self.print_verbose(f"Inside Max Budget Limiter Pre-Call Hook")
+            self.print_verbose("Inside Max Budget Limiter Pre-Call Hook")
             cache_key = f"{user_api_key_dict.user_id}_user_api_key_user_id"
             user_row = cache.get_cache(cache_key)
             if user_row is None:  # value not yet cached

@@ -347,10 +347,18 @@ OpenAIMessageContent = Union[
     str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
 ]
 
+# The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
+AllPromptValues = Union[str, List[str], Iterable[int], Iterable[Iterable[int]], None]
+
 
 class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
     content: OpenAIMessageContent
+
+
+class OpenAITextCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: AllPromptValues
 
 
 class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):

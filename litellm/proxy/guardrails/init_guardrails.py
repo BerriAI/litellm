@@ -245,6 +245,6 @@ def init_guardrails_v2(
         )
 
         guardrail_list.append(parsed_guardrail)
-        guardrail_name = guardrail["guardrail_name"]
+        guardrail["guardrail_name"]
     # pretty print guardrail_list in green
     print(f"\nGuardrail List:{guardrail_list}\n")  # noqa

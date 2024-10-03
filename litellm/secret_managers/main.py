@@ -201,15 +201,15 @@ def get_secret(
                     encrypted_secret: Any = os.getenv(secret_name)
                     if encrypted_secret is None:
                         raise ValueError(
-                            f"Google KMS requires the encrypted secret to be in the environment!"
+                            "Google KMS requires the encrypted secret to be in the environment!"
                         )
                     b64_flag = _is_base64(encrypted_secret)
-                    if b64_flag == True:  # if passed in as encoded b64 string
+                    if b64_flag is True:  # if passed in as encoded b64 string
                         encrypted_secret = base64.b64decode(encrypted_secret)
                         ciphertext = encrypted_secret
                     else:
                         raise ValueError(
-                            f"Google KMS requires the encrypted secret to be encoded in base64"
+                            "Google KMS requires the encrypted secret to be encoded in base64"
                         )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
                     response = client.decrypt(
                         request={
@@ -293,7 +293,7 @@ def get_secret(
                         return secret_value_as_bool
                     else:
                         return secret
-            except:
+            except Exception:
                 return secret
         else:
             secret = os.environ.get(secret_name)

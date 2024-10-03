@@ -101,7 +101,7 @@ def completion(
     encoding,
     api_key,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -135,7 +135,7 @@ def completion(
         data=json.dumps(data),
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         return response.iter_lines()
     else:
         ## LOGGING
@@ -159,7 +159,7 @@ def completion(
                     model_response.choices[0].message.content = completion_response[  # type: ignore
                         "answer"
                     ]
-            except Exception as e:
+            except Exception:
                 raise MaritalkError(
                     message=response.text, status_code=response.status_code
                 )

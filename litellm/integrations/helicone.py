@@ -1,15 +1,28 @@
 #### What this does ####
 #    On success, logs events to Helicone
-import dotenv, os
-import requests  # type: ignore
-import litellm
+import os
 import traceback
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
 from litellm._logging import verbose_logger
 
 
 class HeliconeLogger:
     # Class variables or attributes
-    helicone_model_list = ["gpt", "claude", "command-r", "command-r-plus", "command-light", "command-medium", "command-medium-beta", "command-xlarge-nightly", "command-nightly"]
+    helicone_model_list = [
+        "gpt",
+        "claude",
+        "command-r",
+        "command-r-plus",
+        "command-light",
+        "command-medium",
+        "command-medium-beta",
+        "command-xlarge-nightly",
+        "command-nightly",
+    ]
 
     def __init__(self):
         # Instance variables
@@ -17,7 +30,7 @@ class HeliconeLogger:
         self.key = os.getenv("HELICONE_API_KEY")
 
     def claude_mapping(self, model, messages, response_obj):
-        from anthropic import HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT
 
         prompt = f"{HUMAN_PROMPT}"
         for message in messages:
@@ -29,7 +42,6 @@ class HeliconeLogger:
             else:
                 prompt += f"{HUMAN_PROMPT}{message['content']}"
         prompt += f"{AI_PROMPT}"
-        claude_provider_request = {"model": model, "prompt": prompt}
 
         choice = response_obj["choices"][0]
         message = choice["message"]
@@ -37,12 +49,14 @@ class HeliconeLogger:
         content = []
         if "tool_calls" in message and message["tool_calls"]:
             for tool_call in message["tool_calls"]:
-                content.append({
-                    "type": "tool_use",
-                    "id": tool_call["id"],
-                    "name": tool_call["function"]["name"],
-                    "input": tool_call["function"]["arguments"]
-                })
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["function"]["name"],
+                        "input": tool_call["function"]["arguments"],
+                    }
+                )
         elif "content" in message and message["content"]:
             content = [{"type": "text", "text": message["content"]}]
 
@@ -56,12 +70,12 @@ class HeliconeLogger:
             "stop_sequence": None,
             "usage": {
                 "input_tokens": response_obj["usage"]["prompt_tokens"],
-                "output_tokens": response_obj["usage"]["completion_tokens"]
-            }
+                "output_tokens": response_obj["usage"]["completion_tokens"],
+            },
         }
 
         return claude_response_obj
-    
+
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
         """
@@ -99,10 +113,8 @@ class HeliconeLogger:
                 f"Helicone Logging - Enters logging function for model {model}"
             )
             litellm_params = kwargs.get("litellm_params", {})
-            litellm_call_id = kwargs.get("litellm_call_id", None)
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )
+            kwargs.get("litellm_call_id", None)
+            metadata = litellm_params.get("metadata", {}) or {}
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             model = (
                 model
@@ -175,6 +187,6 @@ class HeliconeLogger:
                     f"Helicone Logging - Error Request was not successful. Status Code: {response.status_code}"
                 )
                 print_verbose(f"Helicone Logging - Error {response.text}")
-        except:
+        except Exception:
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
             pass

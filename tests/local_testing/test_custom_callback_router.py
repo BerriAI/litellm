@@ -141,7 +141,7 @@ class CompletionCustomHandler(
                 kwargs["litellm_params"]["preset_cache_key"], (str, type(None))
             )
             assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -178,7 +178,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -212,7 +212,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
             assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -248,7 +248,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -340,7 +340,7 @@ class CompletionCustomHandler(
                 kwargs["litellm_params"]["preset_cache_key"], (str, type(None))
             )
             assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -374,7 +374,7 @@ class CompletionCustomHandler(
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
-        except:
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -453,7 +453,7 @@ async def test_async_chat_azure():
                 messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
             )
             print(f"response in router3 acompletion: {response}")
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler.states: {customHandler_failure.states}")
@@ -514,7 +514,7 @@ async def test_async_embedding_azure():
                 model="azure-embedding-model", input=["hello from litellm!"]
             )
             print(f"response in router3 aembedding: {response}")
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
         print(f"customHandler.states: {customHandler_failure.states}")

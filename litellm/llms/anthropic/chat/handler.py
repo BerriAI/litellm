@@ -551,6 +551,8 @@ class AnthropicChatCompletion(BaseLLM):
                     error_response = getattr(e, "response", None)
                     if error_headers is None and error_response:
                         error_headers = getattr(error_response, "headers", None)
+                    if error_response and hasattr(error_response, "text"):
+                        error_text = getattr(error_response, "text", error_text)
                     raise AnthropicError(
                         message=error_text,
                         status_code=status_code,
@@ -607,7 +609,6 @@ class ModelResponseIterator:
     def _handle_usage(
         self, anthropic_usage_chunk: Union[dict, UsageDelta]
     ) -> AnthropicChatCompletionUsageBlock:
-        special_fields = ["input_tokens", "output_tokens"]
 
         usage_block = AnthropicChatCompletionUsageBlock(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
@@ -683,7 +684,7 @@ class ModelResponseIterator:
                         "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
-                content_block_stop = ContentBlockStop(**chunk)  # type: ignore
+                ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
                 if is_empty:

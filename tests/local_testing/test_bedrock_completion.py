@@ -1229,7 +1229,7 @@ def test_not_found_error():
 @pytest.mark.parametrize(
     "model",
     [
-        # "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
+        "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
         "bedrock/us.meta.llama3-2-11b-instruct-v1:0",
     ],
 )

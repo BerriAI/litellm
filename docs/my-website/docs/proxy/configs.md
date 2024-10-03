@@ -630,18 +630,6 @@ general_settings:
     "database_url": "string",
     "database_connection_pool_limit": 0, # default 100
     "database_connection_timeout": 0, # default 60s
-    "database_type": "dynamo_db",
-    "database_args": {
-      "billing_mode": "PROVISIONED_THROUGHPUT",
-      "read_capacity_units": 0,
-      "write_capacity_units": 0,
-      "ssl_verify": true,
-      "region_name": "string",
-      "user_table_name": "LiteLLM_UserTable",
-      "key_table_name": "LiteLLM_VerificationToken",
-      "config_table_name": "LiteLLM_Config",
-      "spend_table_name": "LiteLLM_SpendLogs"
-    },
     "otel": true,
     "custom_auth": "string",
     "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
