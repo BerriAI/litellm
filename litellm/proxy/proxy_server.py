@@ -1696,15 +1696,16 @@ class ProxyConfig:
                                     llm_router=llm_router,
                                     premium_user=premium_user,
                                 )
-                                litellm.success_callback.append(_callback)
-                                verbose_proxy_logger.debug(
-                                    "Starting Prometheus Metrics on /metrics"
-                                )
-                                from prometheus_client import make_asgi_app
+                                if _callback is not None:
+                                    litellm.success_callback.append(_callback)  # type: ignore
+                                    verbose_proxy_logger.debug(
+                                        "Starting Prometheus Metrics on /metrics"
+                                    )
+                                    from prometheus_client import make_asgi_app
 
-                                # Add prometheus asgi middleware to route /metrics requests
-                                metrics_app = make_asgi_app()
-                                app.mount("/metrics", metrics_app)
+                                    # Add prometheus asgi middleware to route /metrics requests
+                                    metrics_app = make_asgi_app()
+                                    app.mount("/metrics", metrics_app)
                             else:
                                 litellm.success_callback.append(callback)
                     print(  # noqa
@@ -1729,7 +1730,8 @@ class ProxyConfig:
                                     llm_router=llm_router,
                                     premium_user=premium_user,
                                 )
-                                litellm.failure_callback.append(_callback)
+                                if _callback is not None:
+                                    litellm.failure_callback.append(_callback)  # type: ignore
                             else:
                                 litellm.failure_callback.append(callback)
                     print(  # noqa
