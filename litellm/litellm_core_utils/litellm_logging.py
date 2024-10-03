@@ -265,10 +265,6 @@ class Logging:
             for param in _supported_callback_params:
                 if param in kwargs:
                     standard_callback_dynamic_params[param] = kwargs.pop(param)
-
-            kwargs["standard_callback_dynamic_params"] = (
-                standard_callback_dynamic_params
-            )
         return standard_callback_dynamic_params
 
     def update_environment_variables(
@@ -292,6 +288,7 @@ class Logging:
             "call_type": str(self.call_type),
             "litellm_call_id": self.litellm_call_id,
             "completion_start_time": self.completion_start_time,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
             **self.optional_params,
             **additional_params,
         }

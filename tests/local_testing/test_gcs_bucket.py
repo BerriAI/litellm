@@ -283,8 +283,8 @@ async def test_basic_gcs_logging_per_request():
             messages=[{"role": "user", "content": "This is a test"}],
             max_tokens=10,
             user="ishaan-2",
-            # gcs_bucket_name = "gs://test-bucket-ishaan",
-            # gcs_path_service_account = "gs://test-bucket-ishaan/adroit-crow-413218-bc47f303efc9.json"
+            gcs_bucket_name="gs://test-bucket-ishaan",
+            gcs_path_service_account="gs://test-bucket-ishaan/adroit-crow-413218-bc47f303efc9.json",
         )
     except:
         pass
