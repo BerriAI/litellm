@@ -13,26 +13,25 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 
 ## Pre-Requisites
 
-Ensure you have run `pip install opik` for this integration
-
-```shell
-pip install opik litellm
-```
+You can learn more about setting up Opik in the [Opik quickstart guide](https://www.comet.com/docs/opik/quickstart/). You can also learn more about self-hosting Opik in our [self-hosting guide](https://www.comet.com/docs/opik/self-host/local_deployment).
 
 ## Quick Start
-Use just 2 lines of code, to instantly log your responses **across all providers** with Opik
+Use just 4 lines of code, to instantly log your responses **across all providers** with Opik
 
 Get your Opik API Key by signing up [here](https://www.comet.com/signup?utm_source=litelllm&utm_medium=docs&utm_content=api_key_cell)!
 
 ```python
+from litellm.integrations.opik.opik import OpikLogger
 import litellm
-litellm.success_callback = ["opik"]
+
+opik_logger = OpikLogger()
+litellm.callbacks = [test_opik_logger]
 ```
 
 Full examples:
 
 ```python
-# pip install opik
+from litellm.integrations.opik.opik import OpikLogger
 import litellm
 import os
 
@@ -41,10 +40,9 @@ os.environ["OPIK_API_KEY"] = ""
 # LLM provider API Keys:
 os.environ["OPENAI_API_KEY"] = ""
 
-
-
 # set "opik" as a callback, litellm will send the data to an Opik server (such as comet.com)
-litellm.success_callback = ["opik"]
+opik_logger = OpikLogger()
+litellm.callbacks = [test_opik_logger]
 
 # openai call
 response = litellm.completion(
@@ -55,12 +53,15 @@ response = litellm.completion(
 )
 ```
 
-If you are using a streaming response, you need to surround the
-call with Opik's `@track` and provide `current_span_data` and `current_trace_data`:
+If you are liteLLM within a function tracked using Opik's `@track` decorator,
+you will need provide the `current_span_data` field in the metadata attribute
+so that the LLM call is assigned to the correct trace:
 
 ```python
 from opik import track
-from opik.opik_context import get_current_trace_data, get_current_span_data
+from opik.opik_context import get_current_span_data
+from litellm.integrations.opik.opik import OpikLogger
+import litellm
 
 litellm.success_callback = ["opik"]
 
@@ -73,11 +74,9 @@ def streaming_function(input):
         metadata = {
             "opik": {
                 "current_span_data": get_current_span_data(),
-                "current_trace_data": get_current_trace_data(),
                 "tags": ["streaming-test"],
             },
-        },
-        stream=True,
+        }
     )
     return response
 

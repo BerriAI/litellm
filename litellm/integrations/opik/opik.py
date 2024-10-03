@@ -162,9 +162,15 @@ class OpikLogger(CustomBatchLogger):
         litellm_opik_metadata = litellm_params_metadata.get("opik", {})
         verbose_logger.debug(f"litellm_opik_metadata - {json.dumps(litellm_opik_metadata, default=str)}")
         project_name = litellm_opik_metadata.get("project_name", self.opik_project_name)
-        trace_id = litellm_opik_metadata.get("trace_id", None)
-        parent_span_id = litellm_opik_metadata.get("parent_span_id", None)
-        
+
+        # Extract trace_id and parent_span_id
+        current_span_data = litellm_opik_metadata.get("current_span_data", None)
+        if current_span_data:
+            trace_id = current_span_data.get("trace_id", None)
+            parent_span_id = current_span_data.get("id", None)
+        else:
+            trace_id = None
+            parent_span_id = None
         # Create Opik tags
         opik_tags = litellm_opik_metadata.get("tags", [])
         if kwargs.get("custom_llm_provider"):
