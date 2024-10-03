@@ -428,7 +428,11 @@ class OpenAITextCompletionConfig:
     ) -> AllPromptValues:
         if len(messages) == 1:  # base case
             message_content = messages[0].get("content")
-            if message_content and is_tokens_or_list_of_tokens(message_content):
+            if (
+                message_content
+                and isinstance(message_content, list)
+                and is_tokens_or_list_of_tokens(message_content)
+            ):
                 openai_prompt: AllPromptValues = cast(AllPromptValues, message_content)
             else:
                 openai_prompt = ""
@@ -1548,7 +1552,7 @@ class OpenAITextCompletion(BaseLLM):
         model_response: ModelResponse,
         api_key: str,
         model: str,
-        messages: List[AllMessageValues],
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,

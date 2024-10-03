@@ -6,10 +6,10 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Union
 
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.utils import ModelResponse
 
 from ...OpenAI.openai import OpenAITextCompletion
@@ -25,7 +25,7 @@ class TogetherAITextCompletion(OpenAITextCompletion):
         model_response: ModelResponse,
         api_key: str,
         model: str,
-        messages: List[AllMessageValues],
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
         timeout: float,
         logging_obj: Logging,
         optional_params: dict,
@@ -40,13 +40,13 @@ class TogetherAITextCompletion(OpenAITextCompletion):
     ):
         prompt = together_ai_text_completion_global_config._transform_prompt(messages)
 
-        message = ChatCompletionUserMessage(role="user", content=prompt)
-        messages = [message]
+        message = OpenAITextCompletionUserMessage(role="user", content=prompt)
+        new_messages = [message]
         return super().completion(
             model_response=model_response,
             api_key=api_key,
             model=model,
-            messages=messages,
+            messages=new_messages,
             timeout=timeout,
             logging_obj=logging_obj,
             optional_params=optional_params,
