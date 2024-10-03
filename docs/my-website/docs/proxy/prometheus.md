@@ -138,7 +138,9 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_llm_api_latency_metric`             | Latency (seconds) for just the LLM API call - tracked for labels `litellm_call_id`, `model`, `user_api_key`, `user_api_key_alias`, `user_api_team`, `user_api_team_alias` |
 
 ## Virtual Key - Budget, Rate Limit Metrics
+
 Metrics used to track LiteLLM Proxy Budgeting and Rate limiting logic
+
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) Labels: `"team_id", "team_alias"`|
