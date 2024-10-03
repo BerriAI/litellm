@@ -3316,6 +3316,7 @@ def embedding(
     input=[],
     # Optional params
     dimensions: Optional[int] = None,
+    encoding_format: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
@@ -3336,6 +3337,7 @@ def embedding(
     Parameters:
     - model: The embedding model to use.
     - input: The input for which embeddings are to be generated.
+    - encoding_format: Optional[str] The format to return the embeddings in. Can be either `float` or `base64`
     - dimensions: The number of dimensions the resulting output embeddings should have. Only supported in text-embedding-3 and later models.
     - timeout: The timeout value for the API call, default 10 mins
     - litellm_call_id: The call ID for litellm logging.
@@ -3362,7 +3364,6 @@ def embedding(
     max_parallel_requests = kwargs.pop("max_parallel_requests", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
-    encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     aembedding = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
@@ -3556,6 +3557,7 @@ def embedding(
             model in litellm.open_ai_embedding_models
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "nvidia_nim"
         ):
             api_base = (
                 api_base
