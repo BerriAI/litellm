@@ -4138,6 +4138,45 @@ async def audio_transcriptions(
 
 ######################################################################
 
+#                          /v1/realtime Endpoints
+
+######################################################################
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from litellm import _arealtime
+
+
+@app.websocket("/v1/realtime")
+async def websocket_endpoint(websocket: WebSocket, model: str):
+    import websockets
+
+    await websocket.accept()
+
+    data = {
+        "model": model,
+        "websocket": websocket,
+    }
+
+    ### ROUTE THE REQUEST ###
+    try:
+        llm_call = await route_request(
+            data=data,
+            route_type="_arealtime",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+
+        await llm_call
+    except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        verbose_proxy_logger.exception("Invalid status code")
+        await websocket.close(code=e.status_code, reason="Invalid status code")
+    except Exception:
+        verbose_proxy_logger.exception("Internal server error")
+        await websocket.close(code=1011, reason="Internal server error")
+
+
+######################################################################
+
 #                          /v1/assistant Endpoints
 
 

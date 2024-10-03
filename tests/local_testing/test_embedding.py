@@ -316,7 +316,6 @@ def test_openai_azure_embedding():
     os.environ.get("CIRCLE_OIDC_TOKEN") is None,
     reason="Cannot run without being in CircleCI Runner",
 )
-@pytest.mark.skip(reason="Azure east us 2 has a temp outage")
 def test_openai_azure_embedding_with_oidc_and_cf():
     # TODO: Switch to our own Azure account, currently using ai.moda's account
     os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"

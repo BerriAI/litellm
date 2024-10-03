@@ -6,7 +6,11 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
+from openai.types.completion_usage import (
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
@@ -347,7 +351,7 @@ class Message(OpenAIObject):
             ),
         }
         super(Message, self).__init__(
-            **init_values,
+            **init_values,  # type: ignore
             **params,
         )
 
@@ -478,6 +482,10 @@ class Usage(CompletionUsage):
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
+        prompt_tokens_details: Optional[Union[PromptTokensDetails, dict]] = None,
+        completion_tokens_details: Optional[
+            Union[CompletionTokensDetails, dict]
+        ] = None,
         **params,
     ):
         ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
@@ -489,29 +497,35 @@ class Usage(CompletionUsage):
             prompt_tokens = params["prompt_cache_miss_tokens"]
 
         # handle reasoning_tokens
-        completion_tokens_details = None
+        _completion_tokens_details: Optional[CompletionTokensDetails] = None
         if reasoning_tokens:
             completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=reasoning_tokens
             )
 
         # Ensure completion_tokens_details is properly handled
-        if "completion_tokens_details" in params:
-            if isinstance(params["completion_tokens_details"], dict):
-                completion_tokens_details = CompletionTokensDetails(
-                    **params["completion_tokens_details"]
+        if completion_tokens_details:
+            if isinstance(completion_tokens_details, dict):
+                _completion_tokens_details = CompletionTokensDetails(
+                    **completion_tokens_details
                 )
-            elif isinstance(
-                params["completion_tokens_details"], CompletionTokensDetails
-            ):
-                completion_tokens_details = params["completion_tokens_details"]
-            del params["completion_tokens_details"]
+            elif isinstance(completion_tokens_details, CompletionTokensDetails):
+                _completion_tokens_details = completion_tokens_details
+
+        # handle prompt_tokens_details
+        _prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if prompt_tokens_details:
+            if isinstance(prompt_tokens_details, dict):
+                _prompt_tokens_details = PromptTokensDetails(**prompt_tokens_details)
+            elif isinstance(prompt_tokens_details, PromptTokensDetails):
+                _prompt_tokens_details = prompt_tokens_details
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
             total_tokens=total_tokens or 0,
-            completion_tokens_details=completion_tokens_details or None,
+            completion_tokens_details=_completion_tokens_details or None,
+            prompt_tokens_details=_prompt_tokens_details or None,
         )
 
         ## ANTHROPIC MAPPING ##
@@ -1365,3 +1379,11 @@ OPENAI_RESPONSE_HEADERS = [
     "x-ratelimit-reset-requests",
     "x-ratelimit-reset-tokens",
 ]
+
+
+class StandardCallbackDynamicParams(TypedDict, total=False):
+    langfuse_public_key: Optional[str]
+    langfuse_secret: Optional[str]
+    langfuse_host: Optional[str]
+    gcs_bucket_name: Optional[str]
+    gcs_path_service_account: Optional[str]

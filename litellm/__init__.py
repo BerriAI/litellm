@@ -982,7 +982,13 @@ from .llms.OpenAI.chat.o1_transformation import (
 from .llms.OpenAI.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
-from .llms.nvidia_nim import NvidiaNimConfig
+
+from .llms.nvidia_nim.chat import NvidiaNimConfig
+from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+
+nvidiaNimConfig = NvidiaNimConfig()
+nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
@@ -1028,6 +1034,7 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .rerank_api.main import *
+from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *

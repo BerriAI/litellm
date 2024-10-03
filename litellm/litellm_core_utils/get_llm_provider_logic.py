@@ -311,6 +311,8 @@ def get_llm_provider(
                         dynamic_api_key
                     )
                 )
+            if dynamic_api_key is None and api_key is not None:
+                dynamic_api_key = api_key
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
