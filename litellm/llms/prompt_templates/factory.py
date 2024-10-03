@@ -2387,34 +2387,35 @@ def _bedrock_converse_messages_pt(
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
         init_msg_i = msg_i
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "user":
-            if isinstance(messages[msg_i]["content"], list):
-                _parts: List[BedrockContentBlock] = []
-                for element in messages[msg_i]["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            _part = BedrockContentBlock(text=element["text"])
-                            _parts.append(_part)
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            _part = _process_bedrock_converse_image_block(  # type: ignore
-                                image_url=image_url
-                            )
-                            _parts.append(BedrockContentBlock(image=_part))  # type: ignore
-                user_content.extend(_parts)
-            else:
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
-                user_content.append(_part)
-
+        valid_user_roles = ["user", "tool", "function"]
+        ## MERGE CONSECUTIVE USER + TOOL CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] in valid_user_roles:
+            if messages[msg_i]["role"] == "user":
+                if isinstance(messages[msg_i]["content"], list):
+                    _parts: List[BedrockContentBlock] = []
+                    for element in messages[msg_i]["content"]:
+                        if isinstance(element, dict):
+                            if element["type"] == "text":
+                                _part = BedrockContentBlock(text=element["text"])
+                                _parts.append(_part)
+                            elif element["type"] == "image_url":
+                                image_url = element["image_url"]["url"]
+                                _part = _process_bedrock_converse_image_block(  # type: ignore
+                                    image_url=image_url
+                                )
+                                _parts.append(BedrockContentBlock(image=_part))  # type: ignore
+                    user_content.extend(_parts)
+                elif isinstance(messages[msg_i]["content"], str):
+                    _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                    user_content.append(_part)
+            elif (
+                messages[msg_i]["role"] == "tool"
+                or messages[msg_i]["role"] == "function"
+            ):
+                tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+                user_content.append(tool_call_result)
             msg_i += 1
 
-        ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
-            user_content.append(tool_call_result)
-            msg_i += 1
         if user_content:
             contents.append(BedrockMessageBlock(role="user", content=user_content))
         assistant_content: List[BedrockContentBlock] = []
