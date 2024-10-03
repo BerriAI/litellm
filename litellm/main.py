@@ -144,8 +144,10 @@ from .types.llms.openai import HttpxBinaryResponseContent
 from .types.utils import (
     AdapterCompletionStreamWrapper,
     ChatCompletionMessageToolCall,
+    CompletionTokensDetails,
     FileTypes,
     HiddenParams,
+    PromptTokensDetails,
     all_litellm_params,
 )
 
@@ -5481,7 +5483,14 @@ def stream_chunk_builder(
                 chunks=chunks, messages=messages
             )
         role = chunks[0]["choices"][0]["delta"]["role"]
-        finish_reason = chunks[-1]["choices"][0]["finish_reason"]
+        finish_reason = "stop"
+        for chunk in chunks:
+            if (
+                "choices" in chunk
+                and len(chunk["choices"]) > 0
+                and hasattr(chunk["choices"][0]["delta"], "finish_reason")
+            ):
+                finish_reason = chunk["choices"][0]["delta"].finish_reason
 
         # Initialize the response dictionary
         response = {
@@ -5512,7 +5521,8 @@ def stream_chunk_builder(
         tool_call_chunks = [
             chunk
             for chunk in chunks
-            if "tool_calls" in chunk["choices"][0]["delta"]
+            if len(chunk["choices"]) > 0
+            and "tool_calls" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["tool_calls"] is not None
         ]
 
@@ -5590,7 +5600,8 @@ def stream_chunk_builder(
         function_call_chunks = [
             chunk
             for chunk in chunks
-            if "function_call" in chunk["choices"][0]["delta"]
+            if len(chunk["choices"]) > 0
+            and "function_call" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["function_call"] is not None
         ]
 
@@ -5625,7 +5636,8 @@ def stream_chunk_builder(
         content_chunks = [
             chunk
             for chunk in chunks
-            if "content" in chunk["choices"][0]["delta"]
+            if len(chunk["choices"]) > 0
+            and "content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["content"] is not None
         ]
 
@@ -5657,6 +5669,8 @@ def stream_chunk_builder(
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
+        completion_tokens_details: Optional[CompletionTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -5674,6 +5688,26 @@ def stream_chunk_builder(
                     )
                 if "cache_read_input_tokens" in usage_chunk:
                     cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+                if hasattr(usage_chunk, "completion_tokens_details"):
+                    if isinstance(usage_chunk.completion_tokens_details, dict):
+                        completion_tokens_details = CompletionTokensDetails(
+                            **usage_chunk.completion_tokens_details
+                        )
+                    elif isinstance(
+                        usage_chunk.completion_tokens_details, CompletionTokensDetails
+                    ):
+                        completion_tokens_details = (
+                            usage_chunk.completion_tokens_details
+                        )
+                if hasattr(usage_chunk, "prompt_tokens_details"):
+                    if isinstance(usage_chunk.prompt_tokens_details, dict):
+                        prompt_tokens_details = PromptTokensDetails(
+                            **usage_chunk.prompt_tokens_details
+                        )
+                    elif isinstance(
+                        usage_chunk.prompt_tokens_details, PromptTokensDetails
+                    ):
+                        prompt_tokens_details = usage_chunk.prompt_tokens_details
 
         try:
             response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
@@ -5699,6 +5733,11 @@ def stream_chunk_builder(
             ] = cache_creation_input_tokens
         if cache_read_input_tokens is not None:
             response["usage"]["cache_read_input_tokens"] = cache_read_input_tokens
+
+        if completion_tokens_details is not None:
+            response["usage"]["completion_tokens_details"] = completion_tokens_details
+        if prompt_tokens_details is not None:
+            response["usage"]["prompt_tokens_details"] = prompt_tokens_details
 
         return convert_to_model_response_object(
             response_object=response,

@@ -11,7 +11,7 @@ from openai.types.completion_usage import (
     CompletionUsage,
     PromptTokensDetails,
 )
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -677,6 +677,8 @@ class ModelResponse(OpenAIObject):
                         _new_choice = choice
                     elif isinstance(choice, dict):
                         _new_choice = StreamingChoices(**choice)
+                    elif isinstance(choice, BaseModel):
+                        _new_choice = StreamingChoices(**choice.model_dump())
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
