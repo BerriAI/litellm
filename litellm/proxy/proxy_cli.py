@@ -673,6 +673,9 @@ def run_server(
 
         import litellm
 
+        # DO NOT DELETE - enables global variables to work across files
+        from litellm.proxy.proxy_server import app  # noqa
+
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa

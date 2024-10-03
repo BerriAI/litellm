@@ -80,6 +80,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
 )
 from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
@@ -3360,7 +3361,8 @@ def get_optional_params(
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        if model in litellm.BEDROCK_CONVERSE_MODELS:
+        base_model = litellm.AmazonConverseConfig()._get_base_model(model)
+        if base_model in litellm.BEDROCK_CONVERSE_MODELS:
             _check_valid_arg(supported_params=supported_params)
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -9255,3 +9257,24 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
         **additional_headers,
     }
     return additional_headers
+
+
+def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
+    """
+    Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
+
+    Relevent Issues: https://github.com/BerriAI/litellm/issues/5388, https://github.com/BerriAI/litellm/issues/5747
+    """
+    return [
+        ChatCompletionToolParam(
+            type="function",
+            function=ChatCompletionToolParamFunctionChunk(
+                name="dummy-tool",
+                description="This is a dummy tool call",  # provided to satisfy bedrock constraint.
+                parameters={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+        )
+    ]
