@@ -561,13 +561,11 @@ def function_setup(
             dynamic_success_callbacks=dynamic_success_callbacks,
             dynamic_failure_callbacks=dynamic_failure_callbacks,
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
-            langfuse_public_key=kwargs.pop("langfuse_public_key", None),
-            langfuse_secret=kwargs.pop("langfuse_secret", None)
-            or kwargs.pop("langfuse_secret_key", None),
-            langfuse_host=kwargs.pop("langfuse_host", None),
+            kwargs=kwargs,
         )
+
         ## check if metadata is passed in
-        litellm_params = {"api_base": ""}
+        litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
         logging_obj.update_environment_variables(
