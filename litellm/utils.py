@@ -1590,9 +1590,12 @@ def _select_tokenizer(model: str):
         )
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
-    elif model in litellm.anthropic_models and "claude-3" not in model:
-        claude_tokenizer = Tokenizer.from_str(claude_json_str)
-        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
+    elif model in litellm.anthropic_models:
+        if "claude-3" not in model:
+            claude_tokenizer = Tokenizer.from_str(claude_json_str)
+            return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
+        else:
+            return {"type": "openai_tokenizer", "tokenizer": encoding}
     # llama2
     elif "llama-2" in model.lower() or "replicate" in model.lower():
         tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
