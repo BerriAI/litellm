@@ -202,6 +202,7 @@ def mock_embedding_response() -> Dict[str, Any]:
             "total_tokens": 8,
             "completion_tokens": 0,
             "completion_tokens_details": None,
+            "prompt_tokens_details": None,
         },
     }
 
