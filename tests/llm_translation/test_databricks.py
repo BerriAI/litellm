@@ -46,6 +46,7 @@ def mock_chat_response() -> Dict[str, Any]:
             "completion_tokens": 38,
             "completion_tokens_details": None,
             "total_tokens": 268,
+            "prompt_tokens_details": None,
         },
         "system_fingerprint": None,
     }
