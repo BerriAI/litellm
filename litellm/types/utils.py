@@ -1367,7 +1367,7 @@ OPENAI_RESPONSE_HEADERS = [
 ]
 
 
-class LoggingCallbackDynamicParams(TypedDict, total=False):
+class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_public_key: Optional[str]
     langfuse_secret: Optional[str]
     langfuse_host: Optional[str]
