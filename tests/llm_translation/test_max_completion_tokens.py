@@ -165,7 +165,7 @@ def test_all_model_configs():
         "max_new_tokens": 10
     }
 
-    from litellm.llms.nvidia_nim import NvidiaNimConfig
+    from litellm.llms.nvidia_nim.chat import NvidiaNimConfig
 
     assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(
         model="llama3"
