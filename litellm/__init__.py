@@ -1033,6 +1033,7 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .rerank_api.main import *
+from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
