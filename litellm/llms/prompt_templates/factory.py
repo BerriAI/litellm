@@ -2387,8 +2387,9 @@ def _bedrock_converse_messages_pt(
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
         init_msg_i = msg_i
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "user":
+        valid_user_roles = ["user", "tool", "function"]
+        ## MERGE CONSECUTIVE USER + TOOL CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] in valid_user_roles:
             if isinstance(messages[msg_i]["content"], list):
                 _parts: List[BedrockContentBlock] = []
                 for element in messages[msg_i]["content"]:
@@ -2403,18 +2404,17 @@ def _bedrock_converse_messages_pt(
                             )
                             _parts.append(BedrockContentBlock(image=_part))  # type: ignore
                 user_content.extend(_parts)
-            else:
+            elif isinstance(messages[msg_i]["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
                 user_content.append(_part)
-
+            elif (
+                messages[msg_i]["role"] == "tool"
+                or messages[msg_i]["role"] == "function"
+            ):
+                tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+                user_content.append(tool_call_result)
             msg_i += 1
 
-        ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
-            user_content.append(tool_call_result)
-            msg_i += 1
         if user_content:
             contents.append(BedrockMessageBlock(role="user", content=user_content))
         assistant_content: List[BedrockContentBlock] = []
@@ -2554,7 +2554,9 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
-        parameters = tool.get("function", {}).get("parameters", None)
+        parameters = tool.get("function", {}).get(
+            "parameters", {"type": "object", "properties": {}}
+        )
         name = tool.get("function", {}).get("name", "")
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
