@@ -2646,10 +2646,6 @@ def get_standard_logging_object_payload(
             ),
         )
 
-        verbose_logger.debug(
-            "Standard Logging: created payload - payload: %s\n\n", payload
-        )
-
         return payload
     except Exception as e:
         verbose_logger.exception(
