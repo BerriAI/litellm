@@ -6,7 +6,11 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
+from openai.types.completion_usage import (
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
 from pydantic import ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
@@ -507,11 +511,23 @@ class Usage(CompletionUsage):
                 completion_tokens_details = params["completion_tokens_details"]
             del params["completion_tokens_details"]
 
+        # handle prompt_tokens_details
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if "prompt_tokens_details" in params:
+            if isinstance(params["prompt_tokens_details"], dict):
+                prompt_tokens_details = PromptTokensDetails(
+                    **params["prompt_tokens_details"]
+                )
+            elif isinstance(params["prompt_tokens_details"], PromptTokensDetails):
+                prompt_tokens_details = params["prompt_tokens_details"]
+            del params["prompt_tokens_details"]
+
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
             total_tokens=total_tokens or 0,
             completion_tokens_details=completion_tokens_details or None,
+            prompt_tokens_details=prompt_tokens_details or None,
         )
 
         ## ANTHROPIC MAPPING ##
