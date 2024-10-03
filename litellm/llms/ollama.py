@@ -585,10 +585,11 @@ async def ollama_aembeddings(
         model_response,
         "usage",
         litellm.Usage(
-            **{
-                "prompt_tokens": total_input_tokens,
-                "total_tokens": total_input_tokens,
-            }
+            prompt_tokens=total_input_tokens,
+            completion_tokens=total_input_tokens,
+            total_tokens=total_input_tokens,
+            prompt_tokens_details=None,
+            completion_tokens_details=None,
         ),
     )
     return model_response
