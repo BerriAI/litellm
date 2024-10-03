@@ -40,6 +40,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardCallbackDynamicParams,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
@@ -200,9 +201,7 @@ class Logging:
         dynamic_success_callbacks=None,
         dynamic_failure_callbacks=None,
         dynamic_async_success_callbacks=None,
-        langfuse_public_key=None,
-        langfuse_secret=None,
-        langfuse_host=None,
+        kwargs: Optional[Dict] = None,
     ):
         if messages is not None:
             if isinstance(messages, str):
@@ -225,10 +224,14 @@ class Logging:
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
-        self.streaming_chunks = []  # for generating complete stream response
-        self.sync_streaming_chunks = []  # for generating complete stream response
-        self.model_call_details = {}
-        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
+        self.streaming_chunks: List[Any] = []  # for generating complete stream response
+        self.sync_streaming_chunks: List[Any] = (
+            []
+        )  # for generating complete stream response
+        self.model_call_details: Dict[Any, Any] = {}
+        self.dynamic_input_callbacks: List[Any] = (
+            []
+        )  # [TODO] callbacks set for just that call
         self.dynamic_failure_callbacks = dynamic_failure_callbacks
         self.dynamic_success_callbacks = (
             dynamic_success_callbacks  # callbacks set for just that call
@@ -236,12 +239,26 @@ class Logging:
         self.dynamic_async_success_callbacks = (
             dynamic_async_success_callbacks  # callbacks set for just that call
         )
-        ## DYNAMIC LANGFUSE KEYS ##
-        self.langfuse_public_key = langfuse_public_key
-        self.langfuse_secret = langfuse_secret
-        self.langfuse_host = langfuse_host
+        ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
+        self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
+            self.initialize_standard_callback_dynamic_params(kwargs)
+        )
         ## TIME TO FIRST TOKEN LOGGING ##
+
         self.completion_start_time: Optional[datetime.datetime] = None
+
+    def initialize_standard_callback_dynamic_params(
+        self, kwargs: Optional[Dict] = None
+    ) -> StandardCallbackDynamicParams:
+        standard_callback_dynamic_params = StandardCallbackDynamicParams()
+        if kwargs:
+            _supported_callback_params = (
+                StandardCallbackDynamicParams.__annotations__.keys()
+            )
+            for param in _supported_callback_params:
+                if param in kwargs:
+                    standard_callback_dynamic_params[param] = kwargs.pop(param)  # type: ignore
+        return standard_callback_dynamic_params
 
     def update_environment_variables(
         self, model, user, optional_params, litellm_params, **additional_params
@@ -264,6 +281,7 @@ class Logging:
             "call_type": str(self.call_type),
             "litellm_call_id": self.litellm_call_id,
             "completion_start_time": self.completion_start_time,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
             **self.optional_params,
             **additional_params,
         }
@@ -999,23 +1017,46 @@ class Logging:
                         temp_langfuse_logger = langFuseLogger
                         if langFuseLogger is None or (
                             (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_secret is not None
-                                and self.langfuse_secret != langFuseLogger.secret_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                )
+                                != langFuseLogger.secret_key
                             )
                             or (
-                                self.langfuse_host is not None
-                                and self.langfuse_host != langFuseLogger.langfuse_host
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                != langFuseLogger.langfuse_host
                             )
                         ):
                             credentials = {
-                                "langfuse_public_key": self.langfuse_public_key,
-                                "langfuse_secret": self.langfuse_secret,
-                                "langfuse_host": self.langfuse_host,
+                                "langfuse_public_key": self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                ),
+                                "langfuse_secret": self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                ),
+                                "langfuse_host": self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                ),
                             }
                             temp_langfuse_logger = (
                                 in_memory_dynamic_logger_cache.get_cache(
@@ -1024,9 +1065,15 @@ class Logging:
                             )
                             if temp_langfuse_logger is None:
                                 temp_langfuse_logger = LangFuseLogger(
-                                    langfuse_public_key=self.langfuse_public_key,
-                                    langfuse_secret=self.langfuse_secret,
-                                    langfuse_host=self.langfuse_host,
+                                    langfuse_public_key=self.standard_callback_dynamic_params.get(
+                                        "langfuse_public_key"
+                                    ),
+                                    langfuse_secret=self.standard_callback_dynamic_params.get(
+                                        "langfuse_secret"
+                                    ),
+                                    langfuse_host=self.standard_callback_dynamic_params.get(
+                                        "langfuse_host"
+                                    ),
                                 )
                                 in_memory_dynamic_logger_cache.set_cache(
                                     credentials=credentials,
@@ -1838,24 +1885,46 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if langFuseLogger is None or (
                             (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_host is not None
-                                and self.langfuse_host != langFuseLogger.langfuse_host
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                != langFuseLogger.langfuse_host
                             )
                         ):
                             langFuseLogger = LangFuseLogger(
-                                langfuse_public_key=self.langfuse_public_key,
-                                langfuse_secret=self.langfuse_secret,
-                                langfuse_host=self.langfuse_host,
+                                langfuse_public_key=self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                ),
+                                langfuse_secret=self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                ),
+                                langfuse_host=self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                ),
                             )
                         _response = langFuseLogger.log_event(
                             start_time=start_time,
@@ -1992,22 +2061,34 @@ class Logging:
         if service_name == "langfuse":
             if langFuseLogger is None or (
                 (
-                    self.langfuse_public_key is not None
-                    and self.langfuse_public_key != langFuseLogger.public_key
+                    self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    != langFuseLogger.public_key
                 )
                 or (
-                    self.langfuse_public_key is not None
-                    and self.langfuse_public_key != langFuseLogger.public_key
+                    self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    != langFuseLogger.public_key
                 )
                 or (
-                    self.langfuse_host is not None
-                    and self.langfuse_host != langFuseLogger.langfuse_host
+                    self.standard_callback_dynamic_params.get("langfuse_host")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_host")
+                    != langFuseLogger.langfuse_host
                 )
             ):
                 return LangFuseLogger(
-                    langfuse_public_key=self.langfuse_public_key,
-                    langfuse_secret=self.langfuse_secret,
-                    langfuse_host=self.langfuse_host,
+                    langfuse_public_key=self.standard_callback_dynamic_params.get(
+                        "langfuse_public_key"
+                    ),
+                    langfuse_secret=self.standard_callback_dynamic_params.get(
+                        "langfuse_secret"
+                    ),
+                    langfuse_host=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    ),
                 )
             return langFuseLogger
 

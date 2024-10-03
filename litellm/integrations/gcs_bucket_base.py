@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
 import httpx
 from pydantic import BaseModel, Field
@@ -18,37 +18,48 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
+if TYPE_CHECKING:
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+else:
+    VertexBase = Any
+
 
 class GCSBucketBase(CustomLogger):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
-        from litellm.proxy.proxy_server import premium_user
-
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-        self.path_service_account_json = os.getenv("GCS_PATH_SERVICE_ACCOUNT", None)
-        self.BUCKET_NAME = bucket_name or os.getenv("GCS_BUCKET_NAME", None)
-
-        if self.BUCKET_NAME is None:
+        _path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+        _bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME")
+        if _path_service_account is None:
+            raise ValueError("GCS_PATH_SERVICE_ACCOUNT environment variable is not set")
+        if _bucket_name is None:
             raise ValueError(
                 "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
             )
+        self.path_service_account_json: str = _path_service_account
+        self.BUCKET_NAME: str = _bucket_name
 
-    async def construct_request_headers(self) -> Dict[str, str]:
+    async def construct_request_headers(
+        self,
+        service_account_json: str,
+        vertex_instance: Optional[VertexBase] = None,
+    ) -> Dict[str, str]:
         from litellm import vertex_chat_completion
 
-        _auth_header, vertex_project = (
-            await vertex_chat_completion._ensure_access_token_async(
-                credentials=self.path_service_account_json,
-                project_id=None,
-                custom_llm_provider="vertex_ai",
-            )
+        if vertex_instance is None:
+            vertex_instance = vertex_chat_completion
+
+        _auth_header, vertex_project = await vertex_instance._ensure_access_token_async(
+            credentials=service_account_json,
+            project_id=None,
+            custom_llm_provider="vertex_ai",
         )
 
-        auth_header, _ = vertex_chat_completion._get_token_and_url(
+        auth_header, _ = vertex_instance._get_token_and_url(
             model="gcs-bucket",
             auth_header=_auth_header,
-            vertex_credentials=self.path_service_account_json,
+            vertex_credentials=service_account_json,
             vertex_project=vertex_project,
             vertex_location=None,
             gemini_api_key=None,
@@ -91,65 +102,3 @@ class GCSBucketBase(CustomLogger):
         }
 
         return headers
-
-    async def download_gcs_object(self, object_name):
-        """
-        Download an object from GCS.
-
-        https://cloud.google.com/storage/docs/downloading-objects#download-object-json
-        """
-        try:
-            headers = await self.construct_request_headers()
-            url = f"https://storage.googleapis.com/storage/v1/b/{self.BUCKET_NAME}/o/{object_name}?alt=media"
-
-            # Send the GET request to download the object
-            response = await self.async_httpx_client.get(url=url, headers=headers)
-
-            if response.status_code != 200:
-                verbose_logger.error(
-                    "GCS object download error: %s", str(response.text)
-                )
-                return None
-
-            verbose_logger.debug(
-                "GCS object download response status code: %s", response.status_code
-            )
-
-            # Return the content of the downloaded object
-            return response.content
-
-        except Exception as e:
-            verbose_logger.error("GCS object download error: %s", str(e))
-            return None
-
-    async def delete_gcs_object(self, object_name):
-        """
-        Delete an object from GCS.
-        """
-        try:
-            headers = await self.construct_request_headers()
-            url = f"https://storage.googleapis.com/storage/v1/b/{self.BUCKET_NAME}/o/{object_name}"
-
-            # Send the DELETE request to delete the object
-            response = await self.async_httpx_client.delete(url=url, headers=headers)
-
-            if (response.status_code != 200) or (response.status_code != 204):
-                verbose_logger.error(
-                    "GCS object delete error: %s, status code: %s",
-                    str(response.text),
-                    response.status_code,
-                )
-                return None
-
-            verbose_logger.debug(
-                "GCS object delete response status code: %s, response: %s",
-                response.status_code,
-                response.text,
-            )
-
-            # Return the content of the downloaded object
-            return response.text
-
-        except Exception as e:
-            verbose_logger.error("GCS object download error: %s", str(e))
-            return None
