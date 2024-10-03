@@ -4147,9 +4147,6 @@ async def audio_transcriptions(
 
 #                          /v1/realtime Endpoints
 
-
-import websockets
-
 ######################################################################
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -4158,6 +4155,7 @@ from litellm import _arealtime
 
 @app.websocket("/v1/realtime")
 async def websocket_endpoint(websocket: WebSocket, model: str):
+    import websockets
 
     await websocket.accept()
 
