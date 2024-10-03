@@ -559,8 +559,8 @@ model_list:
       initial_prompt_value: "\n"
       roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
       final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
+      bos_token: " "
+      eos_token: " "
       max_tokens: 4096
 ```
 
@@ -582,95 +582,72 @@ general_settings:
 
 ## **All settings**
 
-```python
-{
-  "environment_variables": {},
-  "model_list": [
-    {
-      "model_name": "string",
-      "litellm_params": {},
-      "model_info": {
-        "id": "string",
-        "mode": "embedding",
-        "input_cost_per_token": 0,
-        "output_cost_per_token": 0,
-        "max_tokens": 2048,
-        "base_model": "gpt-4-1106-preview",
-        "additionalProp1": {}
-      }
-    }
-  ],
-  "litellm_settings": {
-    "success_callback": "List[str]" # list of success callbacks - eg ["langfuse"]
-    "failure_callback": "List[str]" # list of failure callbacks - eg ["sentry"]
-    "callbacks": "List[str] or str" # list of callbacks - runs on success and failure - eg ["otel"]
-    "service_callbacks": "List[str]" # logs redis, postgres failures on datadog, prometheus
+```yaml
+environment_variables: {}
 
-    "turn_off_message_logging": "boolean" # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
-    "redact_user_api_key_info": "boolean" # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+model_list:
+  - model_name: string
+    litellm_params: {}
+    model_info:
+      id: string
+      mode: embedding
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+      max_tokens: 2048
+      base_model: gpt-4-1106-preview
+      additionalProp1: {}
 
-  }, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
-  "callback_settings": {
-    "otel": {        # OTEL logging callback specific settings
-      "message_logging": "boolean"
-    }
-  },
-  "general_settings": {
-    "completion_model": "string",
-    "disable_spend_logs": "boolean", # turn off writing each transaction to the db
-    "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
-    "disable_retry_on_max_parallel_request_limit_error": "boolean", # turn off retries when max parallel request limit is reached
-    "disable_reset_budget": "boolean", # turn off reset budget scheduled task
-    "disable_adding_master_key_hash_to_db": "boolean", # turn off storing master key hash in db, for spend tracking
-    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
-    "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
-    "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
-    "key_management_system": "google_kms", # either google_kms or azure_kms
-    "master_key": "string",
-    "database_url": "string",
-    "database_connection_pool_limit": 0, # default 100
-    "database_connection_timeout": 0, # default 60s
-    "database_type": "dynamo_db",
-    "database_args": {
-      "billing_mode": "PROVISIONED_THROUGHPUT",
-      "read_capacity_units": 0,
-      "write_capacity_units": 0,
-      "ssl_verify": true,
-      "region_name": "string",
-      "user_table_name": "LiteLLM_UserTable",
-      "key_table_name": "LiteLLM_VerificationToken",
-      "config_table_name": "LiteLLM_Config",
-      "spend_table_name": "LiteLLM_SpendLogs"
-    },
-    "otel": true,
-    "custom_auth": "string",
-    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
-    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
-    "infer_model_from_keys": true,
-    "background_health_checks": true,
-    "health_check_interval": 300,
-    "alerting": [
-      "string"
-    ],
-    "alerting_threshold": 0,
-    "use_client_credentials_pass_through_routes" : "boolean", # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints" https://docs.litellm.ai/docs/pass_through/vertex_ai
-  }
-}
+litellm_settings:
+  success_callback: ["langfuse"]  # list of success callbacks
+  failure_callback: ["sentry"]  # list of failure callbacks
+  callbacks: ["otel"]  # list of callbacks - runs on success and failure
+  service_callbacks: ["datadog", "prometheus"]  # logs redis, postgres failures on datadog, prometheus
+  turn_off_message_logging: boolean  # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
+  redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+
+callback_settings:
+  otel:
+    message_logging: boolean  # OTEL logging callback specific settings
+
+general_settings:
+  completion_model: string
+  disable_spend_logs: boolean  # turn off writing each transaction to the db
+  disable_master_key_return: boolean  # turn off returning master key on UI (checked on '/user/info' endpoint)
+  disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
+  disable_reset_budget: boolean  # turn off reset budget scheduled task
+  disable_adding_master_key_hash_to_db: boolean  # turn off storing master key hash in db, for spend tracking
+  enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
+  enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
+  allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
+  key_management_system: google_kms  # either google_kms or azure_kms
+  master_key: string
+  database_url: string
+  database_connection_pool_limit: 0  # default 100
+  database_connection_timeout: 0  # default 60s
+  custom_auth: string
+  max_parallel_requests: 0  # the max parallel requests allowed per deployment 
+  global_max_parallel_requests: 0  # the max parallel requests allowed on the proxy all up 
+  infer_model_from_keys: true
+  background_health_checks: true
+  health_check_interval: 300
+  alerting: ["slack", "email"]
+  alerting_threshold: 0
+  use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
 ```
 
-## Router Settings
+### Router Settings
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2
-  redis_host: <your-redis-host>
-  redis_password: <your-redis-password>
-  redis_port: <your-redis-port>
-  enable_pre_call_check: true
+  routing_strategy: usage-based-routing-v2 # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  redis_host: <your-redis-host>           # string
+  redis_password: <your-redis-password>   # string
+  redis_port: <your-redis-port>           # string
+  enable_pre_call_check: true             # bool - Before call is made check if a call is within model context window 
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
-  disable_cooldowns: True
-  retry_policy: {
+  disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
     "RateLimitErrorRetries": 3,
@@ -678,13 +655,17 @@ router_settings:
     "InternalServerErrorRetries": 4
   }
   allowed_fails_policy: {
-    "ContentPolicyViolationErrorAllowedFails": 1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
-    "RateLimitErrorAllowedFails": 100 # Allow 100 RateLimitErrors before cooling down a deployment
+    "BadRequestErrorAllowedFails": 1000, # Allow 1000 BadRequestErrors before cooling down a deployment
+    "AuthenticationErrorAllowedFails": 10, # int 
+    "TimeoutErrorAllowedFails": 12, # int 
+    "RateLimitErrorAllowedFails": 10000, # int 
+    "ContentPolicyViolationErrorAllowedFails": 15, # int 
+    "InternalServerErrorAllowedFails": 20, # int 
   }
-  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
-  fallbacks=[{"claude-2": ["my-fallback-model"]}]
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
+  fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
 ```
-  
+
 
 ## Extras
 
