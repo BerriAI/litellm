@@ -112,6 +112,7 @@ from .llms.prompt_templates.factory import (
 )
 from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
+from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
 from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
@@ -168,6 +169,7 @@ openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
+together_ai_text_completions = TogetherAITextCompletion()
 azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -1285,21 +1287,38 @@ def completion(
                 prompt = " ".join([message["content"] for message in messages])  # type: ignore
 
             ## COMPLETION CALL
-            _response = openai_text_completions.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                client=client,  # pass AsyncOpenAI, OpenAI client
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                timeout=timeout,  # type: ignore
-            )
+            if custom_llm_provider == "together_ai":
+                _response = together_ai_text_completions.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                )
+            else:
+                _response = openai_text_completions.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                )
 
             if (
                 optional_params.get("stream", False) is False
