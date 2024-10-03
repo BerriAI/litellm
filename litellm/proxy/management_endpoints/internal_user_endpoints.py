@@ -86,7 +86,7 @@ async def new_user(
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
-    if auto_create_key == False:
+    if auto_create_key is False:
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
@@ -135,7 +135,7 @@ async def new_user(
         event = WebhookEvent(
             event="internal_user_created",
             event_group="internal_user",
-            event_message=f"Welcome to LiteLLM Proxy",
+            event_message="Welcome to LiteLLM Proxy",
             token=response.get("token", ""),
             spend=response.get("spend", 0.0),
             max_budget=response.get("max_budget", 0.0),
@@ -629,7 +629,7 @@ async def user_request_model(request: Request):
         user_id = non_default_values.get("user_id", None)
         justification = non_default_values.get("justification", None)
 
-        response = await prisma_client.insert_data(
+        await prisma_client.insert_data(
             data={
                 "models": new_models,
                 "justification": justification,

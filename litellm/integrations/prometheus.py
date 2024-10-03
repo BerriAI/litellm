@@ -520,7 +520,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
-        exception = kwargs.get("exception", None)
+        kwargs.get("exception", None)
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
@@ -679,7 +679,7 @@ class PrometheusLogger(CustomLogger):
             ).inc()
 
             pass
-        except:
+        except Exception:
             pass
 
     def set_llm_deployment_success_metrics(
@@ -800,7 +800,7 @@ class PrometheusLogger(CustomLogger):
 
             if (
                 request_kwargs.get("stream", None) is not None
-                and request_kwargs["stream"] == True
+                and request_kwargs["stream"] is True
             ):
                 # only log ttft for streaming request
                 time_to_first_token_response_time = (

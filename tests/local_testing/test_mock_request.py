@@ -20,7 +20,7 @@ def test_mock_request():
         response = litellm.mock_completion(model=model, messages=messages, stream=False)
         print(response)
         print(type(response))
-    except:
+    except Exception:
         traceback.print_exc()
 
 
@@ -35,7 +35,7 @@ def test_streaming_mock_request():
             complete_response += chunk["choices"][0]["delta"]["content"] or ""
         if complete_response == "":
             raise Exception("Empty response received")
-    except:
+    except Exception:
         traceback.print_exc()
 
 
@@ -71,7 +71,7 @@ def test_mock_request_n_greater_than_1():
         for choice in response.choices:
             assert choice.message.content == "This is a mock request"
 
-    except:
+    except Exception:
         traceback.print_exc()
 
 

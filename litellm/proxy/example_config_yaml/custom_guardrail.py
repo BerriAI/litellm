@@ -6,7 +6,6 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import GuardrailEventHooks
 
 
 class myCustomGuardrail(CustomGuardrail):

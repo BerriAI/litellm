@@ -41,7 +41,7 @@ class VertexFineTuningAPI(VertexLLM):
             created_at = int(create_time_datetime.timestamp())
 
             return created_at
-        except Exception as e:
+        except Exception:
             return 0
 
     def convert_vertex_response_to_open_ai_response(

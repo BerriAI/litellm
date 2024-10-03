@@ -57,7 +57,7 @@
 #             response = "Sorry - no budget!"
 
 #         print(f"response: {response}")
-#     except:
+#     except Exception:
 #         pytest.fail(f"An error occurred")
 
 # ## Scenario 3: Saving budget to client
@@ -76,7 +76,7 @@
 #     try:
 #         response = budget_manager.get_users()
 #         print(response)
-#     except:
+#     except Exception:
 #         pytest.fail(f"An error occurred")
 
 

@@ -135,6 +135,7 @@ class AzureOpenAIConfig:
             "temperature",
             "n",
             "stream",
+            "stream_options",
             "stop",
             "max_tokens",
             "max_completion_tokens",
@@ -317,7 +318,7 @@ class AzureOpenAIAssistantsAPIConfig:
                         if "file_id" in item:
                             file_ids.append(item["file_id"])
                         else:
-                            if litellm.drop_params == True:
+                            if litellm.drop_params is True:
                                 pass
                             else:
                                 raise litellm.utils.UnsupportedParamsError(
@@ -580,7 +581,7 @@ class AzureChatCompletion(BaseLLM):
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(
-                    status_code=422, message=f"Missing model or messages"
+                    status_code=422, message="Missing model or messages"
                 )
 
             max_retries = optional_params.pop("max_retries", 2)
@@ -938,6 +939,7 @@ class AzureChatCompletion(BaseLLM):
             model=model,
             custom_llm_provider="azure",
             logging_obj=logging_obj,
+            stream_options=data.get("stream_options", None),
             _response_headers=process_azure_headers(headers),
         )
         return streamwrapper
@@ -1006,6 +1008,7 @@ class AzureChatCompletion(BaseLLM):
                 model=model,
                 custom_llm_provider="azure",
                 logging_obj=logging_obj,
+                stream_options=data.get("stream_options", None),
                 _response_headers=headers,
             )
             return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
@@ -1240,12 +1243,6 @@ class AzureChatCompletion(BaseLLM):
                 )
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-                    timeout_msg = {
-                        "error": {
-                            "code": "Timeout",
-                            "message": "Operation polling timed out.",
-                        }
-                    }
 
                     raise AzureOpenAIError(
                         status_code=408, message="Operation polling timed out."
@@ -1493,7 +1490,6 @@ class AzureChatCompletion(BaseLLM):
         client=None,
         aimg_generation=None,
     ):
-        exception_mapping_worked = False
         try:
             if model and len(model) > 0:
                 model = model
@@ -1534,7 +1530,7 @@ class AzureChatCompletion(BaseLLM):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 azure_client_params["azure_ad_token"] = azure_ad_token
 
-            if aimg_generation == True:
+            if aimg_generation is True:
                 response = self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
                 return response
 

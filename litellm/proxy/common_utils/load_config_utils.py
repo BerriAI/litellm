@@ -29,7 +29,7 @@ def get_file_contents_from_s3(bucket_name, object_key):
 
         # Read the file contents
         file_contents = response["Body"].read().decode("utf-8")
-        verbose_proxy_logger.debug(f"File contents retrieved from S3")
+        verbose_proxy_logger.debug("File contents retrieved from S3")
 
         # Create a temporary file with YAML extension
         with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml") as temp_file:
@@ -59,13 +59,15 @@ async def get_config_file_contents_from_gcs(bucket_name, object_key):
             bucket_name=bucket_name,
         )
         file_contents = await gcs_bucket.download_gcs_object(object_key)
+        if file_contents is None:
+            raise Exception(f"File contents are None for {object_key}")
         # file_contentis is a bytes object, so we need to convert it to yaml
         file_contents = file_contents.decode("utf-8")
         # convert to yaml
         config = yaml.safe_load(file_contents)
         return config
 
-    except:
+    except Exception as e:
         verbose_proxy_logger.error(f"Error retrieving file contents: {str(e)}")
         return None
 

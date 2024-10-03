@@ -76,6 +76,24 @@ def test_bedrock_optional_params_embeddings():
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-3-haiku-20240307-v1:0",
+        "us.meta.llama3-2-11b-instruct-v1:0",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+    ],
+)
+def test_bedrock_optional_params_completions(model):
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model=model, max_tokens=10, temperature=0.1, custom_llm_provider="bedrock"
+    )
+    print(f"optional_params: {optional_params}")
+    assert len(optional_params) == 3
+    assert optional_params == {"maxTokens": 10, "stream": False, "temperature": 0.1}
+
+
+@pytest.mark.parametrize(
     "model, expected_dimensions, dimensions_kwarg",
     [
         ("bedrock/amazon.titan-embed-text-v1", False, None),

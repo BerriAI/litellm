@@ -416,7 +416,7 @@ async def test_send_llm_exception_to_slack():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-    except:
+    except Exception:
         pass
 
     await router.acompletion(
@@ -819,7 +819,7 @@ async def test_alerting():
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
-    except:
+    except Exception:
         pass
     finally:
         await asyncio.sleep(3)

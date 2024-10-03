@@ -183,7 +183,7 @@ async def test_chat_completion_request_with_redaction(route, body):
                 ),
                 fastapi_response=Response(),
             )
-    except:
+    except Exception:
         pass
     await asyncio.sleep(3)
 

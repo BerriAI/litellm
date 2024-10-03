@@ -161,14 +161,14 @@ async def bedrock_proxy_route(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    request_copy = create_request_copy(request)
+    create_request_copy(request)
 
     try:
         import boto3
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
         from botocore.credentials import Credentials
-    except ImportError as e:
+    except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
     aws_region_name = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
