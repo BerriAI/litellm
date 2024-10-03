@@ -58,6 +58,7 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "_arealtime",  # private function for realtime API
     ],
 ):
     """
@@ -65,7 +66,6 @@ async def route_request(
 
     """
     router_model_names = llm_router.model_names if llm_router is not None else []
-
     if "api_key" in data or "api_base" in data:
         return getattr(litellm, f"{route_type}")(**data)
 

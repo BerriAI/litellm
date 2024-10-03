@@ -612,6 +612,7 @@ class Router:
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         model_name = None
+        traceback.print_stack()
         try:
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -1800,6 +1801,40 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
+    async def _arealtime(self, model: str, **kwargs):
+        messages = [{"role": "user", "content": "dummy-text"}]
+        try:
+            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            kwargs.get("request_timeout", self.timeout)
+            kwargs.setdefault("metadata", {}).update({"model_group": model})
+
+            # pick the one that is available (lowest TPM/RPM)
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                messages=messages,
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+
+            data = deployment["litellm_params"].copy()
+            for k, v in self.default_litellm_params.items():
+                if (
+                    k not in kwargs
+                ):  # prioritize model-specific params > default router params
+                    kwargs[k] = v
+                elif k == "metadata":
+                    kwargs[k].update(v)
+
+            return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
+        except Exception as e:
+            traceback.print_exc()
+            if self.num_retries > 0:
+                kwargs["model"] = model
+                kwargs["messages"] = messages
+                kwargs["original_function"] = self._arealtime
+                return self.function_with_retries(**kwargs)
+            else:
+                raise e
+
     def text_completion(
         self,
         model: str,
@@ -1813,7 +1848,7 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
-            kwargs["original_function"] = self._acompletion
+            kwargs["original_function"] = self.text_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
@@ -1840,7 +1875,7 @@ class Router:
             if self.num_retries > 0:
                 kwargs["model"] = model
                 kwargs["messages"] = messages
-                kwargs["original_function"] = self.completion
+                kwargs["original_function"] = self.text_completion
                 return self.function_with_retries(**kwargs)
             else:
                 raise e
