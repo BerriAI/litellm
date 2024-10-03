@@ -14,7 +14,7 @@ import pytest
 from respx import MockRouter
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 
 
@@ -69,3 +69,38 @@ def test_completion_nvidia_nim(respx_mock: MockRouter):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_embedding_nvidia_nim(respx_mock: MockRouter):
+    litellm.set_verbose = True
+    mock_response = EmbeddingResponse(
+        model="nvidia_nim/databricks/dbrx-instruct",
+        data=[
+            {
+                "embedding": [0.1, 0.2, 0.3],
+                "index": 0,
+            }
+        ],
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=0,
+            total_tokens=10,
+        ),
+    )
+    mock_request = respx_mock.post(
+        "https://integrate.api.nvidia.com/v1/embeddings"
+    ).mock(return_value=httpx.Response(200, json=mock_response.dict()))
+    response = litellm.embedding(
+        model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
+        input="What is the meaning of life?",
+        input_type="passage",
+    )
+    assert mock_request.called
+    request_body = json.loads(mock_request.calls[0].request.content)
+    print("request_body: ", request_body)
+    assert request_body == {
+        "input": "What is the meaning of life?",
+        "model": "nvidia/nv-embedqa-e5-v5",
+        "input_type": "passage",
+        "encoding_format": "base64",
+    }
