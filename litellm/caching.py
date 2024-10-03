@@ -105,9 +105,6 @@ class InMemoryCache(BaseCache):
                 # This can occur when an object is referenced by another object, but the reference is never removed.
 
     def set_cache(self, key, value, **kwargs):
-        print_verbose(
-            "InMemoryCache: set_cache. current size= {}".format(len(self.cache_dict))
-        )
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()
@@ -1835,7 +1832,6 @@ class DualCache(BaseCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
-            print_verbose(f"set cache: key: {key}; value: {value}")
             if self.in_memory_cache is not None:
                 if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
                     kwargs["ttl"] = self.default_in_memory_ttl
@@ -1873,7 +1869,6 @@ class DualCache(BaseCache):
     def get_cache(self, key, local_only: bool = False, **kwargs):
         # Try to fetch from in-memory cache first
         try:
-            print_verbose(f"get cache: cache key: {key}; local_only: {local_only}")
             result = None
             if self.in_memory_cache is not None:
                 in_memory_result = self.in_memory_cache.get_cache(key, **kwargs)
@@ -1906,7 +1901,6 @@ class DualCache(BaseCache):
             if self.in_memory_cache is not None:
                 in_memory_result = self.in_memory_cache.batch_get_cache(keys, **kwargs)
 
-                print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
                     result = in_memory_result
 

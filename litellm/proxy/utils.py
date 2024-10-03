@@ -2360,34 +2360,6 @@ class PrismaClient:
             )
             raise e
 
-    async def apply_db_fixes(self):
-        try:
-            verbose_proxy_logger.debug(
-                "Applying LiteLLM - DB Fixes fixing logs in SpendLogs"
-            )
-            sql_query = """
-                UPDATE "LiteLLM_SpendLogs"
-                SET team_id = (
-                    SELECT vt.team_id
-                    FROM "LiteLLM_VerificationToken" vt
-                    WHERE vt.token = "LiteLLM_SpendLogs".api_key
-                )
-                WHERE team_id IS NULL
-                AND EXISTS (
-                    SELECT 1
-                    FROM "LiteLLM_VerificationToken" vt
-                    WHERE vt.token = "LiteLLM_SpendLogs".api_key
-                );
-            """
-            response = await self.db.query_raw(sql_query)
-            verbose_proxy_logger.debug(
-                "Applied LiteLLM - DB Fixes fixing logs in SpendLogs, Response=%s",
-                response,
-            )
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Error apply_db_fixes: {str(e)}")
-        return
-
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
