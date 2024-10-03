@@ -6,11 +6,17 @@ from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from litellm.types.llms.anthropic import (
     AnthropicMessageRequestBase,
     AnthropicMessagesRequest,
+    AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
-from litellm.utils import has_tool_call_blocks
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
+from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError
 
@@ -146,11 +152,16 @@ class AnthropicConfig:
             and messages is not None
             and has_tool_call_blocks(messages)
         ):
-            raise litellm.UnsupportedParamsError(
-                message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param to enable tool calling.",
-                model="",
-                llm_provider="anthropic",
-            )
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="anthropic",
+                )
 
         return optional_params
 
@@ -266,18 +277,23 @@ class AnthropicConfig:
             if "anthropic-beta" not in headers:
                 # default to v1 of "anthropic-beta"
                 headers["anthropic-beta"] = "tools-2024-05-16"
-
             anthropic_tools = []
             for tool in optional_params["tools"]:
                 if "input_schema" in tool:  # assume in anthropic format
                     anthropic_tools.append(tool)
                 else:  # assume openai tool call
                     new_tool = tool["function"]
-                    new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
+                    parameters = new_tool.pop(
+                        "parameters",
+                        {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    )
+                    new_tool["input_schema"] = parameters  # rename key
                     if "cache_control" in tool:
                         new_tool["cache_control"] = tool["cache_control"]
                     anthropic_tools.append(new_tool)
-
             optional_params["tools"] = anthropic_tools
 
         data = {
