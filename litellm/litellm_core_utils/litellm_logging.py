@@ -71,6 +71,7 @@ from ..integrations.lago import LagoLogger
 from ..integrations.langfuse import LangFuseLogger
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.litedebugger import LiteDebugger
+from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
@@ -2164,6 +2165,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "literalai":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LiteralAILogger):
+                return callback  # type: ignore
+
+        _literalai_logger = LiteralAILogger()
+        _in_memory_loggers.append(_literalai_logger)
+        return _literalai_logger  # type: ignore
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
             if isinstance(callback, PrometheusLogger):
@@ -2312,6 +2321,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "literalai":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LiteralAILogger):
                 return callback
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
