@@ -1025,6 +1025,8 @@ class Huggingface(BaseLLM):
                 **{
                     "prompt_tokens": input_tokens,
                     "total_tokens": input_tokens,
+                    "prompt_tokens_details": None,
+                    "completion_tokens_details": None,
                 }
             ),
         )

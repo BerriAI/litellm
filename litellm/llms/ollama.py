@@ -588,6 +588,8 @@ async def ollama_aembeddings(
             **{
                 "prompt_tokens": total_input_tokens,
                 "total_tokens": total_input_tokens,
+                "prompt_tokens_details": None,
+                "completion_tokens_details": None,
             }
         ),
     )
