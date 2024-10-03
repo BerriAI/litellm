@@ -58,7 +58,7 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
-        "arealtime",
+        "_arealtime",  # private function for realtime API
     ],
 ):
     """

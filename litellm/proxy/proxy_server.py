@@ -4153,11 +4153,7 @@ import websockets
 ######################################################################
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from litellm import arealtime
-
-# from litellm.llms.AzureOpenAI.realtime.handler import AzureOpenAIRealtime
-
-# azure_realtime = AzureOpenAIRealtime()
+from litellm import _arealtime
 
 
 @app.websocket("/v1/realtime")
@@ -4174,7 +4170,7 @@ async def websocket_endpoint(websocket: WebSocket, model: str):
     try:
         llm_call = await route_request(
             data=data,
-            route_type="arealtime",
+            route_type="_arealtime",
             llm_router=llm_router,
             user_model=user_model,
         )

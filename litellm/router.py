@@ -1801,7 +1801,7 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def arealtime(self, model: str, **kwargs):
+    async def _arealtime(self, model: str, **kwargs):
         messages = [{"role": "user", "content": "dummy-text"}]
         try:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
@@ -1830,7 +1830,7 @@ class Router:
             if self.num_retries > 0:
                 kwargs["model"] = model
                 kwargs["messages"] = messages
-                kwargs["original_function"] = self.arealtime
+                kwargs["original_function"] = self._arealtime
                 return self.function_with_retries(**kwargs)
             else:
                 raise e

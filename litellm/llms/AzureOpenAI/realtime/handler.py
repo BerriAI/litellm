@@ -55,8 +55,6 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         url = self._construct_url(api_base, model, api_version)
 
-        # return forward_messages(websocket, url)
-
         try:
             async with websockets.connect(  # type: ignore
                 url,

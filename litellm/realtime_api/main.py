@@ -1,3 +1,5 @@
+"""Abstraction function for OpenAI's realtime API"""
+
 import os
 from typing import Any, Optional
 
@@ -11,7 +13,7 @@ from ..llms.AzureOpenAI.realtime.handler import AzureOpenAIRealtime
 azure_realtime = AzureOpenAIRealtime()
 
 
-async def arealtime(
+async def _arealtime(
     model: str,
     websocket: Any,  # fastapi websocket
     api_base: Optional[str] = None,
@@ -22,6 +24,11 @@ async def arealtime(
     timeout: Optional[float] = None,
     **kwargs,
 ):
+    """
+    Private function to handle the realtime API call.
+
+    For PROXY use only.
+    """
     litellm_params = GenericLiteLLMParams(**kwargs)
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
