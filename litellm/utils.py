@@ -179,7 +179,6 @@ MAX_THREADS = 100
 executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 sentry_sdk_instance = None
 capture_exception = None
-opikLogger = None
 add_breadcrumb = None
 posthog = None
 slack_app = None

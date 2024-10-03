@@ -122,7 +122,6 @@ aispendLogger = None
 berrispendLogger = None
 supabaseClient = None
 liteDebuggerClient = None
-opikLogger = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -185,7 +184,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app, opikLogger
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
     stream_options = None
 
@@ -1326,15 +1325,6 @@ class Logging:
                             print_verbose=print_verbose,
                             callback_func=callback,
                         )
-                    if callback == "opik":
-                        print_verbose("reaches opik for logging!")
-                        opikLogger.log_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            print_verbose=print_verbose,
-                        )
 
                 except Exception as e:
                     print_verbose(
@@ -2028,7 +2018,7 @@ def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, opikLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2128,8 +2118,6 @@ def set_callbacks(callback_list, function_id=None):
                     liteDebuggerClient = LiteDebugger(email=litellm.email)
                 else:
                     liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
-            elif callback == "opik":
-                opikLogger = OpikLogger()
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:

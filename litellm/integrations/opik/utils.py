@@ -85,28 +85,13 @@ def get_opik_config_variable(
     # Return default value if it is not None
     return default_value
 
-def model_response_to_dict(response_obj: ModelResponse) -> Dict:
-    """
-    Convert the ModelResponse to a dictionary.
+def create_usage_object(usage):
+   usage_dict = {}
 
-    Args:
-        response_obj: the ModelResponse from the model vendor, standardized
-
-    Returns a dictionary
-    """
-    return response_obj.to_dict()
-
-def redact_secrets(item):
-    """
-    Recursively redact sensitive information
-    """
-    if isinstance(item, dict):
-        redacted_dict = {}
-        for key, value in item.items():
-            value = redact_secrets(value)
-            if key == "api_key":
-                value = "***REDACTED***"
-            redacted_dict[key] = value
-        return redacted_dict
-    else:
-        return item
+   if usage.completion_tokens is not None:
+      usage_dict["completion_tokens"] = usage.completion_tokens
+   if usage.prompt_tokens is not None:
+      usage_dict["prompt_tokens"] = usage.prompt_tokens
+   if usage.total_tokens is not None:
+      usage_dict["total_tokens"] = usage.total_tokens
+   return usage_dict

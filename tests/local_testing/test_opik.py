@@ -1,162 +1,132 @@
-import asyncio
 import io
 import os
-import pytest
 import sys
+
+sys.path.insert(0, os.path.abspath("../.."))
+
+import asyncio
+import logging
+
+import pytest
+
 import litellm
+from litellm._logging import verbose_logger
+from unittest.mock import AsyncMock
 
-litellm.num_retries = 3
+verbose_logger.setLevel(logging.DEBUG)
 
-OPIK_API_KEY = os.environ.get("OPIK_API_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-
-def get_test_name():
-    return os.environ.get('PYTEST_CURRENT_TEST', "pytest")
+litellm.set_verbose = True
+import time
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(OPENAI_API_KEY is None, reason="OPEN_API_KEY not found in env")
-@pytest.mark.skipif(OPIK_API_KEY is None, reason="OPIK_API_KEY not found in env")
-async def test_opik_with_router():
-    litellm.set_verbose = True
-    litellm.success_callback = ["opik"]
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": OPENAI_API_KEY,
-            },
-        }
-    ]
-    router = litellm.Router(model_list=model_list)
-    response = await router.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "user", "content": "Why is Opik logging and evaluation important?"}
-        ],
-        metadata = {
-            "opik": {
-                "metadata": {
-                    "test_name": get_test_name(),
-                },
-                "tags": ["test"],
-            },
-        },
-    )
-    assert response.usage.prompt_tokens == 16
+async def test_opik_logging_http_request():
+    """
+    - Test that HTTP requests are made to Opik
+    - Traces and spans are batched correctly
+    """
+    try:
+        from litellm.integrations.opik.opik import OpikLogger
 
-@pytest.mark.skipif(ANTHROPIC_API_KEY is None, reason="ANTHROPIC_API_KEY not found in env")
-@pytest.mark.skipif(OPIK_API_KEY is None, reason="OPIK_API_KEY not found in env")
-def test_opik_completion_with_anthropic():
-    litellm.set_verbose = True
-    litellm.success_callback = ["opik"]
-    response = litellm.completion(
-        model="claude-instant-1.2",
-        messages=[{"role": "user", "content": "Why is Opik logging and evaluation important?"}],
-        max_tokens=10,
-        temperature=0.2,
-        metadata = {
-            "opik": {
-                "metadata": {
-                    "test_name": get_test_name(),
-                },
-                "tags": ["test"],
-            },
-        },
-    )
-    assert response.usage.prompt_tokens == 18
+        os.environ["OPIK_URL_OVERRIDE"] = "https://fake.comet.com/opik/api"
+        os.environ["OPIK_API_KEY"] = "anything"
+        os.environ["OPIK_WORKSPACE"] = "anything"
 
-@pytest.mark.skipif(OPENAI_API_KEY is None, reason="OPEN_API_KEY not found in env")
-@pytest.mark.skipif(OPIK_API_KEY is None, reason="OPIK_API_KEY not found in env")
-def test_opik_with_openai():
-    litellm.set_verbose = True
-    litellm.success_callback = ["opik"]
-    response = litellm.completion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Why is Opik logging and evaluation important?"}],
-        max_tokens=10,
-        temperature=0.2,
-        metadata = {
-            "opik": {
-                "metadata": {
-                    "test_name": get_test_name(),
-                },
-                "tags": ["test"],
-            },
-        },
-    )
-    assert response.usage.prompt_tokens == 16
+        # Initialize OpikLogger
+        test_opik_logger = OpikLogger()
 
+        litellm.callbacks = [test_opik_logger]
+        test_opik_logger.batch_size = 12
+        litellm.set_verbose = True
 
-@pytest.mark.skipif(OPENAI_API_KEY is None, reason="OPEN_API_KEY not found in env")
-@pytest.mark.skipif(OPIK_API_KEY is None, reason="OPIK_API_KEY not found in env")
-def test_opik_with_openai_and_track():
-    from opik import track, flush_tracker
-    from opik.opik_context import get_current_span_data, get_current_trace_data
+        # Create a mock for the async_client's post method
+        mock_post = AsyncMock()
+        mock_post.return_value.status_code = 202
+        mock_post.return_value.text = "Accepted"
+        test_opik_logger.async_httpx_client.post = mock_post
 
-    litellm.set_verbose = True
-    litellm.success_callback = ["opik"]
+        # Make multiple calls to ensure we don't hit the batch size
+        for _ in range(5):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
+        await asyncio.sleep(1)
 
-    @track()
-    def complete_function(input):
-        assert get_current_span_data() is not None
-        assert get_current_trace_data() is not None
-        response = litellm.completion(
+        # Check batching of events and that the queue contains 5 trace events and 5 span events
+        assert mock_post.called == False, "HTTP request was made but events should have been batched"
+        assert len(test_opik_logger.log_queue) == 10
+
+        # Now make calls to exceed the batch size
+        for _ in range(3):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
+        
+        # Wait a short time for any asynchronous operations to complete
+        await asyncio.sleep(1)
+
+        # Check that the queue was flushed after exceeding batch size
+        assert len(test_opik_logger.log_queue) < test_opik_logger.batch_size
+
+        # Check that the data has been sent when it goes above the flush interval
+        await asyncio.sleep(test_opik_logger.flush_interval)
+        assert len(test_opik_logger.log_queue) == 0
+
+        # Clean up
+        for cb in litellm.callbacks:
+            if isinstance(cb, OpikLogger):
+                await cb.async_httpx_client.client.aclose()
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="local-only test, to test if everything works fine.")
+async def test_opik_logging():
+    try:
+        from litellm.integrations.opik.opik import OpikLogger
+        
+        # Initialize OpikLogger
+        test_opik_logger = OpikLogger()
+        litellm.callbacks = [test_opik_logger]
+        litellm.set_verbose = True
+
+        # Log a chat completion call
+        response = await litellm.acompletion(
             model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "content": input,
-                    "role": "user"
-                },
-            ],
-            metadata={
-                "opik": {
-                    "current_span_data": get_current_span_data(),
-                    "current_trace_data": get_current_trace_data(),
-                    "tags": ["test"],
-                    "metadata": {
-                        "test_name": get_test_name(),
-                    },
-                },
-            },
+            messages=[{"role": "user", "content": "What LLM are you ?"}],
+            max_tokens=10,
+            temperature=0.2,
+            metadata={"opik": {"custom_field": "custom_value"}}
         )
-        return response.to_dict()
-
-    response = complete_function("Why is Opik logging and evaluation important?")
-    flush_tracker()
-    assert response["usage"]["prompt_tokens"] == 16
-
-@pytest.mark.skipif(OPENAI_API_KEY is None, reason="OPEN_API_KEY not found in env")
-@pytest.mark.skipif(OPIK_API_KEY is None, reason="OPIK_API_KEY not found in env")
-def test_opik_with_streaming_openai():
-    from opik import track, flush_tracker
-    from opik.opik_context import get_current_trace_data, get_current_span_data
-
-    litellm.set_verbose = True
-    litellm.success_callback = ["opik"]
-
-    @track()
-    def streaming_function(input):
-        messages = [{"role": "user", "content": input}]
-        response = litellm.completion(
+        print("Non-streaming response:", response)
+        
+        # Log a streaming completion call
+        stream_response = await litellm.acompletion(
             model="gpt-3.5-turbo",
-            messages=messages,
-            metadata = {
-                "opik": {
-                    "current_span_data": get_current_span_data(),
-                    "current_trace_data": get_current_trace_data(),
-                    "metadata": {
-                        "test_name": get_test_name(),
-                    },
-                    "tags": ["test"],
-                },
-            },
+            messages=[{"role": "user", "content": "Stream = True - What llm are you ?"}],
+            max_tokens=10,
+            temperature=0.2,
             stream=True,
+            metadata={"opik": {"custom_field": "custom_value"}}
         )
-        return response
+        print("Streaming response:")
+        async for chunk in stream_response:
+            print(chunk.choices[0].delta.content, end='', flush=True)
+        print()  # New line after streaming response
 
-    response = streaming_function("Why is Opik logging and evaluation important?")
-    chunks = list(response)
-    flush_tracker()
-    assert len(chunks) > 10
+        await asyncio.sleep(2)
+
+        assert len(test_opik_logger.log_queue) == 4
+        
+        await asyncio.sleep(test_opik_logger.flush_interval + 1)
+        assert len(test_opik_logger.log_queue) == 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
