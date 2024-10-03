@@ -1,0 +1,104 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.4, pytest-8.3.2, pluggy-1.5.0 -- /Users/krrishdholakia/Documents/litellm/myenv/bin/python3.11
+cachedir: .pytest_cache
+rootdir: /Users/krrishdholakia/Documents/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.23.8, respx-0.21.1, anyio-4.6.0
+asyncio: mode=Mode.STRICT
+collecting ... collected 1 item
+
+test_function_calling.py::test_aaparallel_function_call[claude-3-haiku-20240307] <module 'litellm' from '/Users/krrishdholakia/Documents/litellm/litellm/__init__.py'>
+
+
+[92mRequest to litellm:[0m
+[92mlitellm.completion(model='claude-3-haiku-20240307', messages=[{'role': 'user', 'content': "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"}], tools=[{'type': 'function', 'function': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}], tool_choice='auto')[0m
+
+
+SYNC kwargs[caching]: False; litellm.cache: None; kwargs.get('cache')['no-cache']: False
+Final returned optional params: {'tools': [{'type': 'function', 'function': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}], 'tool_choice': {'type': 'auto'}}
+optional_params: {'tools': [{'type': 'function', 'function': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}], 'tool_choice': {'type': 'auto'}}
+SENT optional_params: {'tools': [{'type': 'function', 'function': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}], 'tool_choice': {'type': 'auto'}, 'max_tokens': 4096}
+tool: {'type': 'function', 'function': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}
+[92m
+
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.anthropic.com/v1/messages \
+-H 'accept: *****' -H 'anthropic-version: *****' -H 'content-type: *****' -H 'x-api-key: sk-ant-api03-bJf1M8qp-JDptRcZRE5ve5efAfSIaL5u-SZ9vItIkvuFcV5cUsd********************************************' -H 'anthropic-beta: *****' \
+-d '{'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"}]}], 'tools': [{'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'input_schema': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}], 'tool_choice': {'type': 'auto'}, 'max_tokens': 4096, 'model': 'claude-3-haiku-20240307'}'
+[0m
+
+_is_function_call: False
+RAW RESPONSE:
+{"id":"msg_01HRugqzL4WmcxMmbvDheTph","type":"message","role":"assistant","model":"claude-3-haiku-20240307","content":[{"type":"text","text":"Okay, let's check the current weather in those three cities:"},{"type":"tool_use","id":"toolu_016U6G3kpxjHSiJLwVCrrScz","name":"get_current_weather","input":{"location":"San Francisco","unit":"celsius"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":379,"output_tokens":87}}
+
+
+raw model_response: {"id":"msg_01HRugqzL4WmcxMmbvDheTph","type":"message","role":"assistant","model":"claude-3-haiku-20240307","content":[{"type":"text","text":"Okay, let's check the current weather in those three cities:"},{"type":"tool_use","id":"toolu_016U6G3kpxjHSiJLwVCrrScz","name":"get_current_weather","input":{"location":"San Francisco","unit":"celsius"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":379,"output_tokens":87}}
+Logging Details LiteLLM-Success Call: Cache_hit=None
+Looking up model=claude-3-haiku-20240307 in model_cost_map
+Looking up model=claude-3-haiku-20240307 in model_cost_map
+Response
+ ModelResponse(id='chatcmpl-7222f6c2-962a-4776-8639-576723466cb7', choices=[Choices(finish_reason='tool_calls', index=0, message=Message(content="Okay, let's check the current weather in those three cities:", role='assistant', tool_calls=[ChatCompletionMessageToolCall(index=1, function=Function(arguments='{"location": "San Francisco", "unit": "celsius"}', name='get_current_weather'), id='toolu_016U6G3kpxjHSiJLwVCrrScz', type='function')], function_call=None))], created=1727897483, model='claude-3-haiku-20240307', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=87, prompt_tokens=379, total_tokens=466, completion_tokens_details=None))
+length of tool calls 1
+Expecting there to be 3 tool calls
+tool_calls: [ChatCompletionMessageToolCall(index=1, function=Function(arguments='{"location": "San Francisco", "unit": "celsius"}', name='get_current_weather'), id='toolu_016U6G3kpxjHSiJLwVCrrScz', type='function')]
+Response message
+ Message(content="Okay, let's check the current weather in those three cities:", role='assistant', tool_calls=[ChatCompletionMessageToolCall(index=1, function=Function(arguments='{"location": "San Francisco", "unit": "celsius"}', name='get_current_weather'), id='toolu_016U6G3kpxjHSiJLwVCrrScz', type='function')], function_call=None)
+messages: [{'role': 'user', 'content': "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"}, Message(content="Okay, let's check the current weather in those three cities:", role='assistant', tool_calls=[ChatCompletionMessageToolCall(index=1, function=Function(arguments='{"location": "San Francisco", "unit": "celsius"}', name='get_current_weather'), id='toolu_016U6G3kpxjHSiJLwVCrrScz', type='function')], function_call=None), {'tool_call_id': 'toolu_016U6G3kpxjHSiJLwVCrrScz', 'role': 'tool', 'name': 'get_current_weather', 'content': '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}]
+
+
+[92mRequest to litellm:[0m
+[92mlitellm.completion(model='claude-3-haiku-20240307', messages=[{'role': 'user', 'content': "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"}, Message(content="Okay, let's check the current weather in those three cities:", role='assistant', tool_calls=[ChatCompletionMessageToolCall(index=1, function=Function(arguments='{"location": "San Francisco", "unit": "celsius"}', name='get_current_weather'), id='toolu_016U6G3kpxjHSiJLwVCrrScz', type='function')], function_call=None), {'tool_call_id': 'toolu_016U6G3kpxjHSiJLwVCrrScz', 'role': 'tool', 'name': 'get_current_weather', 'content': '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}], temperature=0.2, seed=22, drop_params=True)[0m
+
+
+SYNC kwargs[caching]: False; litellm.cache: None; kwargs.get('cache')['no-cache']: False
+Final returned optional params: {'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'dummy-tool', 'description': '', 'parameters': {'type': 'object', 'properties': {}}}}]}
+optional_params: {'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'dummy-tool', 'description': '', 'parameters': {'type': 'object', 'properties': {}}}}]}
+SENT optional_params: {'temperature': 0.2, 'tools': [{'type': 'function', 'function': {'name': 'dummy-tool', 'description': '', 'parameters': {'type': 'object', 'properties': {}}}}], 'max_tokens': 4096}
+tool: {'type': 'function', 'function': {'name': 'dummy-tool', 'description': '', 'parameters': {'type': 'object', 'properties': {}}}}
+[92m
+
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.anthropic.com/v1/messages \
+-H 'accept: *****' -H 'anthropic-version: *****' -H 'content-type: *****' -H 'x-api-key: sk-ant-api03-bJf1M8qp-JDptRcZRE5ve5efAfSIaL5u-SZ9vItIkvuFcV5cUsd********************************************' -H 'anthropic-beta: *****' \
+-d '{'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"}]}, {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'toolu_016U6G3kpxjHSiJLwVCrrScz', 'name': 'get_current_weather', 'input': {'location': 'San Francisco', 'unit': 'celsius'}}]}, {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 'toolu_016U6G3kpxjHSiJLwVCrrScz', 'content': '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}]}], 'temperature': 0.2, 'tools': [{'name': 'dummy-tool', 'description': '', 'input_schema': {'type': 'object', 'properties': {}}}], 'max_tokens': 4096, 'model': 'claude-3-haiku-20240307'}'
+[0m
+
+_is_function_call: False
+RAW RESPONSE:
+{"id":"msg_01Wp8NVScugz6yAGsmB5trpZ","type":"message","role":"assistant","model":"claude-3-haiku-20240307","content":[{"type":"text","text":"The current weather in San Francisco is 72°F (22°C)."},{"type":"tool_use","id":"toolu_01HTXEYDX4MspM76STtJqs1n","name":"get_current_weather","input":{"location":"Tokyo","unit":"celsius"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":426,"output_tokens":90}}
+
+
+raw model_response: {"id":"msg_01Wp8NVScugz6yAGsmB5trpZ","type":"message","role":"assistant","model":"claude-3-haiku-20240307","content":[{"type":"text","text":"The current weather in San Francisco is 72°F (22°C)."},{"type":"tool_use","id":"toolu_01HTXEYDX4MspM76STtJqs1n","name":"get_current_weather","input":{"location":"Tokyo","unit":"celsius"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":426,"output_tokens":90}}
+Logging Details LiteLLM-Success Call: Cache_hit=None
+Looking up model=claude-3-haiku-20240307 in model_cost_map
+Looking up model=claude-3-haiku-20240307 in model_cost_map
+second response
+ ModelResponse(id='chatcmpl-c4ed5c25-ba7c-49e5-a6be-5720ab25fff0', choices=[Choices(finish_reason='tool_calls', index=0, message=Message(content='The current weather in San Francisco is 72°F (22°C).', role='assistant', tool_calls=[ChatCompletionMessageToolCall(index=1, function=Function(arguments='{"location": "Tokyo", "unit": "celsius"}', name='get_current_weather'), id='toolu_01HTXEYDX4MspM76STtJqs1n', type='function')], function_call=None))], created=1727897484, model='claude-3-haiku-20240307', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=90, prompt_tokens=426, total_tokens=516, completion_tokens_details=None))
+PASSED
+
+=============================== warnings summary ===============================
+../../myenv/lib/python3.11/site-packages/pydantic/_internal/_config.py:284
+  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+../../litellm/utils.py:17
+  /Users/krrishdholakia/Documents/litellm/litellm/utils.py:17: DeprecationWarning: 'imghdr' is deprecated and slated for removal in Python 3.13
+    import imghdr
+
+../../litellm/utils.py:124
+  /Users/krrishdholakia/Documents/litellm/litellm/utils.py:124: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
+    with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
+
+test_function_calling.py:56
+  /Users/krrishdholakia/Documents/litellm/tests/local_testing/test_function_calling.py:56: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=3, delay=1)
+
+tests/local_testing/test_function_calling.py::test_aaparallel_function_call[claude-3-haiku-20240307]
+tests/local_testing/test_function_calling.py::test_aaparallel_function_call[claude-3-haiku-20240307]
+  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.11/site-packages/httpx/_content.py:202: DeprecationWarning: Use 'content=<...>' to upload raw bytes/text content.
+    warnings.warn(message, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 1 passed, 6 warnings in 1.89s =========================
