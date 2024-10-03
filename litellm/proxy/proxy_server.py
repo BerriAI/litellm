@@ -4165,16 +4165,27 @@ async def websocket_endpoint(websocket: WebSocket, model: str):
 
     await websocket.accept()
 
-    await arealtime(
-        model="azure/gpt-4o-realtime-preview",
-        websocket=websocket,
-        api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
-        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-        api_version="2024-10-01-preview",
-        azure_ad_token=None,
-        client=None,
-        timeout=None,
-    )
+    data = {
+        "model": model,
+        "websocket": websocket,
+    }
+
+    ### ROUTE THE REQUEST ###
+    try:
+        llm_call = await route_request(
+            data=data,
+            route_type="arealtime",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+
+        await llm_call
+    except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        verbose_proxy_logger.exception("Invalid status code")
+        await websocket.close(code=e.status_code, reason="Invalid status code")
+    except Exception:
+        verbose_proxy_logger.exception("Internal server error")
+        await websocket.close(code=1011, reason="Internal server error")
 
 
 ######################################################################
