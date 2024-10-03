@@ -1824,7 +1824,7 @@ class Router:
                 elif k == "metadata":
                     kwargs[k].update(v)
 
-            return await litellm.arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
+            return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
         except Exception as e:
             traceback.print_exc()
             if self.num_retries > 0:
