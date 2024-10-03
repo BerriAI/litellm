@@ -4153,22 +4153,11 @@ import websockets
 ######################################################################
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from litellm.llms.AzureOpenAI.realtime.handler import AzureOpenAIRealtime
+from litellm import arealtime
 
-BACKEND_WS_URL = "wss://my-endpoint-sweden-berri992.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
+# from litellm.llms.AzureOpenAI.realtime.handler import AzureOpenAIRealtime
 
-azure_realtime = AzureOpenAIRealtime()
-
-
-async def forward_messages(
-    client_ws: WebSocket, backend_ws: websockets.WebSocketClientProtocol  # type: ignore
-):
-    try:
-        while True:
-            message = await backend_ws.recv()
-            await client_ws.send_text(message)
-    except websockets.exceptions.ConnectionClosed:  # type: ignore
-        pass
+# azure_realtime = AzureOpenAIRealtime()
 
 
 @app.websocket("/v1/realtime")
@@ -4176,8 +4165,8 @@ async def websocket_endpoint(websocket: WebSocket, model: str):
 
     await websocket.accept()
 
-    await azure_realtime.async_realtime(
-        model="gpt-4o-realtime-preview",
+    await arealtime(
+        model="azure/gpt-4o-realtime-preview",
         websocket=websocket,
         api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
         api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
