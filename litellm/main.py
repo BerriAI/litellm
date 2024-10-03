@@ -106,11 +106,13 @@ from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
     map_system_message_pt,
+    ollama_pt,
     prompt_factory,
     stringify_json_tool_call_content,
 )
 from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
+from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
 from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
@@ -134,8 +136,8 @@ from .llms.vertex_ai_and_google_ai_studio.text_to_speech.text_to_speech_handler 
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings import (
-    embedding_handler as vertex_ai_embedding_handler,
+from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
+    VertexEmbedding,
 )
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
@@ -150,7 +152,6 @@ from .types.utils import (
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     Choices,
-    CustomStreamWrapper,
     EmbeddingResponse,
     ImageResponse,
     Message,
@@ -159,8 +160,6 @@ from litellm.utils import (
     TextCompletionResponse,
     TextCompletionStreamWrapper,
     TranscriptionResponse,
-    get_secret,
-    read_config_args,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -170,6 +169,7 @@ openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
+together_ai_text_completions = TogetherAITextCompletion()
 azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
@@ -185,6 +185,7 @@ bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 vertex_chat_completion = VertexLLM()
+vertex_embedding = VertexEmbedding()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
 vertex_image_generation = VertexImageGeneration()
 google_batch_embeddings = GoogleBatchEmbeddings()
@@ -213,7 +214,7 @@ class LiteLLM:
 class Chat:
     def __init__(self, params, router_obj: Optional[Any]):
         self.params = params
-        if self.params.get("acompletion", False) == True:
+        if self.params.get("acompletion", False) is True:
             self.params.pop("acompletion")
             self.completions: Union[AsyncCompletions, Completions] = AsyncCompletions(
                 self.params, router_obj=router_obj
@@ -836,10 +837,10 @@ def completion(
         model_response = ModelResponse()
         setattr(model_response, "usage", litellm.Usage())
         if (
-            kwargs.get("azure", False) == True
+            kwargs.get("azure", False) is True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
             custom_llm_provider = "azure"
-        if deployment_id != None:  # azure llms
+        if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
@@ -1155,7 +1156,7 @@ def completion(
                 client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1277,7 +1278,7 @@ def completion(
             if (
                 len(messages) > 0
                 and "content" in messages[0]
-                and type(messages[0]["content"]) == list
+                and isinstance(messages[0]["content"], list)
             ):
                 # text-davinci-003 can accept a string or array, if it's an array, assume the array is set in messages[0]['content']
                 # https://platform.openai.com/docs/api-reference/completions/create
@@ -1286,33 +1287,50 @@ def completion(
                 prompt = " ".join([message["content"] for message in messages])  # type: ignore
 
             ## COMPLETION CALL
-            _response = openai_text_completions.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                client=client,  # pass AsyncOpenAI, OpenAI client
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                timeout=timeout,  # type: ignore
-            )
+            if custom_llm_provider == "together_ai":
+                _response = together_ai_text_completions.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                )
+            else:
+                _response = openai_text_completions.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                )
 
             if (
-                optional_params.get("stream", False) == False
-                and acompletion == False
-                and text_completion == False
+                optional_params.get("stream", False) is False
+                and acompletion is False
+                and text_completion is False
             ):
                 # convert to chat completion response
                 _response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                     response_object=_response, model_response_object=model_response
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1518,7 +1536,7 @@ def completion(
                 acompletion=acompletion,
             )
 
-            if optional_params.get("stream", False) == True:
+            if optional_params.get("stream", False) is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1565,7 +1583,7 @@ def completion(
                 custom_prompt_dict=custom_prompt_dict,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 ## LOGGING
                 logging.post_call(
@@ -1574,7 +1592,7 @@ def completion(
                     original_response=model_response,
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1653,7 +1671,7 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1690,7 +1708,7 @@ def completion(
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     response,
@@ -1699,7 +1717,7 @@ def completion(
                     logging_obj=logging,
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1739,7 +1757,7 @@ def completion(
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1787,7 +1805,7 @@ def completion(
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1835,7 +1853,7 @@ def completion(
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1874,7 +1892,7 @@ def completion(
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -1915,7 +1933,7 @@ def completion(
             )
             if (
                 "stream" in optional_params
-                and optional_params["stream"] == True
+                and optional_params["stream"] is True
                 and acompletion is False
             ):
                 # don't try to access stream object,
@@ -1942,7 +1960,7 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -2094,7 +2112,7 @@ def completion(
                 logging_obj=logging,
             )
             # fake palm streaming
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # fake streaming for palm
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
@@ -2389,7 +2407,7 @@ def completion(
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response,
@@ -2526,7 +2544,7 @@ def completion(
             )
             if (
                 "stream" in optional_params
-                and optional_params["stream"] == True
+                and optional_params["stream"] is True
                 and not isinstance(response, CustomStreamWrapper)
             ):
                 # don't try to access stream object,
@@ -2562,7 +2580,7 @@ def completion(
             )
 
             if (
-                "stream" in optional_params and optional_params["stream"] == True
+                "stream" in optional_params and optional_params["stream"] is True
             ):  ## [BETA]
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
@@ -2586,38 +2604,38 @@ def completion(
             if model in custom_prompt_dict:
                 # check if the model has a registered custom prompt
                 model_prompt_details = custom_prompt_dict[model]
-                prompt = custom_prompt(
+                ollama_prompt = custom_prompt(
                     role_dict=model_prompt_details["roles"],
                     initial_prompt_value=model_prompt_details["initial_prompt_value"],
                     final_prompt_value=model_prompt_details["final_prompt_value"],
                     messages=messages,
                 )
             else:
-                prompt = prompt_factory(
-                    model=model,
-                    messages=messages,
-                    custom_llm_provider=custom_llm_provider,
-                )
-                if isinstance(prompt, dict):
+                modified_prompt = ollama_pt(model=model, messages=messages)
+                if isinstance(modified_prompt, dict):
                     # for multimode models - ollama/llava prompt_factory returns a dict {
                     #     "prompt": prompt,
                     #     "images": images
                     # }
-                    prompt, images = prompt["prompt"], prompt["images"]
+                    ollama_prompt, images = (
+                        modified_prompt["prompt"],
+                        modified_prompt["images"],
+                    )
                     optional_params["images"] = images
-
+                else:
+                    ollama_prompt = modified_prompt
             ## LOGGING
             generator = ollama.get_ollama_response(
                 api_base=api_base,
                 model=model,
-                prompt=prompt,
+                prompt=ollama_prompt,
                 optional_params=optional_params,
                 logging_obj=logging,
                 acompletion=acompletion,
                 model_response=model_response,
                 encoding=encoding,
             )
-            if acompletion is True or optional_params.get("stream", False) == True:
+            if acompletion is True or optional_params.get("stream", False) is True:
                 return generator
 
             response = generator
@@ -2700,7 +2718,7 @@ def completion(
                 api_key=api_key,
                 logging_obj=logging,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     response,
@@ -2709,7 +2727,7 @@ def completion(
                     logging_obj=logging,
                 )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -2742,7 +2760,7 @@ def completion(
                 logging_obj=logging,
             )
             if inspect.isgenerator(model_response) or (
-                "stream" in optional_params and optional_params["stream"] == True
+                "stream" in optional_params and optional_params["stream"] is True
             ):
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
@@ -2770,7 +2788,7 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging,
             )
-            if stream == True:  ## [BETA]
+            if stream is True:  ## [BETA]
                 # Fake streaming for petals
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
@@ -2785,7 +2803,7 @@ def completion(
             import requests
 
             url = litellm.api_base or api_base or ""
-            if url == None or url == "":
+            if url is None or url == "":
                 raise ValueError(
                     "api_base not set. Set api_base or litellm.api_base for custom endpoints"
                 )
@@ -2980,7 +2998,7 @@ def batch_completion(
     deployment_id=None,
     request_timeout: Optional[int] = None,
     timeout: Optional[int] = 600,
-    max_workers:Optional[int]= 100,
+    max_workers: Optional[int] = 100,
     # Optional liteLLM function params
     **kwargs,
 ):
@@ -3144,10 +3162,10 @@ def batch_completion_models(*args, **kwargs):
                     try:
                         result = future.result()
                         return result
-                    except Exception as e:
+                    except Exception:
                         # if model 1 fails, continue with response from model 2, model3
                         print_verbose(
-                            f"\n\ngot an exception, ignoring, removing from futures"
+                            "\n\ngot an exception, ignoring, removing from futures"
                         )
                         print_verbose(futures)
                         new_futures = {}
@@ -3188,9 +3206,6 @@ def batch_completion_models_all_responses(*args, **kwargs):
     import concurrent.futures
 
     # ANSI escape codes for colored output
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    RESET = "\033[0m"
 
     if "model" in kwargs:
         kwargs.pop("model")
@@ -3519,7 +3534,7 @@ def embedding(
 
             if api_base is None:
                 raise ValueError(
-                    f"No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env"
+                    "No API Base provided for Azure OpenAI LLM provider. Set 'AZURE_API_BASE' in .env"
                 )
 
             ## EMBEDDING CALL
@@ -3711,21 +3726,21 @@ def embedding(
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
                 or litellm.vertex_project
-                or get_secret("VERTEXAI_PROJECT")
-                or get_secret("VERTEX_PROJECT")
+                or get_secret_str("VERTEXAI_PROJECT")
+                or get_secret_str("VERTEX_PROJECT")
             )
             vertex_ai_location = (
                 optional_params.pop("vertex_location", None)
                 or optional_params.pop("vertex_ai_location", None)
                 or litellm.vertex_location
-                or get_secret("VERTEXAI_LOCATION")
-                or get_secret("VERTEX_LOCATION")
+                or get_secret_str("VERTEXAI_LOCATION")
+                or get_secret_str("VERTEX_LOCATION")
             )
             vertex_credentials = (
                 optional_params.pop("vertex_credentials", None)
                 or optional_params.pop("vertex_ai_credentials", None)
-                or get_secret("VERTEXAI_CREDENTIALS")
-                or get_secret("VERTEX_CREDENTIALS")
+                or get_secret_str("VERTEXAI_CREDENTIALS")
+                or get_secret_str("VERTEX_CREDENTIALS")
             )
 
             if (
@@ -3750,7 +3765,7 @@ def embedding(
                     custom_llm_provider="vertex_ai",
                 )
             else:
-                response = vertex_ai_embedding_handler.embedding(
+                response = vertex_embedding.embedding(
                     model=model,
                     input=input,
                     encoding=encoding,
@@ -3760,6 +3775,8 @@ def embedding(
                     vertex_project=vertex_ai_project,
                     vertex_location=vertex_ai_location,
                     vertex_credentials=vertex_credentials,
+                    custom_llm_provider="vertex_ai",
+                    timeout=timeout,
                     aembedding=aembedding,
                     print_verbose=print_verbose,
                 )
@@ -4103,7 +4120,6 @@ def text_completion(
     *args,
     **kwargs,
 ):
-    global print_verbose
     import copy
 
     """
@@ -4133,7 +4149,7 @@ def text_completion(
         Your example of how to use this function goes here.
     """
     if "engine" in kwargs:
-        if model == None:
+        if model is None:
             # only use engine when model not passed
             model = kwargs["engine"]
         kwargs.pop("engine")
@@ -4186,18 +4202,18 @@ def text_completion(
 
     if custom_llm_provider == "huggingface":
         # if echo == True, for TGI llms we need to set top_n_tokens to 3
-        if echo == True:
+        if echo is True:
             # for tgi llms
             if "top_n_tokens" not in kwargs:
                 kwargs["top_n_tokens"] = 3
 
         # processing prompt - users can pass raw tokens to OpenAI Completion()
-        if type(prompt) == list:
+        if isinstance(prompt, list):
             import concurrent.futures
 
             tokenizer = tiktoken.encoding_for_model("text-davinci-003")
             ## if it's a 2d list - each element in the list is a text_completion() request
-            if len(prompt) > 0 and type(prompt[0]) == list:
+            if len(prompt) > 0 and isinstance(prompt[0], list):
                 responses = [None for x in prompt]  # init responses
 
                 def process_prompt(i, individual_prompt):
@@ -4296,7 +4312,7 @@ def text_completion(
         raw_response = response._hidden_params.get("original_response", None)
         transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
     except Exception as e:
-        print_verbose(f"LiteLLM non blocking exception: {e}")
+        verbose_logger.exception(f"LiteLLM non blocking exception: {e}")
 
     if isinstance(response, TextCompletionResponse):
         return response
@@ -4810,12 +4826,12 @@ def transcription(
     Allows router to load balance between them
     """
     atranscription = kwargs.get("atranscription", False)
-    litellm_call_id = kwargs.get("litellm_call_id", None)
-    logger_fn = kwargs.get("logger_fn", None)
-    proxy_server_request = kwargs.get("proxy_server_request", None)
-    model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
-    tags = kwargs.pop("tags", [])
+    kwargs.get("litellm_call_id", None)
+    kwargs.get("logger_fn", None)
+    kwargs.get("proxy_server_request", None)
+    kwargs.get("model_info", None)
+    kwargs.get("metadata", {})
+    kwargs.pop("tags", [])
 
     drop_params = kwargs.get("drop_params", None)
     client: Optional[
@@ -4993,7 +5009,7 @@ def speech(
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
-    tags = kwargs.pop("tags", [])
+    kwargs.pop("tags", [])
 
     optional_params = {}
     if response_format is not None:
@@ -5342,12 +5358,12 @@ def print_verbose(print_statement):
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
-    except:
+    except Exception:
         pass
 
 
 def config_completion(**kwargs):
-    if litellm.config_path != None:
+    if litellm.config_path is not None:
         config_args = read_config_args(litellm.config_path)
         # overwrite any args passed in with config args
         return completion(**kwargs, **config_args)
@@ -5405,16 +5421,18 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     response["choices"][0]["text"] = combined_content
 
     if len(combined_content) > 0:
-        completion_output = combined_content
+        pass
     else:
-        completion_output = ""
+        pass
     # # Update usage information if needed
     try:
         response["usage"]["prompt_tokens"] = token_counter(
             model=model, messages=messages
         )
-    except:  # don't allow this failing to block a complete streaming response from being returned
-        print_verbose(f"token_counter failed, assuming prompt tokens is 0")
+    except (
+        Exception
+    ):  # don't allow this failing to block a complete streaming response from being returned
+        print_verbose("token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(
         model=model,

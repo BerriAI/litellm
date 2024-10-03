@@ -306,6 +306,7 @@ const sidebars = {
         "migration_policy",
         "contributing",
         "proxy/pii_masking",
+        "extras/code_quality",
         "rules",
         "proxy_server",
         {

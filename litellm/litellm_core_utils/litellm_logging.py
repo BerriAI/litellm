@@ -40,6 +40,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardCallbackDynamicParams,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
@@ -52,18 +53,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     _get_base_model_from_metadata,
-    add_breadcrumb,
-    capture_exception,
-    customLogger,
-    liteDebuggerClient,
-    logfireLogger,
-    lunaryLogger,
     print_verbose,
-    prometheusLogger,
     prompt_token_calculator,
-    promptLayerLogger,
-    supabaseClient,
-    weightsBiasesLogger,
 )
 
 from ..integrations.aispend import AISpendLogger
@@ -71,7 +62,6 @@ from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
-from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -211,9 +201,7 @@ class Logging:
         dynamic_success_callbacks=None,
         dynamic_failure_callbacks=None,
         dynamic_async_success_callbacks=None,
-        langfuse_public_key=None,
-        langfuse_secret=None,
-        langfuse_host=None,
+        kwargs: Optional[Dict] = None,
     ):
         if messages is not None:
             if isinstance(messages, str):
@@ -236,10 +224,14 @@ class Logging:
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
-        self.streaming_chunks = []  # for generating complete stream response
-        self.sync_streaming_chunks = []  # for generating complete stream response
-        self.model_call_details = {}
-        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
+        self.streaming_chunks: List[Any] = []  # for generating complete stream response
+        self.sync_streaming_chunks: List[Any] = (
+            []
+        )  # for generating complete stream response
+        self.model_call_details: Dict[Any, Any] = {}
+        self.dynamic_input_callbacks: List[Any] = (
+            []
+        )  # [TODO] callbacks set for just that call
         self.dynamic_failure_callbacks = dynamic_failure_callbacks
         self.dynamic_success_callbacks = (
             dynamic_success_callbacks  # callbacks set for just that call
@@ -247,12 +239,26 @@ class Logging:
         self.dynamic_async_success_callbacks = (
             dynamic_async_success_callbacks  # callbacks set for just that call
         )
-        ## DYNAMIC LANGFUSE KEYS ##
-        self.langfuse_public_key = langfuse_public_key
-        self.langfuse_secret = langfuse_secret
-        self.langfuse_host = langfuse_host
+        ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
+        self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
+            self.initialize_standard_callback_dynamic_params(kwargs)
+        )
         ## TIME TO FIRST TOKEN LOGGING ##
+
         self.completion_start_time: Optional[datetime.datetime] = None
+
+    def initialize_standard_callback_dynamic_params(
+        self, kwargs: Optional[Dict] = None
+    ) -> StandardCallbackDynamicParams:
+        standard_callback_dynamic_params = StandardCallbackDynamicParams()
+        if kwargs:
+            _supported_callback_params = (
+                StandardCallbackDynamicParams.__annotations__.keys()
+            )
+            for param in _supported_callback_params:
+                if param in kwargs:
+                    standard_callback_dynamic_params[param] = kwargs.pop(param)  # type: ignore
+        return standard_callback_dynamic_params
 
     def update_environment_variables(
         self, model, user, optional_params, litellm_params, **additional_params
@@ -275,6 +281,7 @@ class Logging:
             "call_type": str(self.call_type),
             "litellm_call_id": self.litellm_call_id,
             "completion_start_time": self.completion_start_time,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
             **self.optional_params,
             **additional_params,
         }
@@ -423,7 +430,7 @@ class Logging:
                     elif callback == "sentry" and add_breadcrumb:
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -528,7 +535,7 @@ class Logging:
                         verbose_logger.debug("reaches sentry breadcrumbing")
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -1010,23 +1017,46 @@ class Logging:
                         temp_langfuse_logger = langFuseLogger
                         if langFuseLogger is None or (
                             (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_secret is not None
-                                and self.langfuse_secret != langFuseLogger.secret_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                )
+                                != langFuseLogger.secret_key
                             )
                             or (
-                                self.langfuse_host is not None
-                                and self.langfuse_host != langFuseLogger.langfuse_host
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                != langFuseLogger.langfuse_host
                             )
                         ):
                             credentials = {
-                                "langfuse_public_key": self.langfuse_public_key,
-                                "langfuse_secret": self.langfuse_secret,
-                                "langfuse_host": self.langfuse_host,
+                                "langfuse_public_key": self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                ),
+                                "langfuse_secret": self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                ),
+                                "langfuse_host": self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                ),
                             }
                             temp_langfuse_logger = (
                                 in_memory_dynamic_logger_cache.get_cache(
@@ -1035,9 +1065,15 @@ class Logging:
                             )
                             if temp_langfuse_logger is None:
                                 temp_langfuse_logger = LangFuseLogger(
-                                    langfuse_public_key=self.langfuse_public_key,
-                                    langfuse_secret=self.langfuse_secret,
-                                    langfuse_host=self.langfuse_host,
+                                    langfuse_public_key=self.standard_callback_dynamic_params.get(
+                                        "langfuse_public_key"
+                                    ),
+                                    langfuse_secret=self.standard_callback_dynamic_params.get(
+                                        "langfuse_secret"
+                                    ),
+                                    langfuse_host=self.standard_callback_dynamic_params.get(
+                                        "langfuse_host"
+                                    ),
                                 )
                                 in_memory_dynamic_logger_cache.set_cache(
                                     credentials=credentials,
@@ -1326,7 +1362,7 @@ class Logging:
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
-                            f"success callbacks: Running Custom Callback Function"
+                            "success callbacks: Running Custom Callback Function"
                         )
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1400,7 +1436,7 @@ class Logging:
                     self.model_call_details["response_cost"] = 0.0
                 else:
                     # check if base_model set on azure
-                    base_model = _get_base_model_from_metadata(
+                    _get_base_model_from_metadata(
                         model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
@@ -1483,7 +1519,7 @@ class Logging:
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) == True:
+            if litellm_params.get("no-log", False) is True:
                 # proxy cost tracking cal backs should run
                 if not (
                     isinstance(callback, CustomLogger)
@@ -1492,7 +1528,7 @@ class Logging:
                     print_verbose("no-log request, skipping logging")
                     continue
             try:
-                if kwargs.get("no-log", False) == True:
+                if kwargs.get("no-log", False) is True:
                     print_verbose("no-log request, skipping logging")
                     continue
                 if (
@@ -1641,7 +1677,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except Exception as e:
+            except Exception:
                 verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
@@ -1849,24 +1885,46 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if langFuseLogger is None or (
                             (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_host is not None
-                                and self.langfuse_host != langFuseLogger.langfuse_host
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                != langFuseLogger.langfuse_host
                             )
                         ):
                             langFuseLogger = LangFuseLogger(
-                                langfuse_public_key=self.langfuse_public_key,
-                                langfuse_secret=self.langfuse_secret,
-                                langfuse_host=self.langfuse_host,
+                                langfuse_public_key=self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                ),
+                                langfuse_secret=self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                ),
+                                langfuse_host=self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                ),
                             )
                         _response = langFuseLogger.log_event(
                             start_time=start_time,
@@ -2003,22 +2061,34 @@ class Logging:
         if service_name == "langfuse":
             if langFuseLogger is None or (
                 (
-                    self.langfuse_public_key is not None
-                    and self.langfuse_public_key != langFuseLogger.public_key
+                    self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    != langFuseLogger.public_key
                 )
                 or (
-                    self.langfuse_public_key is not None
-                    and self.langfuse_public_key != langFuseLogger.public_key
+                    self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    != langFuseLogger.public_key
                 )
                 or (
-                    self.langfuse_host is not None
-                    and self.langfuse_host != langFuseLogger.langfuse_host
+                    self.standard_callback_dynamic_params.get("langfuse_host")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_host")
+                    != langFuseLogger.langfuse_host
                 )
             ):
                 return LangFuseLogger(
-                    langfuse_public_key=self.langfuse_public_key,
-                    langfuse_secret=self.langfuse_secret,
-                    langfuse_host=self.langfuse_host,
+                    langfuse_public_key=self.standard_callback_dynamic_params.get(
+                        "langfuse_public_key"
+                    ),
+                    langfuse_secret=self.standard_callback_dynamic_params.get(
+                        "langfuse_secret"
+                    ),
+                    langfuse_host=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    ),
                 )
             return langFuseLogger
 
@@ -2433,7 +2503,7 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         usage = response_obj.get("usage", None) or {}
-        if type(usage) == litellm.Usage:
+        if type(usage) is litellm.Usage:
             usage = dict(usage)
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
@@ -2656,3 +2726,11 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         litellm_params["metadata"] = metadata
 
     return litellm_params
+
+
+# integration helper function
+def modify_integration(integration_name, integration_params):
+    global supabaseClient
+    if integration_name == "supabase":
+        if "table_name" in integration_params:
+            Supabase.supabase_table_name = integration_params["table_name"]

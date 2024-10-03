@@ -741,7 +741,7 @@ async def test_async_fallbacks_max_retries_per_request():
     try:
         try:
             response = await router.acompletion(**kwargs, stream=True)
-        except:
+        except Exception:
             pass
         print(f"customHandler.previous_models: {customHandler.previous_models}")
         await asyncio.sleep(
@@ -930,7 +930,7 @@ def test_custom_cooldown_times():
                     }
                 ],
             )
-        except:
+        except Exception:
             pass
 
         # expect 1 model to be in cooldown models

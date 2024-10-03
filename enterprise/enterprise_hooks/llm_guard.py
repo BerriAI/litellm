@@ -49,7 +49,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def moderation_check(self, text: str):

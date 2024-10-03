@@ -4,7 +4,7 @@ import os
 import time
 import traceback
 import types
-from typing import Any, Callable, Coroutine, Iterable, Literal, Optional, Union
+from typing import Any, Callable, Coroutine, Iterable, Literal, Optional, Union, cast
 
 import httpx
 import openai
@@ -30,8 +30,10 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from ..prompt_templates.common_utils import convert_content_list_to_str
 from ..prompt_templates.factory import custom_prompt, prompt_factory
 from .common_utils import drop_params_from_unprocessable_entity_error
+from .completion.utils import is_tokens_or_list_of_tokens
 
 
 class OpenAIError(Exception):
@@ -420,6 +422,35 @@ class OpenAITextCompletionConfig:
             and v is not None
         }
 
+    def _transform_prompt(
+        self,
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+    ) -> AllPromptValues:
+        if len(messages) == 1:  # base case
+            message_content = messages[0].get("content")
+            if (
+                message_content
+                and isinstance(message_content, list)
+                and is_tokens_or_list_of_tokens(message_content)
+            ):
+                openai_prompt: AllPromptValues = cast(AllPromptValues, message_content)
+            else:
+                openai_prompt = ""
+                content = convert_content_list_to_str(
+                    cast(AllMessageValues, messages[0])
+                )
+                openai_prompt += content
+        else:
+            prompt_str_list: List[str] = []
+            for m in messages:
+                try:  # expect list of int/list of list of int to be a 1 message array only.
+                    content = convert_content_list_to_str(cast(AllMessageValues, m))
+                    prompt_str_list.append(content)
+                except Exception as e:
+                    raise e
+            openai_prompt = prompt_str_list
+        return openai_prompt
+
     def convert_to_chat_model_response_object(
         self,
         response_object: Optional[TextCompletionResponse] = None,
@@ -459,6 +490,7 @@ class OpenAITextCompletionConfig:
 
 
 class OpenAIChatCompletion(BaseLLM):
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -1263,7 +1295,6 @@ class OpenAIChatCompletion(BaseLLM):
         client=None,
         aimg_generation=None,
     ):
-        exception_mapping_worked = False
         data = {}
         try:
             model = model
@@ -1272,7 +1303,7 @@ class OpenAIChatCompletion(BaseLLM):
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
-            if aimg_generation == True:
+            if aimg_generation is True:
                 response = self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
                 return response
 
@@ -1311,7 +1342,6 @@ class OpenAIChatCompletion(BaseLLM):
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
 
-            exception_mapping_worked = True
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1468,7 +1498,9 @@ class OpenAIChatCompletion(BaseLLM):
         elif mode == "audio_transcription":
             # Get the current directory of the file being run
             pwd = os.path.dirname(os.path.realpath(__file__))
-            file_path = os.path.join(pwd, "../tests/gettysburg.wav")
+            file_path = os.path.join(
+                pwd, "../../../tests/gettysburg.wav"
+            )  # proxy address
             audio_file = open(file_path, "rb")
             completion = await client.audio.transcriptions.with_raw_response.create(
                 file=audio_file,
@@ -1504,6 +1536,8 @@ class OpenAIChatCompletion(BaseLLM):
 
 
 class OpenAITextCompletion(BaseLLM):
+    openai_text_completion_global_config = OpenAITextCompletionConfig()
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -1520,7 +1554,7 @@ class OpenAITextCompletion(BaseLLM):
         model_response: ModelResponse,
         api_key: str,
         model: str,
-        messages: list,
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
@@ -1533,23 +1567,17 @@ class OpenAITextCompletion(BaseLLM):
         organization: Optional[str] = None,
         headers: Optional[dict] = None,
     ):
-        super().completion()
         try:
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message="Missing model or messages")
 
-            if (
-                len(messages) > 0
-                and "content" in messages[0]
-                and type(messages[0]["content"]) == list
-            ):
-                prompt = messages[0]["content"]
-            else:
-                prompt = [message["content"] for message in messages]  # type: ignore
-
             # don't send max retries to the api, if set
+
+            prompt = self.openai_text_completion_global_config._transform_prompt(
+                messages
+            )
 
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries = data.pop("max_retries", 2)
@@ -2413,7 +2441,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         aget_assistants=None,
     ):
-        if aget_assistants is not None and aget_assistants == True:
+        if aget_assistants is not None and aget_assistants is True:
             return self.async_get_assistants(
                 api_key=api_key,
                 api_base=api_base,
@@ -2470,7 +2498,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         async_create_assistants=None,
     ):
-        if async_create_assistants is not None and async_create_assistants == True:
+        if async_create_assistants is not None and async_create_assistants is True:
             return self.async_create_assistants(
                 api_key=api_key,
                 api_base=api_base,
@@ -2527,7 +2555,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         async_delete_assistants=None,
     ):
-        if async_delete_assistants is not None and async_delete_assistants == True:
+        if async_delete_assistants is not None and async_delete_assistants is True:
             return self.async_delete_assistant(
                 api_key=api_key,
                 api_base=api_base,
@@ -2629,7 +2657,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         a_add_message: Optional[bool] = None,
     ):
-        if a_add_message is not None and a_add_message == True:
+        if a_add_message is not None and a_add_message is True:
             return self.a_add_message(
                 thread_id=thread_id,
                 message_data=message_data,
@@ -2727,7 +2755,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         aget_messages=None,
     ):
-        if aget_messages is not None and aget_messages == True:
+        if aget_messages is not None and aget_messages is True:
             return self.async_get_messages(
                 thread_id=thread_id,
                 api_key=api_key,
@@ -2838,7 +2866,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         openai_api.create_thread(messages=[message])
         ```
         """
-        if acreate_thread is not None and acreate_thread == True:
+        if acreate_thread is not None and acreate_thread is True:
             return self.async_create_thread(
                 metadata=metadata,
                 api_key=api_key,
@@ -2934,7 +2962,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         aget_thread=None,
     ):
-        if aget_thread is not None and aget_thread == True:
+        if aget_thread is not None and aget_thread is True:
             return self.async_get_thread(
                 thread_id=thread_id,
                 api_key=api_key,
@@ -3117,8 +3145,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         arun_thread=None,
         event_handler: Optional[AssistantEventHandler] = None,
     ):
-        if arun_thread is not None and arun_thread == True:
-            if stream is not None and stream == True:
+        if arun_thread is not None and arun_thread is True:
+            if stream is not None and stream is True:
                 _client = self.async_get_openai_client(
                     api_key=api_key,
                     api_base=api_base,
@@ -3163,7 +3191,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        if stream is not None and stream == True:
+        if stream is not None and stream is True:
             return self.run_thread_stream(
                 client=openai_client,
                 thread_id=thread_id,

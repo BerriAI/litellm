@@ -829,7 +829,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 #     """
 #     Relevant issue - https://github.com/BerriAI/litellm/issues/4630
 #     """
-#     from tests.local_testing.test_amazing_vertex_completion import load_vertex_ai_credentials
+#     from test_amazing_vertex_completion import load_vertex_ai_credentials
 
 #     load_vertex_ai_credentials()
 #     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

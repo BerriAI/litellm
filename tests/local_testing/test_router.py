@@ -801,7 +801,7 @@ def test_router_rpm_pre_call_check():
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
             )
             pytest.fail("Expected this to fail")
-        except:
+        except Exception:
             pass
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")

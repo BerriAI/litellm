@@ -16,15 +16,6 @@ jobs:
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
 
-      - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
-          command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
-            else
-              echo "No changes to litellm or pyproject.toml. Skipping tests."
-              circleci step halt
-            fi
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
@@ -307,6 +298,27 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing/test_python_38.py
+
+  check_code_quality:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project/litellm
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install ruff
+            pip install pylint  
+            pip install .
+      - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+      - run: ruff check ./litellm
+    
 
   build_and_test:
     machine:
@@ -815,6 +827,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - check_code_quality:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - ui_endpoint_testing:
           filters:
             branches:
@@ -876,6 +894,7 @@ workflows:
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
+            - check_code_quality
           filters:
             branches:
               only:

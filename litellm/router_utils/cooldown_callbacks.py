@@ -53,7 +53,7 @@ async def router_cooldown_event_callback(
             model=litellm_model_name,
             custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
         )
-    except:
+    except Exception:
         pass
 
     # Trigger cooldown on Prometheus

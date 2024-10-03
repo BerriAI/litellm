@@ -5,6 +5,7 @@ Uses supabase passwordless auth: https://supabase.com/docs/reference/python/auth
 
 Remember to set your redirect url to 8501 (streamlit default).
 """
+
 import streamlit as st
 from dotenv import load_dotenv
 import requests, base64, binascii
@@ -83,7 +84,7 @@ def auth_page(page_param: str):
         else:
             try:
                 assert email.split("@")[1] in decoded_params["accepted_email_subdomain"]
-            except:
+            except Exception:
                 raise Exception(
                     f"Only emails from {decoded_params['accepted_email_subdomain']} are allowed"
                 )

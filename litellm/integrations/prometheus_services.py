@@ -3,11 +3,17 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-import dotenv, os
-import requests  # type: ignore
+import datetime
+import os
+import subprocess
+import sys
 import traceback
-import datetime, subprocess, sys
-import litellm, uuid
+import uuid
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -23,7 +29,7 @@ class PrometheusServicesLogger:
     ):
         try:
             try:
-                from prometheus_client import Counter, Histogram, REGISTRY
+                from prometheus_client import REGISTRY, Counter, Histogram
             except ImportError:
                 raise Exception(
                     "Missing prometheus_client. Run `pip install prometheus-client`"
@@ -33,7 +39,7 @@ class PrometheusServicesLogger:
             self.Counter = Counter
             self.REGISTRY = REGISTRY
 
-            verbose_logger.debug(f"in init prometheus services metrics")
+            verbose_logger.debug("in init prometheus services metrics")
 
             self.services = [item.value for item in ServiceTypes]
 

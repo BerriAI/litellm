@@ -66,7 +66,7 @@ async def google_login(request: Request):
         or google_client_id is not None
         or generic_client_id is not None
     ):
-        if premium_user != True:
+        if premium_user is not True:
             raise ProxyException(
                 message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
@@ -506,7 +506,7 @@ async def auth_callback(request: Request):
                     result_openid=result,
                     user_defined_values=user_defined_values,
                 )
-    except Exception as e:
+    except Exception:
         pass
 
     if user_defined_values is None:

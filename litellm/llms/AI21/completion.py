@@ -123,7 +123,7 @@ def completion(
     encoding,
     api_key,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -165,7 +165,7 @@ def completion(
     )
     if response.status_code != 200:
         raise AI21Error(status_code=response.status_code, message=response.text)
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         return response.iter_lines()
     else:
         ## LOGGING
@@ -191,7 +191,7 @@ def completion(
                 )
                 choices_list.append(choice_obj)
             model_response.choices = choices_list  # type: ignore
-        except Exception as e:
+        except Exception:
             raise AI21Error(
                 message=traceback.format_exc(), status_code=response.status_code
             )
