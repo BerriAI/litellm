@@ -17,6 +17,7 @@ import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_bucket import GCSBucketLogger, StandardLoggingPayload
+from litellm.types.utils import StandardCallbackDynamicParams
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -276,6 +277,11 @@ async def test_basic_gcs_logging_per_request():
     print("GCSBucketLogger", gcs_logger)
     litellm.callbacks = [gcs_logger]
 
+    GCS_BUCKET_NAME = "key-logging-project1"
+    standard_callback_dynamic_params: StandardCallbackDynamicParams = (
+        StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
+    )
+
     try:
         response = await litellm.acompletion(
             model="gpt-4o-mini",
@@ -283,8 +289,7 @@ async def test_basic_gcs_logging_per_request():
             messages=[{"role": "user", "content": "This is a test"}],
             max_tokens=10,
             user="ishaan-2",
-            gcs_bucket_name="gs://test-bucket-ishaan",
-            gcs_path_service_account="gs://test-bucket-ishaan/adroit-crow-413218-bc47f303efc9.json",
+            gcs_bucket_name=GCS_BUCKET_NAME,
         )
     except:
         pass
@@ -294,3 +299,35 @@ async def test_basic_gcs_logging_per_request():
     # Get the current date
     # Get the current date
     current_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Modify the object_name to include the date-based folder
+    object_name = f"{current_date}%2F{response.id}"
+
+    print("object_name", object_name)
+
+    # Check if object landed on GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    print("object from gcs=", object_from_gcs)
+    # convert object_from_gcs from bytes to DICT
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
+
+    print("type of object_from_gcs", type(parsed_data))
+
+    gcs_payload = StandardLoggingPayload(**parsed_data)
+
+    assert gcs_payload["model"] == "gpt-4o-mini"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+
+    assert gcs_payload["response_cost"] > 0.0
+
+    assert gcs_payload["status"] == "success"
+
+    # clean up the object from GCS
+    await gcs_logger.delete_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
