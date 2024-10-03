@@ -68,6 +68,26 @@ for chunk in response:
 ```
 
 
+## Usage - embedding
+
+```python
+import litellm
+import os
+
+response = litellm.embedding(
+    model="nvidia_nim/nvidia/nv-embedqa-e5-v5",               # add `nvidia_nim/` prefix to model so litellm knows to route to Nvidia NIM
+    input=["good morning from litellm"],
+    encoding_format = "float", 
+    user_id = "user-1234",
+
+    # Nvidia NIM Specific Parameters
+    input_type = "passage", # Optional
+    truncate = "NONE" # Optional
+)
+print(response)
+```
+
+
 ## **Usage - LiteLLM Proxy Server**
 
 Here's how to call an Nvidia NIM Endpoint with the LiteLLM Proxy Server
