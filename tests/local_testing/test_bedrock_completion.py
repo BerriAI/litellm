@@ -1577,3 +1577,59 @@ def test_bedrock_completion_test_2():
     _messages = request["messages"]
     for i in range(len(_messages) - 1):
         assert _messages[i]["role"] != _messages[i + 1]["role"]
+
+
+def test_bedrock_completion_test_3():
+    """
+    Check if content in tool result is formatted correctly
+    """
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        Message(
+            content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    index=1,
+                    function=Function(
+                        arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
+                    type="function",
+                )
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+        },
+    ]
+
+    transformed_messages = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+    print(transformed_messages)
+
+    assert transformed_messages[-1]["role"] == "user"
+    assert transformed_messages[-1]["content"] == [
+        {
+            "toolResult": {
+                "content": [
+                    {
+                        "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
+                    }
+                ],
+                "toolUseId": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
+            }
+        }
+    ]
