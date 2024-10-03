@@ -235,10 +235,14 @@ class Logging:
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
-        self.streaming_chunks = []  # for generating complete stream response
-        self.sync_streaming_chunks = []  # for generating complete stream response
-        self.model_call_details = {}
-        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
+        self.streaming_chunks: List[Any] = []  # for generating complete stream response
+        self.sync_streaming_chunks: List[Any] = (
+            []
+        )  # for generating complete stream response
+        self.model_call_details: Dict[Any, Any] = {}
+        self.dynamic_input_callbacks: List[Any] = (
+            []
+        )  # [TODO] callbacks set for just that call
         self.dynamic_failure_callbacks = dynamic_failure_callbacks
         self.dynamic_success_callbacks = (
             dynamic_success_callbacks  # callbacks set for just that call
@@ -264,7 +268,7 @@ class Logging:
             )
             for param in _supported_callback_params:
                 if param in kwargs:
-                    standard_callback_dynamic_params[param] = kwargs.pop(param)
+                    standard_callback_dynamic_params[param] = kwargs.pop(param)  # type: ignore
         return standard_callback_dynamic_params
 
     def update_environment_variables(
