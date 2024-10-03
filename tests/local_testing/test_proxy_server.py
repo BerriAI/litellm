@@ -740,6 +740,31 @@ def test_load_router_config(mock_cache, fake_env_vars):
 # test_load_router_config()
 
 
+def test_prometheus_config():
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    proxy_config = ProxyConfig()
+    result = asyncio.run(
+        proxy_config.load_config(
+            router=None,
+            config_file_path=f"{filepath}/../../litellm/proxy/example_config_yaml/prometheus_test_config.yaml",
+        )
+    )
+    litellm_module = getattr(litellm.proxy.proxy_server, "litellm")
+    print(litellm_module.callbacks)
+    print(litellm_module.success_callback)
+
+    assert any(
+        isinstance(callback, PrometheusLogger)
+        for callback in litellm_module.success_callback
+    )
+    assert any(
+        isinstance(callback, PrometheusLogger)
+        for callback in litellm_module.failure_callback
+    )
+
+
 @pytest.mark.asyncio
 async def test_team_update_redis():
     """

@@ -1,0 +1,13 @@
+# This is the config for testing Prometheus as 'success_callback' and 'failure_callback'
+model_list:
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  cache: true
+  callbacks: ["otel"]
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]

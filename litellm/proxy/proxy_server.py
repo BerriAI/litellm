@@ -1699,13 +1699,13 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             if "prometheus" in callback:
-                                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                                _callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                                     callback,
                                     internal_usage_cache=None,
                                     llm_router=llm_router,
                                     premium_user=premium_user,
                                 )
-                                litellm.success_callback.append("prometheus")
+                                litellm.success_callback.append(_callback)
                                 verbose_proxy_logger.debug(
                                     "Starting Prometheus Metrics on /metrics"
                                 )
@@ -1731,7 +1731,16 @@ class ProxyConfig:
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.failure_callback.append(callback)
+                            if "prometheus" in callback:
+                                _callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                                    callback,
+                                    internal_usage_cache=None,
+                                    llm_router=llm_router,
+                                    premium_user=premium_user,
+                                )
+                                litellm.failure_callback.append(_callback)
+                            else:
+                                litellm.failure_callback.append(callback)
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
