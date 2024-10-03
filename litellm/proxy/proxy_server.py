@@ -4145,6 +4145,51 @@ async def audio_transcriptions(
 
 ######################################################################
 
+#                          /v1/realtime Endpoints
+
+
+import websockets
+
+######################################################################
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from litellm.llms.AzureOpenAI.realtime.handler import AzureOpenAIRealtime
+
+BACKEND_WS_URL = "wss://my-endpoint-sweden-berri992.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
+
+azure_realtime = AzureOpenAIRealtime()
+
+
+async def forward_messages(
+    client_ws: WebSocket, backend_ws: websockets.WebSocketClientProtocol  # type: ignore
+):
+    try:
+        while True:
+            message = await backend_ws.recv()
+            await client_ws.send_text(message)
+    except websockets.exceptions.ConnectionClosed:  # type: ignore
+        pass
+
+
+@app.websocket("/v1/realtime")
+async def websocket_endpoint(websocket: WebSocket, model: str):
+
+    await websocket.accept()
+
+    await azure_realtime.async_realtime(
+        model="gpt-4o-realtime-preview",
+        websocket=websocket,
+        api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
+        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+        api_version="2024-10-01-preview",
+        azure_ad_token=None,
+        client=None,
+        timeout=None,
+    )
+
+
+######################################################################
+
 #                          /v1/assistant Endpoints
 
 
