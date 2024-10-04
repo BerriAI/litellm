@@ -168,7 +168,7 @@ async def user_api_key_auth(
                 name="Received Proxy Server Request",
                 start_time=_to_ns(datetime.now()),
                 context=open_telemetry_logger.get_traceparent_from_header(
-                    headers=request.headers
+                    headers=request.headers if request.headers is not None else {}
                 ),
             )
         ### USER-DEFINED AUTH FUNCTION ###
