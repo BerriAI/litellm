@@ -286,6 +286,11 @@ class Logging:
             self.dynamic_failure_callbacks, dynamic_callbacks_type="failure"
         )
 
+        # Process async failure callbacks
+        self.dynamic_async_failure_callbacks = self._process_dynamic_callback_list(
+            self.dynamic_async_failure_callbacks, dynamic_callbacks_type="async_failure"
+        )
+
         # Process success callbacks
         self.dynamic_success_callbacks = self._process_dynamic_callback_list(
             self.dynamic_success_callbacks, dynamic_callbacks_type="success"
@@ -299,7 +304,9 @@ class Logging:
     def _process_dynamic_callback_list(
         self,
         callback_list: List[Union[str, Callable, CustomLogger]],
-        dynamic_callbacks_type: Literal["input", "success", "failure", "async_success"],
+        dynamic_callbacks_type: Literal[
+            "input", "success", "failure", "async_success", "async_failure"
+        ],
     ):
         """
         Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
@@ -326,7 +333,7 @@ class Logging:
                     if dynamic_callbacks_type == "success":
                         self.dynamic_async_success_callbacks.append(callback_class)
                     elif dynamic_callbacks_type == "failure":
-                        self.dynamic_failure_callbacks.append(callback_class)
+                        self.dynamic_async_failure_callbacks.append(callback_class)
             else:
                 processed_list.append(callback)
         return processed_list
@@ -2092,8 +2099,25 @@ class Logging:
             start_time=start_time,
             end_time=end_time,
         )
+
+        callbacks = []  # init this to empty incase it's not created
+
+        if self.dynamic_async_failure_callbacks is not None and isinstance(
+            self.dynamic_async_failure_callbacks, list
+        ):
+            callbacks = self.dynamic_async_failure_callbacks
+            ## keep the internal functions ##
+            for callback in litellm._async_failure_callback:
+                if (
+                    isinstance(callback, CustomLogger)
+                    and "_PROXY_" in callback.__class__.__name__
+                ):
+                    callbacks.append(callback)
+        else:
+            callbacks = litellm._async_failure_callback
+
         result = None  # result sent to all loggers, init this to None incase it's not created
-        for callback in litellm._async_failure_callback:
+        for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(

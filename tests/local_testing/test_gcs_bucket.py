@@ -468,46 +468,51 @@ async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     )
 
     # make a failure request - assert that failure callback is hit
-    # try:
-    #     response = await litellm.acompletion(
-    #         model="gpt-4o-mini",
-    #         temperature=0.7,
-    #         messages=[{"role": "user", "content": "This is a test"}],
-    #         max_tokens=10,
-    #         user="ishaan-2",
-    #         mock_response=litellm.BadRequestError(
-    #             model="gpt-4o-mini",
-    #             message="Error: 400: Bad Request: Invalid API key, please check your API key and try again.",
-    #             llm_provider="openai",
-    #         ),
-    #         success_callback = ["gcs_bucket"],
-    #         failure_callback = ["gcs_bucket"],
-    #     )
-    # except:
-    #     pass
+    gcs_log_id = f"failure-test-{uuid.uuid4().hex}"
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            messages=[{"role": "user", "content": "This is a test"}],
+            max_tokens=10,
+            user="ishaan-2",
+            mock_response=litellm.BadRequestError(
+                model="gpt-3.5-turbo",
+                message="Error: 400: Bad Request: Invalid API key, please check your API key and try again.",
+                llm_provider="openai",
+            ),
+            success_callback=["gcs_bucket"],
+            failure_callback=["gcs_bucket"],
+            gcs_bucket_name=GCS_BUCKET_NAME,
+            metadata={
+                "gcs_log_id": gcs_log_id,
+            },
+        )
+    except:
+        pass
 
-    # await asyncio.sleep(5)
+    await asyncio.sleep(5)
 
-    # # check if the failure object is logged in GCS
-    # object_from_gcs = await gcs_logger.download_gcs_object(
-    #     object_name=object_name,
-    #     standard_callback_dynamic_params=standard_callback_dynamic_params,
-    # )
-    # print("object from gcs=", object_from_gcs)
-    # # convert object_from_gcs from bytes to DICT
-    # parsed_data = json.loads(object_from_gcs)
-    # print("object_from_gcs as dict", parsed_data)
+    # check if the failure object is logged in GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(
+        object_name=gcs_log_id,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    print("object from gcs=", object_from_gcs)
+    # convert object_from_gcs from bytes to DICT
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
 
-    # gcs_payload = StandardLoggingPayload(**parsed_data)
+    gcs_payload = StandardLoggingPayload(**parsed_data)
 
-    # assert gcs_payload["model"] == "gpt-4o-mini"
-    # assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+    assert gcs_payload["model"] == "gpt-4o-mini"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
 
-    # assert gcs_payload["response_cost"] == 0
-    # assert gcs_payload["status"] == "failure"
+    assert gcs_payload["response_cost"] == 0
+    assert gcs_payload["status"] == "failure"
 
-    # # clean up the object from GCS
-    # await gcs_logger.delete_gcs_object(
-    #     object_name=object_name,
-    #     standard_callback_dynamic_params=standard_callback_dynamic_params,
-    # )
+    # clean up the object from GCS
+    await gcs_logger.delete_gcs_object(
+        object_name=gcs_log_id,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
