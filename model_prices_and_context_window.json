@@ -51,11 +51,13 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.00000015,
         "output_cost_per_token": 0.00000060,
+        "cache_read_input_token_cost": 0.000000075,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "o1-mini": {
         "max_tokens": 65536,
@@ -63,11 +65,13 @@
         "max_output_tokens": 65536,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000012,
+        "cache_read_input_token_cost": 0.0000015,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "o1-mini-2024-09-12": {
         "max_tokens": 65536,
@@ -87,11 +91,13 @@
         "max_output_tokens": 32768,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000060,
+        "cache_read_input_token_cost": 0.0000075,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "o1-preview-2024-09-12": {
         "max_tokens": 32768,
@@ -135,11 +141,13 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.0000025,
         "output_cost_per_token": 0.000010,
+        "cache_read_input_token_cost": 0.00000125,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "gpt-4-turbo-preview": {
         "max_tokens": 4096,
