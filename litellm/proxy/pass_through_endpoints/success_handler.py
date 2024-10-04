@@ -115,7 +115,7 @@ class PassThroughEndpointLogging:
                     encoding=None,
                 )
             )
-            logging_obj.model = litellm_model_response.model
+            logging_obj.model = litellm_model_response.model or model
             logging_obj.model_call_details["model"] = logging_obj.model
 
             await logging_obj.async_success_handler(

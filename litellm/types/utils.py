@@ -1384,8 +1384,12 @@ OPENAI_RESPONSE_HEADERS = [
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
+    # Langfuse dynamic params
     langfuse_public_key: Optional[str]
     langfuse_secret: Optional[str]
+    langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
+
+    # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
