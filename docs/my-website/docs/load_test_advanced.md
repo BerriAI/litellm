@@ -18,6 +18,12 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
         - [here's the spec used for our locust machine](#machine-specifications-for-running-locust)
         - [here  is the locustfile.py used for our tests](#locust-file-used-for-testing)
 - [ ] Use this [**machine specification for running litellm proxy**](#machine-specifications-for-running-litellm-proxy)
+- [ ] **Enterprise LiteLLM** - Use `prometheus` as a callback in your `proxy_config.yaml` to get metrics on your load test
+    Set `litellm_settings.callbacks` to monitor success/failures/all types of errors
+    ```yaml
+    litellm_settings:
+        callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
+    ```
 
 
 
@@ -43,6 +49,9 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
 ```
 
 2. `pip install locust`
@@ -105,6 +114,9 @@ model_list:
       vertex_project: "adroit-crow-413218"
       vertex_location: "us-central1"
       vertex_credentials: /etc/secrets/adroit_crow.json
+
+litellm_settings:
+  callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
 ```
 
 2. `pip install locust`
