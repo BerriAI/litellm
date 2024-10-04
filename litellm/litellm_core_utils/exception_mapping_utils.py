@@ -895,7 +895,10 @@ def exception_type(  # type: ignore
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
                         )
-            elif custom_llm_provider == "sagemaker":
+            elif (
+                custom_llm_provider == "sagemaker"
+                or custom_llm_provider == "sagemaker_chat"
+            ):
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -926,6 +929,90 @@ def exception_type(  # type: ignore
                         llm_provider="sagemaker",
                         response=original_exception.response,
                     )
+                elif hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=httpx.Response(
+                                status_code=500,
+                                request=httpx.Request(
+                                    method="POST", url="https://api.openai.com/v1/"
+                                ),
+                            ),
+                        )
+                    elif original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 404:
+                        exception_mapping_worked = True
+                        raise NotFoundError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif (
+                        original_exception.status_code == 422
+                        or original_exception.status_code == 424
+                    ):
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
+                        )
             elif (
                 custom_llm_provider == "vertex_ai"
                 or custom_llm_provider == "vertex_ai_beta"

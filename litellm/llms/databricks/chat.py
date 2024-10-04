@@ -14,7 +14,11 @@ import requests  # type: ignore
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.llms.databricks.exceptions import DatabricksError
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.types.llms.openai import (
@@ -167,7 +171,7 @@ class DatabricksEmbeddingConfig:
 
 
 async def make_call(
-    client: AsyncHTTPHandler,
+    client: Optional[AsyncHTTPHandler],
     api_base: str,
     headers: dict,
     data: str,
@@ -176,6 +180,10 @@ async def make_call(
     logging_obj,
     streaming_decoder: Optional[CustomStreamingDecoder] = None,
 ):
+    if client is None:
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.DATABRICKS
+        )  # Create a new client if none provided
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
     if response.status_code != 200:
@@ -343,18 +351,18 @@ class DatabricksChatCompletion(BaseLLM):
     ) -> CustomStreamWrapper:
 
         data["stream"] = True
+        completion_stream = await make_call(
+            client=client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            streaming_decoder=streaming_decoder,
+        )
         streamwrapper = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_call,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                streaming_decoder=streaming_decoder,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
@@ -534,19 +542,18 @@ class DatabricksChatCompletion(BaseLLM):
                 client = HTTPHandler(timeout=timeout)  # type: ignore
             ## COMPLETION CALL
             if stream is True:
+                completion_stream = make_sync_call(
+                    client=client,
+                    api_base=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                    streaming_decoder=streaming_decoder,
+                )
                 return CustomStreamWrapper(
-                    completion_stream=None,
-                    make_call=partial(
-                        make_sync_call,
-                        client=None,
-                        api_base=api_base,
-                        headers=headers,  # type: ignore
-                        data=json.dumps(data),
-                        model=model,
-                        messages=messages,
-                        logging_obj=logging_obj,
-                        streaming_decoder=streaming_decoder,
-                    ),
+                    completion_stream=completion_stream,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     logging_obj=logging_obj,
