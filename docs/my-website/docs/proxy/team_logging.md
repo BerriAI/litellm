@@ -231,24 +231,68 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 </TabItem>
 <TabItem label="GCS Bucket" value="gcs_bucket">
 
-```bash
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "metadata": {
-        "logging": [{
-            "callback_name": "gcs_bucket", # "otel", "gcs_bucket"
-            "callback_type": "success", # "success", "failure", "success_and_failure"
-            "callback_vars": {
-                "gcs_bucket_name": "my-gcs-bucket",
-                "gcs_path_service_account": "os.environ/GCS_SERVICE_ACCOUNT"
-            }
-        }]
-    }
-}'
+1. Set gcs_bucket logging on your config.yaml
 
-```
+  By default, this will use 
+  - `GCS_PATH_SERVICE_ACCOUNT` env variable to get the service account json path
+  - `GCS_BUCKET_NAME` env variable to get the bucket name to send logs to
+
+  ```yaml
+  model_list:
+    - model_name: fake-openai-endpoint
+      litellm_params:
+        model: openai/fake
+        api_key: fake-key
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+  litellm_settings:
+    callbacks: ["gcs_bucket"]
+  ```
+
+2. Create Virtual Key to log to a specific GCS Bucket
+
+  Set `GCS_SERVICE_ACCOUNT` in your environment to the path of the service account json
+  ```bash
+  export GCS_SERVICE_ACCOUNT=/path/to/service-account.json # GCS_SERVICE_ACCOUNT=/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json
+  ```
+
+  ```bash
+  curl -X POST 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+      "metadata": {
+          "logging": [{
+              "callback_name": "gcs_bucket", # "otel", "gcs_bucket"
+              "callback_type": "success", # "success", "failure", "success_and_failure"
+              "callback_vars": {
+                  "gcs_bucket_name": "my-gcs-bucket", # Name of your GCS Bucket to log to
+                  "gcs_path_service_account": "os.environ/GCS_SERVICE_ACCOUNT" # environ variable for this service account
+              }
+          }]
+      }
+  }'
+
+  ```
+
+4. Test it - `/chat/completions` request
+
+  Use the virtual key from step 3 to make a `/chat/completions` request
+
+  You should see your logs on GCS Bucket on a successful request
+
+  ```shell
+  curl -i http://localhost:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-Fxq5XSyWKeXDKfPdqXZhPg" \
+    -d '{
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {"role": "user", "content": "Hello, Claude"}
+      ],
+      "user": "hello",
+    }'
+  ```
 
 </TabItem>
 </Tabs>
