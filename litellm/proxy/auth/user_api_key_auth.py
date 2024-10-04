@@ -164,11 +164,16 @@ async def user_api_key_auth(
             )
 
         if open_telemetry_logger is not None:
+            # Safely handle request headers
+            if hasattr(request, "headers") and "headers" in request.scope:
+                headers = dict(request.headers)
+            else:
+                headers = {}
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
                 start_time=_to_ns(datetime.now()),
                 context=open_telemetry_logger.get_traceparent_from_header(
-                    headers=request.headers if request.headers is not None else {}
+                    headers=headers
                 ),
             )
         ### USER-DEFINED AUTH FUNCTION ###
