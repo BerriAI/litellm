@@ -1077,7 +1077,9 @@ def test_completion_cost_deepseek():
         assert response_2.usage.prompt_cache_hit_tokens is not None
         assert response_2.usage.prompt_cache_miss_tokens is not None
         assert (
-            response_2.usage.prompt_tokens == response_2.usage.prompt_cache_miss_tokens
+            response_2.usage.prompt_tokens
+            == response_2.usage.prompt_cache_miss_tokens
+            + response_2.usage.prompt_cache_hit_tokens
         )
         assert (
             response_2.usage._cache_read_input_tokens
