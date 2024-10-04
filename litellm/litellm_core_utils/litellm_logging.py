@@ -310,14 +310,14 @@ class Logging:
         - If dynamic callback is a "failure" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_failure_callbacks
         """
 
-        processed_list = []
+        processed_list: List[Union[str, Callable, CustomLogger]] = []
         for callback in callback_list:
             if (
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
                 callback_class = _init_custom_logger_compatible_class(
-                    callback, internal_usage_cache=None, llm_router=None
+                    callback, internal_usage_cache=None, llm_router=None  # type: ignore
                 )
                 if callback_class is not None:
                     processed_list.append(callback_class)
