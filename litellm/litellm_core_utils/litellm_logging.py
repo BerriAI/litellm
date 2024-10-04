@@ -243,21 +243,21 @@ class Logging:
         self.model_call_details: Dict[Any, Any] = {}
 
         # Initialize dynamic callbacks
-        self.dynamic_input_callbacks: List[Union[str, Callable, CustomLogger]] = (
-            dynamic_input_callbacks or []
-        )
-        self.dynamic_success_callbacks: List[Union[str, Callable, CustomLogger]] = (
-            dynamic_success_callbacks or []
-        )
-        self.dynamic_async_success_callbacks: List[
-            Union[str, Callable, CustomLogger]
-        ] = (dynamic_async_success_callbacks or [])
-        self.dynamic_failure_callbacks: List[Union[str, Callable, CustomLogger]] = (
-            dynamic_failure_callbacks or []
-        )
-        self.dynamic_async_failure_callbacks: List[
-            Union[str, Callable, CustomLogger]
-        ] = (dynamic_async_failure_callbacks or [])
+        self.dynamic_input_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_input_callbacks
+        self.dynamic_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_success_callbacks
+        self.dynamic_async_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_async_success_callbacks
+        self.dynamic_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_failure_callbacks
+        self.dynamic_async_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_async_failure_callbacks
 
         # Process dynamic callbacks
         self.process_dynamic_callbacks()
@@ -303,11 +303,11 @@ class Logging:
 
     def _process_dynamic_callback_list(
         self,
-        callback_list: List[Union[str, Callable, CustomLogger]],
+        callback_list: Optional[List[Union[str, Callable, CustomLogger]]],
         dynamic_callbacks_type: Literal[
             "input", "success", "failure", "async_success", "async_failure"
         ],
-    ):
+    ) -> Optional[List[Union[str, Callable, CustomLogger]]]:
         """
         Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
 
@@ -316,6 +316,8 @@ class Logging:
         - If dynamic callback is a "success" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_async_success_callbacks
         - If dynamic callback is a "failure" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_failure_callbacks
         """
+        if callback_list is None:
+            return None
 
         processed_list: List[Union[str, Callable, CustomLogger]] = []
         for callback in callback_list:
@@ -331,8 +333,12 @@ class Logging:
 
                     # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
                     if dynamic_callbacks_type == "success":
+                        if self.dynamic_async_success_callbacks is None:
+                            self.dynamic_async_success_callbacks = []
                         self.dynamic_async_success_callbacks.append(callback_class)
                     elif dynamic_callbacks_type == "failure":
+                        if self.dynamic_async_failure_callbacks is None:
+                            self.dynamic_async_failure_callbacks = []
                         self.dynamic_async_failure_callbacks.append(callback_class)
             else:
                 processed_list.append(callback)
@@ -508,7 +514,7 @@ class Logging:
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            callbacks = litellm.input_callback + self.dynamic_input_callbacks
+            callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
                 try:
                     if callback == "supabase" and supabaseClient is not None:
@@ -624,7 +630,7 @@ class Logging:
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
-            callbacks = litellm.input_callback + self.dynamic_input_callbacks
+            callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
                 try:
                     if callback == "sentry" and add_breadcrumb:
