@@ -82,7 +82,7 @@ class GCSBucketLogger(GCSBucketBase):
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
-            json_logged_payload = json.dumps(logging_payload)
+            json_logged_payload = json.dumps(logging_payload, default=str)
 
             # Get the current date
             current_date = datetime.now().strftime("%Y-%m-%d")
@@ -137,7 +137,7 @@ class GCSBucketLogger(GCSBucketBase):
             _litellm_params = kwargs.get("litellm_params") or {}
             metadata = _litellm_params.get("metadata") or {}
 
-            json_logged_payload = json.dumps(logging_payload)
+            json_logged_payload = json.dumps(logging_payload, default=str)
 
             # Get the current date
             current_date = datetime.now().strftime("%Y-%m-%d")
