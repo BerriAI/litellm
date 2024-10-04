@@ -34,6 +34,7 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
+from litellm.llms.OpenAI.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -198,7 +199,33 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    if custom_llm_provider == "vertex_ai":
+    if call_type == "speech" or call_type == "aspeech":
+        prompt_cost, completion_cost = _generic_cost_per_character(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            prompt_characters=prompt_characters,
+            completion_characters=completion_characters,
+            custom_prompt_cost=None,
+            custom_completion_cost=0,
+        )
+        if prompt_cost is None or completion_cost is None:
+            raise ValueError(
+                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
+                    prompt_cost,
+                    completion_cost,
+                    model_without_prefix,
+                    custom_llm_provider,
+                    prompt_characters,
+                    completion_characters,
+                )
+            )
+        return prompt_cost, completion_cost
+    elif call_type == "arerank" or call_type == "rerank":
+        return rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
@@ -226,6 +253,8 @@ def cost_per_token(
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "openai":
+        return openai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -236,32 +265,6 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-        )
-    elif call_type == "speech" or call_type == "aspeech":
-        prompt_cost, completion_cost = _generic_cost_per_character(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
-            custom_prompt_cost=None,
-            custom_completion_cost=0,
-        )
-        if prompt_cost is None or completion_cost is None:
-            raise ValueError(
-                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
-                    prompt_cost,
-                    completion_cost,
-                    model_without_prefix,
-                    custom_llm_provider,
-                    prompt_characters,
-                    completion_characters,
-                )
-            )
-        return prompt_cost, completion_cost
-    elif call_type == "arerank" or call_type == "rerank":
-        return rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
         )
     elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
@@ -562,6 +565,13 @@ def completion_cost(
             completion_tokens = _usage.get("completion_tokens", 0)
             cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
             cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
+            if (
+                "prompt_tokens_details" in _usage
+                and _usage["prompt_tokens_details"] is not {}
+                and _usage["prompt_tokens_details"]
+            ):
+                prompt_tokens_details = _usage.get("prompt_tokens_details", {})
+                cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
             total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(
