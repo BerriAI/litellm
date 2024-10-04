@@ -77,7 +77,7 @@ litellm_settings:
 
 ## Load test - Endpoints with Rate Limits
 
-Run a load test on 2 LLM deployments each with 10K RPM Quota. Expect to see ~20K RPM (333 RPS)
+Run a load test on 2 LLM deployments each with 10K RPM Quota. Expect to see ~20K RPM
 
 ### Expected Performance
 
