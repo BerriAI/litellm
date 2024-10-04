@@ -7813,9 +7813,7 @@ class CustomStreamWrapper:
                         )
                     elif isinstance(response_obj["usage"], BaseModel):
                         model_response.usage = litellm.Usage(
-                            prompt_tokens=response_obj["usage"].prompt_tokens,
-                            completion_tokens=response_obj["usage"].completion_tokens,
-                            total_tokens=response_obj["usage"].total_tokens,
+                            **response_obj["usage"].model_dump()
                         )
 
             model_response.model = self.model
