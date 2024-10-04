@@ -5485,12 +5485,11 @@ def stream_chunk_builder(
         role = chunks[0]["choices"][0]["delta"]["role"]
         finish_reason = "stop"
         for chunk in chunks:
-            if (
-                "choices" in chunk
-                and len(chunk["choices"]) > 0
-                and hasattr(chunk["choices"][0]["delta"], "finish_reason")
-            ):
-                finish_reason = chunk["choices"][0]["delta"].finish_reason
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                if hasattr(chunk["choices"][0], "finish_reason"):
+                    finish_reason = chunk["choices"][0].finish_reason
+                elif "finish_reason" in chunk["choices"][0]:
+                    finish_reason = chunk["choices"][0]["finish_reason"]
 
         # Initialize the response dictionary
         response = {
