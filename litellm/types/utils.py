@@ -319,7 +319,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 class Message(OpenAIObject):
 
     content: Optional[str]
-    role: Literal["assistant"]
+    role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
 
