@@ -347,7 +347,7 @@ class Message(OpenAIObject):
             ),
         }
         super(Message, self).__init__(
-            **init_values,
+            **init_values,  # type: ignore
             **params,
         )
 
