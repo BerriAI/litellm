@@ -191,16 +191,28 @@ class Logging:
 
     def __init__(
         self,
-        model,
+        model: str,
         messages,
         stream,
         call_type,
         start_time,
-        litellm_call_id,
-        function_id,
-        dynamic_success_callbacks=None,
-        dynamic_failure_callbacks=None,
-        dynamic_async_success_callbacks=None,
+        litellm_call_id: str,
+        function_id: str,
+        dynamic_input_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_async_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_async_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
         kwargs: Optional[Dict] = None,
     ):
         if messages is not None:
@@ -229,23 +241,95 @@ class Logging:
             []
         )  # for generating complete stream response
         self.model_call_details: Dict[Any, Any] = {}
-        self.dynamic_input_callbacks: List[Any] = (
-            []
-        )  # [TODO] callbacks set for just that call
-        self.dynamic_failure_callbacks = dynamic_failure_callbacks
-        self.dynamic_success_callbacks = (
-            dynamic_success_callbacks  # callbacks set for just that call
+
+        # Initialize dynamic callbacks
+        self.dynamic_input_callbacks: List[Union[str, Callable, CustomLogger]] = (
+            dynamic_input_callbacks or []
         )
-        self.dynamic_async_success_callbacks = (
-            dynamic_async_success_callbacks  # callbacks set for just that call
+        self.dynamic_success_callbacks: List[Union[str, Callable, CustomLogger]] = (
+            dynamic_success_callbacks or []
         )
+        self.dynamic_async_success_callbacks: List[
+            Union[str, Callable, CustomLogger]
+        ] = (dynamic_async_success_callbacks or [])
+        self.dynamic_failure_callbacks: List[Union[str, Callable, CustomLogger]] = (
+            dynamic_failure_callbacks or []
+        )
+        self.dynamic_async_failure_callbacks: List[
+            Union[str, Callable, CustomLogger]
+        ] = (dynamic_async_failure_callbacks or [])
+
+        # Process dynamic callbacks
+        self.process_dynamic_callbacks()
+
         ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
         self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
             self.initialize_standard_callback_dynamic_params(kwargs)
         )
-        ## TIME TO FIRST TOKEN LOGGING ##
 
+        ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
+
+    def process_dynamic_callbacks(self):
+        """
+        Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
+
+        If a callback is in litellm._known_custom_logger_compatible_callbacks, it needs to be intialized and added to the respective dynamic_* callback list.
+        """
+        # Process input callbacks
+        self.dynamic_input_callbacks = self._process_callback_list(
+            self.dynamic_input_callbacks, dynamic_callbacks_type="input"
+        )
+
+        # Process failure callbacks
+        self.dynamic_failure_callbacks = self._process_callback_list(
+            self.dynamic_failure_callbacks, dynamic_callbacks_type="failure"
+        )
+
+        # Process success callbacks
+        self.dynamic_success_callbacks = self._process_callback_list(
+            self.dynamic_success_callbacks, dynamic_callbacks_type="success"
+        )
+
+        # Process async success callbacks
+        self.dynamic_async_success_callbacks = self._process_callback_list(
+            self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
+        )
+
+    def _process_callback_list(
+        self,
+        callback_list: List[Union[str, Callable, CustomLogger]],
+        dynamic_callbacks_type: Literal["input", "success", "failure", "async_success"],
+    ):
+        """
+        Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
+
+        - If a callback is in litellm._known_custom_logger_compatible_callbacks,
+        replace the string with the initialized callback class.
+        - If dynamic callback is a "success" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_async_success_callbacks
+        - If dynamic callback is a "failure" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_failure_callbacks
+        """
+
+        processed_list = []
+        for callback in callback_list:
+            if (
+                isinstance(callback, str)
+                and callback in litellm._known_custom_logger_compatible_callbacks
+            ):
+                callback_class = _init_custom_logger_compatible_class(
+                    callback, internal_usage_cache=None, llm_router=None
+                )
+                if callback_class is not None:
+                    processed_list.append(callback_class)
+
+                    # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
+                    if dynamic_callbacks_type == "success":
+                        self.dynamic_async_success_callbacks.append(callback_class)
+                    elif dynamic_callbacks_type == "failure":
+                        self.dynamic_failure_callbacks.append(callback_class)
+            else:
+                processed_list.append(callback)
+        return processed_list
 
     def initialize_standard_callback_dynamic_params(
         self, kwargs: Optional[Dict] = None
