@@ -745,12 +745,22 @@ def test_prometheus_config():
     from litellm.integrations.prometheus import PrometheusLogger
 
     proxy_config = ProxyConfig()
-    result = asyncio.run(
-        proxy_config.load_config(
-            router=None,
-            config_file_path=f"{filepath}/../../litellm/proxy/example_config_yaml/prometheus_test_config.yaml",
+    try:
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/../../litellm/proxy/example_config_yaml/prometheus_test_config.yaml",
+            )
         )
-    )
+    except Exception as e:
+        if "Duplicated timeseries in CollectorRegistry" in str(e):
+            pytest.skip(
+                "Skipping test due to duplicate timeseries in CollectorRegistry"
+            )
+        else:
+            pytest.fail(
+                f"Proxy: Got exception reading config: {str(e)}\n{traceback.format_exc()}"
+            )
     litellm_module = getattr(litellm.proxy.proxy_server, "litellm")
     print(litellm_module.callbacks)
     print(litellm_module.success_callback)
