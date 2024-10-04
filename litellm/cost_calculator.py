@@ -567,7 +567,7 @@ def completion_cost(
             cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
             if (
                 "prompt_tokens_details" in _usage
-                and _usage["prompt_tokens_details"] is not {}
+                and _usage["prompt_tokens_details"] != {}
                 and _usage["prompt_tokens_details"]
             ):
                 prompt_tokens_details = _usage.get("prompt_tokens_details", {})
