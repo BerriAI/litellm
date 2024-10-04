@@ -2331,7 +2331,7 @@
         "supports_tool_choice": true, 
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
     },
-    "gemini-pro-flash": {
+    "gemini-flash-experimental": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
