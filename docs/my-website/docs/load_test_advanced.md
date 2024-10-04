@@ -123,6 +123,15 @@ model_list:
   Head to the locust UI on http://0.0.0.0:8089
 
 
+## Prometheus Metrics for debugging load tests
+
+Use the following [prometheus metrics to debug your load tests / failures](./proxy/prometheus)
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_deployment_failure_responses`              | Total number of failed LLM API calls for a specific LLM deployment. Labels: `"requested_model", "litellm_model_name", "model_id", "api_base", "api_provider", "hashed_api_key", "api_key_alias", "team", "team_alias", "exception_status", "exception_class"` |
+| `litellm_deployment_cooled_down`             | Number of times a deployment has been cooled down by LiteLLM load balancing logic. Labels: `"litellm_model_name", "model_id", "api_base", "api_provider", "exception_status"` |
+
 
 
 ## Machine Specifications for Running Locust
@@ -136,7 +145,7 @@ model_list:
 
 ## Machine Specifications for Running LiteLLM Proxy
 
-**Number of Replicas of LiteLLM Proxy=20**
+👉 **Number of Replicas of LiteLLM Proxy=20** for getting 1K+ RPS
 
 | Service | Spec | CPUs | Memory | Architecture | Version|
 | --- | --- | --- | --- | --- | --- | 
