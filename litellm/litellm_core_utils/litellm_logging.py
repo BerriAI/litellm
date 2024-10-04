@@ -353,6 +353,8 @@ class Logging:
 
         checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
         """
+        from litellm.secret_managers.main import get_secret_str
+
         standard_callback_dynamic_params = StandardCallbackDynamicParams()
         if kwargs:
             _supported_callback_params = (
@@ -360,7 +362,10 @@ class Logging:
             )
             for param in _supported_callback_params:
                 if param in kwargs:
-                    standard_callback_dynamic_params[param] = kwargs.pop(param)  # type: ignore
+                    _param_value = kwargs.pop(param)
+                    if "os.environ/" in _param_value:
+                        _param_value = get_secret_str(secret_name=_param_value)
+                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
         return standard_callback_dynamic_params
 
     def update_environment_variables(
