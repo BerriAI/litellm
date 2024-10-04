@@ -251,7 +251,16 @@ const sidebars = {
         },
       ],
     },
-    "load_test",
+    {
+      type: "category",
+      label: "Load Testing",
+      items: [
+        "load_test",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
+      ]
+    },
     {
       type: "category",
       label: "Logging & Observability",
