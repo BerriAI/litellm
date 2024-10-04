@@ -2,15 +2,6 @@
 
 Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
 
-## Expected Performance
-
-| Metric | Value |
-|--------|-------|
-| Requests per Second | 1174+ |
-| Median Response Time | `96ms` |
-| Average Response Time | `142.18ms` |
-
-
 
 ## Pre-Testing Checklist
 - [ ] Ensure you're using the **latest `-stable` version** of litellm
@@ -19,10 +10,23 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
     - [litellm database docker container](https://github.com/BerriAI/litellm/pkgs/container/litellm-database)
 - [ ] Ensure you're following **ALL** [best practices for production](./proxy/production_setup.md)
 - [ ] Locust - Ensure you're Locust instance can create 1K+ requests per second
+    - 👉 You can use our **[maintained locust instance here](https://locust-load-tester-production.up.railway.app/)**
+    - If you're self hosting locust, [here's the spec used for our locust machine](#machine-specifications-for-running-locust)
+- [ ] Use this [**machine specification for running litellm proxy**](#machine-specifications-for-running-litellm-proxy)
 
 
 
-## Running the Load Test - Fake OpenAI Endpoint
+## Load Test - Fake OpenAI Endpoint
+
+### Expected Performance
+
+| Metric | Value |
+|--------|-------|
+| Requests per Second | 1174+ |
+| Median Response Time | `96ms` |
+| Average Response Time | `142.18ms` |
+
+### Run Test
 
 1. Add `fake-openai-endpoint` to your proxy config.yaml and start your litellm proxy
 litellm provides a hosted `fake-openai-endpoint` you can load test against
@@ -44,7 +48,7 @@ model_list:
   Run `locust` in the same directory as your `locustfile.py` from step 2
 
   ```shell
-  locust
+  locust -f locustfile.py --processes 4
   ```
 
   Output on terminal 
@@ -59,7 +63,58 @@ model_list:
 
   Set **Users=1000, Ramp Up Users=500**, Host=Base URL of your LiteLLM Proxy
 
-## Running the Load test - Endpoints with Rate Limits 
+## Load test - Endpoints with Rate Limits
+
+Run a load test on 2 LLM deployments each with 10K RPM Quota. Expect to see ~20K RPM (333 RPS)
+
+### Expected Performance
+
+| Metric | Value |
+|--------|-------|
+| Successful Responses per Second | ~525+ |
+| Total Requests per Second | ~1256+ |
+| Median Response Time | `86ms` |
+| Average Response Time | `880.18ms` |
+
+### Run Test
+
+1. Add 2 `fake-openai-endpoint` deployments on your config.yaml. Each deployment can handle 10K RPM. (We setup a fake endpoint with a rate limit of 1000 RPM on the `/v1/projects/bad-adroit-crow` route below )
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: vertex_ai/fake
+      vertex_credentials: adroit-crow-413218-a9444499891b.json
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/bad-adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001:generateContent
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: vertex_ai/fake
+      vertex_credentials: adroit-crow-413218-a9444499891b.json
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/bad-adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001:generateContent
+```
+
+2. `pip install locust`
+
+3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
+
+4. Start locust
+  Run `locust` in the same directory as your `locustfile.py` from step 2
+
+  ```shell
+  locust -f locustfile.py --processes 4
+  ```
+
+  Output on terminal 
+  ```
+  [2024-03-15 07:19:58,893] Starting web interface at http://0.0.0.0:8089
+  [2024-03-15 07:19:58,898] Starting Locust 2.24.0
+  ```
+
+5. Run Load test on locust
+
+  Head to the locust UI on http://0.0.0.0:8089
+
 
 
 
