@@ -1390,6 +1390,138 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "callback_type, expected_success_callbacks, expected_failure_callbacks",
+    [
+        ("success", ["gcs_bucket"], []),
+        ("failure", [], ["gcs_bucket"]),
+        ("success_and_failure", ["gcs_bucket"], ["gcs_bucket"]),
+    ],
+)
+async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
+    prisma_client, callback_type, expected_success_callbacks, expected_failure_callbacks
+):
+    import json
+
+    from fastapi import HTTPException, Request, Response
+    from starlette.datastructures import URL
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+
+    request = Request(scope={"type": "http", "method": "POST", "headers": {}})
+    request._url = URL(url="/chat/completions")
+
+    test_data = {
+        "model": "azure/chatgpt-v-2",
+        "messages": [
+            {"role": "user", "content": "write 1 sentence poem"},
+        ],
+        "max_tokens": 10,
+        "mock_response": "Hello world",
+        "api_key": "my-fake-key",
+    }
+
+    json_bytes = json.dumps(test_data).encode("utf-8")
+
+    request._body = json_bytes
+
+    data = {
+        "data": {
+            "model": "azure/chatgpt-v-2",
+            "messages": [{"role": "user", "content": "write 1 sentence poem"}],
+            "max_tokens": 10,
+            "mock_response": "Hello world",
+            "api_key": "my-fake-key",
+        },
+        "request": request,
+        "user_api_key_dict": UserAPIKeyAuth(
+            token=None,
+            key_name=None,
+            key_alias=None,
+            spend=0.0,
+            max_budget=None,
+            expires=None,
+            models=[],
+            aliases={},
+            config={},
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "gcs_bucket",
+                        "callback_type": callback_type,
+                        "callback_vars": {
+                            "gcs_bucket_name": "key-logging-project1",
+                            "gcs_path_service_account": "adroit-crow-413218-a956eef1a2a8.json",
+                        },
+                    }
+                ]
+            },
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            budget_reset_at=None,
+            allowed_cache_controls=[],
+            permissions={},
+            model_spend={},
+            model_max_budget={},
+            soft_budget_cooldown=False,
+            litellm_budget_table=None,
+            org_id=None,
+            team_spend=None,
+            team_alias=None,
+            team_tpm_limit=None,
+            team_rpm_limit=None,
+            team_max_budget=None,
+            team_models=[],
+            team_blocked=False,
+            soft_budget=None,
+            team_model_aliases=None,
+            team_member_spend=None,
+            team_metadata=None,
+            end_user_id=None,
+            end_user_tpm_limit=None,
+            end_user_rpm_limit=None,
+            end_user_max_budget=None,
+            last_refreshed_at=None,
+            api_key=None,
+            user_role=None,
+            allowed_model_region=None,
+            parent_otel_span=None,
+        ),
+        "proxy_config": proxy_config,
+        "general_settings": {},
+        "version": "0.0.0",
+    }
+
+    new_data = await add_litellm_data_to_request(**data)
+    print("NEW DATA: {}".format(new_data))
+
+    assert "gcs_bucket_name" in new_data
+    assert new_data["gcs_bucket_name"] == "key-logging-project1"
+    assert "gcs_path_service_account" in new_data
+    assert (
+        new_data["gcs_path_service_account"] == "adroit-crow-413218-a956eef1a2a8.json"
+    )
+
+    if expected_success_callbacks:
+        assert "success_callback" in new_data
+        assert new_data["success_callback"] == expected_success_callbacks
+
+    if expected_failure_callbacks:
+        assert "failure_callback" in new_data
+        assert new_data["failure_callback"] == expected_failure_callbacks
+
+
+@pytest.mark.asyncio
 async def test_gemini_pass_through_endpoint():
     from starlette.datastructures import URL
 
