@@ -221,6 +221,7 @@ const sidebars = {
         "rerank",
         "assistants",
         "batches",
+        "realtime",
         "fine_tuning",
         {
           type: "link",
