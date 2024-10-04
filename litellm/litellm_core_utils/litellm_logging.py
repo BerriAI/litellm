@@ -277,26 +277,26 @@ class Logging:
         If a callback is in litellm._known_custom_logger_compatible_callbacks, it needs to be intialized and added to the respective dynamic_* callback list.
         """
         # Process input callbacks
-        self.dynamic_input_callbacks = self._process_callback_list(
+        self.dynamic_input_callbacks = self._process_dynamic_callback_list(
             self.dynamic_input_callbacks, dynamic_callbacks_type="input"
         )
 
         # Process failure callbacks
-        self.dynamic_failure_callbacks = self._process_callback_list(
+        self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
             self.dynamic_failure_callbacks, dynamic_callbacks_type="failure"
         )
 
         # Process success callbacks
-        self.dynamic_success_callbacks = self._process_callback_list(
+        self.dynamic_success_callbacks = self._process_dynamic_callback_list(
             self.dynamic_success_callbacks, dynamic_callbacks_type="success"
         )
 
         # Process async success callbacks
-        self.dynamic_async_success_callbacks = self._process_callback_list(
+        self.dynamic_async_success_callbacks = self._process_dynamic_callback_list(
             self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
         )
 
-    def _process_callback_list(
+    def _process_dynamic_callback_list(
         self,
         callback_list: List[Union[str, Callable, CustomLogger]],
         dynamic_callbacks_type: Literal["input", "success", "failure", "async_success"],
@@ -334,6 +334,11 @@ class Logging:
     def initialize_standard_callback_dynamic_params(
         self, kwargs: Optional[Dict] = None
     ) -> StandardCallbackDynamicParams:
+        """
+        Initialize the standard callback dynamic params from the kwargs
+
+        checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
+        """
         standard_callback_dynamic_params = StandardCallbackDynamicParams()
         if kwargs:
             _supported_callback_params = (
