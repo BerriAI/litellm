@@ -81,12 +81,15 @@ Run a load test on 2 LLM deployments each with 10K RPM Quota. Expect to see ~20K
 
 ### Expected Performance
 
+- We expect to see 20,000+ successful responses in 1 minute
+- The remaining requests **fail because the endpoint exceeds it's 10K RPM quota limit - from the LLM API provider**
+
 | Metric | Value |
 |--------|-------|
-| Successful Responses per Second | ~525+ |
-| Total Requests per Second | ~1256+ |
-| Median Response Time | `86ms` |
-| Average Response Time | `880.18ms` |
+| Successful Responses in 1 minute | 20,000+ |
+| Requests per Second | ~1170+ |
+| Median Response Time | `70ms` |
+| Average Response Time | `640.18ms` |
 
 ### Run Test
 
@@ -103,14 +106,14 @@ model_list:
   - model_name: gemini-vision
     litellm_params:
       model: vertex_ai/gemini-1.0-pro-vision-001
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/bad-adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
       vertex_project: "adroit-crow-413218"
       vertex_location: "us-central1"
       vertex_credentials: /etc/secrets/adroit_crow.json
   - model_name: gemini-vision
     litellm_params:
       model: vertex_ai/gemini-1.0-pro-vision-001
-      api_base: https://exampleopenaiendpoint-production-c715.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
+      api_base: https://exampleopenaiendpoint-production-c715.up.railway.app/v1/projects/bad-adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
       vertex_project: "adroit-crow-413218"
       vertex_location: "us-central1"
       vertex_credentials: /etc/secrets/adroit_crow.json
@@ -127,12 +130,22 @@ litellm_settings:
   Run `locust` in the same directory as your `locustfile.py` from step 2
 
   ```shell
-  locust -f locustfile.py --processes 4
+  locust -f locustfile.py --processes 4 -t 60
   ```
 
 5. Run Load test on locust
 
-  Head to the locust UI on http://0.0.0.0:8089
+  Head to the locust UI on http://0.0.0.0:8089 and use the following settings
+
+  <Image img={require('../img/locust_load_test2_setup.png')} />
+
+6. Expected results
+    - Successful responses in 1 minute = 19,800 = (69415 - 49615)
+    - Requests per second = 1170
+    - Median response time = 70ms
+    - Average response time = 640ms
+
+  <Image img={require('../img/locust_load_test2.png')} />
 
 
 ## Prometheus Metrics for debugging load tests
