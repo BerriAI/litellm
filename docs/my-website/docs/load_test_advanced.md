@@ -14,7 +14,9 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
 - [ ] Ensure you're following **ALL** [best practices for production](./proxy/production_setup.md)
 - [ ] Locust - Ensure you're Locust instance can create 1K+ requests per second
     - 👉 You can use our **[maintained locust instance here](https://locust-load-tester-production.up.railway.app/)**
-    - If you're self hosting locust, [here's the spec used for our locust machine](#machine-specifications-for-running-locust)
+    - If you're self hosting locust
+        - [here's the spec used for our locust machine](#machine-specifications-for-running-locust)
+        - [here  is the locustfile.py used for our tests](#locust-file-used-for-testing)
 - [ ] Use this [**machine specification for running litellm proxy**](#machine-specifications-for-running-litellm-proxy)
 
 
@@ -52,12 +54,6 @@ model_list:
 
   ```shell
   locust -f locustfile.py --processes 4
-  ```
-
-  Output on terminal 
-  ```
-  [2024-03-15 07:19:58,893] Starting web interface at http://0.0.0.0:8089
-  [2024-03-15 07:19:58,898] Starting Locust 2.24.0
   ```
 
 5. Run Load test on locust
@@ -120,12 +116,6 @@ model_list:
 
   ```shell
   locust -f locustfile.py --processes 4
-  ```
-
-  Output on terminal 
-  ```
-  [2024-03-15 07:19:58,893] Starting web interface at http://0.0.0.0:8089
-  [2024-03-15 07:19:58,898] Starting Locust 2.24.0
   ```
 
 5. Run Load test on locust
