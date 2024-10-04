@@ -3125,7 +3125,7 @@ def get_optional_params(
 
         if stream:
             optional_params["stream"] = stream
-            return optional_params
+            #return optional_params
         if max_tokens is not None:
             if "vicuna" in model or "flan" in model:
                 optional_params["max_length"] = max_tokens
