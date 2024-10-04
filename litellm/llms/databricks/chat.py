@@ -219,7 +219,7 @@ def make_sync_call(
     streaming_decoder: Optional[CustomStreamingDecoder] = None,
 ):
     if client is None:
-        client = HTTPHandler()  # Create a new client if none provided
+        client = litellm.module_level_client  # Create a new client if none provided
 
     response = client.post(api_base, headers=headers, data=data, stream=True)
 
@@ -538,12 +538,14 @@ class DatabricksChatCompletion(BaseLLM):
                     base_model=base_model,
                 )
         else:
-            if client is None or not isinstance(client, HTTPHandler):
-                client = HTTPHandler(timeout=timeout)  # type: ignore
             ## COMPLETION CALL
             if stream is True:
                 completion_stream = make_sync_call(
-                    client=client,
+                    client=(
+                        client
+                        if client is not None and isinstance(client, HTTPHandler)
+                        else None
+                    ),
                     api_base=api_base,
                     headers=headers,
                     data=json.dumps(data),
@@ -552,6 +554,7 @@ class DatabricksChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                     streaming_decoder=streaming_decoder,
                 )
+                # completion_stream.__iter__()
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
@@ -559,6 +562,8 @@ class DatabricksChatCompletion(BaseLLM):
                     logging_obj=logging_obj,
                 )
             else:
+                if client is None or not isinstance(client, HTTPHandler):
+                    client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
                     response = client.post(
                         api_base, headers=headers, data=json.dumps(data)
