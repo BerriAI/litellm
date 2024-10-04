@@ -1633,3 +1633,288 @@ def test_bedrock_completion_test_3():
             }
         }
     ]
+
+
+@pytest.mark.parametrize("modify_params", [True, False])
+def test_bedrock_completion_test_4(modify_params):
+    litellm.set_verbose = True
+    litellm.modify_params = modify_params
+
+    data = {
+        "model": "anthropic.claude-3-opus-20240229-v1:0",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "<task>\nWhat is this file?\n</task>"},
+                    {
+                        "type": "text",
+                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n\n# Current Working Directory (/Users/hongbo-miao/Clouds/Git/hongbomiao.com) Files\n.ansible-lint\n.clang-format\n.cmakelintrc\n.dockerignore\n.editorconfig\n.gitignore\n.gitmodules\n.hadolint.yaml\n.isort.cfg\n.markdownlint-cli2.jsonc\n.mergify.yml\n.npmrc\n.nvmrc\n.prettierignore\n.rubocop.yml\n.ruby-version\n.ruff.toml\n.shellcheckrc\n.solhint.json\n.solhintignore\n.sqlfluff\n.sqlfluffignore\n.stylelintignore\n.yamllint.yaml\nCODE_OF_CONDUCT.md\ncommitlint.config.js\nGemfile\nGemfile.lock\nLICENSE\nlint-staged.config.js\nMakefile\nmiss_hit.cfg\nmypy.ini\npackage-lock.json\npackage.json\npoetry.lock\npoetry.toml\nprettier.config.js\npyproject.toml\nREADME.md\nrelease.config.js\nrenovate.json\nSECURITY.md\nstylelint.config.js\naerospace/\naerospace/air-defense-system/\naerospace/hm-aerosandbox/\naerospace/hm-openaerostruct/\naerospace/px4/\naerospace/quadcopter-pd-controller/\naerospace/simulate-satellite/\naerospace/simulated-and-actual-flights/\naerospace/toroidal-propeller/\nansible/\nansible/inventory.yaml\nansible/Makefile\nansible/requirements.yml\nansible/hm_macos_group/\nansible/hm_ubuntu_group/\nansible/hm_windows_group/\napi-go/\napi-go/buf.yaml\napi-go/go.mod\napi-go/go.sum\napi-go/Makefile\napi-go/api/\napi-go/build/\napi-go/cmd/\napi-go/config/\napi-go/internal/\napi-node/\napi-node/.env.development\napi-node/.env.development.local.example\napi-node/.env.development.local.example.docker\napi-node/.env.production\napi-node/.env.production.local.example\napi-node/.env.test\napi-node/.eslintignore\napi-node/.eslintrc.js\napi-node/.npmrc\napi-node/.nvmrc\napi-node/babel.config.js\napi-node/docker-compose.cypress.yaml\napi-node/docker-compose.development.yaml\napi-node/Dockerfile\napi-node/Dockerfile.development\napi-node/jest.config.js\napi-node/Makefile\napi-node/package-lock.json\napi-node/package.json\napi-node/Procfile\napi-node/stryker.conf.js\napi-node/tsconfig.json\napi-node/bin/\napi-node/postgres/\napi-node/scripts/\napi-node/src/\napi-python/\napi-python/.flaskenv\napi-python/docker-entrypoint.sh\napi-python/Dockerfile\napi-python/Makefile\napi-python/poetry.lock\napi-python/poetry.toml\napi-python/pyproject.toml\napi-python/flaskr/\nasterios/\nasterios/led-blinker/\nauthorization/\nauthorization/hm-opal-client/\nauthorization/ory-hydra/\nautomobile/\nautomobile/build-map-by-lidar-point-cloud/\nautomobile/detect-lane-by-lidar-point-cloud/\nbin/\nbin/clean.sh\nbin/count_code_lines.sh\nbin/lint_javascript_fix.sh\nbin/lint_javascript.sh\nbin/set_up.sh\nbiology/\nbiology/compare-nucleotide-sequences/\nbusybox/\nbusybox/Makefile\ncaddy/\ncaddy/Caddyfile\ncaddy/Makefile\ncaddy/bin/\ncloud-computing/\ncloud-computing/hm-ray/\ncloud-computing/hm-skypilot/\ncloud-cost/\ncloud-cost/komiser/\ncloud-infrastructure/\ncloud-infrastructure/hm-pulumi/\ncloud-infrastructure/karpenter/\ncloud-infrastructure/terraform/\ncloud-platform/\ncloud-platform/aws/\ncloud-platform/google-cloud/\ncloud-security/\ncloud-security/hm-prowler/\ncomputational-fluid-dynamics/\ncomputational-fluid-dynamics/matlab/\ncomputational-fluid-dynamics/openfoam/\ncomputer-vision/\ncomputer-vision/hm-open3d/\ncomputer-vision/hm-pyvista/\ndata-analytics/\ndata-analytics/hm-geopandas/\ndata-distribution-service/\ndata-distribution-service/dummy_test.py\ndata-distribution-service/hm_message.idl\ndata-distribution-service/hm_message.xml\ndata-distribution-service/Makefile\ndata-distribution-service/poetry.lock\ndata-distribution-service/poetry.toml\ndata-distribution-service/publish.py\ndata-ingestion/\ndata-orchestration/\ndata-processing/\ndata-storage/\ndata-transformation/\ndata-visualization/\ndesktop-qt/\nembedded/\nethereum/\ngit/\ngolang-migrate/\nhardware-in-the-loop/\nhasura-graphql-engine/\nhigh-performance-computing/\nhm-alpine/\nhm-kafka/\nhm-locust/\nhm-rust/\nhm-traefik/\nhm-xxhash/\nkubernetes/\nmachine-learning/\nmatlab/\nmobile/\nnetwork-programmability/\noperating-system/\nparallel-computing/\nphysics/\nquantum-computing/\nrclone/\nrestic/\nreverse-engineering/\nrobotics/\nsubmodules/\ntrino/\nvagrant/\nvalgrind/\nvhdl/\nvim/\nweb/\nweb-cypress/\nwireless-network/\n\n(File list truncated. Use list_files on specific subdirectories if you need to explore further.)\n</environment_details>",
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": '<thinking>\nThe user is asking about a specific file: main.py. Based on the environment details provided, this file is located in the computer-vision/hm-open3d/src/ directory and is currently open in a VSCode tab.\n\nTo answer the question of what this file is, the most relevant tool would be the read_file tool. This will allow me to examine the contents of main.py to determine its purpose.\n\nThe read_file tool requires the "path" parameter. I can infer this path based on the environment details:\npath: "computer-vision/hm-open3d/src/main.py"\n\nSince I have the necessary parameter, I can proceed with calling the read_file tool.\n</thinking>',
+                "tool_calls": [
+                    {
+                        "id": "tooluse_qCt-KEyWQlWiyHl26spQVA",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path":"computer-vision/hm-open3d/src/main.py"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tooluse_qCt-KEyWQlWiyHl26spQVA",
+                "content": 'import numpy as np\nimport open3d as o3d\n\n\ndef main():\n    ply_point_cloud = o3d.data.PLYPointCloud()\n    pcd = o3d.io.read_point_cloud(ply_point_cloud.path)\n    print(pcd)\n    print(np.asarray(pcd.points))\n\n    demo_crop_data = o3d.data.DemoCropPointCloud()\n    vol = o3d.visualization.read_selection_polygon_volume(\n        demo_crop_data.cropped_json_path\n    )\n    chair = vol.crop_point_cloud(pcd)\n\n    dists = pcd.compute_point_cloud_distance(chair)\n    dists = np.asarray(dists)\n    idx = np.where(dists > 0.01)[0]\n    pcd_without_chair = pcd.select_by_index(idx)\n\n    axis_aligned_bounding_box = chair.get_axis_aligned_bounding_box()\n    axis_aligned_bounding_box.color = (1, 0, 0)\n\n    oriented_bounding_box = chair.get_oriented_bounding_box()\n    oriented_bounding_box.color = (0, 1, 0)\n\n    o3d.visualization.draw_geometries(\n        [pcd_without_chair, chair, axis_aligned_bounding_box, oriented_bounding_box],\n        zoom=0.3412,\n        front=[0.4, -0.2, -0.9],\n        lookat=[2.6, 2.0, 1.5],\n        up=[-0.10, -1.0, 0.2],\n    )\n\n\nif __name__ == "__main__":\n    main()\n',
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n</environment_details>",
+                    }
+                ],
+            },
+        ],
+        "temperature": 0.2,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_command",
+                    "description": "Execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands will be executed in the current working directory: /Users/hongbo-miao/Clouds/Git/hongbomiao.com",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions.",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file, for example to analyze code, review text files, or extract information from configuration files. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the file to read (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_to_file",
+                    "description": "Write content to a file at the specified path. If the file exists, it will be overwritten with the provided content. If the file doesn't exist, it will be created. Always provide the full intended content of the file, without any truncation. This tool will automatically create any directories needed to write the file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the file to write to (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "The full content to write to the file.",
+                            },
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_files",
+                    "description": "Perform a regex search across files in a specified directory, providing context-rich results. This tool searches for patterns or specific content across multiple files, displaying each match with encapsulating context.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the directory to search in (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com). This directory will be recursively searched.",
+                            },
+                            "regex": {
+                                "type": "string",
+                                "description": "The regular expression pattern to search for. Uses Rust regex syntax.",
+                            },
+                            "filePattern": {
+                                "type": "string",
+                                "description": "Optional glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (*).",
+                            },
+                        },
+                        "required": ["path", "regex"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_files",
+                    "description": "List files and directories within the specified directory. If recursive is true, it will list all files and directories recursively. If recursive is false or not provided, it will only list the top-level contents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the directory to list contents for (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
+                            },
+                            "recursive": {
+                                "type": "string",
+                                "enum": ["true", "false"],
+                                "description": "Whether to list files recursively. Use 'true' for recursive listing, 'false' or omit for top-level only.",
+                            },
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_code_definition_names",
+                    "description": "Lists definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the directory (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com) to list top level source code definitions for",
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "inspect_site",
+                    "description": "Captures a screenshot and console logs of the initial state of a website. This tool navigates to the specified URL, takes a screenshot of the entire page as it appears immediately after loading, and collects any console logs or errors that occur during page load. It does not interact with the page or capture any state changes after the initial load.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "The URL of the site to inspect. This should be a valid URL including the protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.)",
+                            }
+                        },
+                        "required": ["url"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ask_followup_question",
+                    "description": "Ask the user a question to gather additional information needed to complete the task. This tool should be used when you encounter ambiguities, need clarification, or require more details to proceed effectively. It allows for interactive problem-solving by enabling direct communication with the user. Use this tool judiciously to maintain a balance between gathering necessary information and avoiding excessive back-and-forth.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The question to ask the user. This should be a clear, specific question that addresses the information you need.",
+                            }
+                        },
+                        "required": ["question"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "attempt_completion",
+                    "description": "Once you've completed the task, use this tool to present the result to the user. Optionally you may provide a CLI command to showcase the result of your work, but avoid using commands like 'echo' or 'cat' that merely print text. They may respond with feedback if they are not satisfied with the result, which you can use to make improvements and try again.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "A CLI command to execute to show a live demo of the result to the user. For example, use 'open index.html' to display a created website. This command should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions.",
+                            },
+                            "result": {
+                                "type": "string",
+                                "description": "The result of the task. Formulate this result in a way that is final and does not require further input from the user. Don't end your result with questions or offers for further assistance.",
+                            },
+                        },
+                        "required": ["result"],
+                    },
+                },
+            },
+        ],
+        "tool_choice": "auto",
+    }
+
+    if modify_params:
+        transformed_messages = _bedrock_converse_messages_pt(
+            messages=data["messages"], model="", llm_provider=""
+        )
+        expected_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"text": "<task>\nWhat is this file?\n</task>"},
+                    {
+                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n\n# Current Working Directory (/Users/hongbo-miao/Clouds/Git/hongbomiao.com) Files\n.ansible-lint\n.clang-format\n.cmakelintrc\n.dockerignore\n.editorconfig\n.gitignore\n.gitmodules\n.hadolint.yaml\n.isort.cfg\n.markdownlint-cli2.jsonc\n.mergify.yml\n.npmrc\n.nvmrc\n.prettierignore\n.rubocop.yml\n.ruby-version\n.ruff.toml\n.shellcheckrc\n.solhint.json\n.solhintignore\n.sqlfluff\n.sqlfluffignore\n.stylelintignore\n.yamllint.yaml\nCODE_OF_CONDUCT.md\ncommitlint.config.js\nGemfile\nGemfile.lock\nLICENSE\nlint-staged.config.js\nMakefile\nmiss_hit.cfg\nmypy.ini\npackage-lock.json\npackage.json\npoetry.lock\npoetry.toml\nprettier.config.js\npyproject.toml\nREADME.md\nrelease.config.js\nrenovate.json\nSECURITY.md\nstylelint.config.js\naerospace/\naerospace/air-defense-system/\naerospace/hm-aerosandbox/\naerospace/hm-openaerostruct/\naerospace/px4/\naerospace/quadcopter-pd-controller/\naerospace/simulate-satellite/\naerospace/simulated-and-actual-flights/\naerospace/toroidal-propeller/\nansible/\nansible/inventory.yaml\nansible/Makefile\nansible/requirements.yml\nansible/hm_macos_group/\nansible/hm_ubuntu_group/\nansible/hm_windows_group/\napi-go/\napi-go/buf.yaml\napi-go/go.mod\napi-go/go.sum\napi-go/Makefile\napi-go/api/\napi-go/build/\napi-go/cmd/\napi-go/config/\napi-go/internal/\napi-node/\napi-node/.env.development\napi-node/.env.development.local.example\napi-node/.env.development.local.example.docker\napi-node/.env.production\napi-node/.env.production.local.example\napi-node/.env.test\napi-node/.eslintignore\napi-node/.eslintrc.js\napi-node/.npmrc\napi-node/.nvmrc\napi-node/babel.config.js\napi-node/docker-compose.cypress.yaml\napi-node/docker-compose.development.yaml\napi-node/Dockerfile\napi-node/Dockerfile.development\napi-node/jest.config.js\napi-node/Makefile\napi-node/package-lock.json\napi-node/package.json\napi-node/Procfile\napi-node/stryker.conf.js\napi-node/tsconfig.json\napi-node/bin/\napi-node/postgres/\napi-node/scripts/\napi-node/src/\napi-python/\napi-python/.flaskenv\napi-python/docker-entrypoint.sh\napi-python/Dockerfile\napi-python/Makefile\napi-python/poetry.lock\napi-python/poetry.toml\napi-python/pyproject.toml\napi-python/flaskr/\nasterios/\nasterios/led-blinker/\nauthorization/\nauthorization/hm-opal-client/\nauthorization/ory-hydra/\nautomobile/\nautomobile/build-map-by-lidar-point-cloud/\nautomobile/detect-lane-by-lidar-point-cloud/\nbin/\nbin/clean.sh\nbin/count_code_lines.sh\nbin/lint_javascript_fix.sh\nbin/lint_javascript.sh\nbin/set_up.sh\nbiology/\nbiology/compare-nucleotide-sequences/\nbusybox/\nbusybox/Makefile\ncaddy/\ncaddy/Caddyfile\ncaddy/Makefile\ncaddy/bin/\ncloud-computing/\ncloud-computing/hm-ray/\ncloud-computing/hm-skypilot/\ncloud-cost/\ncloud-cost/komiser/\ncloud-infrastructure/\ncloud-infrastructure/hm-pulumi/\ncloud-infrastructure/karpenter/\ncloud-infrastructure/terraform/\ncloud-platform/\ncloud-platform/aws/\ncloud-platform/google-cloud/\ncloud-security/\ncloud-security/hm-prowler/\ncomputational-fluid-dynamics/\ncomputational-fluid-dynamics/matlab/\ncomputational-fluid-dynamics/openfoam/\ncomputer-vision/\ncomputer-vision/hm-open3d/\ncomputer-vision/hm-pyvista/\ndata-analytics/\ndata-analytics/hm-geopandas/\ndata-distribution-service/\ndata-distribution-service/dummy_test.py\ndata-distribution-service/hm_message.idl\ndata-distribution-service/hm_message.xml\ndata-distribution-service/Makefile\ndata-distribution-service/poetry.lock\ndata-distribution-service/poetry.toml\ndata-distribution-service/publish.py\ndata-ingestion/\ndata-orchestration/\ndata-processing/\ndata-storage/\ndata-transformation/\ndata-visualization/\ndesktop-qt/\nembedded/\nethereum/\ngit/\ngolang-migrate/\nhardware-in-the-loop/\nhasura-graphql-engine/\nhigh-performance-computing/\nhm-alpine/\nhm-kafka/\nhm-locust/\nhm-rust/\nhm-traefik/\nhm-xxhash/\nkubernetes/\nmachine-learning/\nmatlab/\nmobile/\nnetwork-programmability/\noperating-system/\nparallel-computing/\nphysics/\nquantum-computing/\nrclone/\nrestic/\nreverse-engineering/\nrobotics/\nsubmodules/\ntrino/\nvagrant/\nvalgrind/\nvhdl/\nvim/\nweb/\nweb-cypress/\nwireless-network/\n\n(File list truncated. Use list_files on specific subdirectories if you need to explore further.)\n</environment_details>"
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"path": "computer-vision/hm-open3d/src/main.py"},
+                            "name": "read_file",
+                            "toolUseId": "tooluse_qCt-KEyWQlWiyHl26spQVA",
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "content": [
+                                {
+                                    "text": 'import numpy as np\nimport open3d as o3d\n\n\ndef main():\n    ply_point_cloud = o3d.data.PLYPointCloud()\n    pcd = o3d.io.read_point_cloud(ply_point_cloud.path)\n    print(pcd)\n    print(np.asarray(pcd.points))\n\n    demo_crop_data = o3d.data.DemoCropPointCloud()\n    vol = o3d.visualization.read_selection_polygon_volume(\n        demo_crop_data.cropped_json_path\n    )\n    chair = vol.crop_point_cloud(pcd)\n\n    dists = pcd.compute_point_cloud_distance(chair)\n    dists = np.asarray(dists)\n    idx = np.where(dists > 0.01)[0]\n    pcd_without_chair = pcd.select_by_index(idx)\n\n    axis_aligned_bounding_box = chair.get_axis_aligned_bounding_box()\n    axis_aligned_bounding_box.color = (1, 0, 0)\n\n    oriented_bounding_box = chair.get_oriented_bounding_box()\n    oriented_bounding_box.color = (0, 1, 0)\n\n    o3d.visualization.draw_geometries(\n        [pcd_without_chair, chair, axis_aligned_bounding_box, oriented_bounding_box],\n        zoom=0.3412,\n        front=[0.4, -0.2, -0.9],\n        lookat=[2.6, 2.0, 1.5],\n        up=[-0.10, -1.0, 0.2],\n    )\n\n\nif __name__ == "__main__":\n    main()\n'
+                                }
+                            ],
+                            "toolUseId": "tooluse_qCt-KEyWQlWiyHl26spQVA",
+                        }
+                    }
+                ],
+            },
+            {"role": "assistant", "content": [{"text": "Please continue."}]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n</environment_details>"
+                    }
+                ],
+            },
+        ]
+        assert transformed_messages == expected_messages
+    else:
+        with pytest.raises(Exception) as e:
+            litellm.completion(**data)
+        assert "litellm.modify_params" in str(e.value)

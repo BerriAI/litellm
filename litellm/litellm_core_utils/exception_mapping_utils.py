@@ -750,6 +750,17 @@ def exception_type(  # type: ignore
                         model=model,
                         llm_provider="bedrock",
                     )
+                elif (
+                    "Conversation blocks and tool result blocks cannot be provided in the same turn."
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"BedrockException - {error_str}\n. Enable 'litellm.modify_params=True' (for PROXY do: `litellm_settings::modify_params: True`) to insert a dummy assistant message and fix this error.",
+                        model=model,
+                        llm_provider="bedrock",
+                        response=original_exception.response,
+                    )
                 elif "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
