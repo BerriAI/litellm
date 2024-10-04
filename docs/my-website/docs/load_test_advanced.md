@@ -1,3 +1,6 @@
+import Image from '@theme/IdealImage';
+
+
 # LiteLLM Proxy - 1K RPS Load test on locust 
 
 Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
@@ -61,7 +64,11 @@ model_list:
 
   Head to the locust UI on http://0.0.0.0:8089
 
-  Set **Users=1000, Ramp Up Users=500**, Host=Base URL of your LiteLLM Proxy
+  Set **Users=1000, Ramp Up Users=1000**, Host=Base URL of your LiteLLM Proxy
+
+6. Expected results 
+
+  <Image img={require('../img/locust_load_test1.png')} />
 
 ## Load test - Endpoints with Rate Limits
 
@@ -78,20 +85,30 @@ Run a load test on 2 LLM deployments each with 10K RPM Quota. Expect to see ~20K
 
 ### Run Test
 
-1. Add 2 `fake-openai-endpoint` deployments on your config.yaml. Each deployment can handle 10K RPM. (We setup a fake endpoint with a rate limit of 1000 RPM on the `/v1/projects/bad-adroit-crow` route below )
+1. Add 2 `gemini-vision` deployments on your config.yaml. Each deployment can handle 10K RPM. (We setup a fake endpoint with a rate limit of 1000 RPM on the `/v1/projects/bad-adroit-crow` route below )
+
+:::info
+
+All requests with `model="gemini-vision"` will be load balanced equally across the 2 deployments.
+
+:::
 
 ```yaml
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gemini-vision
     litellm_params:
-      model: vertex_ai/fake
-      vertex_credentials: adroit-crow-413218-a9444499891b.json
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/bad-adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001:generateContent
-  - model_name: fake-openai-endpoint
+      model: vertex_ai/gemini-1.0-pro-vision-001
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: /etc/secrets/adroit_crow.json
+  - model_name: gemini-vision
     litellm_params:
-      model: vertex_ai/fake
-      vertex_credentials: adroit-crow-413218-a9444499891b.json
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/v1/projects/bad-adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001:generateContent
+      model: vertex_ai/gemini-1.0-pro-vision-001
+      api_base: https://exampleopenaiendpoint-production-c715.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: /etc/secrets/adroit_crow.json
 ```
 
 2. `pip install locust`
@@ -135,6 +152,34 @@ model_list:
 | --- | --- | --- | --- | --- | --- | 
 | Server | `t2.large`. | `2vCPUs` | `8GB` | `x86` |
 
+
+## Locust file used for testing 
+
+```python
+import os
+import uuid
+from locust import HttpUser, task, between
+
+class MyUser(HttpUser):
+    wait_time = between(0.5, 1)  # Random wait time between requests
+
+    @task(100)
+    def litellm_completion(self):
+        # no cache hits with this
+        payload = {
+            "model": "fake-openai-endpoint",
+            "messages": [{"role": "user", "content": f"{uuid.uuid4()} This is a test there will be no cache hits and we'll fill up the context" * 150 }],
+            "user": "my-new-end-user-1"
+        }
+        response = self.client.post("chat/completions", json=payload)
+        if response.status_code != 200:
+            # log the errors in error.txt
+            with open("error.txt", "a") as error_log:
+                error_log.write(response.text + "\n")
     
 
 
+    def on_start(self):
+        self.api_key = os.getenv('API_KEY', 'sk-1234')
+        self.client.headers.update({'Authorization': f'Bearer {self.api_key}'})
+```
