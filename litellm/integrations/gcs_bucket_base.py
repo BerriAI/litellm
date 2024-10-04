@@ -31,14 +31,8 @@ class GCSBucketBase(CustomLogger):
         )
         _path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
         _bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME")
-        if _path_service_account is None:
-            raise ValueError("GCS_PATH_SERVICE_ACCOUNT environment variable is not set")
-        if _bucket_name is None:
-            raise ValueError(
-                "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-            )
-        self.path_service_account_json: str = _path_service_account
-        self.BUCKET_NAME: str = _bucket_name
+        self.path_service_account_json: Optional[str] = _path_service_account
+        self.BUCKET_NAME: Optional[str] = _bucket_name
 
     async def construct_request_headers(
         self,
