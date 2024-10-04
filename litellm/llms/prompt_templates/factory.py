@@ -2375,7 +2375,7 @@ def _insert_assistant_continue_message(
             )
         )
     elif litellm.modify_params:
-        messages.append(BedrockMessageBlock(**DEFAULT_ASSISTANT_CONTINUE_MESSAGE))
+        messages.append(BedrockMessageBlock(**DEFAULT_ASSISTANT_CONTINUE_MESSAGE))  # type: ignore
     return messages
 
 
