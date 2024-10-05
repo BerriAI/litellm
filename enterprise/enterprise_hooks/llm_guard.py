@@ -8,7 +8,11 @@
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
 from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid, os
+import litellm
+import traceback
+import sys
+import uuid
+import os
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
@@ -21,8 +25,10 @@ from litellm.utils import (
     StreamingChoices,
 )
 from datetime import datetime
-import aiohttp, asyncio
+import aiohttp
+import asyncio
 from litellm.utils import get_formatted_prompt
+from litellm.secret_managers.main import get_secret_str
 
 litellm.set_verbose = True
 
@@ -38,7 +44,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         self.llm_guard_mode = litellm.llm_guard_mode
         if mock_testing == True:  # for testing purposes only
             return
-        self.llm_guard_api_base = litellm.get_secret("LLM_GUARD_API_BASE", None)
+        self.llm_guard_api_base = get_secret_str("LLM_GUARD_API_BASE", None)
         if self.llm_guard_api_base is None:
             raise Exception("Missing `LLM_GUARD_API_BASE` from environment")
         elif not self.llm_guard_api_base.endswith("/"):
