@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Prompt Caching 
 
 For OpenAI + Anthropic + Deepseek, LiteLLM follows the OpenAI prompt caching usage object format:
@@ -197,3 +200,86 @@ response_2 = litellm.completion(model=model_name, messages=message_2)
 # Add any assertions here to check the response
 print(response_2.usage)
 ```
+
+
+## Calculate Cost 
+
+Cost cache-hit prompt tokens can differ from cache-miss prompt tokens.
+
+Use the `completion_cost()` function for calculating cost ([handles prompt caching cost calculation](https://github.com/BerriAI/litellm/blob/f7ce1173f3315cc6cae06cf9bcf12e54a2a19705/litellm/llms/anthropic/cost_calculation.py#L12) as well). [**See more helper functions**](./token_usage.md)
+
+```python
+cost = completion_cost(completion_response=response, model=model)
+```
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion, completion_cost
+import litellm 
+import os 
+
+litellm.set_verbose = True # 👈 SEE RAW REQUEST
+os.environ["ANTHROPIC_API_KEY"] = "" 
+model = "anthropic/claude-3-5-sonnet-20240620"
+response = completion(
+    model=model,
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+print(response.usage)
+
+cost = completion_cost(completion_response=response, model=model) 
+
+formatted_string = f"${float(cost):.10f}"
+print(formatted_string)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+LiteLLM returns the calculated cost in the response headers - `x-litellm-response-cost` 
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY", # sk-1234..
+    base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
+)
+response = client.chat.completions.with_raw_response.create(
+    messages=[{
+        "role": "user",
+        "content": "Say this is a test",
+    }],
+    model="gpt-3.5-turbo",
+)
+print(response.headers.get('x-litellm-response-cost'))
+
+completion = response.parse()  # get the object that `chat.completions.create()` would have returned
+print(completion)
+```
+
+</TabItem>
+</Tabs>
