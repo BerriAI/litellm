@@ -32,22 +32,27 @@ for root, dirs, files in os.walk(repo_base):
                 general_settings_keys.update(bracket_matches)
 
 # Parse the documentation to extract documented keys
+repo_base = "../.."
+print(os.listdir(repo_base))
 docs_path = "../../docs/my-website/docs/proxy/configs.md"  # Path to the documentation
 documented_keys = set()
-with open(docs_path, "r", encoding="utf-8") as docs_file:
-    content = docs_file.read()
+try:
+    with open(docs_path, "r", encoding="utf-8") as docs_file:
+        content = docs_file.read()
 
-    # Find the section titled "general_settings - Reference"
-    general_settings_section = re.search(
-        r"### general_settings - Reference(.*?)###", content, re.DOTALL
-    )
-    if general_settings_section:
-        # Extract the table rows, which contain the documented keys
-        table_content = general_settings_section.group(1)
-        doc_key_pattern = re.compile(
-            r"\|\s*([^\|]+?)\s*\|"
-        )  # Capture the key from each row of the table
-        documented_keys.update(doc_key_pattern.findall(table_content))
+        # Find the section titled "general_settings - Reference"
+        general_settings_section = re.search(
+            r"### general_settings - Reference(.*?)###", content, re.DOTALL
+        )
+        if general_settings_section:
+            # Extract the table rows, which contain the documented keys
+            table_content = general_settings_section.group(1)
+            doc_key_pattern = re.compile(
+                r"\|\s*([^\|]+?)\s*\|"
+            )  # Capture the key from each row of the table
+            documented_keys.update(doc_key_pattern.findall(table_content))
+except Exception as e:
+    print(f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}")
 
 # Compare and find undocumented keys
 undocumented_keys = general_settings_keys - documented_keys
