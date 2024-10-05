@@ -1925,12 +1925,12 @@ class CurrentItemRateLimit(TypedDict):
     current_rpm: int
 
 
-class LoggingCallbackStatus(BaseModel):
+class LoggingCallbackStatus(TypedDict, total=False):
     callbacks: List[str]
     status: str
-    details: Optional[str] = None
+    details: Optional[str]
 
 
-class KeyHealthResponse(BaseModel):
+class KeyHealthResponse(TypedDict, total=False):
     key: str
-    logging_callbacks: Optional[LoggingCallbackStatus] = None
+    logging_callbacks: Optional[LoggingCallbackStatus]

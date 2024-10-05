@@ -1511,10 +1511,10 @@ async def key_health(
         # Get the key's metadata
         key_metadata = user_api_key_dict.metadata
 
-        health_status = {
-            "key": "healthy",
-            "logging_callbacks": None,
-        }
+        health_status: KeyHealthResponse = KeyHealthResponse(
+            key="healthy",
+            logging_callbacks=None,
+        )
 
         # Check if logging is configured in metadata
         if key_metadata and "logging" in key_metadata:
