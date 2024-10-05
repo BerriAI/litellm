@@ -1512,7 +1512,7 @@ async def test_key_logging(
     user_api_key_dict: UserAPIKeyAuth,
     request: Request,
     key_logging: List[Dict[str, Any]],
-) -> List[LoggingCallbackStatus]:
+) -> LoggingCallbackStatus:
     """
     Test the key-based logging
 
@@ -1555,35 +1555,26 @@ async def test_key_logging(
         )
         response = await litellm.acompletion(**data)
     except Exception as e:
-        logging_statuses.append(
-            LoggingCallbackStatus(
-                callbacks=logging_callbacks,
-                status="error",
-                details=f"Logging test failed: {str(e)}",
-            )
+        return LoggingCallbackStatus(
+            callbacks=logging_callbacks,
+            status="error",
+            details=f"Logging test failed: {str(e)}",
         )
 
     await asyncio.sleep(1)
 
     # Check if any logger exceptions were triggered
     log_contents = log_capture_string.getvalue()
+    logger.removeHandler(ch)
     if log_contents:
-        logging_statuses.append(
-            LoggingCallbackStatus(
-                callbacks=logging_callbacks,
-                status="unhealthy",
-                details=f"Logger exceptions triggered, system is unhealthy: {log_contents}",
-            )
+        return LoggingCallbackStatus(
+            callbacks=logging_callbacks,
+            status="unhealthy",
+            details=f"Logger exceptions triggered, system is unhealthy: {log_contents}",
         )
     else:
-        logging_statuses.append(
-            LoggingCallbackStatus(
-                callbacks=logging_callbacks,
-                status="healthy",
-                details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
-            )
+        return LoggingCallbackStatus(
+            callbacks=logging_callbacks,
+            status="healthy",
+            details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
         )
-
-    logger.removeHandler(ch)
-
-    return logging_statuses
