@@ -176,6 +176,8 @@ print(response)
 
 | Model Name       | Function Call                          |
 |------------------|----------------------------------------|
+| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
 | gpt-4o-mini            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4o            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4            | `completion('azure/<your deployment name>', messages)`         |
