@@ -4,7 +4,7 @@ import time
 import traceback
 import types
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import requests  # type: ignore
 
@@ -185,8 +185,8 @@ def completion(
 def embedding(
     model: str,
     input: list,
-    api_key: Optional[str] = None,
-    logging_obj=None,
+    api_key: Optional[str],
+    logging_obj: Any,
     model_response=None,
     encoding=None,
 ):

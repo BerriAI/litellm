@@ -77,10 +77,10 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
+        logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str],
         api_base: Optional[str],
         client=None,
-        logging_obj=None,
         atranscription: bool = False,
     ):
         data = {"model": model, "file": audio_file, **optional_params}
@@ -97,7 +97,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 logging_obj=logging_obj,
             )
 
-        openai_client = self._get_openai_client(
+        openai_client: OpenAI = self._get_openai_client(  # type: ignore
             is_async=False,
             api_key=api_key,
             api_base=api_base,
@@ -139,7 +139,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         max_retries=None,
     ):
         try:
-            openai_aclient = self._get_openai_client(
+            openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                 is_async=True,
                 api_key=api_key,
                 api_base=api_base,

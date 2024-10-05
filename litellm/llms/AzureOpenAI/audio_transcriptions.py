@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -24,6 +24,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
+        logging_obj: Any,
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -32,7 +33,6 @@ class AzureAudioTranscription(AzureChatCompletion):
         api_version: Optional[str] = None,
         client=None,
         azure_ad_token: Optional[str] = None,
-        logging_obj=None,
         atranscription: bool = False,
     ):
         data = {"model": model, "file": audio_file, **optional_params}
@@ -114,12 +114,12 @@ class AzureAudioTranscription(AzureChatCompletion):
         data: dict,
         model_response: TranscriptionResponse,
         timeout: float,
+        azure_client_params: dict,
+        logging_obj: Any,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
-        azure_client_params=None,
         max_retries=None,
-        logging_obj=None,
     ):
         response = None
         try:
