@@ -1,9 +1,15 @@
+"""
+This file contains the PrismaWrapper class, which is used to wrap the Prisma client and handle the RDS IAM token.
+"""
+
 import asyncio
 import os
 import urllib
 import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
+
+from litellm.secret_managers.main import str_to_bool
 
 
 class PrismaWrapper:
@@ -107,6 +113,11 @@ class PrismaWrapper:
 
 
 def should_update_schema(disable_prisma_schema_update: Optional[bool]):
+    """
+    This function is used to determine if the Prisma schema should be updated.
+    """
+    if disable_prisma_schema_update is None:
+        disable_prisma_schema_update = str_to_bool(os.getenv("DISABLE_SCHEMA_UPDATE"))
     if disable_prisma_schema_update is True:
-        return True
-    return False
+        return False
+    return True

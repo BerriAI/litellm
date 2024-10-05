@@ -650,8 +650,11 @@ def run_server(
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
                 from litellm.proxy.db.prisma_client import should_update_schema
 
-                if should_update_schema(
-                    general_settings.get("disable_prisma_schema_update")
+                if (
+                    should_update_schema(
+                        general_settings.get("disable_prisma_schema_update")
+                    )
+                    is False
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
