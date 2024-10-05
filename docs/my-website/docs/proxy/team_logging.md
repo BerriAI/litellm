@@ -301,3 +301,53 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 Help us improve this feature, by filing a [ticket here](https://github.com/BerriAI/litellm/issues)
 
+### Check if key callbacks are configured correctly `/key/health`
+
+Call `/key/health` with the key to check if the callback settings are configured correctly
+
+Pass the key in the request header
+
+```bash
+curl -X POST "http://localhost:4000/key/health" \
+  -H "Authorization: Bearer <your-key>" \
+  -H "Content-Type: application/json"
+```
+
+<Tabs>
+<TabItem label="Response when key is configured correctly" value="Response when key is configured correctly">
+
+Response when logging callbacks are setup correctly:
+
+```json
+{
+  "key": "healthy",
+  "logging_callbacks": {
+    "callbacks": [
+      "gcs_bucket"
+    ],
+    "status": "healthy",
+    "details": "No logger exceptions triggered, system is healthy. Manually check if logs were sent to ['gcs_bucket']"
+  }
+}
+```
+
+</TabItem>
+
+<TabItem label="Response when key is configured incorrectly" value="Response when key is configured incorrectly">
+
+Response when logging callbacks are not setup correctly:
+```json
+{
+  "key": "healthy",
+  "logging_callbacks": {
+    "callbacks": [
+      "gcs_bucket"
+    ],
+    "status": "unhealthy",
+    "details": "Logger exceptions triggered, system is unhealthy: Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+  }
+}
+```
+
+</TabItem>
+</Tabs>
