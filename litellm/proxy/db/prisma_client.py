@@ -104,3 +104,9 @@ class PrismaWrapper:
                     raise ValueError("Failed to get RDS IAM token")
 
         return original_attr
+
+
+def should_update_schema(disable_prisma_schema_update: Optional[bool]):
+    if disable_prisma_schema_update is True:
+        return True
+    return False

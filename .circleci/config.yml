@@ -319,6 +319,37 @@ jobs:
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
     
+  db_migration_disable_update_check:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 20.10.14
+      - run:
+          name: Build and run Docker image
+          command: |
+            docker build -t myapp .
+            output=$(docker run --rm \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 2>&1) || true
+            echo "$output" > docker_output.txt
+      - run:
+          name: Check for expected error
+          command: |
+            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two - \['ALTER TABLE \"LiteLLM_BudgetTable\" DROP COLUMN \"temp_verification_token\";\']" docker_output.txt; then
+              echo "Expected error found. Test passed."
+            else
+              echo "Expected error not found. Test failed."
+              exit 1
+            fi
 
   build_and_test:
     machine:
@@ -869,6 +900,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - db_migration_disable_update_check:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - installing_litellm_on_python:
           filters:
             branches:
@@ -890,6 +927,7 @@ workflows:
             - litellm_router_testing
             - litellm_assistants_api_testing
             - ui_endpoint_testing
+            - db_migration_disable_update_check
             - e2e_ui_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
