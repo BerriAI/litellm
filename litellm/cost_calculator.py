@@ -25,6 +25,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_query as azure_ai_rerank_cost_per_query,
 )
+from litellm.llms.AzureOpenAI.cost_calculation import (
+    cost_per_token as azure_openai_cost_per_token,
+)
 from litellm.llms.cohere.cost_calculator import (
     cost_per_query as cohere_rerank_cost_per_query,
 )
@@ -261,6 +264,10 @@ def cost_per_token(
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure":
+        return azure_openai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
