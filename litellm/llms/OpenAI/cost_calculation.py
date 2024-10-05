@@ -53,5 +53,16 @@ def cost_per_token(
         ## COST PER SECOND ##
         prompt_cost = 0
         completion_cost = model_info["output_cost_per_second"] * response_time_ms / 1000
+    elif (
+        "input_cost_per_second" in model_info
+        and model_info["input_cost_per_second"] is not None
+        and response_time_ms is not None
+    ):
+        verbose_logger.debug(
+            f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; response time: {response_time_ms}"
+        )
+        ## COST PER SECOND ##
+        prompt_cost = model_info["input_cost_per_second"] * response_time_ms / 1000
+        completion_cost = 0.0
 
     return prompt_cost, completion_cost
