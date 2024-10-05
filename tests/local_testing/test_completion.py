@@ -1711,6 +1711,9 @@ def test_completion_perplexity_api():
 # test_completion_perplexity_api()
 
 
+@pytest.mark.skip(
+    reason="too many requests. Hitting gemini rate limits. Convert to mock test."
+)
 def test_completion_pydantic_obj_2():
     from pydantic import BaseModel
 
