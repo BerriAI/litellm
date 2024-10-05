@@ -43,17 +43,17 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         model_response: litellm.ImageResponse,
+        logging_obj: Any,
         model: Optional[
             str
         ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[Any] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
-        logging_obj=None,
         aimg_generation=False,
-    ):
+    ) -> litellm.ImageResponse:
         if aimg_generation is True:
-            return self.aimage_generation(
+            return self.aimage_generation(  # type: ignore
                 prompt=prompt,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
@@ -138,13 +138,13 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         model_response: litellm.ImageResponse,
+        logging_obj: Any,
         model: Optional[
             str
         ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[AsyncHTTPHandler] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
-        logging_obj=None,
     ):
         response = None
         if client is None:

@@ -2,7 +2,7 @@ from typing import List, Literal, Tuple
 
 import httpx
 
-from litellm import supports_system_messages, supports_response_schema, verbose_logger
+from litellm import supports_response_schema, supports_system_messages, verbose_logger
 from litellm.types.llms.vertex_ai import PartType
 
 
@@ -67,6 +67,8 @@ def _get_vertex_url(
     vertex_location: Optional[str],
     vertex_api_version: Literal["v1", "v1beta1"],
 ) -> Tuple[str, str]:
+    url: Optional[str] = None
+    endpoint: Optional[str] = None
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
@@ -88,6 +90,8 @@ def _get_vertex_url(
         endpoint = "predict"
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
+    if not url or not endpoint:
+        raise ValueError(f"Unable to get vertex url/endpoinit for mode: {mode}")
     return url, endpoint
 
 

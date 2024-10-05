@@ -2,7 +2,7 @@ import json
 import os
 import time
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests  # type: ignore
 
@@ -124,9 +124,9 @@ def embedding(
     model: str,
     input: list,
     model_response: EmbeddingResponse,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    logging_obj=None,
+    api_key: Optional[str],
+    api_base: Optional[str],
+    logging_obj: Any,
     optional_params=None,
     encoding=None,
 ):

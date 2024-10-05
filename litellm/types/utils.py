@@ -792,7 +792,7 @@ class EmbeddingResponse(OpenAIObject):
     model: Optional[str] = None
     """The model used for embedding."""
 
-    data: Optional[List] = None
+    data: List
     """The actual embedding value"""
 
     object: Literal["list"]
@@ -803,6 +803,7 @@ class EmbeddingResponse(OpenAIObject):
 
     _hidden_params: dict = {}
     _response_headers: Optional[Dict] = None
+    _response_ms: Optional[float] = None
 
     def __init__(
         self,
@@ -822,7 +823,7 @@ class EmbeddingResponse(OpenAIObject):
         if data:
             data = data
         else:
-            data = None
+            data = []
 
         if usage:
             usage = usage

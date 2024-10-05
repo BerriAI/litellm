@@ -39,8 +39,8 @@ from litellm.llms.fireworks_ai.cost_calculator import (
 )
 from litellm.llms.OpenAI.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
-from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import PassthroughCallTypes, Usage
 from litellm.utils import (

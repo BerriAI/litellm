@@ -14,7 +14,7 @@ from typing import Optional
 
 import httpx
 
-from litellm.integrations.SlackAlerting.types import AlertType
+from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
