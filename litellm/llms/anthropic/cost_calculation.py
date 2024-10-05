@@ -25,7 +25,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
 
     ## CALCULATE INPUT COST
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0
+    prompt_cost = 0.0
     ### PROCESSING COST
     non_cache_hit_tokens = usage.prompt_tokens
     cache_hit_tokens = 0
