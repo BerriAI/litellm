@@ -648,6 +648,7 @@ router_settings:
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  enable_tag_filtering: True                # bool - Use tag based routing for requests
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
@@ -667,6 +668,21 @@ router_settings:
   fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
 ```
 
+| Name | Type | Description |
+|------|------|-------------|
+| routing_strategy | string | The strategy used for routing requests. Options: "simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing". Default is "simple-shuffle". [More information here](../routing) |
+| redis_host | string | The host address for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them** |
+| redis_password | string | The password for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them** |
+| redis_port | string | The port number for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them**|
+| enable_pre_call_check | boolean | If true, checks if a call is within the model's context window before making the call. [More information here](reliability) |
+| content_policy_fallbacks | array of objects | Specifies fallback models for content policy violations. [More information here](reliability) |
+| fallbacks | array of objects | Specifies fallback models for all types of errors. [More information here](reliability) |
+| enable_tag_filtering | boolean | If true, uses tag based routing for requests [Tag Based Routing](tag_routing) |
+| cooldown_time | integer | The duration (in seconds) to cooldown a model if it exceeds the allowed failures. |
+| disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
+| retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
+| allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
+| allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
 
 ## Extras
 
