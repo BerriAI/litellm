@@ -254,6 +254,7 @@ class LiteLLMRoutes(enum.Enum):
 
     info_routes = [
         "/key/info",
+        "/key/health",
         "/team/info",
         "/team/list",
         "/user/info",
@@ -276,6 +277,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/update",
         "/key/delete",
         "/key/info",
+        "/key/health",
         # user
         "/user/new",
         "/user/update",
@@ -334,6 +336,7 @@ class LiteLLMRoutes(enum.Enum):
             "/key/generate",
             "/key/update",
             "/key/delete",
+            "/key/health",
             "/key/info",
             "/global/spend/tags",
             "/global/spend/keys",
@@ -1920,3 +1923,14 @@ class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
     current_rpm: int
+
+
+class LoggingCallbackStatus(TypedDict, total=False):
+    callbacks: List[str]
+    status: str
+    details: Optional[str]
+
+
+class KeyHealthResponse(TypedDict, total=False):
+    key: str
+    logging_callbacks: Optional[LoggingCallbackStatus]
