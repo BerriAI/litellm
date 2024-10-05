@@ -111,3 +111,11 @@ def test_prompt_caching_model(model):
     # assert (response.usage.cache_read_input_tokens > 0) or (
     #     response.usage.cache_creation_input_tokens > 0
     # )
+
+
+def test_supports_prompt_caching():
+    from litellm.utils import supports_prompt_caching
+
+    supports_pc = supports_prompt_caching(model="anthropic/claude-3-5-sonnet-20240620")
+
+    assert supports_pc
