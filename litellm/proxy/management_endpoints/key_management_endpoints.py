@@ -1448,3 +1448,167 @@ async def unblock_key(
     )
 
     return record
+
+
+@router.post(
+    "/key/health",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=KeyHealthResponse,
+)
+@management_endpoint_wrapper
+async def key_health(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Check the health of the key
+
+    Checks:
+    - If key based logging is configured correctly - sends a test log
+
+    Usage 
+
+    Pass the key in the request header
+
+    ```bash
+    curl -X POST "http://localhost:4000/key/health" \
+     -H "Authorization: Bearer sk-1234" \
+     -H "Content-Type: application/json"
+    ```
+
+    Response when logging callbacks are setup correctly:
+
+    ```json
+    {
+      "key": "healthy",
+      "logging_callbacks": {
+        "callbacks": [
+          "gcs_bucket"
+        ],
+        "status": "healthy",
+        "details": "No logger exceptions triggered, system is healthy. Manually check if logs were sent to ['gcs_bucket']"
+      }
+    }
+    ```
+
+
+    Response when logging callbacks are not setup correctly:
+    ```json
+    {
+      "key": "healthy",
+      "logging_callbacks": {
+        "callbacks": [
+          "gcs_bucket"
+        ],
+        "status": "unhealthy",
+        "details": "Logger exceptions triggered, system is unhealthy: Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+      }
+    }
+    ```
+    """
+    try:
+        # Get the key's metadata
+        key_metadata = user_api_key_dict.metadata
+
+        health_status: KeyHealthResponse = KeyHealthResponse(
+            key="healthy",
+            logging_callbacks=None,
+        )
+
+        # Check if logging is configured in metadata
+        if key_metadata and "logging" in key_metadata:
+            logging_statuses = await test_key_logging(
+                user_api_key_dict=user_api_key_dict,
+                request=request,
+                key_logging=key_metadata["logging"],
+            )
+            health_status["logging_callbacks"] = logging_statuses
+
+        return KeyHealthResponse(**health_status)
+
+    except Exception as e:
+        raise ProxyException(
+            message=f"Key health check failed: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+async def test_key_logging(
+    user_api_key_dict: UserAPIKeyAuth,
+    request: Request,
+    key_logging: List[Dict[str, Any]],
+) -> LoggingCallbackStatus:
+    """
+    Test the key-based logging
+
+    - Test that key logging is correctly formatted and all args are passed correctly
+    - Make a mock completion call -> user can check if it's correctly logged
+    - Check if any logger.exceptions were triggered -> if they were then returns it to the user client side
+    """
+    import logging
+    from io import StringIO
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.proxy_server import general_settings, proxy_config
+
+    logging_callbacks: List[str] = []
+    for callback in key_logging:
+        if callback.get("callback_name") is not None:
+            logging_callbacks.append(callback["callback_name"])
+        else:
+            raise ValueError("callback_name is required in key_logging")
+
+    log_capture_string = StringIO()
+    ch = logging.StreamHandler(log_capture_string)
+    ch.setLevel(logging.ERROR)
+    logger = logging.getLogger()
+    logger.addHandler(ch)
+
+    try:
+        data = {
+            "model": "openai/litellm-key-health-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello, this is a test from litellm /key/health. No LLM API call was made for this",
+                }
+            ],
+            "mock_response": "test response",
+        }
+        data = await add_litellm_data_to_request(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
+            general_settings=general_settings,
+            request=request,
+        )
+        await litellm.acompletion(
+            **data
+        )  # make mock completion call to trigger key based callbacks
+    except Exception as e:
+        return LoggingCallbackStatus(
+            callbacks=logging_callbacks,
+            status="error",
+            details=f"Logging test failed: {str(e)}",
+        )
+
+    await asyncio.sleep(1)  # wait for callbacks to run
+
+    # Check if any logger exceptions were triggered
+    log_contents = log_capture_string.getvalue()
+    logger.removeHandler(ch)
+    if log_contents:
+        return LoggingCallbackStatus(
+            callbacks=logging_callbacks,
+            status="unhealthy",
+            details=f"Logger exceptions triggered, system is unhealthy: {log_contents}",
+        )
+    else:
+        return LoggingCallbackStatus(
+            callbacks=logging_callbacks,
+            status="healthy",
+            details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
+        )
