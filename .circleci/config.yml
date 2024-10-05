@@ -327,42 +327,33 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Build and run Docker image
+          name: Build Docker image
           command: |
             docker build -t myapp .
-            output=$(docker run --rm \
+      - run:
+          name: Run Docker container
+          command: |
+            docker run --name my-app \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e DISABLE_SCHEMA_UPDATE="True" \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
-              my-app:latest \
+              myapp:latest \
               --config /app/config.yaml \
-              --port 4000 2>&1) || true
-            echo "$output" > docker_output.txt
+              --port 4000 > docker_output.log 2>&1 || true
       - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+          name: Display Docker logs
+          command: cat docker_output.log
       - run:
           name: Check for expected error
           command: |
-            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two" docker_output.txt; then
+            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two - \['ALTER TABLE \"LiteLLM_BudgetTable\" DROP COLUMN \"temp_verification_token\";\']" docker_output.log; then
               echo "Expected error found. Test passed."
             else
               echo "Expected error not found. Test failed."
+              cat docker_output.log
               exit 1
             fi
 
