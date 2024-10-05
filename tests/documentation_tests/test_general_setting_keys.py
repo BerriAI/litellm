@@ -32,7 +32,7 @@ for root, dirs, files in os.walk(repo_base):
                 general_settings_keys.update(bracket_matches)
 
 # Parse the documentation to extract documented keys
-repo_base = "../"
+repo_base = "./"
 print(os.listdir(repo_base))
 docs_path = "../../docs/my-website/docs/proxy/configs.md"  # Path to the documentation
 documented_keys = set()
