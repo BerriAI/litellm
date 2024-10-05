@@ -1450,17 +1450,6 @@ async def unblock_key(
     return record
 
 
-class LoggingCallbackStatus(BaseModel):
-    callbacks: List[str]
-    status: str
-    details: Optional[str] = None
-
-
-class KeyHealthResponse(BaseModel):
-    key: str
-    logging_callbacks: LoggingCallbackStatus
-
-
 @router.post(
     "/key/health",
     tags=["key management"],
@@ -1476,7 +1465,47 @@ async def key_health(
     Check the health of the key
 
     Checks:
-    - If key based logging is configured and working
+    - If key based logging is configured correctly - sends a test log
+
+    Usage 
+
+    Pass the key in the request header
+
+    ```bash
+    curl -X POST "http://localhost:4000/key/health" \
+     -H "Authorization: Bearer sk-1234" \
+     -H "Content-Type: application/json"
+    ```
+
+    Response when logging callbacks are setup correctly:
+
+    ```json
+    {
+      "key": "healthy",
+      "logging_callbacks": {
+        "callbacks": [
+          "gcs_bucket"
+        ],
+        "status": "healthy",
+        "details": "No logger exceptions triggered, system is healthy. Manually check if logs were sent to ['gcs_bucket']"
+      }
+    }
+    ```
+
+
+    Response when logging callbacks are not setup correctly:
+    ```json
+    {
+      "key": "healthy",
+      "logging_callbacks": {
+        "callbacks": [
+          "gcs_bucket"
+        ],
+        "status": "unhealthy",
+        "details": "Logger exceptions triggered, system is unhealthy: Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+      }
+    }
+    ```
     """
     try:
         # Get the key's metadata
@@ -1484,8 +1513,7 @@ async def key_health(
 
         health_status = {
             "key": "healthy",
-            "logging_callbacks": [],
-            "additional_info": {},
+            "logging_callbacks": None,
         }
 
         # Check if logging is configured in metadata
@@ -1533,7 +1561,6 @@ async def test_key_logging(
         else:
             raise ValueError("callback_name is required in key_logging")
 
-    logging_statuses = []
     log_capture_string = StringIO()
     ch = logging.StreamHandler(log_capture_string)
     ch.setLevel(logging.ERROR)
@@ -1542,8 +1569,13 @@ async def test_key_logging(
 
     try:
         data = {
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "model": "litellm-key-health-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello, this is a test from litellm /key/health. No LLM API call was made for this",
+                }
+            ],
             "mock_response": "test response",
         }
         data = await add_litellm_data_to_request(
