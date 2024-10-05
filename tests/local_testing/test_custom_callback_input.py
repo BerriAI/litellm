@@ -1258,6 +1258,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
             "standard_logging_object"
         ]
         if turn_off_message_logging:
+            print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
             assert "redacted-by-litellm" == slobject["response"]
 
@@ -1307,8 +1308,14 @@ def test_aaastandard_logging_payload_cache_hit():
         assert standard_logging_object["saved_cache_cost"] > 0
 
 
-def test_logging_async_cache_hit_sync_call():
+@pytest.mark.parametrize(
+    "turn_off_message_logging",
+    [False, True],
+)  # False
+def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
     from litellm.types.utils import StandardLoggingPayload
+
+    litellm.turn_off_message_logging = turn_off_message_logging
 
     litellm.cache = Cache()
 
@@ -1355,6 +1362,14 @@ def test_logging_async_cache_hit_sync_call():
         assert standard_logging_object["cache_hit"] is True
         assert standard_logging_object["response_cost"] == 0
         assert standard_logging_object["saved_cache_cost"] > 0
+
+        if turn_off_message_logging:
+            print("checks redacted-by-litellm")
+            assert (
+                "redacted-by-litellm"
+                == standard_logging_object["messages"][0]["content"]
+            )
+            assert "redacted-by-litellm" == standard_logging_object["response"]
 
 
 def test_logging_standard_payload_failure_call():
