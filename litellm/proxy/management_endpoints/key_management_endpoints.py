@@ -1569,7 +1569,7 @@ async def test_key_logging(
 
     try:
         data = {
-            "model": "litellm-key-health-test",
+            "model": "openai/litellm-key-health-test",
             "messages": [
                 {
                     "role": "user",
