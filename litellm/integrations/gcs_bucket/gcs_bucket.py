@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.gcs_bucket_base import GCSBucketBase
+from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_dict,
 )
