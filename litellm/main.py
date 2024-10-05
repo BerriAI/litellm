@@ -5285,7 +5285,7 @@ async def ahealth_check(
                 or get_secret_str("AZURE_OPENAI_API_KEY")
             )
 
-            api_base = (
+            api_base: Optional[str] = (
                 model_params.get("api_base")
                 or get_secret_str("AZURE_API_BASE")
                 or get_secret_str("AZURE_OPENAI_API_BASE")
@@ -5334,9 +5334,7 @@ async def ahealth_check(
                 or default_timeout
             )
 
-            api_base: Optional[str] = model_params.get("api_base") or get_secret_str(
-                "OPENAI_API_BASE"
-            )
+            api_base = model_params.get("api_base") or get_secret_str("OPENAI_API_BASE")
 
             if custom_llm_provider == "text-completion-openai":
                 mode = "completion"

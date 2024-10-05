@@ -1188,12 +1188,35 @@ def test_completion_cost_anthropic_prompt_caching():
         system_fingerprint=None,
         usage=Usage(
             completion_tokens=10,
-            prompt_tokens=14,
-            total_tokens=24,
+            prompt_tokens=114,
+            total_tokens=124,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=0),
             cache_creation_input_tokens=100,
             cache_read_input_tokens=0,
         ),
     )
+
+    cost_1 = completion_cost(model=model, completion_response=response_1)
+
+    _model_info = litellm.get_model_info(
+        model="claude-3-5-sonnet-20240620", custom_llm_provider="anthropic"
+    )
+    expected_cost = (
+        (
+            response_1.usage.prompt_tokens
+            - response_1.usage.prompt_tokens_details.cached_tokens
+        )
+        * _model_info["input_cost_per_token"]
+        + response_1.usage.prompt_tokens_details.cached_tokens
+        * _model_info["cache_read_input_token_cost"]
+        + response_1.usage.cache_creation_input_tokens
+        * _model_info["cache_creation_input_token_cost"]
+        + response_1.usage.completion_tokens * _model_info["output_cost_per_token"]
+    )  # Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
+
+    assert round(expected_cost, 5) == round(cost_1, 5)
+
+    print(f"expected_cost: {expected_cost}, cost_1: {cost_1}")
 
     ## READ FROM CACHE ## (LESS EXPENSIVE)
     response_2 = ModelResponse(
@@ -1216,14 +1239,14 @@ def test_completion_cost_anthropic_prompt_caching():
         system_fingerprint=None,
         usage=Usage(
             completion_tokens=10,
-            prompt_tokens=14,
-            total_tokens=24,
+            prompt_tokens=114,
+            total_tokens=134,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=100),
             cache_creation_input_tokens=0,
             cache_read_input_tokens=100,
         ),
     )
 
-    cost_1 = completion_cost(model=model, completion_response=response_1)
     cost_2 = completion_cost(model=model, completion_response=response_2)
 
     assert cost_1 > cost_2
