@@ -9,7 +9,8 @@
         "mode": "one of chat, embedding, completion, image_generation, audio_transcription, audio_speech",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "gpt-4": {
         "max_tokens": 4096, 

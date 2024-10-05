@@ -94,7 +94,7 @@ assert response.usage.prompt_tokens_details.cached_tokens > 0
 ```
 
 </TabItem>
-<TabItem value="proxy" label="PROXY>
+<TabItem value="proxy" label="PROXY">
 
 1. Setup config.yaml
 
@@ -432,3 +432,71 @@ print(completion)
 
 </TabItem>
 </Tabs>
+
+## Check Model Support
+
+Check if a model supports prompt caching with `supports_prompt_caching()` 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm.utils import supports_prompt_caching
+
+supports_pc: bool = supports_prompt_caching(model="anthropic/claude-3-5-sonnet-20240620")
+
+assert supports_pc
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+Use the `/model/info` endpoint to check if a model on the proxy supports prompt caching 
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+    - model_name: claude-3-5-sonnet-20240620
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20240620
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/v1/model/info' \
+-H 'Authorization: Bearer sk-1234' \
+```
+
+**Expected Response**
+
+```bash
+{
+    "data": [
+        {
+            "model_name": "claude-3-5-sonnet-20240620",
+            "litellm_params": {
+                "model": "anthropic/claude-3-5-sonnet-20240620"
+            },
+            "model_info": {
+                "key": "claude-3-5-sonnet-20240620",
+                ...
+                "supports_prompt_caching": true # 👈 LOOK FOR THIS!
+            }
+        }
+    ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+This checks our maintained [model info/cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
