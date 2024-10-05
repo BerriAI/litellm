@@ -79,6 +79,8 @@ class ModelInfo(TypedDict, total=False):
     output_vector_size: Optional[int]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_second: Optional[float]  # for OpenAI Speech models
+
     litellm_provider: Required[str]
     mode: Required[
         Literal[
