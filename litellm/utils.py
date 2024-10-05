@@ -5082,6 +5082,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     "input_cost_per_token_above_128k_tokens", None
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
+                input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
