@@ -2,7 +2,7 @@ import os
 import re
 
 # Define the base directory for the litellm repository and documentation path
-repo_base = "../../litellm"  # Change this to your actual path
+repo_base = "./litellm"  # Change this to your actual path
 
 
 # Regular expressions to capture the keys used in general_settings.get() and general_settings[]
@@ -34,7 +34,7 @@ for root, dirs, files in os.walk(repo_base):
 # Parse the documentation to extract documented keys
 repo_base = "./"
 print(os.listdir(repo_base))
-docs_path = "../../docs/my-website/docs/proxy/configs.md"  # Path to the documentation
+docs_path = "./docs/my-website/docs/proxy/configs.md"  # Path to the documentation
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
@@ -69,4 +69,8 @@ if undocumented_keys:
         f"\nKeys not documented in 'general_settings - Reference': {undocumented_keys}"
     )
 else:
-    print("\nAll keys are documented in 'general_settings - Reference'.")
+    print(
+        "\nAll keys are documented in 'general_settings - Reference'. - {}".format(
+            general_settings_keys
+        )
+    )
