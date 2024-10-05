@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Prompt Caching 
 
 For OpenAI + Anthropic + Deepseek, LiteLLM follows the OpenAI prompt caching usage object format:
@@ -29,6 +32,9 @@ For OpenAI + Anthropic + Deepseek, LiteLLM follows the OpenAI prompt caching usa
 ## Quick Start
 
 Note: OpenAI caching is only available for prompts containing 1024 tokens or more
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
 from litellm import completion 
@@ -87,6 +93,90 @@ assert "prompt_tokens_details" in response.usage
 assert response.usage.prompt_tokens_details.cached_tokens > 0
 ```
 
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gpt-4o
+      litellm_params:
+        model: openai/gpt-4o
+        api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python
+from openai import OpenAI 
+import os
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY", # sk-1234
+    base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
+)
+
+for _ in range(2):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement"
+                        * 400,
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            # The final turn is marked with cache-control, for continuing in followups.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                    }
+                ],
+            },
+        ],
+        temperature=0.2,
+        max_tokens=10,
+    )
+
+print("response=", response)
+print("response.usage=", response.usage)
+
+assert "prompt_tokens_details" in response.usage
+assert response.usage.prompt_tokens_details.cached_tokens > 0
+```
+
+</TabItem>
+</Tabs>
+
 ### Anthropic Example 
 
 Anthropic charges for cache writes. 
@@ -94,6 +184,9 @@ Anthropic charges for cache writes.
 Specify the content to cache with `"cache_control": {"type": "ephemeral"}`.
 
 If you pass that in for any other llm provider, it will be ignored. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python 
 from litellm import completion 
@@ -129,6 +222,65 @@ response = completion(
 
 print(response.usage)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-3-5-sonnet-20240620
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20240620
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python 
+from openai import OpenAI 
+import os
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY", # sk-1234
+    base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
+)
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20240620",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+print(response.usage)
+```
+
+</TabItem>
+</Tabs>
 
 ### Deepeek Example 
 
@@ -197,3 +349,154 @@ response_2 = litellm.completion(model=model_name, messages=message_2)
 # Add any assertions here to check the response
 print(response_2.usage)
 ```
+
+
+## Calculate Cost 
+
+Cost cache-hit prompt tokens can differ from cache-miss prompt tokens.
+
+Use the `completion_cost()` function for calculating cost ([handles prompt caching cost calculation](https://github.com/BerriAI/litellm/blob/f7ce1173f3315cc6cae06cf9bcf12e54a2a19705/litellm/llms/anthropic/cost_calculation.py#L12) as well). [**See more helper functions**](./token_usage.md)
+
+```python
+cost = completion_cost(completion_response=response, model=model)
+```
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion, completion_cost
+import litellm 
+import os 
+
+litellm.set_verbose = True # 👈 SEE RAW REQUEST
+os.environ["ANTHROPIC_API_KEY"] = "" 
+model = "anthropic/claude-3-5-sonnet-20240620"
+response = completion(
+    model=model,
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+print(response.usage)
+
+cost = completion_cost(completion_response=response, model=model) 
+
+formatted_string = f"${float(cost):.10f}"
+print(formatted_string)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+LiteLLM returns the calculated cost in the response headers - `x-litellm-response-cost` 
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY", # sk-1234..
+    base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
+)
+response = client.chat.completions.with_raw_response.create(
+    messages=[{
+        "role": "user",
+        "content": "Say this is a test",
+    }],
+    model="gpt-3.5-turbo",
+)
+print(response.headers.get('x-litellm-response-cost'))
+
+completion = response.parse()  # get the object that `chat.completions.create()` would have returned
+print(completion)
+```
+
+</TabItem>
+</Tabs>
+
+## Check Model Support
+
+Check if a model supports prompt caching with `supports_prompt_caching()` 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm.utils import supports_prompt_caching
+
+supports_pc: bool = supports_prompt_caching(model="anthropic/claude-3-5-sonnet-20240620")
+
+assert supports_pc
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+Use the `/model/info` endpoint to check if a model on the proxy supports prompt caching 
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+    - model_name: claude-3-5-sonnet-20240620
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20240620
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -L -X GET 'http://0.0.0.0:4000/v1/model/info' \
+-H 'Authorization: Bearer sk-1234' \
+```
+
+**Expected Response**
+
+```bash
+{
+    "data": [
+        {
+            "model_name": "claude-3-5-sonnet-20240620",
+            "litellm_params": {
+                "model": "anthropic/claude-3-5-sonnet-20240620"
+            },
+            "model_info": {
+                "key": "claude-3-5-sonnet-20240620",
+                ...
+                "supports_prompt_caching": true # 👈 LOOK FOR THIS!
+            }
+        }
+    ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+This checks our maintained [model info/cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
