@@ -34,7 +34,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         client=None,
         azure_ad_token: Optional[str] = None,
         atranscription: bool = False,
-    ):
+    ) -> TranscriptionResponse:
         data = {"model": model, "file": audio_file, **optional_params}
 
         # init AzureOpenAI Client
@@ -59,7 +59,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             azure_client_params["max_retries"] = max_retries
 
         if atranscription is True:
-            return self.async_audio_transcriptions(
+            return self.async_audio_transcriptions(  # type: ignore
                 audio_file=audio_file,
                 data=data,
                 model_response=model_response,
@@ -105,7 +105,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             original_response=stringified_response,
         )
         hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
-        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(

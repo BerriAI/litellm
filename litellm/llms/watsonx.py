@@ -589,7 +589,7 @@ class IBMWatsonXAI(BaseLLM):
         encoding=None,
         print_verbose=None,
         aembedding=None,
-    ):
+    ) -> litellm.EmbeddingResponse:
         """
         Send a text embedding request to the IBM Watsonx.ai API.
         """
@@ -648,7 +648,7 @@ class IBMWatsonXAI(BaseLLM):
 
         try:
             if aembedding is True:
-                return handle_aembedding(req_params)
+                return handle_aembedding(req_params)  # type: ignore
             else:
                 return handle_embedding(req_params)
         except WatsonXAIError as e:

@@ -51,9 +51,9 @@ class VertexImageGeneration(VertexLLM):
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
         aimg_generation=False,
-    ):
+    ) -> litellm.ImageResponse:
         if aimg_generation is True:
-            return self.aimage_generation(
+            return self.aimage_generation(  # type: ignore
                 prompt=prompt,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,

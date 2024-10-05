@@ -122,7 +122,7 @@ class TritonChatCompletion(BaseLLM):
         )
 
         if aembedding:
-            response = await self.aembedding(
+            response = await self.aembedding(  # type: ignore
                 data=data_for_triton,
                 model_response=model_response,
                 logging_obj=logging_obj,
