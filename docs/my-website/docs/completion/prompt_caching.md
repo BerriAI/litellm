@@ -33,6 +33,9 @@ For OpenAI + Anthropic + Deepseek, LiteLLM follows the OpenAI prompt caching usa
 
 Note: OpenAI caching is only available for prompts containing 1024 tokens or more
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import completion 
 import os
@@ -90,6 +93,90 @@ assert "prompt_tokens_details" in response.usage
 assert response.usage.prompt_tokens_details.cached_tokens > 0
 ```
 
+</TabItem>
+<TabItem value="proxy" label="PROXY>
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gpt-4o
+      litellm_params:
+        model: openai/gpt-4o
+        api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python
+from openai import OpenAI 
+import os
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY", # sk-1234
+    base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
+)
+
+for _ in range(2):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement"
+                        * 400,
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            # The final turn is marked with cache-control, for continuing in followups.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                    }
+                ],
+            },
+        ],
+        temperature=0.2,
+        max_tokens=10,
+    )
+
+print("response=", response)
+print("response.usage=", response.usage)
+
+assert "prompt_tokens_details" in response.usage
+assert response.usage.prompt_tokens_details.cached_tokens > 0
+```
+
+</TabItem>
+</Tabs>
+
 ### Anthropic Example 
 
 Anthropic charges for cache writes. 
@@ -97,6 +184,9 @@ Anthropic charges for cache writes.
 Specify the content to cache with `"cache_control": {"type": "ephemeral"}`.
 
 If you pass that in for any other llm provider, it will be ignored. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python 
 from litellm import completion 
@@ -132,6 +222,65 @@ response = completion(
 
 print(response.usage)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-3-5-sonnet-20240620
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20240620
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python 
+from openai import OpenAI 
+import os
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY", # sk-1234
+    base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
+)
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20240620",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+print(response.usage)
+```
+
+</TabItem>
+</Tabs>
 
 ### Deepeek Example 
 
