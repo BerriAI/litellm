@@ -636,7 +636,46 @@ general_settings:
   use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
 ```
 
-### Router Settings
+### litellm_settings - Reference
+
+| Name | Type | Description |
+|------|------|-------------|
+| success_callback | array of strings | List of success callbacks. [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| failure_callback | array of strings | List of failure callbacks [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| callbacks | array of strings | List of callbacks - runs on success and failure [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| service_callbacks | array of strings | System health monitoring - Logs redis, postgres failures on specified services (e.g. datadog, prometheus) [Doc Metrics](prometheus) |
+| turn_off_message_logging | boolean | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged [Proxy Logging](logging) |
+| redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
+
+### general_settings - Reference
+
+| Name | Type | Description |
+|------|------|-------------|
+| completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
+| disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
+| disable_retry_on_max_parallel_request_limit_error | boolean | If true, turns off retries when max parallel request limit is reached |
+| disable_reset_budget | boolean | If true, turns off reset budget scheduled task |
+| disable_adding_master_key_hash_to_db | boolean | If true, turns off storing master key hash in db |
+| enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
+| enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
+| allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
+| key_management_system | string | Specifies the key management system. [Doc Secret Managers](secret) |
+| master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
+| database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
+| database_connection_pool_limit | integer | The limit for database connection pool [Setting DB Connection Pool limit](#configure-db-pool-limits--connection-timeouts) |
+| database_connection_timeout | integer | The timeout for database connections in seconds [Setting DB Connection Pool limit, timeout](#configure-db-pool-limits--connection-timeouts) |
+| custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
+| max_parallel_requests | integer | The max parallel requests allowed per deployment |
+| global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
+| infer_model_from_keys | boolean | If true, infers the model from the provided keys |
+| background_health_checks | boolean | If true, enables background health checks. [Doc on health checks](health) |
+| health_check_interval | integer | The interval for health checks in seconds [Doc on health checks](health) |
+| alerting | array of strings | List of alerting methods [Doc on Slack Alerting](alerting) |
+| alerting_threshold | integer | The threshold for triggering alerts [Doc on Slack Alerting](alerting) |
+| use_client_credentials_pass_through_routes | boolean | If true, uses client credentials for all pass-through routes. [Doc on pass through routes](pass_through) |
+
+### router_settings - Reference
 
 ```yaml
 router_settings:
