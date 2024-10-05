@@ -633,15 +633,14 @@ class SagemakerLLM(BaseAWSLLM):
             "aws_region_name": aws_region_name,
         }
         prepared_request = await asyncified_prepare_request(**prepared_request_args)
+        completion_stream = await self.make_async_call(
+            api_base=prepared_request.url,
+            headers=prepared_request.headers,  # type: ignore
+            data=data,
+            logging_obj=logging_obj,
+        )
         streaming_response = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                self.make_async_call,
-                api_base=prepared_request.url,
-                headers=prepared_request.headers,  # type: ignore
-                data=data,
-                logging_obj=logging_obj,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="sagemaker",
             logging_obj=logging_obj,
