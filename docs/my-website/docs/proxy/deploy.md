@@ -898,6 +898,18 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 **Step 2:** Set `PORT` = 4000 on Railway Environment Variables
 
 </TabItem>
+<TabItem value="coolify" label="Coolify">
+
+### Deploy with Coolify https://coolify.io
+
+**Step 1:** [Get your own instance of Coolify](https://coolify.io)
+
+**Step 2:** [Deploy LiteLLM with one-click service.](https://coolify.io/docs/services)
+</iframe>
+
+
+
+</TabItem>
 </Tabs>
 
 
