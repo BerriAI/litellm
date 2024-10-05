@@ -115,7 +115,7 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             api_key = get_secret_str(api_key_env_name)
             litellm_params["api_key"] = api_key
 
-        api_base: Optional[str] = litellm_params.get("api_base")
+        api_base = litellm_params.get("api_base")
         base_url: Optional[str] = litellm_params.get("base_url")
         api_base = (
             api_base or base_url or default_api_base

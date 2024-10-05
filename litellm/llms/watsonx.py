@@ -809,7 +809,7 @@ class RequestManager:
                     resp = await self.async_handler.post(**request_params)
                 else:
                     resp = await self.async_handler.get(**request_params)
-                if resp.status_code in [429, 503, 504, 520]:
+                if resp is not None and resp.status_code in [429, 503, 504, 520]:
                     # to handle rate limiting and service unavailable errors
                     # see: ibm_watsonx_ai.foundation_models.inference.base_model_inference.BaseModelInference._send_inference_payload
                     await asyncio.sleep(2**retries)

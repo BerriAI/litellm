@@ -3792,6 +3792,7 @@ def embedding(
                     timeout=timeout,
                     aembedding=aembedding,
                     print_verbose=print_verbose,
+                    api_key=api_key,
                 )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(
