@@ -83,11 +83,14 @@ class GCSBucketLogger(GCSBucketBase):
 
             # Modify the object_name to include the date-based folder
             object_name = f"{current_date}/{response_obj['id']}"
-            response = await self.async_httpx_client.post(
-                headers=headers,
-                url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
-                data=json_logged_payload,
-            )
+            try:
+                response = await self.async_httpx_client.post(
+                    headers=headers,
+                    url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
+                    data=json_logged_payload,
+                )
+            except httpx.HTTPStatusError as e:
+                raise Exception(f"GCS Bucket logging error: {e.response.text}")
 
             if response.status_code != 200:
                 verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
