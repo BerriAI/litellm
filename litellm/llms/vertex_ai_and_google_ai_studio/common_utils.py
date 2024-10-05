@@ -245,7 +245,7 @@ def add_object_type(schema):
 
 
 def strip_titles(schema):
-    title = schema.pop("title", None)
+    schema.pop("title", None)
 
     properties = schema.get("properties", None)
     if properties is not None:
