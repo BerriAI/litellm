@@ -299,7 +299,7 @@ jobs:
             ls
             python -m pytest -vv tests/local_testing/test_python_38.py
 
-  check_code_quality:
+  check_code_and_doc_quality:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -318,6 +318,7 @@ jobs:
             pip install .
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
+      - run: python ./tests/documentation_tests/test_general_setting_keys.py
     
   db_migration_disable_update_check:
     machine:
@@ -864,7 +865,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - check_code_quality:
+      - check_code_and_doc_quality:
           filters:
             branches:
               only:
@@ -938,7 +939,7 @@ workflows:
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
-            - check_code_quality
+            - check_code_and_doc_quality
           filters:
             branches:
               only:
