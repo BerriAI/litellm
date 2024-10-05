@@ -333,12 +333,25 @@ jobs:
             output=$(docker run --rm \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DISABLE_SCHEMA_UPDATE="True" \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 2>&1) || true
             echo "$output" > docker_output.txt
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
       - run:
           name: Check for expected error
           command: |
