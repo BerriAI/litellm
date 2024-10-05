@@ -191,7 +191,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
         new_startup_nodes.append(ClusterNode(**item))
 
     redis_kwargs.pop("startup_nodes")
-    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
+    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)  # type: ignore
 
 
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:

@@ -1742,9 +1742,9 @@ class AzureChatCompletion(BaseLLM):
     async def ahealth_check(
         self,
         model: Optional[str],
-        api_key: str,
+        api_key: Optional[str],
         api_base: str,
-        api_version: str,
+        api_version: Optional[str],
         timeout: float,
         mode: str,
         messages: Optional[list] = None,

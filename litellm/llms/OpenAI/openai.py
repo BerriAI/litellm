@@ -1449,7 +1449,7 @@ class OpenAIChatCompletion(BaseLLM):
     async def ahealth_check(
         self,
         model: Optional[str],
-        api_key: str,
+        api_key: Optional[str],
         timeout: float,
         mode: str,
         messages: Optional[list] = None,

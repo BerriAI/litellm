@@ -4820,7 +4820,6 @@ def transcription(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
-    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
     custom_llm_provider=None,
     **kwargs,
 ) -> TranscriptionResponse:
@@ -4830,6 +4829,7 @@ def transcription(
     Allows router to load balance between them
     """
     atranscription = kwargs.get("atranscription", False)
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     kwargs.get("litellm_call_id", None)
     kwargs.get("logger_fn", None)
     kwargs.get("proxy_server_request", None)
@@ -4876,15 +4876,16 @@ def transcription(
     #     "temperature": None,  # openai defaults this to 0
     # }
 
+    response: Optional[TranscriptionResponse] = None
     if custom_llm_provider == "azure":
         # azure configs
         api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
         api_version = (
-            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+            api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
         )
 
-        azure_ad_token = kwargs.pop("azure_ad_token", None) or get_secret(
+        azure_ad_token = kwargs.pop("azure_ad_token", None) or get_secret_str(
             "AZURE_AD_TOKEN"
         )
 
@@ -4892,8 +4893,8 @@ def transcription(
             api_key
             or litellm.api_key
             or litellm.azure_key
-            or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+            or get_secret_str("AZURE_API_KEY")
+        )
 
         response = azure_audio_transcriptions.audio_transcriptions(
             model=model,
@@ -4942,6 +4943,9 @@ def transcription(
             api_base=api_base,
             api_key=api_key,
         )
+
+    if response is None:
+        raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
 
 
@@ -5149,15 +5153,16 @@ def speech(
         vertex_ai_project = (
             generic_optional_params.vertex_project
             or litellm.vertex_project
-            or get_secret("VERTEXAI_PROJECT")
+            or get_secret_str("VERTEXAI_PROJECT")
         )
         vertex_ai_location = (
             generic_optional_params.vertex_location
             or litellm.vertex_location
-            or get_secret("VERTEXAI_LOCATION")
+            or get_secret_str("VERTEXAI_LOCATION")
         )
-        vertex_credentials = generic_optional_params.vertex_credentials or get_secret(
-            "VERTEXAI_CREDENTIALS"
+        vertex_credentials = (
+            generic_optional_params.vertex_credentials
+            or get_secret_str("VERTEXAI_CREDENTIALS")
         )
 
         if voice is not None and not isinstance(voice, dict):
@@ -5234,20 +5239,25 @@ async def ahealth_check(
         if custom_llm_provider == "azure":
             api_key = (
                 model_params.get("api_key")
-                or get_secret("AZURE_API_KEY")
-                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+                or get_secret_str("AZURE_OPENAI_API_KEY")
             )
 
             api_base = (
                 model_params.get("api_base")
-                or get_secret("AZURE_API_BASE")
-                or get_secret("AZURE_OPENAI_API_BASE")
+                or get_secret_str("AZURE_API_BASE")
+                or get_secret_str("AZURE_OPENAI_API_BASE")
             )
+
+            if api_base is None:
+                raise ValueError(
+                    "Azure API Base cannot be None. Set via 'AZURE_API_BASE' in env var or `.completion(..., api_base=..)`"
+                )
 
             api_version = (
                 model_params.get("api_version")
-                or get_secret("AZURE_API_VERSION")
-                or get_secret("AZURE_OPENAI_API_VERSION")
+                or get_secret_str("AZURE_API_VERSION")
+                or get_secret_str("AZURE_OPENAI_API_VERSION")
             )
 
             timeout = (
@@ -5273,7 +5283,7 @@ async def ahealth_check(
             custom_llm_provider == "openai"
             or custom_llm_provider == "text-completion-openai"
         ):
-            api_key = model_params.get("api_key") or get_secret("OPENAI_API_KEY")
+            api_key = model_params.get("api_key") or get_secret_str("OPENAI_API_KEY")
             organization = model_params.get("organization")
 
             timeout = (
@@ -5282,7 +5292,9 @@ async def ahealth_check(
                 or default_timeout
             )
 
-            api_base = model_params.get("api_base") or get_secret("OPENAI_API_BASE")
+            api_base: Optional[str] = model_params.get("api_base") or get_secret_str(
+                "OPENAI_API_BASE"
+            )
 
             if custom_llm_provider == "text-completion-openai":
                 mode = "completion"
@@ -5377,7 +5389,9 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] = None):
+def stream_chunk_builder_text_completion(
+    chunks: list, messages: Optional[List] = None
+) -> TextCompletionResponse:
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
@@ -5446,7 +5460,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     response["usage"]["total_tokens"] = (
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     )
-    return response
+    return TextCompletionResponse(**response)
 
 
 def stream_chunk_builder(

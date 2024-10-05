@@ -149,7 +149,7 @@ class LunaryLogger:
             else:
                 error_obj = None
 
-            self.lunary_client.track_event(
+            self.lunary_client.track_event(  # type: ignore
                 type,
                 "start",
                 run_id,
@@ -164,7 +164,7 @@ class LunaryLogger:
                 params=extra,
             )
 
-            self.lunary_client.track_event(
+            self.lunary_client.track_event(  # type: ignore
                 type,
                 event,
                 run_id,

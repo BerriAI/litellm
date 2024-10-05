@@ -82,10 +82,10 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         api_base: Optional[str],
         client=None,
         atranscription: bool = False,
-    ):
+    ) -> TranscriptionResponse:
         data = {"model": model, "file": audio_file, **optional_params}
         if atranscription is True:
-            return self.async_audio_transcriptions(
+            return self.async_audio_transcriptions(  # type: ignore
                 audio_file=audio_file,
                 data=data,
                 model_response=model_response,
@@ -123,7 +123,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             original_response=stringified_response,
         )
         hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
-        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(

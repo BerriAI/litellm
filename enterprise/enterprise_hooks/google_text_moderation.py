@@ -48,7 +48,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         try:
-            from google.cloud import language_v1
+            from google.cloud import language_v1  # type: ignore
         except Exception:
             raise Exception(
                 "Missing google.cloud package. Run `pip install --upgrade google-cloud-language`"
