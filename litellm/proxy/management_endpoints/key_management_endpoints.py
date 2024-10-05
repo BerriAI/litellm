@@ -1546,7 +1546,7 @@ async def test_key_logging(
 
     - Test that key logging is correctly formatted and all args are passed correctly
     - Make a mock completion call -> user can check if it's correctly logged
-    - Check if any logger exceptions were triggered
+    - Check if any logger.exceptions were triggered -> if they were then returns it to the user client side
     """
     import logging
     from io import StringIO
@@ -1585,7 +1585,9 @@ async def test_key_logging(
             general_settings=general_settings,
             request=request,
         )
-        response = await litellm.acompletion(**data)
+        await litellm.acompletion(
+            **data
+        )  # make mock completion call to trigger key based callbacks
     except Exception as e:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
@@ -1593,7 +1595,7 @@ async def test_key_logging(
             details=f"Logging test failed: {str(e)}",
         )
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(1)  # wait for callbacks to run
 
     # Check if any logger exceptions were triggered
     log_contents = log_capture_string.getvalue()
