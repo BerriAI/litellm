@@ -159,7 +159,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_prompt_caching": true,
+        "supports_prompt_caching": true
     },
     "gpt-4-turbo-preview": {
         "max_tokens": 4096,
