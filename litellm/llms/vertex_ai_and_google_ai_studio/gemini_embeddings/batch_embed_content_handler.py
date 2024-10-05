@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 import httpx
 
@@ -31,9 +31,9 @@ class GoogleBatchEmbeddings(VertexLLM):
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
+        logging_obj: Any,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        logging_obj=None,
         encoding=None,
         vertex_project=None,
         vertex_location=None,

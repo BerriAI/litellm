@@ -42,8 +42,10 @@ async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
     )
     _team_member_user_ids: List[str] = []
     for member in _team_members:
-        if member and isinstance(member, dict) and member.get("user_id") is not None:
-            _team_member_user_ids.append(member.get("user_id"))
+        if member and isinstance(member, dict):
+            _user_id = member.get("user_id")
+            if _user_id and isinstance(_user_id, str):
+                _team_member_user_ids.append(_user_id)
 
     sql_query = """
         SELECT user_email

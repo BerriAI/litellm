@@ -4,7 +4,7 @@ import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.cohere.rerank import CohereRerank
-from litellm.rerank_api.types import RerankResponse
+from litellm.types.rerank import RerankResponse
 
 
 class AzureAIRerank(CohereRerank):

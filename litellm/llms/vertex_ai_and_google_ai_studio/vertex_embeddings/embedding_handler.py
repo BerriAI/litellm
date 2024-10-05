@@ -52,9 +52,9 @@ class VertexEmbedding(VertexBase):
         vertex_credentials: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
-    ):
+    ) -> litellm.EmbeddingResponse:
         if aembedding is True:
-            return self.async_embedding(
+            return self.async_embedding(  # type: ignore
                 model=model,
                 input=input,
                 logging_obj=logging_obj,

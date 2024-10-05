@@ -15,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.rerank_api.types import RerankRequest, RerankResponse
+from litellm.types.rerank import RerankRequest, RerankResponse
 
 
 class TogetherAIRerank(BaseLLM):

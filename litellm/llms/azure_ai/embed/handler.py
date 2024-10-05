@@ -216,7 +216,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         api_base: Optional[str] = None,
         client=None,
         aembedding=None,
-    ):
+    ) -> litellm.EmbeddingResponse:
         """
         - Separate image url from text
         -> route image url call to `/image/embeddings`
@@ -225,7 +225,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         assemble result in-order, and return
         """
         if aembedding is True:
-            return self.async_embedding(
+            return self.async_embedding(  # type: ignore
                 model,
                 input,
                 timeout,
