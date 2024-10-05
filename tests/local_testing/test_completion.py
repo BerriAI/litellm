@@ -1711,6 +1711,28 @@ def test_completion_perplexity_api():
 # test_completion_perplexity_api()
 
 
+def test_completion_pydantic_obj_2():
+    from pydantic import BaseModel
+
+    litellm.set_verbose = True
+
+    class CalendarEvent(BaseModel):
+        name: str
+        date: str
+        participants: list[str]
+
+    class EventsList(BaseModel):
+        events: list[CalendarEvent]
+
+    messages = [
+        {"role": "user", "content": "List important events from the 20th century."}
+    ]
+
+    response = litellm.completion(
+        model="gemini/gemini-1.5-pro", messages=messages, response_format=EventsList
+    )
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api_2():
     try:
