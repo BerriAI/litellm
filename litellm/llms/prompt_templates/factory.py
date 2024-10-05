@@ -2714,7 +2714,7 @@ def custom_prompt(
     final_prompt_value: str = "",
     bos_token: str = "",
     eos_token: str = "",
-):
+) -> str:
     prompt = bos_token + initial_prompt_value
     bos_open = True
     ## a bos token is at the start of a system / human message
