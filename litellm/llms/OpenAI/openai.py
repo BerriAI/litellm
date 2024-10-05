@@ -1167,7 +1167,7 @@ class OpenAIChatCompletion(BaseLLM):
         api_base: Optional[str] = None,
         client=None,
         aembedding=None,
-    ):
+    ) -> litellm.EmbeddingResponse:
         super().embedding()
         try:
             model = model
@@ -1183,7 +1183,7 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             if aembedding is True:
-                async_response = self.aembedding(
+                return self.aembedding(  # type: ignore
                     data=data,
                     input=input,
                     logging_obj=logging_obj,
@@ -1194,7 +1194,6 @@ class OpenAIChatCompletion(BaseLLM):
                     client=client,
                     max_retries=max_retries,
                 )
-                return async_response
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1294,7 +1293,7 @@ class OpenAIChatCompletion(BaseLLM):
         model_response: Optional[litellm.utils.ImageResponse] = None,
         client=None,
         aimg_generation=None,
-    ):
+    ) -> litellm.ImageResponse:
         data = {}
         try:
             model = model
@@ -1304,8 +1303,7 @@ class OpenAIChatCompletion(BaseLLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                response = self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
-                return response
+                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
 
             openai_client = self._get_openai_client(
                 is_async=False,
@@ -1449,7 +1447,7 @@ class OpenAIChatCompletion(BaseLLM):
     async def ahealth_check(
         self,
         model: Optional[str],
-        api_key: str,
+        api_key: Optional[str],
         timeout: float,
         mode: str,
         messages: Optional[list] = None,

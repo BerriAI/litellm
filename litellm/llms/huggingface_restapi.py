@@ -554,7 +554,7 @@ class Huggingface(BaseLLM):
                 else:
                     prompt = prompt_factory(model=model, messages=messages)
                 data = {
-                    "inputs": prompt,
+                    "inputs": prompt,  # type: ignore
                     "parameters": optional_params,
                     "stream": (  # type: ignore
                         True
@@ -589,7 +589,7 @@ class Huggingface(BaseLLM):
                 inference_params.pop("details")
                 inference_params.pop("return_full_text")
                 data = {
-                    "inputs": prompt,
+                    "inputs": prompt,  # type: ignore
                 }
                 if task == "text-generation-inference":
                     data["parameters"] = inference_params

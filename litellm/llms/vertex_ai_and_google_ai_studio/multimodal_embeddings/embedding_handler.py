@@ -48,7 +48,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         aembedding=False,
         timeout=300,
         client=None,
-    ):
+    ) -> litellm.EmbeddingResponse:
 
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -121,7 +121,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         )
 
         if aembedding is True:
-            return self.async_multimodal_embedding(
+            return self.async_multimodal_embedding(  # type: ignore
                 model=model,
                 api_base=url,
                 data=request_data,
