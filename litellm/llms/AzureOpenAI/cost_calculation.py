@@ -24,7 +24,7 @@ def cost_per_token(
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider="openai")
+    model_info = get_model_info(model=model, custom_llm_provider="azure")
 
     ## CALCULATE INPUT COST
     prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
