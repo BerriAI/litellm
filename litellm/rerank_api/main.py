@@ -10,10 +10,9 @@ from litellm.llms.azure_ai.rerank import AzureAIRerank
 from litellm.llms.cohere.rerank import CohereRerank
 from litellm.llms.together_ai.rerank import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
+from litellm.types.rerank import RerankRequest, RerankResponse
 from litellm.types.router import *
 from litellm.utils import client, exception_type, supports_httpx_timeout
-
-from .types import RerankRequest, RerankResponse
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
