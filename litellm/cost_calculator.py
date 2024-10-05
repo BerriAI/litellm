@@ -56,7 +56,7 @@ from litellm.utils import (
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
-    response_time_ms=None,
+    response_time_ms: Optional[float] = 0.0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
@@ -80,7 +80,7 @@ def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
-    response_time_ms=None,
+    response_time_ms: Optional[float] = 0.0,
     custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CHARACTER PRICING ###
@@ -254,7 +254,9 @@ def cost_per_token(
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block)
+        return openai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -464,7 +466,7 @@ def completion_cost(
     prompt="",
     messages: List = [],
     completion="",
-    total_time=0.0,  # used for replicate, sagemaker
+    total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
     call_type: Literal[
         "embedding",
         "aembedding",
@@ -504,7 +506,7 @@ def completion_cost(
         model (str): Optional. The name of the language model used in the completion calls
         prompt (str): Optional. The input prompt passed to the llm
         completion (str): Optional. The output completion text from the llm
-        total_time (float): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
+        total_time (float, int): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
         custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
         custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
 

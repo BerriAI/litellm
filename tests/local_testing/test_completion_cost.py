@@ -210,7 +210,9 @@ def test_cost_ft_gpt_35():
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
-        cost = litellm.completion_cost(completion_response=resp)
+        cost = litellm.completion_cost(
+            completion_response=resp, custom_llm_provider="openai"
+        )
         print("\n Calculated Cost for ft:gpt-3.5", cost)
         input_cost = model_cost["ft:gpt-3.5-turbo"]["input_cost_per_token"]
         output_cost = model_cost["ft:gpt-3.5-turbo"]["output_cost_per_token"]
