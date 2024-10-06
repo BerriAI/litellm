@@ -48,8 +48,6 @@ class AporiaGuardrail(CustomGuardrail):
         )
         self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
         self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]
-        self.event_hook: GuardrailEventHooks
-
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####

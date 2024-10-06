@@ -39,11 +39,11 @@ from litellm.proxy._types import (
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.types.integrations.slack_alerting import *
 from litellm.types.router import LiteLLM_Params
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
-from .types import *
 from .utils import _add_langfuse_trace_id_to_alert, process_slack_alerting_variables
 
 

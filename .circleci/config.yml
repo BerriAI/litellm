@@ -315,6 +315,7 @@ jobs:
             python -m pip install --upgrade pip
             pip install ruff
             pip install pylint  
+            pip install pyright
             pip install .
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
@@ -357,7 +358,7 @@ jobs:
               cat docker_output.log
               exit 1
             fi
-
+            
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1

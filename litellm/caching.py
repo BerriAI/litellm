@@ -10,6 +10,7 @@
 import ast
 import asyncio
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -245,7 +246,8 @@ class RedisCache(BaseCache):
             self.redis_flush_size = redis_flush_size
         self.redis_version = "Unknown"
         try:
-            self.redis_version = self.redis_client.info()["redis_version"]
+            if not inspect.iscoroutinefunction(self.redis_client):
+                self.redis_version = self.redis_client.info()["redis_version"]  # type: ignore
         except Exception:
             pass
 
@@ -266,7 +268,8 @@ class RedisCache(BaseCache):
 
         ### SYNC HEALTH PING ###
         try:
-            self.redis_client.ping()
+            if hasattr(self.redis_client, "ping"):
+                self.redis_client.ping()  # type: ignore
         except Exception as e:
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
@@ -308,7 +311,7 @@ class RedisCache(BaseCache):
         _redis_client = self.redis_client
         start_time = time.time()
         try:
-            result = _redis_client.incr(name=key, amount=value)
+            result: int = _redis_client.incr(name=key, amount=value)  # type: ignore
 
             if ttl is not None:
                 # check if key already has ttl, if not -> set ttl
@@ -561,7 +564,7 @@ class RedisCache(BaseCache):
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
             try:
-                await redis_client.sadd(key, *value)
+                await redis_client.sadd(key, *value)  # type: ignore
                 if ttl is not None:
                     _td = timedelta(seconds=ttl)
                     await redis_client.expire(key, _td)
@@ -712,7 +715,7 @@ class RedisCache(BaseCache):
             for cache_key in key_list:
                 cache_key = self.check_and_fix_namespace(key=cache_key)
                 _keys.append(cache_key)
-            results = self.redis_client.mget(keys=_keys)
+            results: List = self.redis_client.mget(keys=_keys)  # type: ignore
 
             # Associate the results back with their keys.
             # 'results' is a list of values corresponding to the order of keys in 'key_list'.
@@ -842,7 +845,7 @@ class RedisCache(BaseCache):
         print_verbose("Pinging Sync Redis Cache")
         start_time = time.time()
         try:
-            response = self.redis_client.ping()
+            response: bool = self.redis_client.ping()  # type: ignore
             print_verbose(f"Redis Cache PING: {response}")
             ## LOGGING ##
             end_time = time.time()
@@ -911,8 +914,8 @@ class RedisCache(BaseCache):
         async with _redis_client as redis_client:
             await redis_client.delete(*keys)
 
-    def client_list(self):
-        client_list = self.redis_client.client_list()
+    def client_list(self) -> List:
+        client_list: List = self.redis_client.client_list()  # type: ignore
         return client_list
 
     def info(self):

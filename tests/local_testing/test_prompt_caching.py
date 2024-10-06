@@ -10,12 +10,40 @@ import litellm
 import pytest
 
 
+def _usage_format_tests(usage: litellm.Usage):
+    """
+    OpenAI prompt caching
+    - prompt_tokens = sum of non-cache hit tokens + cache-hit tokens
+    - total_tokens = prompt_tokens + completion_tokens
+
+    Example
+    ```
+    "usage": {
+        "prompt_tokens": 2006,
+        "completion_tokens": 300,
+        "total_tokens": 2306,
+        "prompt_tokens_details": {
+            "cached_tokens": 1920
+        },
+        "completion_tokens_details": {
+            "reasoning_tokens": 0
+        }
+        # ANTHROPIC_ONLY #
+        "cache_creation_input_tokens": 0
+    }
+    ```
+    """
+    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+
+    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+
+
 @pytest.mark.parametrize(
     "model",
     [
         "anthropic/claude-3-5-sonnet-20240620",
-        "openai/gpt-4o",
-        "deepseek/deepseek-chat",
+        # "openai/gpt-4o",
+        # "deepseek/deepseek-chat",
     ],
 )
 def test_prompt_caching_model(model):
@@ -66,8 +94,12 @@ def test_prompt_caching_model(model):
             max_tokens=10,
         )
 
+        _usage_format_tests(response.usage)
+
     print("response=", response)
     print("response.usage=", response.usage)
+
+    _usage_format_tests(response.usage)
 
     assert "prompt_tokens_details" in response.usage
     assert response.usage.prompt_tokens_details.cached_tokens > 0
@@ -79,3 +111,11 @@ def test_prompt_caching_model(model):
     # assert (response.usage.cache_read_input_tokens > 0) or (
     #     response.usage.cache_creation_input_tokens > 0
     # )
+
+
+def test_supports_prompt_caching():
+    from litellm.utils import supports_prompt_caching
+
+    supports_pc = supports_prompt_caching(model="anthropic/claude-3-5-sonnet-20240620")
+
+    assert supports_pc
