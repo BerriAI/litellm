@@ -461,6 +461,7 @@ def run_server(
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
+        general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
         if iam_token_db_auth:
@@ -646,24 +647,37 @@ def run_server(
                 is_prisma_runnable = False
 
             if is_prisma_runnable:
-                for _ in range(4):
-                    # run prisma db push, before starting server
-                    # Save the current working directory
-                    original_dir = os.getcwd()
-                    # set the working directory to where this script is
-                    abspath = os.path.abspath(__file__)
-                    dname = os.path.dirname(abspath)
-                    os.chdir(dname)
-                    try:
-                        subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
-                        break  # Exit the loop if the subprocess succeeds
-                    except subprocess.CalledProcessError as e:
-                        import time
+                from litellm.proxy.db.check_migration import check_prisma_schema_diff
+                from litellm.proxy.db.prisma_client import should_update_schema
 
-                        print(f"Error: {e}")  # noqa
-                        time.sleep(random.randrange(start=1, stop=5))
-                    finally:
-                        os.chdir(original_dir)
+                if (
+                    should_update_schema(
+                        general_settings.get("disable_prisma_schema_update")
+                    )
+                    is False
+                ):
+                    check_prisma_schema_diff(db_url=None)
+                else:
+                    for _ in range(4):
+                        # run prisma db push, before starting server
+                        # Save the current working directory
+                        original_dir = os.getcwd()
+                        # set the working directory to where this script is
+                        abspath = os.path.abspath(__file__)
+                        dname = os.path.dirname(abspath)
+                        os.chdir(dname)
+                        try:
+                            subprocess.run(
+                                ["prisma", "db", "push", "--accept-data-loss"]
+                            )
+                            break  # Exit the loop if the subprocess succeeds
+                        except subprocess.CalledProcessError as e:
+                            import time
+
+                            print(f"Error: {e}")  # noqa
+                            time.sleep(random.randrange(start=1, stop=5))
+                        finally:
+                            os.chdir(original_dir)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
