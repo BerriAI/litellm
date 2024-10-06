@@ -299,7 +299,7 @@ jobs:
             ls
             python -m pytest -vv tests/local_testing/test_python_38.py
 
-  check_code_quality:
+  check_code_and_doc_quality:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -319,7 +319,46 @@ jobs:
             pip install .
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
-
+      - run: python ./tests/documentation_tests/test_general_setting_keys.py
+    
+  db_migration_disable_update_check:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t myapp .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run --name my-app \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DISABLE_SCHEMA_UPDATE="True" \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
+              myapp:latest \
+              --config /app/config.yaml \
+              --port 4000 > docker_output.log 2>&1 || true
+      - run:
+          name: Display Docker logs
+          command: cat docker_output.log
+      - run:
+          name: Check for expected error
+          command: |
+            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two" docker_output.log; then
+              echo "Expected error found. Test passed."
+            else
+              echo "Expected error not found. Test failed."
+              cat docker_output.log
+              exit 1
+            fi
+            
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -827,7 +866,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - check_code_quality:
+      - check_code_and_doc_quality:
           filters:
             branches:
               only:
@@ -869,6 +908,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - db_migration_disable_update_check:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - installing_litellm_on_python:
           filters:
             branches:
@@ -890,11 +935,12 @@ workflows:
             - litellm_router_testing
             - litellm_assistants_api_testing
             - ui_endpoint_testing
+            - db_migration_disable_update_check
             - e2e_ui_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
-            - check_code_quality
+            - check_code_and_doc_quality
           filters:
             branches:
               only:

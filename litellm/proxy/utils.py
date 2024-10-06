@@ -1055,27 +1055,7 @@ class PrismaClient:
         try:
             from prisma import Prisma  # type: ignore
         except Exception:
-            os.environ["DATABASE_URL"] = database_url
-            # Save the current working directory
-            original_dir = os.getcwd()
-            # set the working directory to where this script is
-            abspath = os.path.abspath(__file__)
-            dname = os.path.dirname(abspath)
-            os.chdir(dname)
-
-            try:
-                subprocess.run(["prisma", "generate"])
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-            except Exception as e:
-                raise Exception(
-                    f"Unable to run prisma commands. Run `pip install prisma` Got Exception: {(str(e))}"
-                )
-            finally:
-                os.chdir(original_dir)
-            # Now you can import the Prisma Client
-            from prisma import Prisma  # type: ignore
+            raise Exception("Unable to find Prisma binaries.")
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         if http_client is not None:
             self.db = PrismaWrapper(
