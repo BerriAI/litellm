@@ -32,8 +32,8 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
 from litellm.proxy._types import CommonProxyErrors
-from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
     CallTypes,
@@ -65,7 +65,7 @@ from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
-from ..integrations.gcs_bucket import GCSBucketLogger
+from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
@@ -363,7 +363,7 @@ class Logging:
             for param in _supported_callback_params:
                 if param in kwargs:
                     _param_value = kwargs.pop(param)
-                    if "os.environ/" in _param_value:
+                    if _param_value is not None and "os.environ/" in _param_value:
                         _param_value = get_secret_str(secret_name=_param_value)
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
         return standard_callback_dynamic_params
@@ -632,7 +632,12 @@ class Logging:
                         )
                     )
             original_response = redact_message_input_output_from_logging(
-                litellm_logging_obj=self, result=original_response
+                model_call_details=(
+                    self.model_call_details
+                    if hasattr(self, "model_call_details")
+                    else {}
+                ),
+                result=original_response,
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
@@ -933,7 +938,12 @@ class Logging:
                 callbacks = litellm.success_callback
 
             result = redact_message_input_output_from_logging(
-                result=result, litellm_logging_obj=self
+                model_call_details=(
+                    self.model_call_details
+                    if hasattr(self, "model_call_details")
+                    else {}
+                ),
+                result=result,
             )
 
             ## LOGGING HOOK ##
@@ -1591,7 +1601,10 @@ class Logging:
             callbacks = litellm._async_success_callback
 
         result = redact_message_input_output_from_logging(
-            result=result, litellm_logging_obj=self
+            model_call_details=(
+                self.model_call_details if hasattr(self, "model_call_details") else {}
+            ),
+            result=result,
         )
 
         ## LOGGING HOOK ##
@@ -1899,7 +1912,12 @@ class Logging:
             result = None  # result sent to all loggers, init this to None incase it's not created
 
             result = redact_message_input_output_from_logging(
-                result=result, litellm_logging_obj=self
+                model_call_details=(
+                    self.model_call_details
+                    if hasattr(self, "model_call_details")
+                    else {}
+                ),
+                result=result,
             )
             for callback in callbacks:
                 try:
@@ -2747,8 +2765,17 @@ def get_standard_logging_object_payload(
         else:
             final_response_obj = None
 
-        if litellm.turn_off_message_logging:
-            final_response_obj = "redacted-by-litellm"
+        modified_final_response_obj = redact_message_input_output_from_logging(
+            model_call_details=kwargs,
+            result=final_response_obj,
+        )
+
+        if modified_final_response_obj is not None and isinstance(
+            modified_final_response_obj, BaseModel
+        ):
+            final_response_obj = modified_final_response_obj.model_dump()
+        else:
+            final_response_obj = modified_final_response_obj
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),

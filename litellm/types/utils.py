@@ -67,6 +67,7 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
+    input_cost_per_second: Optional[float]  # for OpenAI Speech models
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_token_above_128k_tokens: Optional[
@@ -79,6 +80,8 @@ class ModelInfo(TypedDict, total=False):
     output_vector_size: Optional[int]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_second: Optional[float]  # for OpenAI Speech models
+
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -319,7 +322,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 class Message(OpenAIObject):
 
     content: Optional[str]
-    role: Literal["assistant"]
+    role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
 
@@ -488,14 +491,6 @@ class Usage(CompletionUsage):
         ] = None,
         **params,
     ):
-        ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
-        if (
-            "prompt_cache_miss_tokens" in params
-            and isinstance(params["prompt_cache_miss_tokens"], int)
-            and prompt_tokens is not None
-        ):
-            prompt_tokens = params["prompt_cache_miss_tokens"]
-
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetails] = None
         if reasoning_tokens:
@@ -511,6 +506,24 @@ class Usage(CompletionUsage):
                 )
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
                 _completion_tokens_details = completion_tokens_details
+
+        ## DEEPSEEK MAPPING ##
+        if "prompt_cache_hit_tokens" in params and isinstance(
+            params["prompt_cache_hit_tokens"], int
+        ):
+            if prompt_tokens_details is None:
+                prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=params["prompt_cache_hit_tokens"]
+                )
+
+        ## ANTHROPIC MAPPING ##
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            if prompt_tokens_details is None:
+                prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=params["cache_read_input_tokens"]
+                )
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetails] = None
@@ -779,7 +792,7 @@ class EmbeddingResponse(OpenAIObject):
     model: Optional[str] = None
     """The model used for embedding."""
 
-    data: Optional[List] = None
+    data: List
     """The actual embedding value"""
 
     object: Literal["list"]
@@ -790,6 +803,7 @@ class EmbeddingResponse(OpenAIObject):
 
     _hidden_params: dict = {}
     _response_headers: Optional[Dict] = None
+    _response_ms: Optional[float] = None
 
     def __init__(
         self,
@@ -809,7 +823,7 @@ class EmbeddingResponse(OpenAIObject):
         if data:
             data = data
         else:
-            data = None
+            data = []
 
         if usage:
             usage = usage

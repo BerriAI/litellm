@@ -24,6 +24,7 @@ from litellm import (
     model_cost,
     open_ai_chat_completion_models,
 )
+from litellm.types.utils import PromptTokensDetails
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
 
 
@@ -209,7 +210,9 @@ def test_cost_ft_gpt_35():
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
-        cost = litellm.completion_cost(completion_response=resp)
+        cost = litellm.completion_cost(
+            completion_response=resp, custom_llm_provider="openai"
+        )
         print("\n Calculated Cost for ft:gpt-3.5", cost)
         input_cost = model_cost["ft:gpt-3.5-turbo"]["input_cost_per_token"]
         output_cost = model_cost["ft:gpt-3.5-turbo"]["output_cost_per_token"]
@@ -1077,7 +1080,9 @@ def test_completion_cost_deepseek():
         assert response_2.usage.prompt_cache_hit_tokens is not None
         assert response_2.usage.prompt_cache_miss_tokens is not None
         assert (
-            response_2.usage.prompt_tokens == response_2.usage.prompt_cache_miss_tokens
+            response_2.usage.prompt_tokens
+            == response_2.usage.prompt_cache_miss_tokens
+            + response_2.usage.prompt_cache_hit_tokens
         )
         assert (
             response_2.usage._cache_read_input_tokens
@@ -1183,12 +1188,35 @@ def test_completion_cost_anthropic_prompt_caching():
         system_fingerprint=None,
         usage=Usage(
             completion_tokens=10,
-            prompt_tokens=14,
-            total_tokens=24,
+            prompt_tokens=114,
+            total_tokens=124,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=0),
             cache_creation_input_tokens=100,
             cache_read_input_tokens=0,
         ),
     )
+
+    cost_1 = completion_cost(model=model, completion_response=response_1)
+
+    _model_info = litellm.get_model_info(
+        model="claude-3-5-sonnet-20240620", custom_llm_provider="anthropic"
+    )
+    expected_cost = (
+        (
+            response_1.usage.prompt_tokens
+            - response_1.usage.prompt_tokens_details.cached_tokens
+        )
+        * _model_info["input_cost_per_token"]
+        + response_1.usage.prompt_tokens_details.cached_tokens
+        * _model_info["cache_read_input_token_cost"]
+        + response_1.usage.cache_creation_input_tokens
+        * _model_info["cache_creation_input_token_cost"]
+        + response_1.usage.completion_tokens * _model_info["output_cost_per_token"]
+    )  # Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
+
+    assert round(expected_cost, 5) == round(cost_1, 5)
+
+    print(f"expected_cost: {expected_cost}, cost_1: {cost_1}")
 
     ## READ FROM CACHE ## (LESS EXPENSIVE)
     response_2 = ModelResponse(
@@ -1211,14 +1239,14 @@ def test_completion_cost_anthropic_prompt_caching():
         system_fingerprint=None,
         usage=Usage(
             completion_tokens=10,
-            prompt_tokens=14,
-            total_tokens=24,
+            prompt_tokens=114,
+            total_tokens=134,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=100),
             cache_creation_input_tokens=0,
             cache_read_input_tokens=100,
         ),
     )
 
-    cost_1 = completion_cost(model=model, completion_response=response_1)
     cost_2 = completion_cost(model=model, completion_response=response_2)
 
     assert cost_1 > cost_2
@@ -1290,6 +1318,93 @@ def test_completion_cost_fireworks_ai(model):
     cost = completion_cost(completion_response=resp)
 
 
+def test_cost_azure_openai_prompt_caching():
+    from litellm.utils import Choices, Message, ModelResponse, Usage
+    from litellm.types.utils import PromptTokensDetails, CompletionTokensDetails
+    from litellm import get_model_info
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "azure/o1-mini"
+
+    ## LLM API CALL ## (MORE EXPENSIVE)
+    response_1 = ModelResponse(
+        id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
+        choices=[
+            Choices(
+                finish_reason="length",
+                index=0,
+                message=Message(
+                    content="Hello! I'm doing well, thank you for",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=14,
+            total_tokens=24,
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=2),
+        ),
+    )
+
+    ## PROMPT CACHE HIT ## (LESS EXPENSIVE)
+    response_2 = ModelResponse(
+        id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
+        choices=[
+            Choices(
+                finish_reason="length",
+                index=0,
+                message=Message(
+                    content="Hello! I'm doing well, thank you for",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=0,
+            total_tokens=10,
+            prompt_tokens_details=PromptTokensDetails(
+                cached_tokens=14,
+            ),
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=2),
+        ),
+    )
+
+    cost_1 = completion_cost(model=model, completion_response=response_1)
+    cost_2 = completion_cost(model=model, completion_response=response_2)
+    assert cost_1 > cost_2
+
+    model_info = get_model_info(model=model, custom_llm_provider="azure")
+    usage = response_2.usage
+
+    _expected_cost2 = (
+        usage.prompt_tokens * model_info["input_cost_per_token"]
+        + usage.completion_tokens * model_info["output_cost_per_token"]
+        + usage.prompt_tokens_details.cached_tokens
+        * model_info["cache_read_input_token_cost"]
+    )
+
+    print("_expected_cost2", _expected_cost2)
+    print("cost_2", cost_2)
+
+    assert cost_2 == _expected_cost2
+
+
 def test_completion_cost_vertex_llama3():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1326,6 +1441,90 @@ def test_completion_cost_vertex_llama3():
     cost = completion_cost(model=model, completion_response=response)
 
     assert cost == 0
+
+
+def test_cost_openai_prompt_caching():
+    from litellm.utils import Choices, Message, ModelResponse, Usage
+    from litellm import get_model_info
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-4o-mini-2024-07-18"
+
+    ## LLM API CALL ## (MORE EXPENSIVE)
+    response_1 = ModelResponse(
+        id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
+        choices=[
+            Choices(
+                finish_reason="length",
+                index=0,
+                message=Message(
+                    content="Hello! I'm doing well, thank you for",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=14,
+            total_tokens=24,
+        ),
+    )
+
+    ## PROMPT CACHE HIT ## (LESS EXPENSIVE)
+    response_2 = ModelResponse(
+        id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
+        choices=[
+            Choices(
+                finish_reason="length",
+                index=0,
+                message=Message(
+                    content="Hello! I'm doing well, thank you for",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=0,
+            total_tokens=10,
+            prompt_tokens_details=PromptTokensDetails(
+                cached_tokens=14,
+            ),
+        ),
+    )
+
+    cost_1 = completion_cost(model=model, completion_response=response_1)
+    cost_2 = completion_cost(model=model, completion_response=response_2)
+    assert cost_1 > cost_2
+
+    model_info = get_model_info(model=model, custom_llm_provider="openai")
+    usage = response_2.usage
+
+    _expected_cost2 = (
+        usage.prompt_tokens * model_info["input_cost_per_token"]
+        + usage.completion_tokens * model_info["output_cost_per_token"]
+        + usage.prompt_tokens_details.cached_tokens
+        * model_info["cache_read_input_token_cost"]
+    )
+
+    print("_expected_cost2", _expected_cost2)
+    print("cost_2", cost_2)
+
+    assert cost_2 == _expected_cost2
 
 
 @pytest.mark.parametrize(

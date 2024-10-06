@@ -16,7 +16,10 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.gcs_bucket import GCSBucketLogger, StandardLoggingPayload
+from litellm.integrations.gcs_bucket.gcs_bucket import (
+    GCSBucketLogger,
+    StandardLoggingPayload,
+)
 from litellm.types.utils import StandardCallbackDynamicParams
 
 verbose_logger.setLevel(logging.DEBUG)

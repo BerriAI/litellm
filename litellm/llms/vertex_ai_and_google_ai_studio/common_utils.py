@@ -90,8 +90,8 @@ def _get_vertex_url(
         endpoint = "predict"
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
-    if url is None or endpoint is None:
-        raise ValueError(f"Unable to get vertex url for mode: {mode}")
+    if not url or not endpoint:
+        raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
 
 

@@ -48,7 +48,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         try:
-            from google.cloud import language_v1
+            from google.cloud import language_v1  # type: ignore
         except Exception:
             raise Exception(
                 "Missing google.cloud package. Run `pip install --upgrade google-cloud-language`"
@@ -57,8 +57,8 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         # Instantiates a client
         self.client = language_v1.LanguageServiceClient()
         self.moderate_text_request = language_v1.ModerateTextRequest
-        self.language_document = language_v1.types.Document
-        self.document_type = language_v1.types.Document.Type.PLAIN_TEXT
+        self.language_document = language_v1.types.Document  # type: ignore
+        self.document_type = language_v1.types.Document.Type.PLAIN_TEXT  # type: ignore
 
         default_confidence_threshold = (
             litellm.google_moderation_confidence_threshold or 0.8

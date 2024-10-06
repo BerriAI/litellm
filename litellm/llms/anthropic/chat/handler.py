@@ -43,7 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk, PromptTokensDetails
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ...base import BaseLLM
@@ -282,20 +282,31 @@ class AnthropicChatCompletion(BaseLLM):
         prompt_tokens = completion_response["usage"]["input_tokens"]
         completion_tokens = completion_response["usage"]["output_tokens"]
         _usage = completion_response["usage"]
-        total_tokens = prompt_tokens + completion_tokens
+        cache_creation_input_tokens: int = 0
+        cache_read_input_tokens: int = 0
 
         model_response.created = int(time.time())
         model_response.model = model
+        if "cache_creation_input_tokens" in _usage:
+            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+            prompt_tokens += cache_creation_input_tokens
+        if "cache_read_input_tokens" in _usage:
+            cache_read_input_tokens = _usage["cache_read_input_tokens"]
+            prompt_tokens += cache_read_input_tokens
+
+        prompt_tokens_details = PromptTokensDetails(
+            cached_tokens=cache_read_input_tokens
+        )
+        total_tokens = prompt_tokens + completion_tokens
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
         )
 
-        if "cache_creation_input_tokens" in _usage:
-            usage["cache_creation_input_tokens"] = _usage["cache_creation_input_tokens"]
-        if "cache_read_input_tokens" in _usage:
-            usage["cache_read_input_tokens"] = _usage["cache_read_input_tokens"]
         setattr(model_response, "usage", usage)  # type: ignore
 
         model_response._hidden_params = _hidden_params

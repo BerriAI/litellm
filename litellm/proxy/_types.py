@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
-from litellm.integrations.SlackAlerting.types import AlertType
+from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import ProviderField, StandardCallbackDynamicParams
 
@@ -254,6 +254,7 @@ class LiteLLMRoutes(enum.Enum):
 
     info_routes = [
         "/key/info",
+        "/key/health",
         "/team/info",
         "/team/list",
         "/user/info",
@@ -276,6 +277,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/update",
         "/key/delete",
         "/key/info",
+        "/key/health",
         # user
         "/user/new",
         "/user/update",
@@ -334,6 +336,7 @@ class LiteLLMRoutes(enum.Enum):
             "/key/generate",
             "/key/update",
             "/key/delete",
+            "/key/health",
             "/key/info",
             "/global/spend/tags",
             "/global/spend/keys",
@@ -1920,3 +1923,14 @@ class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
     current_rpm: int
+
+
+class LoggingCallbackStatus(TypedDict, total=False):
+    callbacks: List[str]
+    status: str
+    details: Optional[str]
+
+
+class KeyHealthResponse(TypedDict, total=False):
+    key: str
+    logging_callbacks: Optional[LoggingCallbackStatus]

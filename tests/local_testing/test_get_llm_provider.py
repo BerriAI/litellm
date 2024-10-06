@@ -115,3 +115,12 @@ def test_get_llm_provider_cohere_chat_test2():
     print("api_base=", api_base)
     assert custom_llm_provider == "cohere_chat"
     assert model == "command-r-plus"
+
+
+def test_get_llm_provider_azure_o1():
+
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="azure/o1-mini",
+    )
+    assert custom_llm_provider == "azure"
+    assert model == "o1-mini"

@@ -636,7 +636,83 @@ general_settings:
   use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
 ```
 
-### Router Settings
+### litellm_settings - Reference
+
+| Name | Type | Description |
+|------|------|-------------|
+| success_callback | array of strings | List of success callbacks. [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| failure_callback | array of strings | List of failure callbacks [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| callbacks | array of strings | List of callbacks - runs on success and failure [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| service_callbacks | array of strings | System health monitoring - Logs redis, postgres failures on specified services (e.g. datadog, prometheus) [Doc Metrics](prometheus) |
+| turn_off_message_logging | boolean | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged [Proxy Logging](logging) |
+| redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
+
+### general_settings - Reference
+
+| Name | Type | Description |
+|------|------|-------------|
+| completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
+| disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
+| disable_retry_on_max_parallel_request_limit_error | boolean | If true, turns off retries when max parallel request limit is reached |
+| disable_reset_budget | boolean | If true, turns off reset budget scheduled task |
+| disable_adding_master_key_hash_to_db | boolean | If true, turns off storing master key hash in db |
+| enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
+| enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
+| allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
+| key_management_system | string | Specifies the key management system. [Doc Secret Managers](../secret) |
+| master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
+| database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
+| database_connection_pool_limit | integer | The limit for database connection pool [Setting DB Connection Pool limit](#configure-db-pool-limits--connection-timeouts) |
+| database_connection_timeout | integer | The timeout for database connections in seconds [Setting DB Connection Pool limit, timeout](#configure-db-pool-limits--connection-timeouts) |
+| custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
+| max_parallel_requests | integer | The max parallel requests allowed per deployment |
+| global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
+| infer_model_from_keys | boolean | If true, infers the model from the provided keys |
+| background_health_checks | boolean | If true, enables background health checks. [Doc on health checks](health) |
+| health_check_interval | integer | The interval for health checks in seconds [Doc on health checks](health) |
+| alerting | array of strings | List of alerting methods [Doc on Slack Alerting](alerting) |
+| alerting_threshold | integer | The threshold for triggering alerts [Doc on Slack Alerting](alerting) |
+| use_client_credentials_pass_through_routes | boolean | If true, uses client credentials for all pass-through routes. [Doc on pass through routes](pass_through) |
+| health_check_details | boolean | If false, hides health check details (e.g. remaining rate limit). [Doc on health checks](health) |
+| public_routes | List[str] | (Enterprise Feature) Control list of public routes |
+| alert_types | List[str] | Control list of alert types to send to slack (Doc on alert types)[./alerting.md] |
+| enforced_params | List[str] | (Enterprise Feature) List of params that must be included in all requests to the proxy |
+| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+| use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
+| service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
+| image_generation_model | str | The default model to use for image generation - ignores model set in request |
+| store_model_in_db | boolean | If true, allows `/model/new` endpoint to store model information in db. Endpoint disabled by default. [Doc on `/model/new` endpoint](./model_management.md#create-a-new-model) |
+| max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
+| max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
+| proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. |
+| proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. |
+| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. |
+| alerting_args | dict | Args for Slack Alerting [Doc on Slack Alerting](./alerting.md) |
+| custom_key_generate | str | Custom function for key generation [Doc on custom key generation](./virtual_keys.md#custom--key-generate) |
+| allowed_ips | List[str] | List of IPs allowed to access the proxy. If not set, all IPs are allowed. |
+| embedding_model | str | The default model to use for embeddings - ignores model set in request |
+| default_team_disabled | boolean | If true, users cannot create 'personal' keys (keys with no team_id). |
+| alert_to_webhook_url | Dict[str] | [Specify a webhook url for each alert type.](./alerting.md#set-specific-slack-channels-per-alert-type) |
+| key_management_settings | List[Dict[str, Any]] | Settings for key management system (e.g. AWS KMS, Azure Key Vault) [Doc on key management](../secret.md) |
+| allow_user_auth | boolean | (Deprecated) old approach for user authentication. |
+| user_api_key_cache_ttl | int | The time (in seconds) to cache user api keys in memory. |
+| disable_prisma_schema_update | boolean | If true, turns off automatic schema updates to DB |
+| litellm_key_header_name | str | If set, allows passing LiteLLM keys as a custom header. [Doc on custom headers](./virtual_keys.md#custom-headers) |
+| moderation_model | str | The default model to use for moderation. |
+| custom_sso | str | Path to a python file that implements custom SSO logic. [Doc on custom SSO](./custom_sso.md) |
+| allow_client_side_credentials | boolean | If true, allows passing client side credentials to the proxy. (Useful when testing finetuning models) [Doc on client side credentials](./virtual_keys.md#client-side-credentials) |
+| admin_only_routes | List[str] | (Enterprise Feature) List of routes that are only accessible to admin users. [Doc on admin only routes](./enterprise#control-available-public-private-routes) |
+| use_azure_key_vault | boolean | If true, load keys from azure key vault | 
+| use_google_kms | boolean | If true, load keys from google kms |
+| spend_report_frequency | str | Specify how often you want a Spend Report to be sent (e.g. "1d", "2d", "30d") [More on this](./alerting.md#spend-report-frequency) |
+| ui_access_mode | Literal["admin_only"] | If set, restricts access to the UI to admin users only. [Docs](./ui.md#restrict-ui-access) |
+| litellm_jwtauth | Dict[str, Any] | Settings for JWT authentication. [Docs](./token_auth.md) |
+| litellm_license | str | The license key for the proxy. [Docs](../enterprise.md#how-does-deployment-with-enterprise-license-work) |
+| oauth2_config_mappings | Dict[str, str] | Define the OAuth2 config mappings | 
+| pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
+| enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+### router_settings - Reference
 
 ```yaml
 router_settings:
@@ -648,6 +724,7 @@ router_settings:
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  enable_tag_filtering: True                # bool - Use tag based routing for requests
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
@@ -667,6 +744,21 @@ router_settings:
   fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
 ```
 
+| Name | Type | Description |
+|------|------|-------------|
+| routing_strategy | string | The strategy used for routing requests. Options: "simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing". Default is "simple-shuffle". [More information here](../routing) |
+| redis_host | string | The host address for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them** |
+| redis_password | string | The password for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them** |
+| redis_port | string | The port number for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them**|
+| enable_pre_call_check | boolean | If true, checks if a call is within the model's context window before making the call. [More information here](reliability) |
+| content_policy_fallbacks | array of objects | Specifies fallback models for content policy violations. [More information here](reliability) |
+| fallbacks | array of objects | Specifies fallback models for all types of errors. [More information here](reliability) |
+| enable_tag_filtering | boolean | If true, uses tag based routing for requests [Tag Based Routing](tag_routing) |
+| cooldown_time | integer | The duration (in seconds) to cooldown a model if it exceeds the allowed failures. |
+| disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
+| retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
+| allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
+| allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
 
 ## Extras
 

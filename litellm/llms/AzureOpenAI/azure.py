@@ -1083,7 +1083,7 @@ class AzureChatCompletion(BaseLLM):
         azure_ad_token: Optional[str] = None,
         client=None,
         aembedding=None,
-    ):
+    ) -> litellm.EmbeddingResponse:
         super().embedding()
         if self._client_session is None:
             self._client_session = self.create_client_session()
@@ -1128,7 +1128,7 @@ class AzureChatCompletion(BaseLLM):
             )
 
             if aembedding is True:
-                response = self.aembedding(
+                return self.aembedding(  # type: ignore
                     data=data,
                     input=input,
                     logging_obj=logging_obj,
@@ -1138,7 +1138,6 @@ class AzureChatCompletion(BaseLLM):
                     timeout=timeout,
                     client=client,
                 )
-                return response
             if client is None:
                 azure_client = AzureOpenAI(**azure_client_params)  # type: ignore
             else:
@@ -1418,7 +1417,7 @@ class AzureChatCompletion(BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         timeout=None,
-    ):
+    ) -> litellm.ImageResponse:
         response: Optional[dict] = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
@@ -1460,7 +1459,7 @@ class AzureChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(
+            return convert_to_model_response_object(  # type: ignore
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="image_generation",
@@ -1489,7 +1488,7 @@ class AzureChatCompletion(BaseLLM):
         azure_ad_token: Optional[str] = None,
         client=None,
         aimg_generation=None,
-    ):
+    ) -> litellm.ImageResponse:
         try:
             if model and len(model) > 0:
                 model = model
@@ -1531,8 +1530,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["azure_ad_token"] = azure_ad_token
 
             if aimg_generation is True:
-                response = self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
-                return response
+                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
 
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params, model=data.get("model", "")
@@ -1742,9 +1740,9 @@ class AzureChatCompletion(BaseLLM):
     async def ahealth_check(
         self,
         model: Optional[str],
-        api_key: str,
+        api_key: Optional[str],
         api_base: str,
-        api_version: str,
+        api_version: Optional[str],
         timeout: float,
         mode: str,
         messages: Optional[list] = None,
