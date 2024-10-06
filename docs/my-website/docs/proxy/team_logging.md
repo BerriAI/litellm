@@ -318,6 +318,8 @@ curl -X POST "http://localhost:4000/key/health" \
 
 Response when logging callbacks are setup correctly:
 
+A key is **healthy** when the logging callbacks are setup correctly.
+
 ```json
 {
   "key": "healthy",
@@ -335,7 +337,10 @@ Response when logging callbacks are setup correctly:
 
 <TabItem label="Response when key is configured incorrectly" value="Response when key is configured incorrectly">
 
-Response when logging callbacks are not setup correctly:
+Response when logging callbacks are not setup correctly
+
+A key is **unhealthy** when the logging callbacks are not setup correctly.
+
 ```json
 {
   "key": "unhealthy",
