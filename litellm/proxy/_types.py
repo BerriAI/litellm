@@ -1927,10 +1927,10 @@ class CurrentItemRateLimit(TypedDict):
 
 class LoggingCallbackStatus(TypedDict, total=False):
     callbacks: List[str]
-    status: str
+    status: Literal["healthy", "unhealthy"]
     details: Optional[str]
 
 
 class KeyHealthResponse(TypedDict, total=False):
-    key: str
+    key: Literal["healthy", "unhealthy"]
     logging_callbacks: Optional[LoggingCallbackStatus]
