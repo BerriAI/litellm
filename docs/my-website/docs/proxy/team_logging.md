@@ -338,7 +338,7 @@ Response when logging callbacks are setup correctly:
 Response when logging callbacks are not setup correctly:
 ```json
 {
-  "key": "healthy",
+  "key": "unhealthy",
   "logging_callbacks": {
     "callbacks": [
       "gcs_bucket"

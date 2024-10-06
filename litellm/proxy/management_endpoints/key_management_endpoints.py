@@ -1496,7 +1496,7 @@ async def key_health(
     Response when logging callbacks are not setup correctly:
     ```json
     {
-      "key": "healthy",
+      "key": "unhealthy",
       "logging_callbacks": {
         "callbacks": [
           "gcs_bucket"
@@ -1524,6 +1524,10 @@ async def key_health(
                 key_logging=key_metadata["logging"],
             )
             health_status["logging_callbacks"] = logging_statuses
+
+            # Check if any logging callback is unhealthy
+            if logging_statuses.get("status") == "unhealthy":
+                health_status["key"] = "unhealthy"
 
         return KeyHealthResponse(**health_status)
 
@@ -1591,7 +1595,7 @@ async def test_key_logging(
     except Exception as e:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,
-            status="error",
+            status="unhealthy",
             details=f"Logging test failed: {str(e)}",
         )
 
