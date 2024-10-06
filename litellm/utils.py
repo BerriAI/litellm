@@ -2996,12 +2996,16 @@ def get_optional_params(
                 "vertex_ai_beta",
             ]
         ):
+            from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+                _build_vertex_schema,
+            )
             old_schema = copy.deepcopy(
                 non_default_params["response_format"]
                 .get("json_schema", {})
                 .get("schema")
             )
             new_schema = _remove_additional_properties(schema=old_schema)
+            new_schema = _build_vertex_schema(parameters=new_schema)
             non_default_params["response_format"]["json_schema"]["schema"] = new_schema
     if "tools" in non_default_params and isinstance(
         non_default_params, list
