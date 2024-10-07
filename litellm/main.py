@@ -89,6 +89,7 @@ from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.azure_text import AzureTextCompletion
 from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
 from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.AzureOpenAI.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.bedrock import image_generation as bedrock_image_generation  # type: ignore
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
@@ -178,6 +179,7 @@ azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
+azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
 azure_audio_transcriptions = AzureAudioTranscription()
 huggingface = Huggingface()
@@ -1064,35 +1066,68 @@ def completion(  # type: ignore
 
             headers = headers or litellm.headers
 
-            ## LOAD CONFIG - if set
-            config = litellm.AzureOpenAIConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in optional_params
-                ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
-                    optional_params[k] = v
+            if (
+                litellm.enable_preview_features
+                and litellm.AzureOpenAIO1Config().is_o1_model(model=model)
+            ):
+                ## LOAD CONFIG - if set
+                config = litellm.AzureOpenAIO1Config.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in optional_params
+                    ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
+                        optional_params[k] = v
 
-            ## COMPLETION CALL
-            response = azure_chat_completions.completion(
-                model=model,
-                messages=messages,
-                headers=headers,
-                api_key=api_key,
-                api_base=api_base,
-                api_version=api_version,
-                api_type=api_type,
-                dynamic_params=dynamic_params,
-                azure_ad_token=azure_ad_token,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                logging_obj=logging,
-                acompletion=acompletion,
-                timeout=timeout,  # type: ignore
-                client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
-            )
+                response = azure_o1_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    api_key=api_key,
+                    api_base=api_base,
+                    api_version=api_version,
+                    api_type=api_type,
+                    dynamic_params=dynamic_params,
+                    azure_ad_token=azure_ad_token,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,  # type: ignore
+                    client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
+                )
+            else:
+                ## LOAD CONFIG - if set
+                config = litellm.AzureOpenAIConfig.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in optional_params
+                    ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
+                        optional_params[k] = v
+
+                ## COMPLETION CALL
+                response = azure_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    api_key=api_key,
+                    api_base=api_base,
+                    api_version=api_version,
+                    api_type=api_type,
+                    dynamic_params=dynamic_params,
+                    azure_ad_token=azure_ad_token,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,  # type: ignore
+                    client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
+                )
 
             if optional_params.get("stream", False):
                 ## LOGGING

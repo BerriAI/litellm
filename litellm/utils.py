@@ -3932,7 +3932,7 @@ def get_optional_params(
             model=model, custom_llm_provider="azure"
         )
         _check_valid_arg(supported_params=supported_params)
-        if model == "o1-preview" or model == "o1-mini":
+        if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
