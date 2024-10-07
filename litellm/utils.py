@@ -2999,13 +2999,19 @@ def get_optional_params(
             from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
                 _build_vertex_schema,
             )
+
             old_schema = copy.deepcopy(
                 non_default_params["response_format"]
                 .get("json_schema", {})
                 .get("schema")
             )
             new_schema = _remove_additional_properties(schema=old_schema)
-            new_schema = _build_vertex_schema(parameters=new_schema)
+            if isinstance(new_schema, list):
+                for item in new_schema:
+                    if isinstance(item, dict):
+                        item = _build_vertex_schema(parameters=item)
+            elif isinstance(new_schema, dict):
+                new_schema = _build_vertex_schema(parameters=new_schema)
             non_default_params["response_format"]["json_schema"]["schema"] = new_schema
     if "tools" in non_default_params and isinstance(
         non_default_params, list
@@ -3926,24 +3932,36 @@ def get_optional_params(
             model=model, custom_llm_provider="azure"
         )
         _check_valid_arg(supported_params=supported_params)
-        verbose_logger.debug(
-            "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
-                api_version, litellm.api_version, get_secret("AZURE_API_VERSION")
+        if model == "o1-preview" or model == "o1-mini":
+            optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
             )
-        )
-        api_version = (
-            api_version
-            or litellm.api_version
-            or get_secret("AZURE_API_VERSION")
-            or litellm.AZURE_DEFAULT_API_VERSION
-        )
-        optional_params = litellm.AzureOpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            api_version=api_version,  # type: ignore
-            drop_params=drop_params,
-        )
+        else:
+            verbose_logger.debug(
+                "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
+                    api_version, litellm.api_version, get_secret("AZURE_API_VERSION")
+                )
+            )
+            api_version = (
+                api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+                or litellm.AZURE_DEFAULT_API_VERSION
+            )
+            optional_params = litellm.AzureOpenAIConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                api_version=api_version,  # type: ignore
+                drop_params=drop_params,
+            )
     else:  # assume passing in params for text-completion openai
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="custom_openai"

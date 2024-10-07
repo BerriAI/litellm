@@ -620,16 +620,28 @@ def test_o1_model_params():
     assert optional_params["user"] == "John"
 
 
+def test_azure_o1_model_params():
+    optional_params = get_optional_params(
+        model="o1-preview",
+        custom_llm_provider="azure",
+        seed=10,
+        user="John",
+    )
+    assert optional_params["seed"] == 10
+    assert optional_params["user"] == "John"
+
+
 @pytest.mark.parametrize(
     "temperature, expected_error",
     [(0.2, True), (1, False)],
 )
-def test_o1_model_temperature_params(temperature, expected_error):
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_o1_model_temperature_params(provider, temperature, expected_error):
     if expected_error:
         with pytest.raises(litellm.UnsupportedParamsError):
             get_optional_params(
-                model="o1-preview-2024-09-12",
-                custom_llm_provider="openai",
+                model="o1-preview",
+                custom_llm_provider=provider,
                 temperature=temperature,
             )
     else:
