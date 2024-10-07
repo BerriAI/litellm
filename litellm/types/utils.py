@@ -1095,7 +1095,7 @@ class ImageResponse(OpenAIImageResponse):
             if isinstance(d, dict):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
-                _data.append(**d.model_dump())
+                _data.append(ImageObject(**d.model_dump()))
         super().__init__(created=created, data=_data)
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
