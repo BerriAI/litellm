@@ -32,6 +32,7 @@ export interface ProxySettings {
   PROXY_BASE_URL: string | null;
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
+  SSO_ENABLED: boolean;
 }
 
 function getCookie(name: string) {
