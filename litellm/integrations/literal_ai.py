@@ -194,8 +194,8 @@ class LiteralAILogger(CustomBatchLogger):
         settings = logging_payload["model_parameters"]
 
         messages = logging_payload["messages"]
-        output = logging_payload.get("response", {}).get("choices", [])[0]
-        message_completion = output["message"] if output else None
+        choices = logging_payload.get("response", {}).get("choices", [])
+        message_completion = choices[0]["message"] if choices else None
         prompt_id = None
         variables = None
 
