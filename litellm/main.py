@@ -42,6 +42,7 @@ from litellm import (  # type: ignore
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
@@ -4617,6 +4618,7 @@ def image_generation(
     Currently supports just Azure + OpenAI.
     """
     try:
+        args = locals()
         aimg_generation = kwargs.get("aimg_generation", False)
         litellm_call_id = kwargs.get("litellm_call_id", None)
         logger_fn = kwargs.get("logger_fn", None)
@@ -4822,6 +4824,56 @@ def image_generation(
                 vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
             )
+        elif (
+            custom_llm_provider in litellm._custom_providers
+        ):  # Assume custom LLM provider
+            # Get the Custom Handler
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise ValueError(
+                    f"Unable to map your input to a model. Check your input - {args}"
+                )
+
+            ## ROUTE LLM CALL ##
+            if aimg_generation is True:
+                handler_fn = custom_handler.aimage_generation
+                async_custom_client: Optional[AsyncHTTPHandler] = None
+                if client is not None and isinstance(client, AsyncHTTPHandler):
+                    async_custom_client = client
+
+                ## CALL FUNCTION
+                model_response = handler_fn(  # type: ignore
+                    model=model,
+                    prompt=prompt,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=async_custom_client,
+                )
+            else:
+                handler_fn = custom_handler.image_generation
+                if client is not None and isinstance(client, HTTPHandler):
+                    custom_client = client
+
+                custom_client: Optional[HTTPHandler] = None
+                if client is not None and isinstance(client, HTTPHandler):
+                    custom_client = client
+
+                ## CALL FUNCTION
+                model_response = handler_fn(
+                    model=model,
+                    prompt=prompt,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=custom_client,
+                )
 
         return model_response
     except Exception as e:
