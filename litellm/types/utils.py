@@ -1090,7 +1090,10 @@ class ImageResponse(OpenAIImageResponse):
         else:
             created = int(time.time())
 
-        super().__init__(created=created, data=data)
+        _data: List[OpenAIImage] = []
+        for d in data:
+            _data.append(ImageObject(**d.model_dump()))
+        super().__init__(created=created, data=_data)
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def __contains__(self, key):

@@ -158,7 +158,7 @@ class CustomLLM(BaseLLM):
         logging_obj: Any,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[HTTPHandler] = None,
-    ):
+    ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def aimage_generation(
@@ -170,7 +170,7 @@ class CustomLLM(BaseLLM):
         logging_obj: Any,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
-    ):
+    ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
 

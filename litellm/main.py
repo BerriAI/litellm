@@ -4840,13 +4840,12 @@ def image_generation(
 
             ## ROUTE LLM CALL ##
             if aimg_generation is True:
-                handler_fn = custom_handler.aimage_generation
                 async_custom_client: Optional[AsyncHTTPHandler] = None
                 if client is not None and isinstance(client, AsyncHTTPHandler):
                     async_custom_client = client
 
                 ## CALL FUNCTION
-                model_response = handler_fn(  # type: ignore
+                model_response = custom_handler.aimage_generation(  # type: ignore
                     model=model,
                     prompt=prompt,
                     model_response=model_response,
@@ -4856,16 +4855,12 @@ def image_generation(
                     client=async_custom_client,
                 )
             else:
-                handler_fn = custom_handler.image_generation
-                if client is not None and isinstance(client, HTTPHandler):
-                    custom_client = client
-
                 custom_client: Optional[HTTPHandler] = None
                 if client is not None and isinstance(client, HTTPHandler):
                     custom_client = client
 
                 ## CALL FUNCTION
-                model_response = handler_fn(
+                model_response = custom_handler.image_generation(
                     model=model,
                     prompt=prompt,
                     model_response=model_response,
