@@ -66,8 +66,11 @@ def prepare_payload(data):
 
     contents = []
     for message in data.get("messages", []):
+        role = message.get("role")
+        if role in ["system", "assistant"]:
+            role = "model"
         contents.append({
-            "role": message.get("role"),
+            "role": role,
             "parts": [
                 {
                     "text": message.get("content")
