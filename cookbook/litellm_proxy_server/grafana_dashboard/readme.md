@@ -2,7 +2,7 @@
 
 This folder contains the `json` for creating Grafana Dashboards
 
-## LiteLLM v2 Dashboard 
+## [LiteLLM v2 Dashboard](./dashboard_v2)
 
 <img width="1316" alt="grafana_1" src="https://github.com/user-attachments/assets/d0df802d-0cb9-4906-a679-941c547789ab">
 <img width="1289" alt="grafana_2" src="https://github.com/user-attachments/assets/b11f755f-e113-42ab-b21d-83f91f451a28">
