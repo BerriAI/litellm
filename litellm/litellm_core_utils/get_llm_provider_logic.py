@@ -206,6 +206,14 @@ def get_llm_provider(
                     or "https://codestral.mistral.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("CODESTRAL_API_KEY")
+            elif custom_llm_provider == "hosted_vllm":
+                # vllm is openai compatible, we just need to set this to custom_openai
+                api_base = api_base or get_secret(
+                    "HOSTED_VLLM_API_BASE"
+                )  # type: ignore
+                dynamic_api_key = (
+                    api_key or get_secret("HOSTED_VLLM_API_KEY") or ""
+                )  # vllm does not require an api key
             elif custom_llm_provider == "deepseek":
                 # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
                 api_base = (

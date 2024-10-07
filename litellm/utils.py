@@ -2788,6 +2788,24 @@ def _remove_additional_properties(schema):
     return schema
 
 
+def _remove_strict_from_schema(schema):
+    if isinstance(schema, dict):
+        # Remove the 'additionalProperties' key if it exists and is set to False
+        if "strict" in schema:
+            del schema["strict"]
+
+        # Recursively process all dictionary values
+        for key, value in schema.items():
+            _remove_strict_from_schema(value)
+
+    elif isinstance(schema, list):
+        # Recursively process all items in the list
+        for item in schema:
+            _remove_strict_from_schema(item)
+
+    return schema
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -3773,6 +3791,21 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
         )
+    elif custom_llm_provider == "hosted_vllm":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.HostedVLLMChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
 
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
@@ -4427,6 +4460,8 @@ def get_supported_openai_params(
             "extra_headers",
             "extra_body",
         ]
+    elif custom_llm_provider == "hosted_vllm":
+        return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepseek":
         return [
             # https://platform.deepseek.com/api-docs/api/create-chat-completion
@@ -4483,7 +4518,12 @@ def get_supported_openai_params(
     elif custom_llm_provider == "openai":
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
-        return litellm.AzureOpenAIConfig().get_supported_openai_params()
+        if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+            return litellm.AzureOpenAIO1Config().get_supported_openai_params(
+                model=model
+            )
+        else:
+            return litellm.AzureOpenAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "openrouter":
         return [
             "temperature",

@@ -662,3 +662,45 @@ def test_unmapped_gemini_model_params():
         stop="stop_word",
     )
     assert optional_params["stop_sequences"] == ["stop_word"]
+
+
+def test_drop_nested_params_vllm():
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5288
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "structure_output",
+                "description": "Send structured output back to the user",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {"type": "string"},
+                        "sentiment": {"type": "string"},
+                    },
+                    "required": ["reasoning", "sentiment"],
+                    "additionalProperties": False,
+                },
+                "additionalProperties": False,
+            },
+        }
+    ]
+    tool_choice = {"type": "function", "function": {"name": "structure_output"}}
+    optional_params = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        temperature=0.2,
+        tools=tools,
+        tool_choice=tool_choice,
+        additional_drop_params=[
+            ["tools", "function", "strict"],
+            ["tools", "function", "additionalProperties"],
+        ],
+    )
+    print(optional_params["tools"][0]["function"])
+
+    assert "additionalProperties" not in optional_params["tools"][0]["function"]
+    assert "strict" not in optional_params["tools"][0]["function"]
