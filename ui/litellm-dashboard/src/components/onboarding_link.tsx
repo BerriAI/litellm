@@ -21,6 +21,7 @@ export interface InvitationLink {
   created_by: string;
   updated_at: Date;
   updated_by: string;
+  has_user_setup_sso: boolean;
 }
 
 interface OnboardingProps {
@@ -47,6 +48,13 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
     setIsInvitationLinkModalVisible(false);
   };
 
+  const getInvitationUrl = () => {
+    if (invitationLinkData?.has_user_setup_sso) {
+      return `${baseUrl}/ui`;
+    }
+    return `${baseUrl}/ui?invitation_id=${invitationLinkData?.id}`;
+  };
+
   return (
     <Modal
       title="Invitation Link"
@@ -67,13 +75,13 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
       <div className="flex justify-between pt-5 pb-2">
         <Text>Invitation Link</Text>
         <Text>
-          {baseUrl}/ui?invitation_id={invitationLinkData?.id}
+        <Text>{getInvitationUrl()}</Text>
         </Text>
       </div>
       <div className="flex justify-end mt-5">
         <div></div>
         <CopyToClipboard
-          text={`${baseUrl}/ui?invitation_id=${invitationLinkData?.id}`}
+          text={getInvitationUrl()}
           onCopy={() => message.success("Copied!")}
         >
           <Button variant="primary">Copy invitation link</Button>
