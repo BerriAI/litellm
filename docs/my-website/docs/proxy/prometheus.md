@@ -1,5 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # 📈 Prometheus metrics
 
@@ -169,11 +170,21 @@ litellm_settings:
 | `litellm_redis_fails`         | Number of failed redis calls    |
 | `litellm_self_latency`         | Histogram latency for successful litellm api call    |
 
-## 🔥 Community Maintained Grafana Dashboards 
+## **🔥 LiteLLM Maintained Grafana Dashboards **
 
-Link to Grafana Dashboards made by LiteLLM community 
+Link to Grafana Dashboards maintained by LiteLLM
 
 https://github.com/BerriAI/litellm/tree/main/cookbook/litellm_proxy_server/grafana_dashboard
+
+Here is a screenshot of the metrics you can monitor with the LiteLLM Grafana Dashboard
+
+
+<Image img={require('../../img/grafana_1.png')} />
+
+<Image img={require('../../img/grafana_2.png')} />
+
+<Image img={require('../../img/grafana_3.png')} />
+
 
 ## Deprecated Metrics 
 
