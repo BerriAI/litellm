@@ -52,6 +52,15 @@ interface ViewUserDashboardProps {
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
+
+interface UserListResponse {
+  users: any[] | null;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -67,6 +76,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   teams,
   setKeys,
 }) => {
+  const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -123,8 +133,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           currentPage,
           defaultPageSize
         );
+
+        setUserListResponse(userDataResponse);
+
         console.log("user data response:", userDataResponse);
-        setUserData(userDataResponse.users);
+        setUserData(userDataResponse.users || []);
 
         const availableUserRoles = await getPossibleUserRoles(accessToken);
         setPossibleUIRoles(availableUserRoles);
@@ -149,27 +162,31 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   function renderPagination() {
     if (!userData) return null;
 
-    const totalPages = Math.ceil(userData.length / defaultPageSize);
+    const totalPages = userListResponse?.total_pages || 0;
+
+    const handlePageChange = (newPage: number) => {
+      setUserData([]); // Clear current users
+      setCurrentPage(newPage);
+    };
+  
 
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing Page {currentPage + 1} of {totalPages}
+          Showing Page {currentPage } of {totalPages}
         </div>
         <div className="flex">
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 0}
-            onClick={() => setCurrentPage(currentPage - 1)}
+            disabled={currentPage === 1}
+            onClick={() => handlePageChange(currentPage - 1)}
           >
             &larr; Prev
           </button>
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            // disabled={currentPage === totalPages}
-            onClick={() => {
-              setCurrentPage(currentPage + 1);
-            }}
+            disabled={currentPage === totalPages}
+            onClick={() => handlePageChange(currentPage + 1)}
           >
             Next &rarr;
           </button>
@@ -255,11 +272,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           >
                             View Keys
                           </Icon>
-                          {/* 
-                        <Icon icon={TrashIcon} onClick= {() => {
-                          setOpenDialogId(user.user_id)
-                          setSelectedItem(user)
-                        }}>View Keys</Icon> */}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -271,25 +283,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <div className="flex-1"></div>
                   <div className="flex-1 flex justify-between items-center"></div>
                 </div>
-                {/* <Table className="max-h-[70vh] min-h-[500px]">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>End User</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell>Total Events</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {endUsers?.map((user: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>{user.end_user}</TableCell>
-                        <TableCell>{user.total_spend}</TableCell>
-                        <TableCell>{user.total_events}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table> */}
               </TabPanel>
             </TabPanels>
           </TabGroup>
