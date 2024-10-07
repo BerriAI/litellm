@@ -32,11 +32,33 @@ def test_batch_completions():
             messages=messages,
             max_tokens=10,
             temperature=0.2,
-            request_timeout=1,
+            request_timeout=1
         )
         print(result)
         print(len(result))
         assert len(result) == 3
+    except Timeout as e:
+        print(f"IN TIMEOUT")
+        pass
+    except Exception as e:
+        pytest.fail(f"An error occurred: {e}")
+
+    # max_worker in batch_completion test
+    messages = [[{"role": "user", "content": "write a short poem"}] for _ in range(30)]
+    model = "gpt-3.5-turbo"
+    litellm.set_verbose = True
+    try:
+        result = batch_completion(
+            model=model,
+            messages=messages,
+            max_tokens=10,
+            temperature=0.2,
+            request_timeout=1,
+            max_workers=5
+        )
+        print(result)
+        print(len(result))
+        assert len(result) == 30
     except Timeout as e:
         print(f"IN TIMEOUT")
         pass
