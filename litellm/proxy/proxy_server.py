@@ -2768,6 +2768,10 @@ async def chat_completion(
         except:
             data = json.loads(body_str)
 
+        if data.get("model", "") == "workday_gateway":
+            from litellm.proxy.external.workday_gateway import call_workday_gateway
+            return await call_workday_gateway(data)
+
         # set user api keys from vault
         if "user_id" in data:
             print(f"getting api keys for user: {data['user_id']}")
