@@ -16,7 +16,11 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.gcs_bucket import GCSBucketLogger, StandardLoggingPayload
+from litellm.integrations.gcs_bucket.gcs_bucket import (
+    GCSBucketLogger,
+    StandardLoggingPayload,
+)
+from litellm.types.utils import StandardCallbackDynamicParams
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -221,7 +225,7 @@ async def test_basic_gcs_logger_failure():
                 "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
             },
         )
-    except:
+    except Exception:
         pass
 
     await asyncio.sleep(5)
@@ -263,3 +267,255 @@ async def test_basic_gcs_logger_failure():
     # Delete Object from GCS
     print("deleting object from GCS")
     await gcs_logger.delete_gcs_object(object_name=object_name)
+
+
+@pytest.mark.asyncio
+async def test_basic_gcs_logging_per_request_with_callback_set():
+    """
+    Test GCS Bucket logging per request
+
+    Request 1 - pass gcs_bucket_name in kwargs
+    Request 2 - don't pass gcs_bucket_name in kwargs - ensure 'litellm-testing-bucket'
+    """
+    import logging
+    from litellm._logging import verbose_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+    load_vertex_ai_credentials()
+    gcs_logger = GCSBucketLogger()
+    print("GCSBucketLogger", gcs_logger)
+    litellm.callbacks = [gcs_logger]
+
+    GCS_BUCKET_NAME = "key-logging-project1"
+    standard_callback_dynamic_params: StandardCallbackDynamicParams = (
+        StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
+    )
+
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            messages=[{"role": "user", "content": "This is a test"}],
+            max_tokens=10,
+            user="ishaan-2",
+            gcs_bucket_name=GCS_BUCKET_NAME,
+        )
+    except:
+        pass
+
+    await asyncio.sleep(5)
+
+    # Get the current date
+    # Get the current date
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Modify the object_name to include the date-based folder
+    object_name = f"{current_date}%2F{response.id}"
+
+    print("object_name", object_name)
+
+    # Check if object landed on GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    print("object from gcs=", object_from_gcs)
+    # convert object_from_gcs from bytes to DICT
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
+
+    print("type of object_from_gcs", type(parsed_data))
+
+    gcs_payload = StandardLoggingPayload(**parsed_data)
+
+    assert gcs_payload["model"] == "gpt-4o-mini"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+
+    assert gcs_payload["response_cost"] > 0.0
+
+    assert gcs_payload["status"] == "success"
+
+    # clean up the object from GCS
+    await gcs_logger.delete_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+
+    # Request 2 - don't pass gcs_bucket_name in kwargs - ensure 'litellm-testing-bucket'
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            messages=[{"role": "user", "content": "This is a test"}],
+            max_tokens=10,
+            user="ishaan-2",
+            mock_response="Hi!",
+        )
+    except:
+        pass
+
+    await asyncio.sleep(5)
+
+    # Get the current date
+    # Get the current date
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        gcs_bucket_name="litellm-testing-bucket"
+    )
+
+    # Modify the object_name to include the date-based folder
+    object_name = f"{current_date}%2F{response.id}"
+
+    print("object_name", object_name)
+
+    # Check if object landed on GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    print("object from gcs=", object_from_gcs)
+    # convert object_from_gcs from bytes to DICT
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
+
+    print("type of object_from_gcs", type(parsed_data))
+
+    gcs_payload = StandardLoggingPayload(**parsed_data)
+
+    assert gcs_payload["model"] == "gpt-4o-mini"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+
+    assert gcs_payload["response_cost"] > 0.0
+
+    assert gcs_payload["status"] == "success"
+
+    # clean up the object from GCS
+    await gcs_logger.delete_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+
+
+@pytest.mark.asyncio
+async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
+    """
+    Test GCS Bucket logging per request
+
+    key difference: no litellm.callbacks set
+
+    Request 1 - pass gcs_bucket_name in kwargs
+    Request 2 - don't pass gcs_bucket_name in kwargs - ensure 'litellm-testing-bucket'
+    """
+    import logging
+    from litellm._logging import verbose_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+    load_vertex_ai_credentials()
+    gcs_logger = GCSBucketLogger()
+
+    GCS_BUCKET_NAME = "key-logging-project1"
+    standard_callback_dynamic_params: StandardCallbackDynamicParams = (
+        StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
+    )
+
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            messages=[{"role": "user", "content": "This is a test"}],
+            max_tokens=10,
+            user="ishaan-2",
+            gcs_bucket_name=GCS_BUCKET_NAME,
+            success_callback=["gcs_bucket"],
+            failure_callback=["gcs_bucket"],
+        )
+    except:
+        pass
+
+    await asyncio.sleep(5)
+
+    # Get the current date
+    # Get the current date
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Modify the object_name to include the date-based folder
+    object_name = f"{current_date}%2F{response.id}"
+
+    print("object_name", object_name)
+
+    # Check if object landed on GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    print("object from gcs=", object_from_gcs)
+    # convert object_from_gcs from bytes to DICT
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
+
+    print("type of object_from_gcs", type(parsed_data))
+
+    gcs_payload = StandardLoggingPayload(**parsed_data)
+
+    assert gcs_payload["model"] == "gpt-4o-mini"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+
+    assert gcs_payload["response_cost"] > 0.0
+
+    assert gcs_payload["status"] == "success"
+
+    # clean up the object from GCS
+    await gcs_logger.delete_gcs_object(
+        object_name=object_name,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+
+    # make a failure request - assert that failure callback is hit
+    gcs_log_id = f"failure-test-{uuid.uuid4().hex}"
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            temperature=0.7,
+            messages=[{"role": "user", "content": "This is a test"}],
+            max_tokens=10,
+            user="ishaan-2",
+            mock_response=litellm.BadRequestError(
+                model="gpt-3.5-turbo",
+                message="Error: 400: Bad Request: Invalid API key, please check your API key and try again.",
+                llm_provider="openai",
+            ),
+            success_callback=["gcs_bucket"],
+            failure_callback=["gcs_bucket"],
+            gcs_bucket_name=GCS_BUCKET_NAME,
+            metadata={
+                "gcs_log_id": gcs_log_id,
+            },
+        )
+    except:
+        pass
+
+    await asyncio.sleep(5)
+
+    # check if the failure object is logged in GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(
+        object_name=gcs_log_id,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    print("object from gcs=", object_from_gcs)
+    # convert object_from_gcs from bytes to DICT
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
+
+    gcs_payload = StandardLoggingPayload(**parsed_data)
+
+    assert gcs_payload["model"] == "gpt-4o-mini"
+    assert gcs_payload["messages"] == [{"role": "user", "content": "This is a test"}]
+
+    assert gcs_payload["response_cost"] == 0
+    assert gcs_payload["status"] == "failure"
+
+    # clean up the object from GCS
+    await gcs_logger.delete_gcs_object(
+        object_name=gcs_log_id,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )

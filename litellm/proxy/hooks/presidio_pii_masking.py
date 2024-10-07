@@ -108,7 +108,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     async def check_pii(self, text: str, output_parse_pii: bool) -> str:
@@ -152,7 +152,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                         start = item["start"]
                         end = item["end"]
                         replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii == True:
+                        if item["operator"] == "replace" and output_parse_pii is True:
                             # check if token in dict
                             # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
                             if replacement in self.pii_tokens:
@@ -216,10 +216,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 # pii masking ##
                 if (
                     content_safety.get("no-pii", None) is not None
-                    and content_safety.get("no-pii") == True
+                    and content_safety.get("no-pii") is True
                 ):
                     # check if user allowed to turn this off
-                    if permissions.get("allow_pii_controls", False) == False:
+                    if permissions.get("allow_pii_controls", False) is False:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -236,7 +236,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 ## pii output parsing ##
                 if content_safety.get("output_parse_pii", None) is not None:
                     # check if user allowed to turn this off
-                    if permissions.get("allow_pii_controls", False) == False:
+                    if permissions.get("allow_pii_controls", False) is False:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -279,7 +279,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             return data
         except Exception as e:
             verbose_proxy_logger.info(
-                f"An error occurred -",
+                "An error occurred -",
             )
             raise e
 
@@ -318,7 +318,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             )
             kwargs["messages"] = messages
 
-        return kwargs, responses
+        return kwargs, result
 
     async def async_post_call_success_hook(
         self,
@@ -332,7 +332,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         verbose_proxy_logger.debug(
             f"PII Masking Args: litellm.output_parse_pii={litellm.output_parse_pii}; type of response={type(response)}"
         )
-        if litellm.output_parse_pii == False:
+        if litellm.output_parse_pii is False:
             return response
 
         if isinstance(response, ModelResponse) and not isinstance(

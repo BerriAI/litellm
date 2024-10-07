@@ -16,15 +16,6 @@ jobs:
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
 
-      - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
-          command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
-            else
-              echo "No changes to litellm or pyproject.toml. Skipping tests."
-              circleci step halt
-            fi
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
@@ -52,7 +43,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.45.0
+            pip install openai==1.51.0
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
@@ -308,6 +299,66 @@ jobs:
             ls
             python -m pytest -vv tests/local_testing/test_python_38.py
 
+  check_code_and_doc_quality:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project/litellm
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install ruff
+            pip install pylint  
+            pip install pyright
+            pip install .
+      - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+      - run: ruff check ./litellm
+      - run: python ./tests/documentation_tests/test_general_setting_keys.py
+    
+  db_migration_disable_update_check:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t myapp .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run --name my-app \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DISABLE_SCHEMA_UPDATE="True" \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
+              myapp:latest \
+              --config /app/config.yaml \
+              --port 4000 > docker_output.log 2>&1 || true
+      - run:
+          name: Display Docker logs
+          command: cat docker_output.log
+      - run:
+          name: Check for expected error
+          command: |
+            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two" docker_output.log; then
+              echo "Expected error found. Test passed."
+            else
+              echo "Expected error not found. Test failed."
+              cat docker_output.log
+              exit 1
+            fi
+            
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -362,7 +413,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -455,7 +506,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -563,7 +614,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -731,7 +782,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.45.0"
+            pip install "openai==1.51.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -815,6 +866,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - check_code_and_doc_quality:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - ui_endpoint_testing:
           filters:
             branches:
@@ -851,6 +908,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - db_migration_disable_update_check:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - installing_litellm_on_python:
           filters:
             branches:
@@ -872,10 +935,12 @@ workflows:
             - litellm_router_testing
             - litellm_assistants_api_testing
             - ui_endpoint_testing
+            - db_migration_disable_update_check
             - e2e_ui_testing
             - installing_litellm_on_python
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
+            - check_code_and_doc_quality
           filters:
             branches:
               only:

@@ -51,8 +51,8 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "audio_transcription",
         ],
     ):
+        text = ""
         if "messages" in data and isinstance(data["messages"], list):
-            text = ""
             for m in data["messages"]:  # assume messages is a list
                 if "content" in m and isinstance(m["content"], str):
                     text += m["content"]
@@ -67,7 +67,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         )
 
         verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
-        if moderation_response.results[0].flagged == True:
+        if moderation_response.results[0].flagged is True:
             raise HTTPException(
                 status_code=403, detail={"error": "Violated content safety policy"}
             )

@@ -46,6 +46,7 @@ def mock_chat_response() -> Dict[str, Any]:
             "completion_tokens": 38,
             "completion_tokens_details": None,
             "total_tokens": 268,
+            "prompt_tokens_details": None,
         },
         "system_fingerprint": None,
     }
@@ -201,6 +202,7 @@ def mock_embedding_response() -> Dict[str, Any]:
             "total_tokens": 8,
             "completion_tokens": 0,
             "completion_tokens_details": None,
+            "prompt_tokens_details": None,
         },
     }
 

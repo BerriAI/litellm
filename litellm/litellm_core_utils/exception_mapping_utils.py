@@ -62,7 +62,7 @@ def get_error_message(error_obj) -> Optional[str]:
 
         # If all else fails, return None
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -750,6 +750,17 @@ def exception_type(  # type: ignore
                         model=model,
                         llm_provider="bedrock",
                     )
+                elif (
+                    "Conversation blocks and tool result blocks cannot be provided in the same turn."
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"BedrockException - {error_str}\n. Enable 'litellm.modify_params=True' (for PROXY do: `litellm_settings::modify_params: True`) to insert a dummy assistant message and fix this error.",
+                        model=model,
+                        llm_provider="bedrock",
+                        response=original_exception.response,
+                    )
                 elif "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -895,7 +906,10 @@ def exception_type(  # type: ignore
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
                         )
-            elif custom_llm_provider == "sagemaker":
+            elif (
+                custom_llm_provider == "sagemaker"
+                or custom_llm_provider == "sagemaker_chat"
+            ):
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -910,7 +924,7 @@ def exception_type(  # type: ignore
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints",
+                        message="SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints",
                         model=model,
                         llm_provider="sagemaker",
                         response=original_exception.response,
@@ -926,6 +940,90 @@ def exception_type(  # type: ignore
                         llm_provider="sagemaker",
                         response=original_exception.response,
                     )
+                elif hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=httpx.Response(
+                                status_code=500,
+                                request=httpx.Request(
+                                    method="POST", url="https://api.openai.com/v1/"
+                                ),
+                            ),
+                        )
+                    elif original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 404:
+                        exception_mapping_worked = True
+                        raise NotFoundError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif (
+                        original_exception.status_code == 422
+                        or original_exception.status_code == 424
+                    ):
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"SagemakerException - {original_exception.message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            litellm_debug_info=extra_information,
+                        )
             elif (
                 custom_llm_provider == "vertex_ai"
                 or custom_llm_provider == "vertex_ai_beta"
@@ -1122,7 +1220,7 @@ def exception_type(  # type: ignore
                     # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"GeminiException - Invalid api key",
+                        message="GeminiException - Invalid api key",
                         model=model,
                         llm_provider="palm",
                         response=original_exception.response,
@@ -2067,12 +2165,34 @@ def exception_logging(
                 logger_fn(
                     model_call_details
                 )  # Expectation: any logger function passed in by the user should accept a dict object
-            except Exception as e:
+            except Exception:
                 verbose_logger.debug(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                 )
-    except Exception as e:
+    except Exception:
         verbose_logger.debug(
             f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
         )
         pass
+
+
+def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
+    """
+    Internal helper function for litellm proxy
+    Add the Key Name + Team Name to the error
+    Only gets added if the metadata contains the user_api_key_alias and user_api_key_team_alias
+
+    [Non-Blocking helper function]
+    """
+    try:
+        _api_key_name = metadata.get("user_api_key_alias", None)
+        _user_api_key_team_alias = metadata.get("user_api_key_team_alias", None)
+        if _api_key_name is not None:
+            request_info = (
+                f"\n\nKey Name: `{_api_key_name}`\nTeam: `{_user_api_key_team_alias}`"
+                + request_info
+            )
+
+        return request_info
+    except Exception:
+        return request_info

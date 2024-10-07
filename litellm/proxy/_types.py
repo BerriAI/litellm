@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
+from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
-from litellm.types.utils import ProviderField
+from litellm.types.utils import ProviderField, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -110,23 +111,6 @@ class LitellmTableNames(enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
 
 
-AlertType = Literal[
-    "llm_exceptions",
-    "llm_too_slow",
-    "llm_requests_hanging",
-    "budget_alerts",
-    "db_exceptions",
-    "daily_reports",
-    "spend_reports",
-    "cooldown_deployment",
-    "new_model_added",
-    "outage_alerts",
-    "region_outage_alerts",
-    "fallback_reports",
-    "failed_tracking_spend",
-]
-
-
 def hash_token(token: str):
     import hashlib
 
@@ -144,14 +128,14 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
     def fields_set(self):
         try:
             return self.model_fields_set  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.__fields_set__
 
@@ -270,6 +254,7 @@ class LiteLLMRoutes(enum.Enum):
 
     info_routes = [
         "/key/info",
+        "/key/health",
         "/team/info",
         "/team/list",
         "/user/info",
@@ -292,6 +277,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/update",
         "/key/delete",
         "/key/info",
+        "/key/health",
         # user
         "/user/new",
         "/user/update",
@@ -350,6 +336,7 @@ class LiteLLMRoutes(enum.Enum):
             "/key/generate",
             "/key/update",
             "/key/delete",
+            "/key/health",
             "/key/info",
             "/global/spend/tags",
             "/global/spend/keys",
@@ -975,21 +962,38 @@ class BlockKeyRequest(LiteLLMBase):
 class AddTeamCallback(LiteLLMBase):
     callback_name: str
     callback_type: Literal["success", "failure", "success_and_failure"]
-    # for now - only supported for langfuse
-    callback_vars: Dict[
-        Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
-    ]
+    callback_vars: Dict[str, str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_callback_vars(cls, values):
+        callback_vars = values.get("callback_vars", {})
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        for key in callback_vars:
+            if key not in valid_keys:
+                raise ValueError(
+                    f"Invalid callback variable: {key}. Must be one of {valid_keys}"
+                )
+        return values
 
 
 class TeamCallbackMetadata(LiteLLMBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
     # for now - only supported for langfuse
-    callback_vars: Optional[
-        Dict[
-            Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
-        ]
-    ] = {}
+    callback_vars: Optional[Dict[str, str]] = {}
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_callback_vars(cls, values):
+        callback_vars = values.get("callback_vars", {})
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        for key in callback_vars:
+            if key not in valid_keys:
+                raise ValueError(
+                    f"Invalid callback variable: {key}. Must be one of {valid_keys}"
+                )
+        return values
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -1919,3 +1923,14 @@ class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
     current_rpm: int
+
+
+class LoggingCallbackStatus(TypedDict, total=False):
+    callbacks: List[str]
+    status: Literal["healthy", "unhealthy"]
+    details: Optional[str]
+
+
+class KeyHealthResponse(TypedDict, total=False):
+    key: Literal["healthy", "unhealthy"]
+    logging_callbacks: Optional[LoggingCallbackStatus]

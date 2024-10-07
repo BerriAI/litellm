@@ -5,6 +5,7 @@ import time
 import traceback
 
 import pytest
+from typing import List
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -12,11 +13,10 @@ sys.path.insert(
 import os
 
 import dotenv
-import pytest
 from openai import OpenAI
 
 import litellm
-from tests.local_testing import stream_chunk_testdata
+import stream_chunk_testdata
 from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()
@@ -622,3 +622,46 @@ def test_stream_chunk_builder_multiple_tool_calls():
     assert (
         expected_response.choices == response.choices
     ), "\nGot={}\n, Expected={}\n".format(response.choices, expected_response.choices)
+
+
+def test_stream_chunk_builder_openai_prompt_caching():
+    from openai import OpenAI
+    from pydantic import BaseModel
+
+    client = OpenAI(
+        # This is the default and can be omitted
+        api_key=os.getenv("OPENAI_API_KEY"),
+    )
+
+    chat_completion = client.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": "Say this is a test",
+            }
+        ],
+        model="gpt-3.5-turbo",
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    chunks: List[litellm.ModelResponse] = []
+    usage_obj = None
+    for chunk in chat_completion:
+        chunks.append(litellm.ModelResponse(**chunk.model_dump(), stream=True))
+
+    print(f"chunks: {chunks}")
+
+    usage_obj: litellm.Usage = chunks[-1].usage  # type: ignore
+
+    response = stream_chunk_builder(chunks=chunks)
+    print(f"response: {response}")
+    print(f"response usage: {response.usage}")
+    for k, v in usage_obj.model_dump().items():
+        print(k, v)
+        response_usage_value = getattr(response.usage, k)  # type: ignore
+        print(f"response_usage_value: {response_usage_value}")
+        print(f"type: {type(response_usage_value)}")
+        if isinstance(response_usage_value, BaseModel):
+            assert response_usage_value.model_dump() == v
+        else:
+            assert response_usage_value == v

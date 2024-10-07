@@ -1,42 +1,16 @@
 model_list:
-  - model_name: multimodalembedding@001
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: vertex_ai/multimodalembedding@001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json"
-  - model_name: text-embedding-ada-002
+      model: openai/gpt-5
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railwaz.app/
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: openai/text-embedding-ada-002                          # The `openai/` prefix will call openai.chat.completions.create
-      api_key: os.environ/OPENAI_API_KEY
- - model_name: db-openai-endpoint
-   litellm_params:
-     model: openai/gpt-3.5-turbo
-     api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
-   model_info:
-     supported_environments: ["development", "production", "staging"]
- - model_name: rerank-english-v3.0
-   litellm_params:
-     model: cohere/rerank-english-v3.0
-     api_key: os.environ/COHERE_API_KEY
-   model_info:
-     supported_environments: ["production", "staging"]
- - model_name: llava-hf
-   litellm_params:
-     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
-     api_key: fake-key
-   model_info:
-     supported_environments: ["production", "staging"]
-
-general_settings:
-    service_account_settings: 
-        enforced_params: ["user"]
-
+      model: openai/gpt-5
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railwxaz.app/
 
 litellm_settings:
-  drop_params: True
-  callbacks: ["otel"]
-  success_callback: ["langfuse"]
-  failure_callback: ["langfuse"]
+  callbacks: ["prometheus"]
+
 

@@ -23,7 +23,7 @@ def set_arize_ai_attributes(span: Span, kwargs, response_obj):
     )
 
     optional_params = kwargs.get("optional_params", {})
-    litellm_params = kwargs.get("litellm_params", {}) or {}
+    # litellm_params = kwargs.get("litellm_params", {}) or {}
 
     #############################################
     ############ LLM CALL METADATA ##############

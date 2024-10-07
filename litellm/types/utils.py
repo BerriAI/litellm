@@ -6,8 +6,12 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
-from pydantic import ConfigDict, PrivateAttr
+from openai.types.completion_usage import (
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -63,6 +67,7 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
+    input_cost_per_second: Optional[float]  # for OpenAI Speech models
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_token_above_128k_tokens: Optional[
@@ -75,6 +80,8 @@ class ModelInfo(TypedDict, total=False):
     output_vector_size: Optional[int]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_second: Optional[float]  # for OpenAI Speech models
+
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -260,7 +267,7 @@ class HiddenParams(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -315,7 +322,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 class Message(OpenAIObject):
 
     content: Optional[str]
-    role: Literal["assistant"]
+    role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
 
@@ -347,7 +354,7 @@ class Message(OpenAIObject):
             ),
         }
         super(Message, self).__init__(
-            **init_values,
+            **init_values,  # type: ignore
             **params,
         )
 
@@ -366,7 +373,7 @@ class Message(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -478,40 +485,60 @@ class Usage(CompletionUsage):
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
+        prompt_tokens_details: Optional[Union[PromptTokensDetails, dict]] = None,
+        completion_tokens_details: Optional[
+            Union[CompletionTokensDetails, dict]
+        ] = None,
         **params,
     ):
-        ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
-        if (
-            "prompt_cache_miss_tokens" in params
-            and isinstance(params["prompt_cache_miss_tokens"], int)
-            and prompt_tokens is not None
-        ):
-            prompt_tokens = params["prompt_cache_miss_tokens"]
-
         # handle reasoning_tokens
-        completion_tokens_details = None
+        _completion_tokens_details: Optional[CompletionTokensDetails] = None
         if reasoning_tokens:
             completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=reasoning_tokens
             )
 
         # Ensure completion_tokens_details is properly handled
-        if "completion_tokens_details" in params:
-            if isinstance(params["completion_tokens_details"], dict):
-                completion_tokens_details = CompletionTokensDetails(
-                    **params["completion_tokens_details"]
+        if completion_tokens_details:
+            if isinstance(completion_tokens_details, dict):
+                _completion_tokens_details = CompletionTokensDetails(
+                    **completion_tokens_details
                 )
-            elif isinstance(
-                params["completion_tokens_details"], CompletionTokensDetails
-            ):
-                completion_tokens_details = params["completion_tokens_details"]
-            del params["completion_tokens_details"]
+            elif isinstance(completion_tokens_details, CompletionTokensDetails):
+                _completion_tokens_details = completion_tokens_details
+
+        ## DEEPSEEK MAPPING ##
+        if "prompt_cache_hit_tokens" in params and isinstance(
+            params["prompt_cache_hit_tokens"], int
+        ):
+            if prompt_tokens_details is None:
+                prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=params["prompt_cache_hit_tokens"]
+                )
+
+        ## ANTHROPIC MAPPING ##
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            if prompt_tokens_details is None:
+                prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=params["cache_read_input_tokens"]
+                )
+
+        # handle prompt_tokens_details
+        _prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if prompt_tokens_details:
+            if isinstance(prompt_tokens_details, dict):
+                _prompt_tokens_details = PromptTokensDetails(**prompt_tokens_details)
+            elif isinstance(prompt_tokens_details, PromptTokensDetails):
+                _prompt_tokens_details = prompt_tokens_details
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
             total_tokens=total_tokens or 0,
-            completion_tokens_details=completion_tokens_details or None,
+            completion_tokens_details=_completion_tokens_details or None,
+            prompt_tokens_details=_prompt_tokens_details or None,
         )
 
         ## ANTHROPIC MAPPING ##
@@ -663,6 +690,8 @@ class ModelResponse(OpenAIObject):
                         _new_choice = choice
                     elif isinstance(choice, dict):
                         _new_choice = StreamingChoices(**choice)
+                    elif isinstance(choice, BaseModel):
+                        _new_choice = StreamingChoices(**choice.model_dump())
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
@@ -736,7 +765,7 @@ class ModelResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -763,7 +792,7 @@ class EmbeddingResponse(OpenAIObject):
     model: Optional[str] = None
     """The model used for embedding."""
 
-    data: Optional[List] = None
+    data: List
     """The actual embedding value"""
 
     object: Literal["list"]
@@ -774,6 +803,7 @@ class EmbeddingResponse(OpenAIObject):
 
     _hidden_params: dict = {}
     _response_headers: Optional[Dict] = None
+    _response_ms: Optional[float] = None
 
     def __init__(
         self,
@@ -793,7 +823,7 @@ class EmbeddingResponse(OpenAIObject):
         if data:
             data = data
         else:
-            data = None
+            data = []
 
         if usage:
             usage = usage
@@ -825,7 +855,7 @@ class EmbeddingResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -876,7 +906,7 @@ class TextChoices(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1026,7 +1056,7 @@ class ImageObject(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1079,7 +1109,7 @@ class ImageResponse(OpenAIImageResponse):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1112,7 +1142,7 @@ class TranscriptionResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1365,3 +1395,15 @@ OPENAI_RESPONSE_HEADERS = [
     "x-ratelimit-reset-requests",
     "x-ratelimit-reset-tokens",
 ]
+
+
+class StandardCallbackDynamicParams(TypedDict, total=False):
+    # Langfuse dynamic params
+    langfuse_public_key: Optional[str]
+    langfuse_secret: Optional[str]
+    langfuse_secret_key: Optional[str]
+    langfuse_host: Optional[str]
+
+    # GCS dynamic params
+    gcs_bucket_name: Optional[str]
+    gcs_path_service_account: Optional[str]

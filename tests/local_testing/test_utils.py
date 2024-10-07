@@ -517,17 +517,19 @@ def test_redact_msgs_from_logs():
         ]
     )
 
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
-        litellm_logging_obj=Logging(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=False,
-            call_type="acompletion",
-            litellm_call_id="1234",
-            start_time=datetime.now(),
-            function_id="1234",
-        ),
+        model_call_details=litellm_logging_obj.model_call_details,
     )
 
     # Assert the response_obj content is NOT modified

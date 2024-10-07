@@ -24,7 +24,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -1709,6 +1709,31 @@ def test_completion_perplexity_api():
 
 
 # test_completion_perplexity_api()
+
+
+@pytest.mark.skip(
+    reason="too many requests. Hitting gemini rate limits. Convert to mock test."
+)
+def test_completion_pydantic_obj_2():
+    from pydantic import BaseModel
+
+    litellm.set_verbose = True
+
+    class CalendarEvent(BaseModel):
+        name: str
+        date: str
+        participants: list[str]
+
+    class EventsList(BaseModel):
+        events: list[CalendarEvent]
+
+    messages = [
+        {"role": "user", "content": "List important events from the 20th century."}
+    ]
+
+    response = litellm.completion(
+        model="gemini/gemini-1.5-pro", messages=messages, response_format=EventsList
+    )
 
 
 @pytest.mark.skip(reason="this test is flaky")

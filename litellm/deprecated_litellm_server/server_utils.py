@@ -57,7 +57,7 @@
 #                 config = yaml.safe_load(file)
 #         else:
 #             pass
-#     except:
+#     except Exception:
 #         pass
 
 #     ## SERVER SETTINGS (e.g. default completion model = 'ollama/mistral')

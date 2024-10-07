@@ -68,7 +68,7 @@ class OpenAIFineTuningAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[FineTuningJob, Union[Coroutine[Any, Any, FineTuningJob]]]:
+    ) -> Union[FineTuningJob, Coroutine[Any, Any, FineTuningJob]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,

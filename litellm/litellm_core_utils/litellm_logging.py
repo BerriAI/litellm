@@ -32,14 +32,15 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
 from litellm.proxy._types import CommonProxyErrors
-from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardCallbackDynamicParams,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
@@ -52,18 +53,8 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     _get_base_model_from_metadata,
-    add_breadcrumb,
-    capture_exception,
-    customLogger,
-    liteDebuggerClient,
-    logfireLogger,
-    lunaryLogger,
     print_verbose,
-    prometheusLogger,
     prompt_token_calculator,
-    promptLayerLogger,
-    supabaseClient,
-    weightsBiasesLogger,
 )
 
 from ..integrations.aispend import AISpendLogger
@@ -71,17 +62,17 @@ from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
-from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
-from ..integrations.gcs_bucket import GCSBucketLogger
+from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse import LangFuseLogger
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.litedebugger import LiteDebugger
+from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
@@ -201,19 +192,29 @@ class Logging:
 
     def __init__(
         self,
-        model,
+        model: str,
         messages,
         stream,
         call_type,
         start_time,
-        litellm_call_id,
-        function_id,
-        dynamic_success_callbacks=None,
-        dynamic_failure_callbacks=None,
-        dynamic_async_success_callbacks=None,
-        langfuse_public_key=None,
-        langfuse_secret=None,
-        langfuse_host=None,
+        litellm_call_id: str,
+        function_id: str,
+        dynamic_input_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_async_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        dynamic_async_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = None,
+        kwargs: Optional[Dict] = None,
     ):
         if messages is not None:
             if isinstance(messages, str):
@@ -236,23 +237,136 @@ class Logging:
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
-        self.streaming_chunks = []  # for generating complete stream response
-        self.sync_streaming_chunks = []  # for generating complete stream response
-        self.model_call_details = {}
-        self.dynamic_input_callbacks = []  # [TODO] callbacks set for just that call
-        self.dynamic_failure_callbacks = dynamic_failure_callbacks
-        self.dynamic_success_callbacks = (
-            dynamic_success_callbacks  # callbacks set for just that call
+        self.streaming_chunks: List[Any] = []  # for generating complete stream response
+        self.sync_streaming_chunks: List[Any] = (
+            []
+        )  # for generating complete stream response
+        self.model_call_details: Dict[Any, Any] = {}
+
+        # Initialize dynamic callbacks
+        self.dynamic_input_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_input_callbacks
+        self.dynamic_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_success_callbacks
+        self.dynamic_async_success_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_async_success_callbacks
+        self.dynamic_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_failure_callbacks
+        self.dynamic_async_failure_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = dynamic_async_failure_callbacks
+
+        # Process dynamic callbacks
+        self.process_dynamic_callbacks()
+
+        ## DYNAMIC LANGFUSE / GCS / logging callback KEYS ##
+        self.standard_callback_dynamic_params: StandardCallbackDynamicParams = (
+            self.initialize_standard_callback_dynamic_params(kwargs)
         )
-        self.dynamic_async_success_callbacks = (
-            dynamic_async_success_callbacks  # callbacks set for just that call
-        )
-        ## DYNAMIC LANGFUSE KEYS ##
-        self.langfuse_public_key = langfuse_public_key
-        self.langfuse_secret = langfuse_secret
-        self.langfuse_host = langfuse_host
+
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
+
+    def process_dynamic_callbacks(self):
+        """
+        Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
+
+        If a callback is in litellm._known_custom_logger_compatible_callbacks, it needs to be intialized and added to the respective dynamic_* callback list.
+        """
+        # Process input callbacks
+        self.dynamic_input_callbacks = self._process_dynamic_callback_list(
+            self.dynamic_input_callbacks, dynamic_callbacks_type="input"
+        )
+
+        # Process failure callbacks
+        self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
+            self.dynamic_failure_callbacks, dynamic_callbacks_type="failure"
+        )
+
+        # Process async failure callbacks
+        self.dynamic_async_failure_callbacks = self._process_dynamic_callback_list(
+            self.dynamic_async_failure_callbacks, dynamic_callbacks_type="async_failure"
+        )
+
+        # Process success callbacks
+        self.dynamic_success_callbacks = self._process_dynamic_callback_list(
+            self.dynamic_success_callbacks, dynamic_callbacks_type="success"
+        )
+
+        # Process async success callbacks
+        self.dynamic_async_success_callbacks = self._process_dynamic_callback_list(
+            self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
+        )
+
+    def _process_dynamic_callback_list(
+        self,
+        callback_list: Optional[List[Union[str, Callable, CustomLogger]]],
+        dynamic_callbacks_type: Literal[
+            "input", "success", "failure", "async_success", "async_failure"
+        ],
+    ) -> Optional[List[Union[str, Callable, CustomLogger]]]:
+        """
+        Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
+
+        - If a callback is in litellm._known_custom_logger_compatible_callbacks,
+        replace the string with the initialized callback class.
+        - If dynamic callback is a "success" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_async_success_callbacks
+        - If dynamic callback is a "failure" callback that is a known_custom_logger_compatible_callbacks then add it to dynamic_failure_callbacks
+        """
+        if callback_list is None:
+            return None
+
+        processed_list: List[Union[str, Callable, CustomLogger]] = []
+        for callback in callback_list:
+            if (
+                isinstance(callback, str)
+                and callback in litellm._known_custom_logger_compatible_callbacks
+            ):
+                callback_class = _init_custom_logger_compatible_class(
+                    callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                )
+                if callback_class is not None:
+                    processed_list.append(callback_class)
+
+                    # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
+                    if dynamic_callbacks_type == "success":
+                        if self.dynamic_async_success_callbacks is None:
+                            self.dynamic_async_success_callbacks = []
+                        self.dynamic_async_success_callbacks.append(callback_class)
+                    elif dynamic_callbacks_type == "failure":
+                        if self.dynamic_async_failure_callbacks is None:
+                            self.dynamic_async_failure_callbacks = []
+                        self.dynamic_async_failure_callbacks.append(callback_class)
+            else:
+                processed_list.append(callback)
+        return processed_list
+
+    def initialize_standard_callback_dynamic_params(
+        self, kwargs: Optional[Dict] = None
+    ) -> StandardCallbackDynamicParams:
+        """
+        Initialize the standard callback dynamic params from the kwargs
+
+        checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
+        """
+        from litellm.secret_managers.main import get_secret_str
+
+        standard_callback_dynamic_params = StandardCallbackDynamicParams()
+        if kwargs:
+            _supported_callback_params = (
+                StandardCallbackDynamicParams.__annotations__.keys()
+            )
+            for param in _supported_callback_params:
+                if param in kwargs:
+                    _param_value = kwargs.pop(param)
+                    if _param_value is not None and "os.environ/" in _param_value:
+                        _param_value = get_secret_str(secret_name=_param_value)
+                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
+        return standard_callback_dynamic_params
 
     def update_environment_variables(
         self, model, user, optional_params, litellm_params, **additional_params
@@ -275,6 +389,7 @@ class Logging:
             "call_type": str(self.call_type),
             "litellm_call_id": self.litellm_call_id,
             "completion_start_time": self.completion_start_time,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
             **self.optional_params,
             **additional_params,
         }
@@ -405,7 +520,7 @@ class Logging:
 
             self.model_call_details["api_call_start_time"] = datetime.datetime.now()
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
-            callbacks = litellm.input_callback + self.dynamic_input_callbacks
+            callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
                 try:
                     if callback == "supabase" and supabaseClient is not None:
@@ -423,7 +538,7 @@ class Logging:
                     elif callback == "sentry" and add_breadcrumb:
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -517,18 +632,23 @@ class Logging:
                         )
                     )
             original_response = redact_message_input_output_from_logging(
-                litellm_logging_obj=self, result=original_response
+                model_call_details=(
+                    self.model_call_details
+                    if hasattr(self, "model_call_details")
+                    else {}
+                ),
+                result=original_response,
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
-            callbacks = litellm.input_callback + self.dynamic_input_callbacks
+            callbacks = litellm.input_callback + (self.dynamic_input_callbacks or [])
             for callback in callbacks:
                 try:
                     if callback == "sentry" and add_breadcrumb:
                         verbose_logger.debug("reaches sentry breadcrumbing")
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
-                        except:
+                        except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
                             # make a copy of the _model_Call_details and log it
@@ -818,7 +938,12 @@ class Logging:
                 callbacks = litellm.success_callback
 
             result = redact_message_input_output_from_logging(
-                result=result, litellm_logging_obj=self
+                model_call_details=(
+                    self.model_call_details
+                    if hasattr(self, "model_call_details")
+                    else {}
+                ),
+                result=result,
             )
 
             ## LOGGING HOOK ##
@@ -1010,23 +1135,46 @@ class Logging:
                         temp_langfuse_logger = langFuseLogger
                         if langFuseLogger is None or (
                             (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_secret is not None
-                                and self.langfuse_secret != langFuseLogger.secret_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                )
+                                != langFuseLogger.secret_key
                             )
                             or (
-                                self.langfuse_host is not None
-                                and self.langfuse_host != langFuseLogger.langfuse_host
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                != langFuseLogger.langfuse_host
                             )
                         ):
                             credentials = {
-                                "langfuse_public_key": self.langfuse_public_key,
-                                "langfuse_secret": self.langfuse_secret,
-                                "langfuse_host": self.langfuse_host,
+                                "langfuse_public_key": self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                ),
+                                "langfuse_secret": self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                ),
+                                "langfuse_host": self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                ),
                             }
                             temp_langfuse_logger = (
                                 in_memory_dynamic_logger_cache.get_cache(
@@ -1035,9 +1183,15 @@ class Logging:
                             )
                             if temp_langfuse_logger is None:
                                 temp_langfuse_logger = LangFuseLogger(
-                                    langfuse_public_key=self.langfuse_public_key,
-                                    langfuse_secret=self.langfuse_secret,
-                                    langfuse_host=self.langfuse_host,
+                                    langfuse_public_key=self.standard_callback_dynamic_params.get(
+                                        "langfuse_public_key"
+                                    ),
+                                    langfuse_secret=self.standard_callback_dynamic_params.get(
+                                        "langfuse_secret"
+                                    ),
+                                    langfuse_host=self.standard_callback_dynamic_params.get(
+                                        "langfuse_host"
+                                    ),
                                 )
                                 in_memory_dynamic_logger_cache.set_cache(
                                     credentials=credentials,
@@ -1326,7 +1480,7 @@ class Logging:
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
-                            f"success callbacks: Running Custom Callback Function"
+                            "success callbacks: Running Custom Callback Function"
                         )
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1400,7 +1554,7 @@ class Logging:
                     self.model_call_details["response_cost"] = 0.0
                 else:
                     # check if base_model set on azure
-                    base_model = _get_base_model_from_metadata(
+                    _get_base_model_from_metadata(
                         model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
@@ -1447,7 +1601,10 @@ class Logging:
             callbacks = litellm._async_success_callback
 
         result = redact_message_input_output_from_logging(
-            result=result, litellm_logging_obj=self
+            model_call_details=(
+                self.model_call_details if hasattr(self, "model_call_details") else {}
+            ),
+            result=result,
         )
 
         ## LOGGING HOOK ##
@@ -1483,7 +1640,7 @@ class Logging:
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) == True:
+            if litellm_params.get("no-log", False) is True:
                 # proxy cost tracking cal backs should run
                 if not (
                     isinstance(callback, CustomLogger)
@@ -1492,7 +1649,7 @@ class Logging:
                     print_verbose("no-log request, skipping logging")
                     continue
             try:
-                if kwargs.get("no-log", False) == True:
+                if kwargs.get("no-log", False) is True:
                     print_verbose("no-log request, skipping logging")
                     continue
                 if (
@@ -1641,7 +1798,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except Exception as e:
+            except Exception:
                 verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
@@ -1755,7 +1912,12 @@ class Logging:
             result = None  # result sent to all loggers, init this to None incase it's not created
 
             result = redact_message_input_output_from_logging(
-                result=result, litellm_logging_obj=self
+                model_call_details=(
+                    self.model_call_details
+                    if hasattr(self, "model_call_details")
+                    else {}
+                ),
+                result=result,
             )
             for callback in callbacks:
                 try:
@@ -1849,24 +2011,46 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if langFuseLogger is None or (
                             (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_public_key is not None
-                                and self.langfuse_public_key
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                )
                                 != langFuseLogger.public_key
                             )
                             or (
-                                self.langfuse_host is not None
-                                and self.langfuse_host != langFuseLogger.langfuse_host
+                                self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                is not None
+                                and self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                )
+                                != langFuseLogger.langfuse_host
                             )
                         ):
                             langFuseLogger = LangFuseLogger(
-                                langfuse_public_key=self.langfuse_public_key,
-                                langfuse_secret=self.langfuse_secret,
-                                langfuse_host=self.langfuse_host,
+                                langfuse_public_key=self.standard_callback_dynamic_params.get(
+                                    "langfuse_public_key"
+                                ),
+                                langfuse_secret=self.standard_callback_dynamic_params.get(
+                                    "langfuse_secret"
+                                ),
+                                langfuse_host=self.standard_callback_dynamic_params.get(
+                                    "langfuse_host"
+                                ),
                             )
                         _response = langFuseLogger.log_event(
                             start_time=start_time,
@@ -1945,8 +2129,25 @@ class Logging:
             start_time=start_time,
             end_time=end_time,
         )
+
+        callbacks = []  # init this to empty incase it's not created
+
+        if self.dynamic_async_failure_callbacks is not None and isinstance(
+            self.dynamic_async_failure_callbacks, list
+        ):
+            callbacks = self.dynamic_async_failure_callbacks
+            ## keep the internal functions ##
+            for callback in litellm._async_failure_callback:
+                if (
+                    isinstance(callback, CustomLogger)
+                    and "_PROXY_" in callback.__class__.__name__
+                ):
+                    callbacks.append(callback)
+        else:
+            callbacks = litellm._async_failure_callback
+
         result = None  # result sent to all loggers, init this to None incase it's not created
-        for callback in litellm._async_failure_callback:
+        for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
@@ -2003,22 +2204,34 @@ class Logging:
         if service_name == "langfuse":
             if langFuseLogger is None or (
                 (
-                    self.langfuse_public_key is not None
-                    and self.langfuse_public_key != langFuseLogger.public_key
+                    self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    != langFuseLogger.public_key
                 )
                 or (
-                    self.langfuse_public_key is not None
-                    and self.langfuse_public_key != langFuseLogger.public_key
+                    self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_public_key")
+                    != langFuseLogger.public_key
                 )
                 or (
-                    self.langfuse_host is not None
-                    and self.langfuse_host != langFuseLogger.langfuse_host
+                    self.standard_callback_dynamic_params.get("langfuse_host")
+                    is not None
+                    and self.standard_callback_dynamic_params.get("langfuse_host")
+                    != langFuseLogger.langfuse_host
                 )
             ):
                 return LangFuseLogger(
-                    langfuse_public_key=self.langfuse_public_key,
-                    langfuse_secret=self.langfuse_secret,
-                    langfuse_host=self.langfuse_host,
+                    langfuse_public_key=self.standard_callback_dynamic_params.get(
+                        "langfuse_public_key"
+                    ),
+                    langfuse_secret=self.standard_callback_dynamic_params.get(
+                        "langfuse_secret"
+                    ),
+                    langfuse_host=self.standard_callback_dynamic_params.get(
+                        "langfuse_host"
+                    ),
                 )
             return langFuseLogger
 
@@ -2175,6 +2388,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "literalai":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LiteralAILogger):
+                return callback  # type: ignore
+
+        _literalai_logger = LiteralAILogger()
+        _in_memory_loggers.append(_literalai_logger)
+        return _literalai_logger  # type: ignore
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
             if isinstance(callback, PrometheusLogger):
@@ -2324,6 +2545,10 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
                 return callback
+    elif logging_integration == "literalai":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LiteralAILogger):
+                return callback
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
             if isinstance(callback, PrometheusLogger):
@@ -2433,7 +2658,7 @@ def get_standard_logging_object_payload(
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
         usage = response_obj.get("usage", None) or {}
-        if type(usage) == litellm.Usage:
+        if type(usage) is litellm.Usage:
             usage = dict(usage)
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
@@ -2540,8 +2765,17 @@ def get_standard_logging_object_payload(
         else:
             final_response_obj = None
 
-        if litellm.turn_off_message_logging:
-            final_response_obj = "redacted-by-litellm"
+        modified_final_response_obj = redact_message_input_output_from_logging(
+            model_call_details=kwargs,
+            result=final_response_obj,
+        )
+
+        if modified_final_response_obj is not None and isinstance(
+            modified_final_response_obj, BaseModel
+        ):
+            final_response_obj = modified_final_response_obj.model_dump()
+        else:
+            final_response_obj = modified_final_response_obj
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
@@ -2574,10 +2808,6 @@ def get_standard_logging_object_payload(
             response_cost_failure_debug_info=kwargs.get(
                 "response_cost_failure_debug_information"
             ),
-        )
-
-        verbose_logger.debug(
-            "Standard Logging: created payload - payload: %s\n\n", payload
         )
 
         return payload
@@ -2656,3 +2886,11 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         litellm_params["metadata"] = metadata
 
     return litellm_params
+
+
+# integration helper function
+def modify_integration(integration_name, integration_params):
+    global supabaseClient
+    if integration_name == "supabase":
+        if "table_name" in integration_params:
+            Supabase.supabase_table_name = integration_params["table_name"]

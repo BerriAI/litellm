@@ -1,0 +1,12 @@
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["gcs_bucket"]
+
+general_settings:
+  disable_prisma_schema_update: true

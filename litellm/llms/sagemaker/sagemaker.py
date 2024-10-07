@@ -8,7 +8,7 @@ import types
 from copy import deepcopy
 from enum import Enum
 from functools import partial
-from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -112,7 +112,7 @@ class SagemakerLLM(BaseAWSLLM):
     ):
         try:
             from botocore.credentials import Credentials
-        except ImportError as e:
+        except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
@@ -123,7 +123,7 @@ class SagemakerLLM(BaseAWSLLM):
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
         aws_profile_name = optional_params.pop("aws_profile_name", None)
-        aws_bedrock_runtime_endpoint = optional_params.pop(
+        optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
@@ -175,7 +175,7 @@ class SagemakerLLM(BaseAWSLLM):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
-        except ImportError as e:
+        except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         sigv4 = SigV4Auth(credentials, "sagemaker", aws_region_name)
@@ -244,7 +244,7 @@ class SagemakerLLM(BaseAWSLLM):
             hf_model_name = (
                 hf_model_name or model
             )  # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
-            prompt = prompt_factory(model=hf_model_name, messages=messages)
+            prompt: str = prompt_factory(model=hf_model_name, messages=messages)  # type: ignore
 
         return prompt
 
@@ -256,10 +256,10 @@ class SagemakerLLM(BaseAWSLLM):
         print_verbose: Callable,
         encoding,
         logging_obj,
+        optional_params: dict,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         custom_prompt_dict={},
         hf_model_name=None,
-        optional_params=None,
         litellm_params=None,
         logger_fn=None,
         acompletion: bool = False,
@@ -277,7 +277,7 @@ class SagemakerLLM(BaseAWSLLM):
 
             openai_like_chat_completions = DatabricksChatCompletion()
             inference_params["stream"] = True if stream is True else False
-            _data = {
+            _data: Dict[str, Any] = {
                 "model": model,
                 "messages": messages,
                 **inference_params,
@@ -310,7 +310,7 @@ class SagemakerLLM(BaseAWSLLM):
                 logger_fn=logger_fn,
                 timeout=timeout,
                 encoding=encoding,
-                headers=prepared_request.headers,
+                headers=prepared_request.headers,  # type: ignore
                 custom_endpoint=True,
                 custom_llm_provider="sagemaker_chat",
                 streaming_decoder=custom_stream_decoder,  # type: ignore
@@ -474,7 +474,7 @@ class SagemakerLLM(BaseAWSLLM):
             try:
                 sync_response = sync_handler.post(
                     url=prepared_request.url,
-                    headers=prepared_request.headers,
+                    headers=prepared_request.headers,  # type: ignore
                     json=_data,
                     timeout=timeout,
                 )
@@ -559,7 +559,7 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         api_base: str,
         headers: dict,
-        data: str,
+        data: dict,
         logging_obj,
         client=None,
     ):
@@ -598,7 +598,7 @@ class SagemakerLLM(BaseAWSLLM):
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise SagemakerError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise SagemakerError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
             raise SagemakerError(status_code=500, message=str(e))
@@ -633,15 +633,14 @@ class SagemakerLLM(BaseAWSLLM):
             "aws_region_name": aws_region_name,
         }
         prepared_request = await asyncified_prepare_request(**prepared_request_args)
+        completion_stream = await self.make_async_call(
+            api_base=prepared_request.url,
+            headers=prepared_request.headers,  # type: ignore
+            data=data,
+            logging_obj=logging_obj,
+        )
         streaming_response = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                self.make_async_call,
-                api_base=prepared_request.url,
-                headers=prepared_request.headers,
-                data=data,
-                logging_obj=logging_obj,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="sagemaker",
             logging_obj=logging_obj,
@@ -716,7 +715,7 @@ class SagemakerLLM(BaseAWSLLM):
             try:
                 response = await async_handler.post(
                     url=prepared_request.url,
-                    headers=prepared_request.headers,
+                    headers=prepared_request.headers,  # type: ignore
                     json=data,
                     timeout=timeout,
                 )
@@ -794,8 +793,8 @@ class SagemakerLLM(BaseAWSLLM):
         print_verbose: Callable,
         encoding,
         logging_obj,
+        optional_params: dict,
         custom_prompt_dict={},
-        optional_params=None,
         litellm_params=None,
         logger_fn=None,
     ):
@@ -1032,7 +1031,7 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser_messages_api(chunk_data=_data)
                 else:
                     yield self._chunk_parser(chunk_data=_data)
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
                 verbose_logger.error(
                     f"Warning: Unparseable JSON data remained: {accumulated_json}"

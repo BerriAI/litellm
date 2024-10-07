@@ -132,7 +132,7 @@ def common_checks(
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
         general_settings.get("enforce_user_param", None) is not None
-        and general_settings["enforce_user_param"] == True
+        and general_settings["enforce_user_param"] is True
     ):
         if is_llm_api_route(route=route) and "user" not in request_body:
             raise Exception(
@@ -557,7 +557,7 @@ async def get_team_object(
         )
 
         return _response
-    except Exception as e:
+    except Exception:
         raise Exception(
             f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
         )
@@ -664,7 +664,7 @@ async def get_org_object(
             raise Exception
 
         return response
-    except Exception as e:
+    except Exception:
         raise Exception(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )

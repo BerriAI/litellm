@@ -3,7 +3,8 @@ import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
-import threading, requests, os
+import threading
+import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching import Cache
@@ -42,6 +43,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
     "logfire",
+    "literalai",
     "dynamic_rate_limiter",
     "langsmith",
     "prometheus",
@@ -308,13 +310,13 @@ def get_model_cost_map(url: str):
             return content
 
     try:
-        with requests.get(
+        response = httpx.get(
             url, timeout=5
-        ) as response:  # set a 5 second timeout for the get request
-            response.raise_for_status()  # Raise an exception if the request is unsuccessful
-            content = response.json()
-            return content
-    except Exception as e:
+        )  # set a 5 second timeout for the get request
+        response.raise_for_status()  # Raise an exception if the request is unsuccessful
+        content = response.json()
+        return content
+    except Exception:
         import importlib.resources
         import json
 
@@ -839,7 +841,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
 from .cost_calculator import completion_cost
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
@@ -848,7 +850,6 @@ from .utils import (
     exception_type,
     get_optional_params,
     get_response_string,
-    modify_integration,
     token_counter,
     create_pretrained_tokenizer,
     create_tokenizer,
@@ -918,9 +919,13 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
+
+from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,
 )
+
+vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
+
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
     VertexAIAnthropicConfig,
 )
@@ -977,7 +982,13 @@ from .llms.OpenAI.chat.o1_transformation import (
 from .llms.OpenAI.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
-from .llms.nvidia_nim import NvidiaNimConfig
+
+from .llms.nvidia_nim.chat import NvidiaNimConfig
+from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+
+nvidiaNimConfig = NvidiaNimConfig()
+nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.AI21.chat import AI21ChatConfig
@@ -1023,6 +1034,7 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .rerank_api.main import *
+from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *

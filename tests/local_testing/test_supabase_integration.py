@@ -63,7 +63,7 @@ def test_acompletion_sync():
 
         except litellm.Timeout as e:
             pass
-        except:
+        except Exception:
             print(f"error occurred: {traceback.format_exc()}")
             pass
 

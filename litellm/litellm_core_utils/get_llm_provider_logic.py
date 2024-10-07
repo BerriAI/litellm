@@ -311,6 +311,8 @@ def get_llm_provider(
                         dynamic_api_key
                     )
                 )
+            if dynamic_api_key is None and api_key is not None:
+                dynamic_api_key = api_key
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -476,7 +478,7 @@ def get_llm_provider(
         elif model == "*":
             custom_llm_provider = "openai"
         if custom_llm_provider is None or custom_llm_provider == "":
-            if litellm.suppress_debug_info == False:
+            if litellm.suppress_debug_info is False:
                 print()  # noqa
                 print(  # noqa
                     "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa

@@ -62,8 +62,6 @@ try:
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
-import random
-
 list_of_messages = [
     "'The thing I wish you improved is...'",
     "'A feature I really want is...'",
@@ -116,10 +114,7 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.SlackAlerting.slack_alerting import (
-    SlackAlerting,
-    SlackAlertingArgs,
-)
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -216,7 +211,6 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
 from litellm.proxy.utils import (
-    DBClient,
     PrismaClient,
     ProxyLogging,
     _cache_user_row,
@@ -226,7 +220,6 @@ from litellm.proxy.utils import (
     get_error_message_str,
     get_instance_fn,
     hash_token,
-    log_to_opentelemetry,
     reset_budget,
     update_spend,
 )
@@ -253,6 +246,7 @@ from litellm.secret_managers.aws_secret_manager import (
 )
 from litellm.secret_managers.google_kms import load_google_kms
 from litellm.secret_managers.main import get_secret, get_secret_str, str_to_bool
+from litellm.types.integrations.slack_alerting import SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -264,11 +258,10 @@ from litellm.types.router import RouterGeneralSettings
 
 try:
     from litellm._version import version
-except:
+except Exception:
     version = "0.0.0"
 litellm.suppress_debug_info = True
 import json
-import logging
 from typing import Union
 
 from fastapi import (
@@ -303,11 +296,11 @@ from fastapi.staticfiles import StaticFiles
 try:
     # when using litellm cli
     import litellm.proxy.enterprise as enterprise
-except Exception as e:
+except Exception:
     # when using litellm docker image
     try:
         import enterprise  # type: ignore
-    except Exception as e:
+    except Exception:
         pass
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
@@ -335,9 +328,9 @@ ui_link = f"{server_root_path}/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
-ui_message += f"\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
+ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
-custom_swagger_message = f"[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
+custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 _docs_url = None if os.getenv("NO_DOCS", "False") == "True" else "/"
@@ -445,7 +438,7 @@ try:
                 return RedirectResponse(new_path)
             return await call_next(request)
 
-except:
+except Exception:
     pass
 app.add_middleware(
     CORSMiddleware,
@@ -480,7 +473,6 @@ worker_config = None
 master_key: Optional[str] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-custom_db_client: Optional[DBClient] = None
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -507,7 +499,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger = None
+open_telemetry_logger: Optional[Any] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
@@ -524,7 +516,7 @@ db_writer_client: Optional[HTTPHandler] = None
 def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
     try:
         return pydantic_obj.model_dump()  # type: ignore
-    except:
+    except Exception:
         # if using pydantic v1
         return pydantic_obj.dict()
 
@@ -686,8 +678,8 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 
 def cost_tracking():
-    global prisma_client, custom_db_client
-    if prisma_client is not None or custom_db_client is not None:
+    global prisma_client
+    if prisma_client is not None:
         if isinstance(litellm._async_success_callback, list):
             verbose_proxy_logger.debug("setting litellm success callback to track cost")
             if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
@@ -720,7 +712,7 @@ async def _PROXY_failure_handler(
         _status_code = "500"
         try:
             _status_code = str(_exception.status_code)
-        except:
+        except Exception:
             # Don't let this fail logging the exception to the dB
             pass
 
@@ -764,7 +756,7 @@ async def _PROXY_track_cost_callback(
     end_time=None,  # start/end time for completion
 ):
     verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
-    global prisma_client, custom_db_client
+    global prisma_client
     try:
         # check if it has collected an entire stream response
         verbose_proxy_logger.debug(
@@ -789,14 +781,14 @@ async def _PROXY_track_cost_callback(
             response_cost = kwargs["response_cost"]
             user_api_key = metadata.get("user_api_key", None)
 
-            if kwargs.get("cache_hit", False) == True:
+            if kwargs.get("cache_hit", False) is True:
                 response_cost = 0.0
                 verbose_proxy_logger.info(
                     f"Cache Hit: response_cost {response_cost}, for user_id {user_id}"
                 )
 
             verbose_proxy_logger.debug(
-                f"user_api_key {user_api_key}, prisma_client: {prisma_client}, custom_db_client: {custom_db_client}"
+                f"user_api_key {user_api_key}, prisma_client: {prisma_client}"
             )
             if user_api_key is not None or user_id is not None or team_id is not None:
                 ## UPDATE DATABASE
@@ -861,8 +853,8 @@ async def _PROXY_track_cost_callback(
 
 
 def error_tracking():
-    global prisma_client, custom_db_client
-    if prisma_client is not None or custom_db_client is not None:
+    global prisma_client
+    if prisma_client is not None:
         if isinstance(litellm.failure_callback, list):
             verbose_proxy_logger.debug("setting litellm failure callback to track cost")
             if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
@@ -917,7 +909,6 @@ async def update_database(
             existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
             if existing_user_obj is not None and isinstance(existing_user_obj, dict):
                 existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
-            data_list = []
             try:
                 if prisma_client is not None:  # update
                     user_ids = [user_id]
@@ -1017,7 +1008,7 @@ async def update_database(
                                 team_member_key, 0
                             )
                         )
-                    except:
+                    except Exception:
                         pass
             except Exception as e:
                 verbose_proxy_logger.info(
@@ -1062,7 +1053,7 @@ async def update_database(
             )
 
         verbose_proxy_logger.debug("Runs spend update on all tables")
-    except Exception as e:
+    except Exception:
         verbose_proxy_logger.debug(
             f"Error updating Prisma database: {traceback.format_exc()}"
         )
@@ -1107,9 +1098,8 @@ async def update_cache(
         new_spend = existing_spend + response_cost
 
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
-        soft_budget_cooldown = existing_spend_obj.soft_budget_cooldown
         if (
-            existing_spend_obj.soft_budget_cooldown == False
+            existing_spend_obj.soft_budget_cooldown is False
             and existing_spend_obj.litellm_budget_table is not None
             and (
                 _is_projected_spend_over_limit(
@@ -1118,7 +1108,7 @@ async def update_cache(
                         "soft_budget"
                     ],
                 )
-                == True
+                is True
             )
         ):
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
@@ -1147,7 +1137,6 @@ async def update_cache(
                 )
             )
             # set cooldown on alert
-            soft_budget_cooldown = True
 
         if (
             existing_spend_obj is not None
@@ -1325,7 +1314,7 @@ def run_ollama_serve():
         command = ["ollama", "serve"]
 
         with open(os.devnull, "w") as devnull:
-            process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+            subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
         verbose_proxy_logger.debug(
             f"""
@@ -1401,7 +1390,7 @@ class ProxyConfig:
 
         ## DB
         if prisma_client is not None and (
-            general_settings.get("store_model_in_db", False) == True
+            general_settings.get("store_model_in_db", False) is True
             or store_model_in_db is True
         ):
             _tasks = []
@@ -1444,7 +1433,7 @@ class ProxyConfig:
         - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
         """
         if prisma_client is not None and (
-            general_settings.get("store_model_in_db", False) == True
+            general_settings.get("store_model_in_db", False) is True
             or store_model_in_db
         ):
             # if using - db for config - models are in ModelTable
@@ -1505,7 +1494,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         # Load existing config
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
@@ -1560,7 +1549,7 @@ class ProxyConfig:
             blue_color_code = "\033[94m"
             reset_color_code = "\033[0m"
             for key, value in litellm_settings.items():
-                if key == "cache" and value == True:
+                if key == "cache" and value is True:
                     print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
                     from litellm.caching import Cache
 
@@ -1737,7 +1726,7 @@ class ProxyConfig:
                     ):  # run through pydantic validation
                         try:
                             TeamDefaultSettings(**team_setting)
-                        except:
+                        except Exception:
                             raise Exception(
                                 f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting}"
                             )
@@ -1929,14 +1918,14 @@ class ProxyConfig:
 
         router_params: dict = {
             "cache_responses": litellm.cache
-            != None,  # cache if user passed in cache values
+            is not None,  # cache if user passed in cache values
         }
         ## MODEL LIST
         model_list = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
             print(  # noqa
-                f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
+                "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )  # noqa
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
@@ -2030,7 +2019,7 @@ class ProxyConfig:
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
-            if "db_model" in model.model_info and model.model_info["db_model"] == False:
+            if "db_model" in model.model_info and model.model_info["db_model"] is False:
                 model.model_info["db_model"] = db_model
             _model_info = RouterModelInfo(**model.model_info)
 
@@ -2427,7 +2416,7 @@ async def initialize(
         verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
         verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
         verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
-    if detailed_debug == True:
+    if detailed_debug is True:
         import logging
 
         from litellm._logging import (
@@ -2439,10 +2428,10 @@ async def initialize(
         verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
         verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
         verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
-    elif debug == False and detailed_debug == False:
+    elif debug is False and detailed_debug is False:
         # users can control proxy debugging using env variable = 'LITELLM_LOG'
         litellm_log_setting = os.environ.get("LITELLM_LOG", "")
-        if litellm_log_setting != None:
+        if litellm_log_setting is not None:
             if litellm_log_setting.upper() == "INFO":
                 import logging
 
@@ -2485,7 +2474,6 @@ async def initialize(
             api_version  # set this for azure - litellm can read this from the env
         )
     if max_tokens:  # model-specific param
-        user_max_tokens = max_tokens
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
         user_temperature = temperature
@@ -2495,10 +2483,10 @@ async def initialize(
         dynamic_config[user_model]["request_timeout"] = request_timeout
     if alias:  # model-specific param
         dynamic_config[user_model]["alias"] = alias
-    if drop_params == True:  # litellm-specific param
+    if drop_params is True:  # litellm-specific param
         litellm.drop_params = True
         dynamic_config["general"]["drop_params"] = True
-    if add_function_to_prompt == True:  # litellm-specific param
+    if add_function_to_prompt is True:  # litellm-specific param
         litellm.add_function_to_prompt = True
         dynamic_config["general"]["add_function_to_prompt"] = True
     if max_budget:  # litellm-specific param
@@ -2516,7 +2504,7 @@ def data_generator(response):
         verbose_proxy_logger.debug("returned chunk: %s", chunk)
         try:
             yield f"data: {json.dumps(chunk.dict())}\n\n"
-        except:
+        except Exception:
             yield f"data: {json.dumps(chunk)}\n\n"
 
 
@@ -2525,7 +2513,7 @@ async def async_assistants_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        start_time = time.time()
+        time.time()
         async with response as chunk:
 
             ### CALL HOOKS ### - modify outgoing data
@@ -2558,7 +2546,6 @@ async def async_assistants_data_generator(
         verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
-        router_model_names = llm_router.model_names if llm_router is not None else []
         if isinstance(e, HTTPException):
             raise e
         else:
@@ -2580,7 +2567,7 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        start_time = time.time()
+        time.time()
         async for chunk in response:
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
@@ -2615,7 +2602,6 @@ async def async_data_generator(
         verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
-        router_model_names = llm_router.model_names if llm_router is not None else []
 
         if isinstance(e, HTTPException):
             raise e
@@ -2638,7 +2624,7 @@ async def async_data_generator_anthropic(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        start_time = time.time()
+        time.time()
         async for chunk in response:
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
@@ -2668,7 +2654,6 @@ async def async_data_generator_anthropic(
         verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
-        router_model_names = llm_router.model_names if llm_router is not None else []
 
         if isinstance(e, HTTPException):
             raise e
@@ -2704,7 +2689,7 @@ def get_litellm_model_info(model: dict = {}):
             model_to_lookup = model_info.get("base_model", None)
         litellm_model_info = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
-    except:
+    except Exception:
         # this should not block returning on /model/info
         # if litellm does not have info on the model it should return {}
         return {}
@@ -2864,11 +2849,6 @@ async def startup_event():
     if prisma_client is not None:
         await prisma_client.connect()
 
-    verbose_proxy_logger.debug("custom_db_client client - %s", custom_db_client)
-    if custom_db_client is not None:
-        verbose_proxy_logger.debug("custom_db_client: connecting %s", custom_db_client)
-        await custom_db_client.connect()
-
     if prisma_client is not None and master_key is not None:
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
             litellm_proxy_admin_name = os.getenv(
@@ -2920,25 +2900,6 @@ async def startup_event():
             )
         )
 
-    if custom_db_client is not None and master_key is not None:
-        # add master key to db
-        await generate_key_helper_fn(
-            request_type="key",
-            duration=None,
-            models=[],
-            aliases={},
-            config={},
-            spend=0,
-            token=master_key,
-        )
-
-    ### CHECK IF VIEW EXISTS ###
-    if prisma_client is not None:
-        create_view_response = await prisma_client.check_view_exists()
-        # Apply misc fixes on DB
-        # [non-blocking] helper to apply fixes from older litellm versions
-        asyncio.create_task(prisma_client.apply_db_fixes())
-
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
         scheduler = AsyncIOScheduler()
@@ -2950,7 +2911,7 @@ async def startup_event():
         )  # random interval, so multiple workers avoid batch writing at the same time
 
         ### RESET BUDGET ###
-        if general_settings.get("disable_reset_budget", False) == False:
+        if general_settings.get("disable_reset_budget", False) is False:
             scheduler.add_job(
                 reset_budget, "interval", seconds=interval, args=[prisma_client]
             )
@@ -2967,7 +2928,7 @@ async def startup_event():
         store_model_in_db = (
             get_secret("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
         )  # type: ignore
-        if store_model_in_db == True:
+        if store_model_in_db is True:
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
@@ -3146,7 +3107,7 @@ async def chat_completion(
         body_str = body.decode()
         try:
             data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             data = json.loads(body_str)
 
         verbose_proxy_logger.debug(
@@ -3252,7 +3213,7 @@ async def chat_completion(
             )
         )
         if (
-            "stream" in data and data["stream"] == True
+            "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -3316,7 +3277,7 @@ async def chat_completion(
         _chat_response = litellm.ModelResponse()
         _chat_response.choices[0].message.content = e.message  # type: ignore
 
-        if data.get("stream", None) is not None and data["stream"] == True:
+        if data.get("stream", None) is not None and data["stream"] is True:
             _iterator = litellm.utils.ModelResponseIterator(
                 model_response=_chat_response, convert_to_delta=True
             )
@@ -3352,7 +3313,6 @@ async def chat_completion(
             e,
             litellm_debug_info,
         )
-        router_model_names = llm_router.model_names if llm_router is not None else []
 
         if isinstance(e, HTTPException):
             # print("e.headers={}".format(e.headers))
@@ -3420,7 +3380,7 @@ async def completion(
         body_str = body.decode()
         try:
             data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             data = json.loads(body_str)
 
         data["model"] = (
@@ -3489,7 +3449,7 @@ async def completion(
 
         verbose_proxy_logger.debug("final response: %s", response)
         if (
-            "stream" in data and data["stream"] == True
+            "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -3538,7 +3498,7 @@ async def completion(
             original_exception=e,
             request_data=_data,
         )
-        if _data.get("stream", None) is not None and _data["stream"] == True:
+        if _data.get("stream", None) is not None and _data["stream"] is True:
             _chat_response = litellm.ModelResponse()
             _usage = litellm.Usage(
                 prompt_tokens=0,
@@ -3844,8 +3804,6 @@ async def image_generation(
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
-        router_model_names = llm_router.model_names if llm_router is not None else []
-
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
@@ -3959,8 +3917,6 @@ async def audio_speech(
         if user_model:
             data["model"] = user_model
 
-        router_model_names = llm_router.model_names if llm_router is not None else []
-
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
@@ -4009,7 +3965,7 @@ async def audio_speech(
             request_data=data,
         )
 
-        selected_data_generator = select_data_generator(
+        select_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=data,
@@ -4180,6 +4136,45 @@ async def audio_transcriptions(
 
 ######################################################################
 
+#                          /v1/realtime Endpoints
+
+######################################################################
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from litellm import _arealtime
+
+
+@app.websocket("/v1/realtime")
+async def websocket_endpoint(websocket: WebSocket, model: str):
+    import websockets
+
+    await websocket.accept()
+
+    data = {
+        "model": model,
+        "websocket": websocket,
+    }
+
+    ### ROUTE THE REQUEST ###
+    try:
+        llm_call = await route_request(
+            data=data,
+            route_type="_arealtime",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+
+        await llm_call
+    except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        verbose_proxy_logger.exception("Invalid status code")
+        await websocket.close(code=e.status_code, reason="Invalid status code")
+    except Exception:
+        verbose_proxy_logger.exception("Internal server error")
+        await websocket.close(code=1011, reason="Internal server error")
+
+
+######################################################################
+
 #                          /v1/assistant Endpoints
 
 
@@ -4210,7 +4205,7 @@ async def get_assistants(
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
+        await request.body()
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -4499,7 +4494,7 @@ async def create_threads(
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
+        await request.body()
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -4902,7 +4897,7 @@ async def run_thread(
         response = await llm_router.arun_thread(thread_id=thread_id, **data)
 
         if (
-            "stream" in data and data["stream"] == True
+            "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
             return StreamingResponse(
                 async_assistants_data_generator(
@@ -5018,7 +5013,7 @@ async def create_batch(
         body_str = body.decode()
         try:
             data = ast.literal_eval(body_str)
-        except:
+        except Exception:
             data = json.loads(body_str)
 
         verbose_proxy_logger.debug(
@@ -5159,8 +5154,6 @@ async def retrieve_batch(
     data: Dict = {}
     try:
         ## check if model is a loadbalanced model
-        router_model: Optional[str] = None
-        is_router_model = False
 
         _retrieve_batch_request = RetrieveBatchRequest(
             batch_id=batch_id,
@@ -5227,7 +5220,7 @@ async def retrieve_batch(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
+            traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -5321,7 +5314,7 @@ async def list_batches(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
+            traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -5391,14 +5384,12 @@ async def moderations(
         if user_model:
             data["model"] = user_model
 
-        router_model_names = llm_router.model_names if llm_router is not None else []
-
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="moderation"
         )
 
-        start_time = time.time()
+        time.time()
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call = await route_request(
@@ -5626,7 +5617,7 @@ async def anthropic_response(
             original_exception=e,
             request_data=_data,
         )
-        if _data.get("stream", None) is not None and _data["stream"] == True:
+        if _data.get("stream", None) is not None and _data["stream"] is True:
             _chat_response = litellm.ModelResponse()
             _usage = litellm.Usage(
                 prompt_tokens=0,
@@ -5761,7 +5752,7 @@ async def supported_openai_params(model: str):
                 model=model, custom_llm_provider=custom_llm_provider
             )
         }
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=400, detail={"error": "Could not map model={}".format(model)}
         )
@@ -6038,7 +6029,8 @@ async def end_user_info(
         )
 
     user_info = await prisma_client.db.litellm_endusertable.find_first(
-        where={"user_id": end_user_id}
+        where={"user_id": end_user_id},
+        include={"litellm_budget_table": True}
     )
 
     if user_info is None:
@@ -6256,7 +6248,6 @@ async def list_team(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
         litellm_proxy_admin_name,
         prisma_client,
@@ -6281,7 +6272,9 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    response = await prisma_client.db.litellm_endusertable.find_many()
+    response = await prisma_client.db.litellm_endusertable.find_many(
+        include={"litellm_budget_table": True}
+    )
 
     returned_response: List[LiteLLM_EndUserTable] = []
     for item in response:
@@ -6438,7 +6431,7 @@ async def new_organization(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"User not allowed to give access to all models. Select models you want org to have access to."
+                    "error": "User not allowed to give access to all models. Select models you want org to have access to."
                 },
             )
         for m in data.models:
@@ -6744,7 +6737,7 @@ async def add_new_model(
 
         model_response = None
         # update DB
-        if store_model_in_db == True:
+        if store_model_in_db is True:
             """
             - store model_list in db
             - store keys separately
@@ -6784,7 +6777,7 @@ async def add_new_model(
                         litellm_model_name=_orignal_litellm_model_name,
                         passed_model_info=model_params.model_info,
                     )
-            except:
+            except Exception:
                 pass
 
         else:
@@ -6846,7 +6839,7 @@ async def update_model(
                 },
             )
         # update DB
-        if store_model_in_db == True:
+        if store_model_in_db is True:
             _model_id = None
             _model_info = getattr(model_params, "model_info", None)
             if _model_info is None:
@@ -6965,7 +6958,7 @@ async def model_info_v2(
         )
 
     # Load existing config
-    config = await proxy_config.get_config()
+    await proxy_config.get_config()
 
     all_models = copy.deepcopy(llm_model_list)
     if user_model is not None:
@@ -6973,9 +6966,8 @@ async def model_info_v2(
         all_models += [user_model]
 
     # check all models user has access to in user_api_key_dict
-    user_models = []
     if len(user_api_key_dict.models) > 0:
-        user_models = user_api_key_dict.models
+        pass
 
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
@@ -7588,7 +7580,7 @@ async def model_info_v1(
             litellm_model = litellm_params.get("model", None)
             try:
                 litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except:
+            except Exception:
                 litellm_model_info = {}
         # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
         if litellm_model_info == {}:
@@ -7602,7 +7594,7 @@ async def model_info_v1(
                 litellm_model_info = litellm.get_model_info(
                     model=litellm_model, custom_llm_provider=split_model[0]
                 )
-            except:
+            except Exception:
                 litellm_model_info = {}
         for k, v in litellm_model_info.items():
             if k not in model_info:
@@ -7822,7 +7814,7 @@ async def delete_model(model_info: ModelInfoDelete):
             )
 
         # update DB
-        if store_model_in_db == True:
+        if store_model_in_db is True:
             """
             - store model_list in db
             - store keys separately
@@ -8095,7 +8087,7 @@ async def async_queue_request(
         response = await llm_router.schedule_acompletion(**data)
 
         if (
-            "stream" in data and data["stream"] == True
+            "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
             return StreamingResponse(
                 async_data_generator(
@@ -8549,7 +8541,6 @@ async def claim_onboarding_link(data: InvitationClaim):
 @app.get("/get_image", include_in_schema=False)
 def get_image():
     """Get logo to show on admin UI"""
-    from fastapi.responses import FileResponse
 
     # get current_dir
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -8859,8 +8850,6 @@ async def update_config(config_info: ConfigYAML):
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
-        import base64
-
         # Load existing config
         config = await proxy_config.get_config()
         verbose_proxy_logger.debug("Loaded config: %s", config)
@@ -9010,8 +8999,8 @@ async def update_config_general_settings(
         )
 
     try:
-        cgs = ConfigGeneralSettings(**{data.field_name: data.field_value})
-    except:
+        ConfigGeneralSettings(**{data.field_name: data.field_value})
+    except Exception:
         raise HTTPException(
             status_code=400,
             detail={
@@ -9630,7 +9619,7 @@ async def shutdown_event():
 
             if langFuseLogger is not None:
                 langFuseLogger.Langfuse.flush()
-        except:
+        except Exception:
             # [DO NOT BLOCK shutdown events for this]
             pass
 
@@ -9639,7 +9628,7 @@ async def shutdown_event():
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -9651,9 +9640,7 @@ def cleanup_router_config_variables():
     user_custom_sso = None
     use_background_health_checks = None
     health_check_interval = None
-    health_check_details = None
     prisma_client = None
-    custom_db_client = None
 
 
 app.include_router(router)

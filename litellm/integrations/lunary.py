@@ -1,8 +1,8 @@
 #### What this does ####
 #    On success + failure, log events to lunary.ai
-from datetime import datetime, timezone
-import traceback
 import importlib
+import traceback
+from datetime import datetime, timezone
 
 import packaging
 
@@ -74,9 +74,9 @@ class LunaryLogger:
         try:
             import lunary
 
-            version = importlib.metadata.version("lunary")
+            version = importlib.metadata.version("lunary")  # type: ignore
             # if version < 0.1.43 then raise ImportError
-            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
+            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):  # type: ignore
                 print(  # noqa
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
@@ -97,7 +97,7 @@ class LunaryLogger:
         run_id,
         model,
         print_verbose,
-        extra=None,
+        extra={},
         input=None,
         user_id=None,
         response_obj=None,
@@ -116,7 +116,7 @@ class LunaryLogger:
             if optional_params:
                 extra = {**extra, **optional_params}
 
-            tags = metadata.get("tags", None) 
+            tags = metadata.get("tags", None)
 
             if extra:
                 extra.pop("extra_body", None)
@@ -128,7 +128,7 @@ class LunaryLogger:
                 if not isinstance(value, (str, int, bool, float)) and param != "tools":
                     try:
                         extra[param] = str(value)
-                    except:
+                    except Exception:
                         pass
 
             if response_obj:
@@ -149,7 +149,7 @@ class LunaryLogger:
             else:
                 error_obj = None
 
-            self.lunary_client.track_event(
+            self.lunary_client.track_event(  # type: ignore
                 type,
                 "start",
                 run_id,
@@ -164,7 +164,7 @@ class LunaryLogger:
                 params=extra,
             )
 
-            self.lunary_client.track_event(
+            self.lunary_client.track_event(  # type: ignore
                 type,
                 event,
                 run_id,
@@ -175,6 +175,6 @@ class LunaryLogger:
                 token_usage=usage,
             )
 
-        except:
+        except Exception:
             print_verbose(f"Lunary Logging Error - {traceback.format_exc()}")
             pass

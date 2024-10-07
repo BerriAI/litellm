@@ -22,7 +22,7 @@ async def create_missing_views(db: _db):
         # Try to select one row from the view
         await db.query_raw("""SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1""")
         print("LiteLLM_VerificationTokenView Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         # If an error occurs, the view does not exist, so create it
         await db.execute_raw(
             """
@@ -43,7 +43,7 @@ async def create_missing_views(db: _db):
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
         print("MonthlyGlobalSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
         SELECT
@@ -63,7 +63,7 @@ async def create_missing_views(db: _db):
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
         print("Last30dKeysBySpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
         SELECT 
@@ -91,7 +91,7 @@ async def create_missing_views(db: _db):
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
         print("Last30dModelsBySpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
         SELECT
@@ -113,7 +113,7 @@ async def create_missing_views(db: _db):
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
         print("MonthlyGlobalSpendPerKey Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
             SELECT
@@ -136,7 +136,7 @@ async def create_missing_views(db: _db):
             """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
         )
         print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
             SELECT
@@ -160,7 +160,7 @@ async def create_missing_views(db: _db):
     try:
         await db.query_raw("""SELECT 1 FROM DailyTagSpend LIMIT 1""")
         print("DailyTagSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW DailyTagSpend AS
         SELECT
@@ -178,7 +178,7 @@ async def create_missing_views(db: _db):
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
         print("Last30dTopEndUsersSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE VIEW "Last30dTopEndUsersSpend" AS
         SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend

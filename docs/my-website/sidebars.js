@@ -198,6 +198,7 @@ const sidebars = {
         "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",
+        "completion/prompt_caching",
         "completion/usage",
         "exception_mapping",
         "completion/stream",
@@ -221,6 +222,7 @@ const sidebars = {
         "rerank",
         "assistants",
         "batches",
+        "realtime",
         "fine_tuning",
         {
           type: "link",
@@ -250,7 +252,16 @@ const sidebars = {
         },
       ],
     },
-    "load_test",
+    {
+      type: "category",
+      label: "Load Testing",
+      items: [
+        "load_test",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
+      ]
+    },
     {
       type: "category",
       label: "Logging & Observability",
@@ -306,6 +317,7 @@ const sidebars = {
         "migration_policy",
         "contributing",
         "proxy/pii_masking",
+        "extras/code_quality",
         "rules",
         "proxy_server",
         {

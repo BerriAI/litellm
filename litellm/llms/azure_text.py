@@ -233,7 +233,7 @@ class AzureTextCompletion(BaseLLM):
                         client=client,
                         logging_obj=logging_obj,
                     )
-            elif "stream" in optional_params and optional_params["stream"] == True:
+            elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
                     logging_obj=logging_obj,
                     api_base=api_base,

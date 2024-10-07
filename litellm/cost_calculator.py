@@ -25,6 +25,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_query as azure_ai_rerank_cost_per_query,
 )
+from litellm.llms.AzureOpenAI.cost_calculation import (
+    cost_per_token as azure_openai_cost_per_token,
+)
 from litellm.llms.cohere.cost_calculator import (
     cost_per_query as cohere_rerank_cost_per_query,
 )
@@ -34,9 +37,10 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
+from litellm.llms.OpenAI.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
-from litellm.rerank_api.types import RerankResponse
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import PassthroughCallTypes, Usage
 from litellm.utils import (
@@ -55,7 +59,7 @@ from litellm.utils import (
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
-    response_time_ms=None,
+    response_time_ms: Optional[float] = 0.0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
@@ -79,7 +83,7 @@ def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
-    response_time_ms=None,
+    response_time_ms: Optional[float] = 0.0,
     custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CHARACTER PRICING ###
@@ -198,7 +202,33 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    if custom_llm_provider == "vertex_ai":
+    if call_type == "speech" or call_type == "aspeech":
+        prompt_cost, completion_cost = _generic_cost_per_character(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            prompt_characters=prompt_characters,
+            completion_characters=completion_characters,
+            custom_prompt_cost=None,
+            custom_completion_cost=0,
+        )
+        if prompt_cost is None or completion_cost is None:
+            raise ValueError(
+                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
+                    prompt_cost,
+                    completion_cost,
+                    model_without_prefix,
+                    custom_llm_provider,
+                    prompt_characters,
+                    completion_characters,
+                )
+            )
+        return prompt_cost, completion_cost
+    elif call_type == "arerank" or call_type == "rerank":
+        return rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
@@ -226,42 +256,24 @@ def cost_per_token(
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "openai":
+        return openai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure":
+        return azure_openai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-        )
-    elif call_type == "speech" or call_type == "aspeech":
-        prompt_cost, completion_cost = _generic_cost_per_character(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
-            custom_prompt_cost=None,
-            custom_completion_cost=0,
-        )
-        if prompt_cost is None or completion_cost is None:
-            raise ValueError(
-                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
-                    prompt_cost,
-                    completion_cost,
-                    model_without_prefix,
-                    custom_llm_provider,
-                    prompt_characters,
-                    completion_characters,
-                )
-            )
-        return prompt_cost, completion_cost
-    elif call_type == "arerank" or call_type == "rerank":
-        return rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
         )
     elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
@@ -461,7 +473,7 @@ def completion_cost(
     prompt="",
     messages: List = [],
     completion="",
-    total_time=0.0,  # used for replicate, sagemaker
+    total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
     call_type: Literal[
         "embedding",
         "aembedding",
@@ -501,7 +513,7 @@ def completion_cost(
         model (str): Optional. The name of the language model used in the completion calls
         prompt (str): Optional. The input prompt passed to the llm
         completion (str): Optional. The output completion text from the llm
-        total_time (float): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
+        total_time (float, int): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
         custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
         custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
 
@@ -562,6 +574,13 @@ def completion_cost(
             completion_tokens = _usage.get("completion_tokens", 0)
             cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
             cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
+            if (
+                "prompt_tokens_details" in _usage
+                and _usage["prompt_tokens_details"] != {}
+                and _usage["prompt_tokens_details"]
+            ):
+                prompt_tokens_details = _usage.get("prompt_tokens_details", {})
+                cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
             total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(

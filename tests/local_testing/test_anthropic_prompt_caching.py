@@ -9,7 +9,7 @@ load_dotenv()
 import io
 import os
 
-from tests.local_testing.test_streaming import streaming_format_tests
+from test_streaming import streaming_format_tests
 
 sys.path.insert(
     0, os.path.abspath("../..")

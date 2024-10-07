@@ -9,7 +9,7 @@ load_dotenv()
 import io
 import os
 
-from tests.local_testing.test_streaming import streaming_format_tests
+from test_streaming import streaming_format_tests
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -178,6 +178,40 @@ async def test_completion_sagemaker_stream(sync_mode, model):
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+        "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+    ],
+)
+async def test_completion_sagemaker_streaming_bad_request(sync_mode, model):
+    litellm.set_verbose = True
+    print("testing sagemaker")
+    if sync_mode is True:
+        with pytest.raises(litellm.BadRequestError):
+            response = litellm.completion(
+                model=model,
+                messages=[
+                    {"role": "user", "content": "hi"},
+                ],
+                stream=True,
+                max_tokens=8000000000000000,
+            )
+    else:
+        with pytest.raises(litellm.BadRequestError):
+            response = await litellm.acompletion(
+                model=model,
+                messages=[
+                    {"role": "user", "content": "hi"},
+                ],
+                stream=True,
+                max_tokens=8000000000000000,
+            )
 
 
 @pytest.mark.asyncio

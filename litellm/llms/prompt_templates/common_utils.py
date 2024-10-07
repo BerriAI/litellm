@@ -7,7 +7,7 @@ from typing import List
 from litellm.types.llms.openai import AllMessageValues
 
 
-def convert_content_list_to_str(message: AllMessageValues) -> AllMessageValues:
+def convert_content_list_to_str(message: AllMessageValues) -> str:
     """
     - handles scenario where content is list and not string
     - content list is just text, and no images
@@ -26,7 +26,4 @@ def convert_content_list_to_str(message: AllMessageValues) -> AllMessageValues:
         elif message_content is not None and isinstance(message_content, str):
             texts = message_content
 
-    if texts:
-        message["content"] = texts
-
-    return message
+    return texts
