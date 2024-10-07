@@ -23,6 +23,7 @@ from litellm.proxy._types import (
     SSOUserDefinedValues,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -640,6 +641,7 @@ async def get_ui_settings(request: Request):
 
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
+    _is_sso_enabled = _has_user_setup_sso()
 
     default_team_disabled = general_settings.get("default_team_disabled", False)
     if "PROXY_DEFAULT_TEAM_DISABLED" in os.environ:
@@ -650,4 +652,5 @@ async def get_ui_settings(request: Request):
         "PROXY_BASE_URL": _proxy_base_url,
         "PROXY_LOGOUT_URL": _logout_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
+        "SSO_ENABLED": _is_sso_enabled,
     }
