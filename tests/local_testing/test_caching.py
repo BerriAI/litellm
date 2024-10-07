@@ -580,6 +580,33 @@ async def test_embedding_caching_base_64():
 
 
 @pytest.mark.asyncio
+async def test_embedding_caching_redis_ttl():
+    """
+    Test default_in_redis_ttl is used for embedding caching
+    """
+    litellm.set_verbose = True
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        default_in_redis_ttl=2.5,
+    )
+    import uuid
+
+    inputs = [
+        f"{uuid.uuid4()} hello this is ishaan",
+        f"{uuid.uuid4()} hello this is ishaan again",
+    ]
+
+    embedding_val_1 = await aembedding(
+        model="azure/azure-embedding-model",
+        input=inputs,
+        encoding_format="base64",
+    )
+    await asyncio.sleep(5)
+
+
+@pytest.mark.asyncio
 async def test_redis_cache_basic():
     """
     Init redis client
