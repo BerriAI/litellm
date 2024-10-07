@@ -13,8 +13,9 @@ async def call_workday_gateway(data):
     try:
         vault_secrets = vault.get_api_keys(data['user_id'])
         api_gateway = vault_secrets.get("__custom::api_base")
+        gemini_model = vault_secrets.get("__custom::model")
 
-        payload = prepare_payload(data)
+        payload = prepare_payload(data, gemini_model)
         print(f"calling workday gateway: {api_gateway}, payload: {payload}")
         response = requests.post(url=api_gateway, json=payload)
         print(f"gateway response code : {response.status_code}")
@@ -33,7 +34,7 @@ async def call_workday_gateway(data):
         }
 
 
-def prepare_payload(data):
+def prepare_payload(data, gemini_model):
     """Convert Litellm input format to gateway payload format"""
 
     safety_settings = [
@@ -81,7 +82,7 @@ def prepare_payload(data):
     return {
         "target": {
             "provider": "gcp",
-            "model": "gemini-1.5-flash"
+            "model": gemini_model
         },
         "task": {
             "type": "gcp-multimodal-v1",
