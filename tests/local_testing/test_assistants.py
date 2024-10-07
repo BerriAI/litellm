@@ -64,6 +64,28 @@ async def test_get_assistants(provider, sync_mode):
     "sync_mode",
     [True, False],
 )
+@pytest.mark.asyncio
+async def test_get_assistant(provider, sync_mode):
+    data = {
+        "custom_llm_provider": provider,
+        "assistant_id": "abc",
+    }
+    if provider == "azure":
+        data["api_version"] = "2024-02-15-preview"
+
+    if sync_mode == True:
+        assistant = litellm.get_assistant(**data)
+        assert isinstance(assistant, Assistant)
+    else:
+        assistant = await litellm.aget_assistant(**data)
+        assert isinstance(assistant, Assistant)
+
+
+@pytest.mark.parametrize("provider", ["azure", "openai"])
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_create_delete_assistants(provider, sync_mode):

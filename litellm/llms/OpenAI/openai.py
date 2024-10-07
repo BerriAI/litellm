@@ -2461,6 +2461,64 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         return response
 
+    # Get Assistant
+    async def async_get_assistant(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[AsyncOpenAI],
+        assistant_id: str,
+    ) -> AssistantDeleted:
+        openai_client = self.async_get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = await openai_client.beta.assistants.retrieve(assistant_id=assistant_id)
+
+        return response
+
+    def get_assistant(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        assistant_id: str,
+        client=None,
+        async_get_assistants=None,
+    ):
+        if async_get_assistants is not None and async_get_assistants == True:
+            return self.async_get_assistant(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                client=client,
+                assistant_id=assistant_id,
+            )
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.assistants.retrieve(assistant_id=assistant_id)
+        return response
+
+
     # Create Assistant
     async def async_create_assistants(
         self,
