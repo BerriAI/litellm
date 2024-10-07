@@ -15,7 +15,7 @@ async def call_workday_gateway(data):
         api_gateway = vault_secrets.get("__custom::api_base")
 
         payload = prepare_payload(data)
-        print(f"calling workday gateway: {api_gateway}")
+        print(f"calling workday gateway: {api_gateway}, payload: {payload}")
         response = requests.post(url=api_gateway, json=payload)
         print(f"gateway response code : {response.status_code}")
         if response.status_code != 200:
@@ -27,7 +27,7 @@ async def call_workday_gateway(data):
         traceback.print_exc()
         return {
             "error": {
-                "message": f"Internal Server Error: {str(e)}",
+                "message": f"Internal Server Error",
                 "code": 500
             }
         }
