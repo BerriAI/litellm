@@ -2,7 +2,6 @@
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
 import asyncio
 import os
-import traceback
 import uuid
 from typing import Optional
 
@@ -10,7 +9,6 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -92,7 +90,6 @@ class LiteralAILogger(CustomBatchLogger):
         url = f"{self.literalai_api_url}/api/graphql"
         query = self._steps_query_builder(self.log_queue)
         variables = self._steps_variables_builder(self.log_queue)
-
         try:
             response = self.sync_http_handler.post(
                 url=url,
@@ -102,7 +99,6 @@ class LiteralAILogger(CustomBatchLogger):
                 },
                 headers=self.headers,
             )
-            response.raise_for_status()
 
             if response.status_code >= 300:
                 verbose_logger.error(
@@ -170,8 +166,6 @@ class LiteralAILogger(CustomBatchLogger):
                 },
                 headers=self.headers,
             )
-            response.raise_for_status()
-
             if response.status_code >= 300:
                 verbose_logger.error(
                     f"Literal AI Error: {response.status_code} - {response.text}"
@@ -200,6 +194,8 @@ class LiteralAILogger(CustomBatchLogger):
         settings = logging_payload["model_parameters"]
 
         messages = logging_payload["messages"]
+        output = logging_payload.get("response", {}).get("choices", [])[0]
+        message_completion = output["message"] if output else None
         prompt_id = None
         variables = None
 
@@ -238,6 +234,7 @@ class LiteralAILogger(CustomBatchLogger):
                 "duration": (end_time - start_time).total_seconds(),
                 "settings": settings,
                 "messages": messages,
+                "messageCompletion": message_completion,
                 "tools": tools,
             },
         }
