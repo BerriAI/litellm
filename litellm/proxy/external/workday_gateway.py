@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 async def call_workday_gateway(data):
     try:
         vault_secrets = vault.get_api_keys(data['user_id'])
-        api_gateway = vault_secrets.get("api_base")
+        api_gateway = vault_secrets.get("__custom::api_base")
 
         payload = prepare_payload(data)
         print(f"calling workday gateway: {api_gateway}")
