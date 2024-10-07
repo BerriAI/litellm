@@ -23,11 +23,11 @@ async def call_workday_gateway(data):
 
         return get_formatted_output(data, response.json())
     except Exception as e:
-        logger.info(f"Workday error {str(e)}")
+        print(f"Gateway error {str(e)}")
         traceback.print_exc()
         return {
             "error": {
-                "message": "Internal Server Error",
+                "message": f"Internal Server Error: {str(e)}",
                 "code": 500
             }
         }
