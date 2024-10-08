@@ -1403,6 +1403,37 @@ def test_logging_standard_payload_failure_call():
         ]["standard_logging_object"]
 
 
+@pytest.mark.parametrize("stream", [True, False])
+def test_logging_standard_payload_llm_headers(stream):
+    from litellm.types.utils import StandardLoggingPayload
+
+    # sync completion
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        resp = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            stream=stream,
+        )
+
+        if stream:
+            for chunk in resp:
+                continue
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+
+        print(standard_logging_object["hidden_params"]["additional_headers"])
+
+
 def test_logging_key_masking_gemini():
     customHandler = CompletionCustomHandler()
     litellm.callbacks = [customHandler]
