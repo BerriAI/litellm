@@ -21,7 +21,7 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -44,7 +44,7 @@ RUN pip uninstall PyJWT -y
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
 # Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -66,7 +66,7 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 
 # Generate prisma client
 RUN prisma generate
-RUN chmod +x entrypoint.sh
+RUN chmod +x docker/entrypoint.sh
 
 EXPOSE 4000/tcp
 
