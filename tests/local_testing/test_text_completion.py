@@ -4223,7 +4223,8 @@ def mock_post(*args, **kwargs):
     return mock_response
 
 
-def test_completion_vllm():
+@pytest.mark.parametrize("provider", ["openai", "hosted_vllm"])
+def test_completion_vllm(provider):
     """
     Asserts a text completion call for vllm actually goes to the text completion endpoint
     """
@@ -4235,7 +4236,10 @@ def test_completion_vllm():
         client.completions.with_raw_response, "create", side_effect=mock_post
     ) as mock_call:
         response = text_completion(
-            model="openai/gemini-1.5-flash", prompt="ping", client=client, hello="world"
+            model="{provider}/gemini-1.5-flash".format(provider=provider),
+            prompt="ping",
+            client=client,
+            hello="world",
         )
         print("raw response", response)
 

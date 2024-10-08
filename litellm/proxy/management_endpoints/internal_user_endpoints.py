@@ -299,17 +299,13 @@ async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
-    page: Optional[int] = fastapi.Query(
-        default=0,
-        description="Page number for pagination. Only use when view_all is true",
-    ),
-    page_size: Optional[int] = fastapi.Query(
-        default=25,
-        description="Number of items per page. Only use when view_all is true",
-    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [10/07/2024]
+    Note: To get all users (+pagination), use `/user/list` endpoint.
+
+
     Use this to get user information. (user row + all user key info)
 
     Example request

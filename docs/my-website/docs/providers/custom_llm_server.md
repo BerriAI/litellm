@@ -183,11 +183,80 @@ class UnixTimeLLM(CustomLLM):
 unixtime = UnixTimeLLM()
 ```
 
+## Image Generation
+
+1. Setup your `custom_handler.py` file 
+```python
+import litellm
+from litellm import CustomLLM
+from litellm.types.utils import ImageResponse, ImageObject
+
+
+class MyCustomLLM(CustomLLM):
+    async def aimage_generation(self, model: str, prompt: str, model_response: ImageResponse, optional_params: dict, logging_obj: Any, timeout: Optional[Union[float, httpx.Timeout]] = None, client: Optional[AsyncHTTPHandler] = None,) -> ImageResponse:
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/image.png")],
+        )
+
+my_custom_llm = MyCustomLLM()
+```
+
+
+2. Add to `config.yaml` 
+
+In the config below, we pass
+
+python_filename: `custom_handler.py`
+custom_handler_instance_name: `my_custom_llm`. This is defined in Step 1
+
+custom_handler: `custom_handler.my_custom_llm`
+
+```yaml
+model_list:
+  - model_name: "test-model"             
+    litellm_params:
+      model: "openai/text-embedding-ada-002"
+  - model_name: "my-custom-model"
+    litellm_params:
+      model: "my-custom-llm/my-model"
+
+litellm_settings:
+  custom_provider_map:
+  - {"provider": "my-custom-llm", "custom_handler": custom_handler.my_custom_llm}
+```
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "my-custom-model",
+    "prompt": "A cute baby sea otter",
+}'
+```
+
+Expected Response
+
+```
+{
+    "created": 1721955063,
+    "data": [{"url": "https://example.com/image.png"}],
+}
+```
+
+
 ## Custom Handler Spec
 
 ```python
-from litellm.types.utils import GenericStreamingChunk, ModelResponse
-from typing import Iterator, AsyncIterator
+from litellm.types.utils import GenericStreamingChunk, ModelResponse, ImageResponse
+from typing import Iterator, AsyncIterator, Any, Optional, Union
 from litellm.llms.base import BaseLLM
 
 class CustomLLMError(Exception):  # use this for all your exceptions
@@ -216,5 +285,29 @@ class CustomLLM(BaseLLM):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    def image_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+    ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 ```
