@@ -1173,7 +1173,7 @@ class ResponseFormatChunk(TypedDict, total=False):
 
 
 all_litellm_params = [
-    "metadata",
+    "litellm_metadata",
     "tags",
     "acompletion",
     "atext_completion",

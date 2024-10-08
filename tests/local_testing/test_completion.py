@@ -4596,3 +4596,65 @@ def test_completion_response_ratelimit_headers(model, stream):
     print(additional_headers)
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers
+
+
+@pytest.mark.parametrize("router", [False, True])
+def test_completion_metadata(router):
+    import copy
+
+    data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "system", "content": "You are a corporate IT support expert."},
+            {"role": "user", "content": "How can I hide the dock on my Mac?"},
+        ],
+        "store": True,
+        "metadata": {
+            "role": "manager",
+            "department": "accounting",
+            "source": "homepage",
+        },
+    }
+
+    sent_data = copy.deepcopy(data)
+
+    if router:
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": os.getenv("OPENAI_API_KEY"),
+                    },
+                }
+            ]
+        )
+        calling_fn = router.completion
+    else:
+        calling_fn = completion
+
+    openai_client = openai.OpenAI()
+    with patch.object(
+        openai_client.chat.completions.with_raw_response, "create"
+    ) as mock_response:
+        print(f"calling_fn: {calling_fn}")
+        try:
+            calling_fn(**sent_data, client=openai_client)
+        except Exception as e:
+            pass
+
+        mock_response.assert_called()
+
+        print("mock_response.call_args: ", mock_response.call_args)
+        print("mock_response.call_args.kwargs: ", mock_response.call_args.kwargs)
+        print(
+            "metadata IN MOCK_RESPONSE KWARGS: ",
+            mock_response.call_args.kwargs["metadata"],
+        )
+        print("keys: ", mock_response.call_args.kwargs["metadata"].keys())
+
+        for k, v in mock_response.call_args.kwargs["metadata"].items():
+            print(f"k: {k}, v: {v}")
+            print(f"data[metadata][k]: {data['metadata'][k]}")
+            assert v == data["metadata"][k]

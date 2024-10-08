@@ -2367,7 +2367,7 @@ def get_litellm_params(
     litellm_call_id=None,
     model_alias_map=None,
     completion_call_id=None,
-    metadata=None,
+    litellm_metadata=None,
     model_info=None,
     proxy_server_request=None,
     acompletion=None,
@@ -2394,7 +2394,7 @@ def get_litellm_params(
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
-        "metadata": metadata,
+        "metadata": litellm_metadata,
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
         "preset_cache_key": preset_cache_key,
@@ -2409,7 +2409,7 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or _get_base_model_from_litellm_call_metadata(metadata=metadata),
+        or _get_base_model_from_litellm_call_metadata(metadata=litellm_metadata),
     }
 
     return litellm_params
@@ -2838,6 +2838,7 @@ def get_optional_params(
     drop_params=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2918,6 +2919,7 @@ def get_optional_params(
         "drop_params": None,
         "additional_drop_params": None,
         "messages": None,
+        "metadata": None,
     }
 
     # filter out those parameters that were passed with non-default values
@@ -3064,7 +3066,12 @@ def get_optional_params(
         unsupported_params = {}
         for k in non_default_params.keys():
             if k not in supported_params:
-                if k == "user" or k == "stream_options" or k == "stream":
+                if (
+                    k == "user"
+                    or k == "stream_options"
+                    or k == "stream"
+                    or k == "metadata"
+                ):
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param

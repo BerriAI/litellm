@@ -743,6 +743,7 @@ def completion(  # type: ignore
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
     id = kwargs.get("id", None)
     metadata = kwargs.get("metadata", None)
+    litellm_metadata = kwargs.get("litellm_metadata", None)
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
@@ -993,7 +994,7 @@ def completion(  # type: ignore
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
-            metadata=metadata,
+            litellm_metadata=litellm_metadata,
             model_info=model_info,
             proxy_server_request=proxy_server_request,
             preset_cache_key=preset_cache_key,

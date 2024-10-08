@@ -432,7 +432,7 @@ class Router:
         self.default_litellm_params = default_litellm_params
         self.default_litellm_params.setdefault("timeout", timeout)
         self.default_litellm_params.setdefault("max_retries", 0)
-        self.default_litellm_params.setdefault("metadata", {}).update(
+        self.default_litellm_params.setdefault("litellm_metadata", {}).update(
             {"caching_groups": caching_groups}
         )
 
@@ -602,7 +602,7 @@ class Router:
             kwargs["original_function"] = self._completion
             kwargs.get("request_timeout", self.timeout)
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
@@ -612,7 +612,6 @@ class Router:
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         model_name = None
-        traceback.print_stack()
         try:
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -620,7 +619,7 @@ class Router:
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "api_base": deployment.get("litellm_params", {}).get("api_base"),
@@ -635,7 +634,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -719,7 +718,7 @@ class Router:
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
 
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
             request_priority = kwargs.get("priority") or self.default_priority
 
@@ -765,7 +764,7 @@ class Router:
             # debug how often this deployment picked
             self._track_deployment_metrics(deployment=deployment)
 
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -781,7 +780,7 @@ class Router:
                     k not in kwargs and v is not None
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1197,7 +1196,7 @@ class Router:
             kwargs["original_function"] = self._image_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
 
             return response
@@ -1215,7 +1214,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1229,7 +1228,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1280,7 +1279,7 @@ class Router:
             kwargs["original_function"] = self._aimage_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1306,7 +1305,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1320,7 +1319,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1413,7 +1412,7 @@ class Router:
             kwargs["original_function"] = self._atranscription
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1439,7 +1438,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1453,7 +1452,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1558,7 +1557,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1572,7 +1571,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1610,7 +1609,7 @@ class Router:
             kwargs["original_function"] = self._amoderation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -1637,7 +1636,7 @@ class Router:
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1651,7 +1650,7 @@ class Router:
                     k not in kwargs and v is not None
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1710,7 +1709,7 @@ class Router:
             kwargs["original_function"] = self._arerank
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -1736,7 +1735,7 @@ class Router:
                 model=model,
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1750,7 +1749,7 @@ class Router:
                     k not in kwargs and v is not None
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -1806,7 +1805,7 @@ class Router:
         try:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = await self.async_get_available_deployment(
@@ -1821,7 +1820,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
@@ -1851,7 +1850,7 @@ class Router:
             kwargs["original_function"] = self.text_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -1866,7 +1865,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             # call via litellm.completion()
@@ -1895,7 +1894,7 @@ class Router:
             kwargs["original_function"] = self._atext_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1920,7 +1919,7 @@ class Router:
                 messages=[{"role": "user", "content": prompt}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -1935,7 +1934,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -2014,7 +2013,7 @@ class Router:
             kwargs["original_function"] = self._aadapter_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2039,7 +2038,7 @@ class Router:
                 messages=[{"role": "user", "content": "default text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -2054,7 +2053,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -2131,7 +2130,7 @@ class Router:
             kwargs["original_function"] = self._embedding
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
@@ -2148,7 +2147,7 @@ class Router:
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -2162,7 +2161,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -2219,7 +2218,7 @@ class Router:
             kwargs["original_function"] = self._aembedding
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
@@ -2244,7 +2243,7 @@ class Router:
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -2259,7 +2258,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -2335,7 +2334,7 @@ class Router:
             kwargs["original_function"] = self._acreate_file
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2364,7 +2363,7 @@ class Router:
                 messages=[{"role": "user", "content": "files-api-fake-text"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {
                     "deployment": deployment["litellm_params"]["model"],
                     "model_info": deployment.get("model_info", {}),
@@ -2379,7 +2378,7 @@ class Router:
                     k not in kwargs
                 ):  # prioritize model-specific params > default router params
                     kwargs[k] = v
-                elif k == "metadata":
+                elif k == "litellm_metadata":
                     kwargs[k].update(v)
 
             potential_model_client = self._get_client(
@@ -2461,7 +2460,7 @@ class Router:
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            kwargs.setdefault("litellm_metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -3097,7 +3096,7 @@ class Router:
         num_retries = kwargs.pop("num_retries")
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
-        _metadata: dict = kwargs.get("metadata") or {}
+        _metadata: dict = kwargs.get("litellm_metadata") or {}
         if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
             model_list = self.get_model_list(model_name=_metadata["model_group"])
             if model_list is not None:
@@ -3569,10 +3568,10 @@ class Router:
             """
             Update TPM usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            if kwargs["litellm_params"].get("litellm_metadata") is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
+                model_group = kwargs["litellm_params"]["litellm_metadata"].get(
                     "model_group", None
                 )
                 model_info = kwargs["litellm_params"].get("model_info", {}) or {}
@@ -3625,10 +3624,12 @@ class Router:
         end_time,  # start/end time
     ):
         id = None
-        if kwargs["litellm_params"].get("metadata") is None:
+        if kwargs["litellm_params"].get("litellm_metadata") is None:
             pass
         else:
-            model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+            model_group = kwargs["litellm_params"]["litellm_metadata"].get(
+                "model_group", None
+            )
             model_info = kwargs["litellm_params"].get("model_info", {}) or {}
             id = model_info.get("id", None)
             if model_group is None or id is None:
@@ -3656,7 +3657,6 @@ class Router:
             custom_llm_provider = kwargs.get("litellm_params", {}).get(
                 "custom_llm_provider", None
             )  # i.e. azure
-            kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
 
             exception_headers = litellm.utils._get_litellm_response_headers(
@@ -3713,11 +3713,11 @@ class Router:
             ) in (
                 kwargs.items()
             ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in ["metadata", "messages", "original_function"]:
+                if k not in ["litellm_metadata", "messages", "original_function"]:
                     previous_model[k] = v
-                elif k == "metadata" and isinstance(v, dict):
-                    previous_model["metadata"] = {}  # type: ignore
-                    for metadata_k, metadata_v in kwargs["metadata"].items():
+                elif k == "litellm_metadata" and isinstance(v, dict):
+                    previous_model["litellm_metadata"] = {}  # type: ignore
+                    for metadata_k, metadata_v in kwargs["litellm_metadata"].items():
                         if metadata_k != "previous_models":
                             previous_model[k][metadata_k] = metadata_v  # type: ignore
 
@@ -3726,7 +3726,7 @@ class Router:
                 self.previous_models.pop(0)
 
             self.previous_models.append(previous_model)
-            kwargs["metadata"]["previous_models"] = self.previous_models
+            kwargs["litellm_metadata"]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
             raise e
