@@ -63,7 +63,7 @@ async def new_user(
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - teams: Optional[list] - specify a list of team id's a user belongs to.
-    - organization_id: Optional[str] - specify the org a user belongs to.
+    - organization_id: Optional[str] - specify the org a user belongs to. when specified a user will be added to the organization.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
@@ -79,6 +79,18 @@ async def new_user(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     - max_budget: (float|None) Max budget for given user.
+
+    Usage Example 
+
+    ```shell
+     curl -X POST "http://localhost:4000/user/new" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer sk-1234" \
+     -d '{
+         "username": "new_user",
+         "email": "new_user@example.com"
+     }'
+    ```
     """
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
@@ -106,6 +118,7 @@ async def new_user(
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
+    # Add User to Team and Organization
     # if team_id passed add this user to the team
     if data_json.get("team_id", None) is not None:
         from litellm.proxy.management_endpoints.team_endpoints import team_member_add
@@ -123,6 +136,17 @@ async def new_user(
                 scope={"type": "http", "path": "/user/new"},
             ),
             user_api_key_dict=user_api_key_dict,
+        )
+
+    if data_json.get("organization_id", None) is not None:
+        # default to adding users as `INTERNAL_USER_VIEW_ONLY` if no role specified for organizations
+        _user_role: LitellmUserRoles = (
+            data_json.get("user_role", None) or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        )
+        await add_internal_user_to_organization(
+            user_id=data_json.get("user_id", None),
+            organization_id=data_json["organization_id"],
+            user_role=_user_role,
         )
 
     if data.send_invite_email is True:
@@ -874,3 +898,49 @@ async def delete_user(
     )
 
     return deleted_users
+
+
+async def add_internal_user_to_organization(
+    user_id: str,
+    organization_id: str,
+    user_role: LitellmUserRoles,
+):
+    """
+    Helper function to add an internal user to an organization
+
+    Adds the user to LiteLLM_OrganizationMembership table
+
+    - Checks if organization_id exists
+
+    Raises:
+    - Exception if database not connected
+    - Exception if user_id or organization_id not found
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise Exception("Database not connected")
+
+    try:
+        # Check if organization_id exists
+        organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id}
+        )
+        if organization_row is None:
+            raise Exception(
+                f"Organization not found, passed organization_id={organization_id}"
+            )
+
+        # Create a new organization membership entry
+        new_membership = await prisma_client.db.litellm_organizationmembership.create(
+            data={
+                "user_id": user_id,
+                "organization_id": organization_id,
+                "user_role": user_role,
+                # Note: You can also set budget within an organization if needed
+            }
+        )
+
+        return new_membership
+    except Exception as e:
+        raise Exception(f"Failed to add user to organization: {str(e)}")
