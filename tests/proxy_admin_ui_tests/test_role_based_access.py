@@ -338,3 +338,107 @@ async def test_org_admin_create_user_permissions(prisma_client):
     )
 
     print("response from new team")
+
+
+@pytest.mark.asyncio
+async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
+    """
+    Create a new org admin
+
+    org admin creates a new user and new team in orgs they are not part of -> expect error
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    response = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias=f"new-org-{uuid.uuid4()}",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    response2 = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias=f"new-org-{uuid.uuid4()}",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    org_id = response.organization_id
+
+    org_without_admins = response2.organization_id
+
+    response = await new_user(
+        data=NewUserRequest(organization_id=org_id, user_role=LitellmUserRoles.ADMIN)
+    )
+
+    # create key with the response["user_id"]
+
+    _new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=response.user_id,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.ADMIN,
+            user_id=response.user_id,
+        ),
+    )
+
+    new_key = _new_key.key
+
+    print("user api key auth response", response)
+
+    # Create /user/new request in organization=org_without_admins -> expect fail
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/user/new")
+
+    async def return_body():
+        body = {"organization_id": org_without_admins}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+
+    try:
+        response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
+        pytest.fail(
+            f"This should have failed!. creating a user in an org without admins"
+        )
+    except Exception as e:
+        print("got exception", e)
+        print("exception.message", e.message)
+        assert (
+            "You do not have permission to access this route. Passed organization_id"
+            in e.message
+        )
+
+    # Create /team/new request in organization=org_without_admins -> expect fail
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/team/new")
+
+    async def return_body():
+        body = {"organization_id": org_without_admins}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+
+    try:
+        response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
+        pytest.fail(
+            f"This should have failed!. creating a user in an org without admins"
+        )
+    except Exception as e:
+        print("got exception", e)
+        print("exception.message", e.message)
+        assert (
+            "You do not have permission to access this route. Passed organization_id"
+            in e.message
+        )
