@@ -67,6 +67,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     spend_user_fn,
     view_spend_logs,
 )
+from starlette.datastructures import URL
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
@@ -126,16 +127,11 @@ RBAC Tests
 1. create a new user with an organization id 
     - test 1 - if organization_id does exist expect to create a new user and user, organization relation
 
-2. Create a new user, set as Admin for the organization. As the org admin
-    2a. Create a new user without an organization id -> expect to raise an error 
-    2b. Create a new user with an organization id and Internal_USER role -> expect to create a new user and user, organization relation
+2. org admin creates team in his org → success 
 
-3. Tests run as an Admin within an Organization 
-    3a. Try creating a team without an organization_id specific -> expect to raise an error
-    3b. Try creating a team in an organization Admin is not part of ->  expect to raise an Error
-    3c. Try creating a team in an organization Admin is part of ->  expect to create a new team and team, organization relation
-    3d. Try creating a user in an organization Admin is not part of -> expect to raise an Error
-    3e. Try creating a user in an organization Admin is part of -> expect to create a new user and user, organization relation
+3. org admin adds new internal user to his org → success 
+
+4. org admin creates team and internal user not in his org → fail both
 """
 
 
@@ -199,3 +195,75 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
         assert _membership.user_role == user_role
     else:
         assert _membership.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_org_admin_create_team_permissions(prisma_client):
+    """
+    Create a new org admin
+
+    org admin creates a new team in their org -> success
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    response = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias=f"new-org-{uuid.uuid4()}",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    org_id = response.organization_id
+
+    response = await new_user(
+        data=NewUserRequest(organization_id=org_id, user_role=LitellmUserRoles.ADMIN)
+    )
+
+    # create key with the response["user_id"]
+
+    _new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=response.user_id,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.ADMIN,
+            user_id=response.user_id,
+        ),
+    )
+
+    new_key = _new_key.key
+
+    print("user api key auth response", response)
+
+    # Create /team/new request -> expect auth to pass
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/team/new")
+
+    async def return_body():
+        body = {"organization_id": org_id}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+    response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
+
+    # after auth - actually create team now
+    response = await new_team(
+        data=NewTeamRequest(
+            organization_id=org_id,
+        ),
+        http_request=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id=response.user_id,
+            user_role=LitellmUserRoles.ADMIN,
+        ),
+    )
+
+    print("response from new team")

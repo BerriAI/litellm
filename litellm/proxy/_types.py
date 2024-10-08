@@ -358,6 +358,10 @@ class LiteLLMRoutes(enum.Enum):
         + sso_only_routes
     )
 
+    # routes for role = ADMIN
+    # Org Admins can do all management routes within their organization
+    org_admin_user_routes = internal_user_routes + management_routes
+
     internal_user_view_only_routes = (
         spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
