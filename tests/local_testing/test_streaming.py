@@ -2156,7 +2156,13 @@ def test_openai_chat_completion_complete_response_call():
 # test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307", "o1-preview"],  #
+    [
+        "gpt-3.5-turbo",
+        "azure/chatgpt-v-2",
+        "claude-3-haiku-20240307",
+        "o1-preview",
+        "azure/fake-o1-mini",
+    ],
 )
 @pytest.mark.parametrize(
     "sync",
@@ -2164,6 +2170,7 @@ def test_openai_chat_completion_complete_response_call():
 )
 @pytest.mark.asyncio
 async def test_openai_stream_options_call(model, sync):
+    litellm.enable_preview_features = True
     litellm.set_verbose = True
     usage = None
     chunks = []
@@ -2175,7 +2182,6 @@ async def test_openai_stream_options_call(model, sync):
             ],
             stream=True,
             stream_options={"include_usage": True},
-            max_tokens=10,
         )
         for chunk in response:
             print("chunk: ", chunk)
@@ -2186,7 +2192,6 @@ async def test_openai_stream_options_call(model, sync):
             messages=[{"role": "user", "content": "say GM - we're going to make it "}],
             stream=True,
             stream_options={"include_usage": True},
-            max_tokens=10,
         )
 
         async for chunk in response:
