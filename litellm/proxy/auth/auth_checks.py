@@ -430,11 +430,15 @@ async def get_user_object(
             else:
                 raise Exception
 
-        if response.organization_memberships is not None:
+        if (
+            response.organization_memberships is not None
+            and len(response.organization_memberships) > 0
+        ):
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
             _dumped_memberships = [
                 membership.model_dump()
                 for membership in response.organization_memberships
+                if membership is not None
             ]
             response.organization_memberships = _dumped_memberships
 
