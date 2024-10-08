@@ -825,7 +825,7 @@ class TeamBase(LiteLLMBase):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
 
-    models: list = []
+    models: Optional[List[str]] = None
     blocked: bool = False
 
 
