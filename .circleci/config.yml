@@ -69,7 +69,7 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
-          name: Run prisma ./docker/docker/entrypoint.sh
+          name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
             chmod +x docker/entrypoint.sh
