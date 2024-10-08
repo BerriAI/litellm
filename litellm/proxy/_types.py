@@ -272,19 +272,24 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
     ]
 
-    management_routes = [  # key
+    # Management Routes for creating new keys, users, teams, models
+    management_create_routes = [
         "/key/generate",
+        "/user/new",
+        "/team/new",
+        "/model/new",
+    ]
+
+    management_routes = [  # key
         "/key/update",
         "/key/delete",
         "/key/info",
         "/key/health",
         # user
-        "/user/new",
         "/user/update",
         "/user/delete",
         "/user/info",
         # team
-        "/team/new",
         "/team/update",
         "/team/delete",
         "/team/list",
@@ -292,11 +297,10 @@ class LiteLLMRoutes(enum.Enum):
         "/team/block",
         "/team/unblock",
         # model
-        "/model/new",
         "/model/update",
         "/model/delete",
         "/model/info",
-    ]
+    ] + management_create_routes
 
     spend_tracking_routes = [
         # spend
@@ -1444,6 +1448,26 @@ class LiteLLM_Config(LiteLLMBase):
     param_value: Dict
 
 
+class LiteLLM_OrganizationMembershipTable(LiteLLMBase):
+    """
+    This is the table that track what organizations a user belongs to and users spend within the organization
+    """
+
+    user_id: str
+    organization_id: str
+    user_role: Optional[str] = None
+    spend: float = 0.0
+    budget_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLM_UserTable(LiteLLMBase):
     user_id: str
     max_budget: Optional[float]
@@ -1455,6 +1479,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
+    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
 
     @model_validator(mode="before")
     @classmethod

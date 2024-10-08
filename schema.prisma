@@ -119,7 +119,10 @@ model LiteLLM_UserTable {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
-    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+
+    // relations
+    litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
+    organization_memberships LiteLLM_OrganizationMembership[]
     invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
@@ -242,8 +245,13 @@ model LiteLLM_OrganizationMembership {
   budget_id String?
   created_at    DateTime               @default(now()) @map("created_at")
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+
+  // relations
+  user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  
   @@id([user_id, organization_id])
+  @@unique([user_id, organization_id])
 }
 
 model LiteLLM_InvitationLink {
