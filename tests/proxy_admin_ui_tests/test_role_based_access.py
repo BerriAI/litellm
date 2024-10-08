@@ -145,6 +145,7 @@ RBAC Tests
     [
         None,
         LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.ADMIN,
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ],

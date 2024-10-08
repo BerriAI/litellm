@@ -34,6 +34,7 @@ class LitellmUserRoles(str, enum.Enum):
     Admin Roles:
     PROXY_ADMIN: admin over the platform
     PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+    ADMIN: admin over a specific organization, can create teams, users only within their organization
 
     Internal User Roles:
     INTERNAL_USER: can login, view/create/delete their own keys, view their spend
@@ -52,6 +53,9 @@ class LitellmUserRoles(str, enum.Enum):
     # Admin Roles
     PROXY_ADMIN = "proxy_admin"
     PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
+
+    # Organization admins
+    ADMIN = "admin"
 
     # Internal User Roles
     INTERNAL_USER = "internal_user"
@@ -693,16 +697,7 @@ class NewUserRequest(_GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
     user_alias: Optional[str] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
-        ]
-    ] = None
+    user_role: Optional[LitellmUserRoles] = None
     teams: Optional[list] = None
     organization_id: Optional[str] = None
     auto_create_key: bool = (
@@ -714,16 +709,7 @@ class NewUserRequest(_GenerateKeyRequest):
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
-        ]
-    ] = None
+    user_role: Optional[LitellmUserRoles] = None
     teams: Optional[list] = None
     organization_id: Optional[str] = None
     user_alias: Optional[str] = None
@@ -737,16 +723,7 @@ class UpdateUserRequest(GenerateRequestBase):
     user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
-        ]
-    ] = None
+    user_role: Optional[LitellmUserRoles] = None
     max_budget: Optional[float] = None
 
     @model_validator(mode="before")
