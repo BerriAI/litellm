@@ -267,3 +267,74 @@ async def test_org_admin_create_team_permissions(prisma_client):
     )
 
     print("response from new team")
+
+
+@pytest.mark.asyncio
+async def test_org_admin_create_user_permissions(prisma_client):
+    """
+    Create a new org admin
+
+    org admin creates a new user in their org -> success
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    response = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias=f"new-org-{uuid.uuid4()}",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    org_id = response.organization_id
+
+    response = await new_user(
+        data=NewUserRequest(organization_id=org_id, user_role=LitellmUserRoles.ADMIN)
+    )
+
+    # create key with the response["user_id"]
+
+    _new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=response.user_id,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.ADMIN,
+            user_id=response.user_id,
+        ),
+    )
+
+    new_key = _new_key.key
+
+    print("user api key auth response", response)
+
+    # Create /user/new request -> expect auth to pass
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/user/new")
+
+    async def return_body():
+        body = {"organization_id": org_id}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+    response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
+
+    # after auth - actually create team now
+    response = await new_user(
+        data=NewUserRequest(
+            organization_id=org_id,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id=response.user_id,
+            user_role=LitellmUserRoles.ADMIN,
+        ),
+    )
+
+    print("response from new team")
