@@ -623,7 +623,7 @@ def completion_cost(
             try:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             except Exception as e:
-                verbose_logger.error(
+                verbose_logger.debug(
                     "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
                         str(e)
                     )
