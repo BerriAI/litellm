@@ -62,7 +62,7 @@ def organization_role_based_access_check(
         )
         if user_role is None:
             raise ProxyException(
-                message=f"You are not a member of the organization specified in the request body. Passed organization_id: {passed_organization_id}",
+                message=f"You do not have a role within the selected organization. Passed organization_id: {passed_organization_id}",
                 type=ProxyErrorTypes.auth_error.value,
                 param="organization_id",
                 code=status.HTTP_401_UNAUTHORIZED,
@@ -72,7 +72,7 @@ def organization_role_based_access_check(
             and route not in LiteLLMRoutes.internal_user_routes.value
         ):
             raise ProxyException(
-                message=f"You do not have permission to access this route. Passed organization_id: {passed_organization_id}, role: {user_role}. Tried to call route: {route}",
+                message=f"You do not have the correct role to access this route in organization_id: {passed_organization_id}, role: {user_role}. Tried to call route: {route}",
                 type=ProxyErrorTypes.auth_error.value,
                 param="user_role",
                 code=status.HTTP_401_UNAUTHORIZED,
@@ -82,7 +82,7 @@ def organization_role_based_access_check(
             and route not in LiteLLMRoutes.internal_user_view_only_routes.value
         ):
             raise ProxyException(
-                message=f"You do not have permission to access this route. Passed organization_id: {passed_organization_id}, role: {user_role}. Tried to call route: {route}",
+                message=f"You do not have the correct role to access this route in organization_id: {passed_organization_id}, role: {user_role}. Tried to call route: {route}",
                 type=ProxyErrorTypes.auth_error.value,
                 param="user_role",
                 code=status.HTTP_401_UNAUTHORIZED,

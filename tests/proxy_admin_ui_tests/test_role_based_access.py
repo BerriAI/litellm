@@ -416,7 +416,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
         print("got exception", e)
         print("exception.message", e.message)
         assert (
-            "You do not have permission to access this route. Passed organization_id"
+            "You are not a member of the organization specified in the request body. Passed organization_id"
             in e.message
         )
 
@@ -439,6 +439,6 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
         print("got exception", e)
         print("exception.message", e.message)
         assert (
-            "You do not have permission to access this route. Passed organization_id"
+            "You are not a member of the organization specified in the request body"
             in e.message
         )
