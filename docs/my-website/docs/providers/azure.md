@@ -281,6 +281,78 @@ response = completion(
 )
 ```
 
+## Azure O1 Models
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+
+Set `litellm.enable_preview_features = True` to use Azure O1 Models with streaming support. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.enable_preview_features = True # 👈 KEY CHANGE
+
+response = litellm.completion(
+    model="azure/<your deployment name>",
+    messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: o1-mini
+    litellm_params:
+      model: azure/o1-mini
+      api_base: "os.environ/AZURE_API_BASE"
+      api_key: "os.environ/AZURE_API_KEY"
+      api_version: "os.environ/AZURE_API_VERSION"
+
+litellm_settings:
+    enable_preview_features: true # 👈 KEY CHANGE
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it 
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(model="o1-mini", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+stream=True)
+
+for chunk in response:
+    print(chunk)
+```
+</TabItem>
+</Tabs>
+
 ## Azure Instruct Models
 
 Use `model="azure_text/<your-deployment>"`
@@ -614,3 +686,4 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 print("\nTool Choice:\n", tool_calls)
 ```
+
