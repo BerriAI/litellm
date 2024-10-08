@@ -88,9 +88,15 @@ async def test_user_info():
         key_gen = await new_user(session, 0, user_id=get_user)
         key = key_gen["key"]
         ## as admin ##
-        await get_user_info(session=session, get_user=get_user, call_user="sk-1234")
+        resp = await get_user_info(
+            session=session, get_user=get_user, call_user="sk-1234"
+        )
+        assert isinstance(resp["user_info"], dict)
+        assert len(resp["user_info"]) > 0
         ## as user themself ##
-        await get_user_info(session=session, get_user=get_user, call_user=key)
+        resp = await get_user_info(session=session, get_user=get_user, call_user=key)
+        assert isinstance(resp["user_info"], dict)
+        assert len(resp["user_info"]) > 0
         # as random user #
         key_gen = await new_user(session=session, i=0)
         random_key = key_gen["key"]

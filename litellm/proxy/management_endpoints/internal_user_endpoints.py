@@ -292,7 +292,7 @@ def get_team_from_list(
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=UserInfoResponse,
+    # response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(
@@ -436,8 +436,11 @@ async def user_info(
                     key["team_alias"] = "None"
                 returned_keys.append(key)
 
+        _user_info = (
+            user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
+        )
         response_data = UserInfoResponse(
-            user_id=user_id, user_info=user_info, keys=returned_keys, teams=team_list
+            user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
         )
 
         return response_data
