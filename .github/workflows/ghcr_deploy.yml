@@ -55,7 +55,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./docker/Dockerfile
           push: true
           tags: litellm/litellm:${{ github.event.inputs.tag || 'latest' }} 
       -
@@ -112,7 +111,6 @@ jobs:
         uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
           context: .
-          file: ./docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
