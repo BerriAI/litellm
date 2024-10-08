@@ -55,6 +55,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./docker/Dockerfile
           push: true
           tags: litellm/litellm:${{ github.event.inputs.tag || 'latest' }} 
       -
