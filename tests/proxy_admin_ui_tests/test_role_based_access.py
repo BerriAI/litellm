@@ -124,8 +124,7 @@ def prisma_client():
 RBAC Tests
 
 1. create a new user with an organization id 
-    - test 1 - if organization_id does not exist excpect to raise an error 
-    - test 2 - if organization_id does exist expect to create a new user and user, organization relation
+    - test 1 - if organization_id does exist expect to create a new user and user, organization relation
 
 2. Create a new user, set as Admin for the organization. As the org admin
     2a. Create a new user without an organization id -> expect to raise an error 
@@ -141,7 +140,19 @@ RBAC Tests
 
 
 @pytest.mark.asyncio
-async def test_create_new_user_in_organization(prisma_client):
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        None,
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ],
+)
+async def test_create_new_user_in_organization(prisma_client, user_role):
+    """
+    Create a new user in an organization and assert the user object is created with the correct organization memberships / roles
+    """
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
@@ -159,7 +170,9 @@ async def test_create_new_user_in_organization(prisma_client):
 
     org_id = response.organization_id
 
-    response = await new_user(data=NewUserRequest(organization_id=org_id))
+    response = await new_user(
+        data=NewUserRequest(organization_id=org_id, user_role=user_role)
+    )
 
     print("new user response", response)
 
@@ -180,3 +193,8 @@ async def test_create_new_user_in_organization(prisma_client):
 
     assert _membership.user_id == response.user_id
     assert _membership.organization_id == org_id
+
+    if user_role != None:
+        assert _membership.user_role == user_role
+    else:
+        assert _membership.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
