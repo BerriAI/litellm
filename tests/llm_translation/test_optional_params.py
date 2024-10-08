@@ -633,7 +633,7 @@ def test_azure_o1_model_params():
 
 @pytest.mark.parametrize(
     "temperature, expected_error",
-    [(0.2, True), (1, False)],
+    [(0.2, True), (1, False), (0, True)],
 )
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 def test_o1_model_temperature_params(provider, temperature, expected_error):
