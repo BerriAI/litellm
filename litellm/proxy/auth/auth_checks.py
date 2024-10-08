@@ -76,6 +76,7 @@ def common_checks(
     if (
         _model is not None
         and team_object is not None
+        and team_object.models is not None
         and len(team_object.models) > 0
         and _model not in team_object.models
     ):
