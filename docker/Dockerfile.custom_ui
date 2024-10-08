@@ -31,8 +31,8 @@ RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
 # Switch back to the main app directory
 WORKDIR /app
 
-# Make sure your entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
