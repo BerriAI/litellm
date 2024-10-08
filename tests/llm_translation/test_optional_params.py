@@ -620,16 +620,28 @@ def test_o1_model_params():
     assert optional_params["user"] == "John"
 
 
+def test_azure_o1_model_params():
+    optional_params = get_optional_params(
+        model="o1-preview",
+        custom_llm_provider="azure",
+        seed=10,
+        user="John",
+    )
+    assert optional_params["seed"] == 10
+    assert optional_params["user"] == "John"
+
+
 @pytest.mark.parametrize(
     "temperature, expected_error",
     [(0.2, True), (1, False)],
 )
-def test_o1_model_temperature_params(temperature, expected_error):
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_o1_model_temperature_params(provider, temperature, expected_error):
     if expected_error:
         with pytest.raises(litellm.UnsupportedParamsError):
             get_optional_params(
-                model="o1-preview-2024-09-12",
-                custom_llm_provider="openai",
+                model="o1-preview",
+                custom_llm_provider=provider,
                 temperature=temperature,
             )
     else:
@@ -650,3 +662,45 @@ def test_unmapped_gemini_model_params():
         stop="stop_word",
     )
     assert optional_params["stop_sequences"] == ["stop_word"]
+
+
+def test_drop_nested_params_vllm():
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5288
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "structure_output",
+                "description": "Send structured output back to the user",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {"type": "string"},
+                        "sentiment": {"type": "string"},
+                    },
+                    "required": ["reasoning", "sentiment"],
+                    "additionalProperties": False,
+                },
+                "additionalProperties": False,
+            },
+        }
+    ]
+    tool_choice = {"type": "function", "function": {"name": "structure_output"}}
+    optional_params = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        temperature=0.2,
+        tools=tools,
+        tool_choice=tool_choice,
+        additional_drop_params=[
+            ["tools", "function", "strict"],
+            ["tools", "function", "additionalProperties"],
+        ],
+    )
+    print(optional_params["tools"][0]["function"])
+
+    assert "additionalProperties" not in optional_params["tools"][0]["function"]
+    assert "strict" not in optional_params["tools"][0]["function"]
