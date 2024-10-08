@@ -605,6 +605,54 @@ litellm_settings:
   service_callbacks: ["datadog", "prometheus"]  # logs redis, postgres failures on datadog, prometheus
   turn_off_message_logging: boolean  # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
   redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+  set_verbose: boolean # sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION
+  json_logs: boolean # if true, logs will be in json format
+
+  # Fallbacks, reliability
+  default_fallbacks: ["claude-opus"] # set default_fallbacks, in case a specific model group is misconfigured / bad.
+  content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}] # fallbacks for ContentPolicyErrors
+  context_window_fallbacks: [{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}] # fallbacks for ContextWindowExceededErrors
+
+
+
+  # Caching settings
+  cache: true 
+  cache_params:        # set cache params for redis
+    type: redis        # type of cache to initialize
+
+    # Optional - Redis Settings
+    host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
+    port: 6379  # The port number for the Redis cache. Required if type is "redis".
+    password: "your_password"  # The password for the Redis cache. Required if type is "redis".
+    namespace: "litellm_caching" # namespace for redis cache
+  
+    # Optional - Redis Cluster Settings
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
+
+    # Optional - Redis Sentinel Settings
+    service_name: "mymaster"
+    sentinel_nodes: [["localhost", 26379]]
+
+    # Optional - Qdrant Semantic Cache Settings
+    qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
+    qdrant_collection_name: test_collection
+    qdrant_quantization_config: binary
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+
+    # Optional - S3 Cache Settings
+    s3_bucket_name: cache-bucket-litellm   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 bucket
+
+    # Common Cache settings
+    # Optional - Supported call types for caching
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+    mode: default_off # if default_off, you need to opt in to caching on a per call basis
+    ttl: 600 # ttl for caching
+
 
 callback_settings:
   otel:
@@ -646,6 +694,33 @@ general_settings:
 | service_callbacks | array of strings | System health monitoring - Logs redis, postgres failures on specified services (e.g. datadog, prometheus) [Doc Metrics](prometheus) |
 | turn_off_message_logging | boolean | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged [Proxy Logging](logging) |
 | redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
+| set_verbose | boolean | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION |
+| json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
+| default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
+| content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
+| context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
+| cache | boolean | If true, enables caching. [Further docs](./caching) |
+| cache_params | object | Parameters for the cache. [Further docs](./caching) |
+| cache_params.type | string | The type of cache to initialize. Can be one of ["local", "redis", "redis-semantic", "s3", "disk", "qdrant-semantic"]. Defaults to "redis". [Furher docs](./caching) |
+| cache_params.host | string | The host address for the Redis cache. Required if type is "redis". |
+| cache_params.port | integer | The port number for the Redis cache. Required if type is "redis". |
+| cache_params.password | string | The password for the Redis cache. Required if type is "redis". |
+| cache_params.namespace | string | The namespace for the Redis cache. |
+| cache_params.redis_startup_nodes | array of objects | Redis Cluster Settings. [Further docs](./caching) |
+| cache_params.service_name | string | Redis Sentinel Settings. [Further docs](./caching) |
+| cache_params.sentinel_nodes | array of arrays | Redis Sentinel Settings. [Further docs](./caching) |
+| cache_params.ttl | integer | The time (in seconds) to store entries in cache. |
+| cache_params.qdrant_semantic_cache_embedding_model | string | The embedding model to use for qdrant semantic cache. |
+| cache_params.qdrant_collection_name | string | The name of the collection to use for qdrant semantic cache. |
+| cache_params.qdrant_quantization_config | string | The quantization configuration for the qdrant semantic cache. |
+| cache_params.similarity_threshold | float | The similarity threshold for the semantic cache. |
+| cache_params.s3_bucket_name | string | The name of the S3 bucket to use for the semantic cache. |
+| cache_params.s3_region_name | string | The region name for the S3 bucket. |
+| cache_params.s3_aws_access_key_id | string | The AWS access key ID for the S3 bucket. |
+| cache_params.s3_aws_secret_access_key | string | The AWS secret access key for the S3 bucket. |
+| cache_params.s3_endpoint_url | string | Optional - The endpoint URL for the S3 bucket. |
+| cache_params.supported_call_types | array of strings | The types of calls to cache. [Further docs](./caching) |
+| cache_params.mode | string | The mode of the cache. [Further docs](./caching) |
 
 ### general_settings - Reference
 
