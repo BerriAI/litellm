@@ -69,11 +69,11 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
-          name: Run prisma ./entrypoint.sh
+          name: Run prisma ./docker/docker/entrypoint.sh
           command: |
             set +e
-            chmod +x entrypoint.sh
-            ./entrypoint.sh
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
             set -e
       - run:
           name: Black Formatting
@@ -128,11 +128,11 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
-          name: Run prisma ./entrypoint.sh
+          name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
-            chmod +x entrypoint.sh
-            ./entrypoint.sh
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
             set -e
       # Run pytest and generate JUnit XML report
       - run:
