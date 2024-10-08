@@ -26,6 +26,7 @@ model LiteLLM_BudgetTable {
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
 }
 
 // Models on proxy
@@ -230,6 +231,19 @@ model LiteLLM_TeamMembership {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
+}
+
+model LiteLLM_OrganizationMembership {
+  // Use this table to track Internal User and Organization membership. Helps tracking a users role within an Organization
+  user_id    String
+  organization_id String
+  user_role  String?
+  spend      Float    @default(0.0)
+  budget_id String?
+  created_at    DateTime               @default(now()) @map("created_at")
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  @@id([user_id, organization_id])
 }
 
 model LiteLLM_InvitationLink {
