@@ -31,7 +31,10 @@ def organization_role_based_access_check(
     if user_object is None:
         return
 
-    if user_object.organization_memberships is None:
+    if (
+        user_object.organization_memberships is None
+        or len(user_object.organization_memberships) == 0
+    ):
         return
 
     _user_organizations: List[str] = []
