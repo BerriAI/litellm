@@ -203,6 +203,11 @@ Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a
 
 :::
 
+### How key based logging works:
+
+- If **Key has no callbacks** configured, it will use the default callbacks specified in the config.yaml file
+- If **Key has callbacks** configured, it will use the callbacks specified in the key
+
 <Tabs>
 <TabItem label="Langfuse" value="langfuse">
 
@@ -231,25 +236,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 </TabItem>
 <TabItem label="GCS Bucket" value="gcs_bucket">
 
-1. Set gcs_bucket logging on your config.yaml
-
-  By default, this will use 
-  - `GCS_PATH_SERVICE_ACCOUNT` env variable to get the service account json path
-  - `GCS_BUCKET_NAME` env variable to get the bucket name to send logs to
-
-  ```yaml
-  model_list:
-    - model_name: fake-openai-endpoint
-      litellm_params:
-        model: openai/fake
-        api_key: fake-key
-        api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-  litellm_settings:
-    callbacks: ["gcs_bucket"]
-  ```
-
-2. Create Virtual Key to log to a specific GCS Bucket
+1. Create Virtual Key to log to a specific GCS Bucket
 
   Set `GCS_SERVICE_ACCOUNT` in your environment to the path of the service account json
   ```bash
@@ -275,7 +262,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
   ```
 
-4. Test it - `/chat/completions` request
+2. Test it - `/chat/completions` request
 
   Use the virtual key from step 3 to make a `/chat/completions` request
 
