@@ -3491,6 +3491,7 @@ def embedding(
         "client_id",
         "client_secret",
         "extra_headers",
+        "litellm_metadata",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -4654,7 +4655,7 @@ def image_generation(
             "style",
         ]
         litellm_params = [
-            "metadata",
+            "litellm_metadata",
             "aimg_generation",
             "caching",
             "mock_response",

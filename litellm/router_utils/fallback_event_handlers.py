@@ -33,7 +33,7 @@ async def run_async_fallback(
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
             kwargs["model"] = mg
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {"model_group": mg}
             )  # update model_group used, if fallbacks are done
             response = await litellm_router.async_function_with_fallbacks(
@@ -77,7 +77,7 @@ def run_sync_fallback(
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
             kwargs["model"] = mg
-            kwargs.setdefault("metadata", {}).update(
+            kwargs.setdefault("litellm_metadata", {}).update(
                 {"model_group": mg}
             )  # update model_group used, if fallbacks are done
             response = litellm_router.function_with_fallbacks(*args, **kwargs)
