@@ -4,10 +4,11 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,6 +29,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamAddMemberResponse,
+    TeamBase,
     TeamInfoResponseObject,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
@@ -36,6 +38,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -202,7 +205,7 @@ async def new_team(
             if member.user_id == user_api_key_dict.user_id:
                 creating_user_in_list = True
 
-        if creating_user_in_list == False:
+        if creating_user_in_list is False:
             data.members_with_roles.append(
                 Member(role="admin", user_id=user_api_key_dict.user_id)
             )
@@ -229,6 +232,12 @@ async def new_team(
 
     # Set tags on the new team
     if data.tags is not None:
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+            )
         if complete_team_data.metadata is None:
             complete_team_data.metadata = {"tags": data.tags}
         else:
@@ -240,7 +249,7 @@ async def new_team(
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
         complete_team_data.budget_reset_at = reset_at
 
-    team_row = await prisma_client.insert_data(
+    team_row: LiteLLM_TeamTable = await prisma_client.insert_data(  # type: ignore
         data=complete_team_data.json(exclude_none=True), table_name="team"
     )
 
@@ -283,7 +292,7 @@ async def new_team(
 
     try:
         return team_row.model_dump()
-    except Exception as e:
+    except Exception:
         return team_row.dict()
 
 
@@ -378,6 +387,12 @@ async def update_team(
 
     # check if user is trying to update tags for team
     if "tags" in updated_kv and updated_kv["tags"] is not None:
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+            )
         # remove tags from updated_kv
         _tags = updated_kv.pop("tags")
         if "metadata" in updated_kv and updated_kv["metadata"] is not None:
@@ -462,9 +477,6 @@ async def team_member_add(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
-        create_audit_log_for_update,
-        get_team_object,
         litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
@@ -932,9 +944,12 @@ async def delete_team(
     if litellm.store_audit_logs is True:
         # make an audit log for each team deleted
         for team_id in data.team_ids:
-            team_row = await prisma_client.get_data(  # type: ignore
+            team_row: Optional[LiteLLM_TeamTable] = await prisma_client.get_data(  # type: ignore
                 team_id=team_id, table_name="team", query_type="find_unique"
             )
+
+            if team_row is None:
+                continue
 
             _team_row = team_row.json(exclude_none=True)
 
@@ -982,12 +997,8 @@ async def team_info(
     get info on team + related keys
 
     ```
-    curl --location 'http://localhost:4000/team/info' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "teams": ["<team-id>",..]
-    }'
+    curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
+    --header 'Authorization: Bearer your_api_key_here'
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -1002,7 +1013,7 @@ async def team_info(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
-                    "error": f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                    "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
                 },
             )
         if team_id is None:
@@ -1027,8 +1038,10 @@ async def team_info(
                 ),
             )
 
-        team_info = await prisma_client.get_data(
-            team_id=team_id, table_name="team", query_type="find_unique"
+        team_info: Optional[Union[LiteLLM_TeamTable, dict]] = (
+            await prisma_client.get_data(
+                team_id=team_id, table_name="team", query_type="find_unique"
+            )
         )
         if team_info is None:
             raise HTTPException(
@@ -1044,6 +1057,9 @@ async def team_info(
             expires=datetime.now(),
         )
 
+        if keys is None:
+            keys = []
+
         if team_info is None:
             ## make sure we still return a total spend ##
             spend = 0
@@ -1055,7 +1071,7 @@ async def team_info(
         for key in keys:
             try:
                 key = key.model_dump()  # noqa
-            except:
+            except Exception:
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
@@ -1070,9 +1086,16 @@ async def team_info(
         for tm in team_memberships:
             returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
+        if isinstance(team_info, dict):
+            _team_info = LiteLLM_TeamTable(**team_info)
+        elif isinstance(team_info, BaseModel):
+            _team_info = LiteLLM_TeamTable(**team_info.model_dump())
+        else:
+            _team_info = LiteLLM_TeamTable()
+
         response_object = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=team_info,
+            team_info=_team_info,
             keys=keys,
             team_memberships=returned_tm,
         )

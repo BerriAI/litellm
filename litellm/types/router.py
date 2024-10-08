@@ -139,6 +139,7 @@ class GenericLiteLLMParams(BaseModel):
     )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
+    configurable_clientside_auth_params: Optional[List[str]] = None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
     ## VERTEX AI ##
@@ -302,6 +303,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: Optional[int]
     order: Optional[int]
     weight: Optional[int]
+    max_parallel_requests: Optional[int]
     api_key: Optional[str]
     api_base: Optional[str]
     api_version: Optional[str]
@@ -309,6 +311,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
     organization: Optional[Union[List, str]]  # for openai orgs
+    configurable_clientside_auth_params: Optional[
+        List[str]
+    ]  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
@@ -414,6 +419,9 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+    no_deployments_with_tag_routing = (
+        "Not allowed to access model due to tags configuration"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -474,7 +482,12 @@ class ModelGroupInfo(BaseModel):
     output_cost_per_token: Optional[float] = None
     mode: Optional[
         Literal[
-            "chat", "embedding", "completion", "image_generation", "audio_transcription"
+            "chat",
+            "embedding",
+            "completion",
+            "image_generation",
+            "audio_transcription",
+            "rerank",
         ]
     ] = Field(default="chat")
     tpm: Optional[int] = None
@@ -483,6 +496,7 @@ class ModelGroupInfo(BaseModel):
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
+    configurable_clientside_auth_params: Optional[List[str]] = None
 
 
 class AssistantsTypedDict(TypedDict):
@@ -582,3 +596,15 @@ class RouterRateLimitError(ValueError):
         self.cooldown_list = cooldown_list
         _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
         super().__init__(_message)
+
+
+class RouterModelGroupAliasItem(TypedDict):
+    model: str
+    hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+VALID_LITELLM_ENVIRONMENTS = [
+    "development",
+    "staging",
+    "production",
+]

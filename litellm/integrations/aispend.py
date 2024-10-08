@@ -1,8 +1,10 @@
 #### What this does ####
 #    On success + failure, log events to aispend.io
-import dotenv, os
-import traceback
 import datetime
+import os
+import traceback
+
+import dotenv
 
 model_cost = {
     "gpt-3.5-turbo": {
@@ -118,8 +120,6 @@ class AISpendLogger:
             for model in model_cost:
                 input_cost_sum += model_cost[model]["input_cost_per_token"]
                 output_cost_sum += model_cost[model]["output_cost_per_token"]
-            avg_input_cost = input_cost_sum / len(model_cost.keys())
-            avg_output_cost = output_cost_sum / len(model_cost.keys())
             prompt_tokens_cost_usd_dollar = (
                 model_cost[model]["input_cost_per_token"]
                 * response_obj["usage"]["prompt_tokens"]
@@ -136,12 +136,6 @@ class AISpendLogger:
             print_verbose(
                 f"AISpend Logging - Enters logging function for model {model}"
             )
-
-            url = f"https://aispend.io/api/v1/accounts/{self.account_id}/data"
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
 
             response_timestamp = datetime.datetime.fromtimestamp(
                 int(response_obj["created"])
@@ -168,6 +162,6 @@ class AISpendLogger:
             ]
 
             print_verbose(f"AISpend Logging - final data object: {data}")
-        except:
+        except Exception:
             print_verbose(f"AISpend Logging Error - {traceback.format_exc()}")
             pass

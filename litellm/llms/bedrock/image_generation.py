@@ -5,7 +5,7 @@ Handles image gen calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import os
-from typing import List
+from typing import Any, List
 
 from openai.types.image import Image
 
@@ -20,8 +20,8 @@ def image_generation(
     prompt: str,
     model_response: ImageResponse,
     optional_params: dict,
+    logging_obj: Any,
     timeout=None,
-    logging_obj=None,
     aimg_generation=False,
 ):
     """

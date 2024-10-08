@@ -22,7 +22,7 @@ from litellm.types.llms.vertex_ai import (
     Tools,
 )
 
-from ..common_utils import get_supports_system_message
+from ..common_utils import get_supports_response_schema, get_supports_system_message
 from ..vertex_ai_non_gemini import _gemini_convert_messages_with_history
 
 
@@ -46,8 +46,8 @@ def _transform_request_body(
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
-        supports_response_schema = litellm.supports_response_schema(
-            model=model, custom_llm_provider="vertex_ai"
+        supports_response_schema = get_supports_response_schema(
+            model=model, custom_llm_provider=custom_llm_provider
         )
         if supports_response_schema is False:
             user_response_schema_message = response_schema_prompt(
@@ -73,8 +73,14 @@ def _transform_request_body(
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
+        config_fields = GenerationConfig.__annotations__.keys()
+
+        filtered_params = {
+            k: v for k, v in optional_params.items() if k in config_fields
+        }
+
         generation_config: Optional[GenerationConfig] = GenerationConfig(
-            **optional_params
+            **filtered_params
         )
         data = RequestBody(contents=content)
         if system_instructions is not None:
@@ -104,7 +110,7 @@ def sync_transform_request_body(
     timeout: Optional[Union[float, httpx.Timeout]],
     extra_headers: Optional[dict],
     optional_params: dict,
-    logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+    logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
 ) -> RequestBody:
@@ -146,7 +152,7 @@ async def async_transform_request_body(
     timeout: Optional[Union[float, httpx.Timeout]],
     extra_headers: Optional[dict],
     optional_params: dict,
-    logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+    logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
 ) -> RequestBody:
@@ -199,6 +205,7 @@ def _transform_system_message(
     if supports_system_message is True:
         for idx, message in enumerate(messages):
             if message["role"] == "system":
+                _system_content_block: Optional[PartType] = None
                 if isinstance(message["content"], str):
                     _system_content_block = PartType(text=message["content"])
                 elif isinstance(message["content"], list):
@@ -206,8 +213,9 @@ def _transform_system_message(
                     for content in message["content"]:
                         system_text += content.get("text") or ""
                     _system_content_block = PartType(text=system_text)
-                system_content_blocks.append(_system_content_block)
-                system_prompt_indices.append(idx)
+                if _system_content_block is not None:
+                    system_content_blocks.append(_system_content_block)
+                    system_prompt_indices.append(idx)
         if len(system_prompt_indices) > 0:
             for idx in reversed(system_prompt_indices):
                 messages.pop(idx)

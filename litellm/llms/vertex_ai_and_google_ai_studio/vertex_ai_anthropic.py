@@ -114,6 +114,7 @@ class VertexAIAnthropicConfig:
     def get_supported_openai_params(self):
         return [
             "max_tokens",
+            "max_completion_tokens",
             "tools",
             "tool_choice",
             "stream",
@@ -125,7 +126,7 @@ class VertexAIAnthropicConfig:
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
@@ -267,7 +268,7 @@ def completion(
 ):
     try:
         import vertexai
-    except:
+    except Exception:
         raise VertexAIError(
             status_code=400,
             message="""vertexai import failed please run `pip install -U google-cloud-aiplatform "anthropic[vertex]"`""",
@@ -275,7 +276,7 @@ def completion(
 
     from anthropic import AnthropicVertex
 
-    from litellm.llms.anthropic.chat import AnthropicChatCompletion
+    from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
     from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
@@ -292,7 +293,9 @@ def completion(
         vertex_httpx_logic = VertexLLM()
 
         access_token, project_id = vertex_httpx_logic._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
         )
 
         anthropic_chat_completions = AnthropicChatCompletion()
@@ -364,7 +367,7 @@ async def async_completion(
 
     if client is None:
         vertex_ai_client = AsyncAnthropicVertex(
-            project_id=vertex_project, region=vertex_location, access_token=access_token
+            project_id=vertex_project, region=vertex_location, access_token=access_token  # type: ignore
         )
     else:
         vertex_ai_client = client
@@ -435,7 +438,7 @@ async def async_streaming(
 
     if client is None:
         vertex_ai_client = AsyncAnthropicVertex(
-            project_id=vertex_project, region=vertex_location, access_token=access_token
+            project_id=vertex_project, region=vertex_location, access_token=access_token  # type: ignore
         )
     else:
         vertex_ai_client = client

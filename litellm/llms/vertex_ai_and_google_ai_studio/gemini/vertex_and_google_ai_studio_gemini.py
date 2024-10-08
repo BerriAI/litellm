@@ -9,7 +9,17 @@ import types
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -19,7 +29,11 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.llms.prompt_templates.factory import (
     convert_url_to_base64,
     response_schema_prompt,
@@ -35,6 +49,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.llms.vertex_ai import (
+    Candidates,
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
@@ -58,6 +73,7 @@ from ..common_utils import (
     all_gemini_url_modes,
     get_supports_system_message,
 )
+from ..vertex_llm_base import VertexBase
 from .transformation import (
     async_transform_request_body,
     set_headers,
@@ -143,6 +159,7 @@ class VertexAIConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "tools",
             "tool_choice",
@@ -159,7 +176,7 @@ class VertexAIConfig:
             if param == "top_p":
                 optional_params["top_p"] = value
             if (
-                param == "stream" and value == True
+                param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
             if param == "n":
@@ -169,9 +186,13 @@ class VertexAIConfig:
                     optional_params["stop_sequences"] = [value]
                 elif isinstance(value, list):
                     optional_params["stop_sequences"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":
+            if (
+                param == "response_format"
+                and isinstance(value, dict)
+                and value["type"] == "json_object"
+            ):
                 optional_params["response_mime_type"] = "application/json"
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
@@ -229,232 +250,6 @@ class VertexAIConfig:
             "europe-west8",
             "europe-west9",
         ]
-
-
-class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
-    """
-    Reference: https://ai.google.dev/api/rest/v1beta/GenerationConfig
-
-    The class `GoogleAIStudioGeminiConfig` provides configuration for the Google AI Studio's Gemini API interface. Below are the parameters:
-
-    - `temperature` (float): This controls the degree of randomness in token selection.
-
-    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
-
-    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
-
-    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
-
-    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'. Other values - `application/json`.
-
-    - `response_schema` (dict): Optional. Output response schema of the generated candidate text when response mime type can have schema. Schema can be objects, primitives or arrays and is a subset of OpenAPI schema. If set, a compatible response_mime_type must also be set. Compatible mimetypes: application/json: Schema for JSON response.
-
-    - `candidate_count` (int): Number of generated responses to return.
-
-    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    response_schema: Optional[dict] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        response_schema: Optional[dict] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-            "functions",
-            "response_format",
-            "n",
-            "stop",
-        ]
-
-    def _map_function(self, value: List[dict]) -> List[Tools]:
-        gtool_func_declarations = []
-        googleSearchRetrieval: Optional[dict] = None
-
-        for tool in value:
-            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
-                None
-            )
-            if "function" in tool:  # tools list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
-                    **tool["function"]
-                )
-            elif "name" in tool:  # functions list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
-
-            # check if grounding
-            if tool.get("googleSearchRetrieval", None) is not None:
-                googleSearchRetrieval = tool["googleSearchRetrieval"]
-            elif openai_function_object is not None:
-                gtool_func_declaration = FunctionDeclaration(
-                    name=openai_function_object["name"],
-                    description=openai_function_object.get("description", ""),
-                    parameters=openai_function_object.get("parameters", {}),
-                )
-                gtool_func_declarations.append(gtool_func_declaration)
-            else:
-                # assume it's a provider-specific param
-                verbose_logger.warning(
-                    "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
-                )
-
-        _tools = Tools(
-            function_declarations=gtool_func_declarations,
-        )
-        if googleSearchRetrieval is not None:
-            _tools["googleSearchRetrieval"] = googleSearchRetrieval
-        return [_tools]
-
-    def map_tool_choice_values(
-        self, model: str, tool_choice: Union[str, dict]
-    ) -> Optional[ToolConfig]:
-        if tool_choice == "none":
-            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="NONE"))
-        elif tool_choice == "required":
-            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="ANY"))
-        elif tool_choice == "auto":
-            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="AUTO"))
-        elif isinstance(tool_choice, dict):
-            # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-            name = tool_choice.get("function", {}).get("name", "")
-            return ToolConfig(
-                functionCallingConfig=FunctionCallingConfig(
-                    mode="ANY", allowed_function_names=[name]
-                )
-            )
-        else:
-            raise litellm.utils.UnsupportedParamsError(
-                message="VertexAI doesn't support tool_choice={}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.".format(
-                    tool_choice
-                ),
-                status_code=400,
-            )
-
-    def map_openai_params(
-        self,
-        model: str,
-        non_default_params: dict,
-        optional_params: dict,
-    ):
-        for param, value in non_default_params.items():
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if (
-                param == "stream" and value is True
-            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
-                optional_params["stream"] = value
-            if param == "n":
-                optional_params["candidate_count"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    optional_params["stop_sequences"] = [value]
-                elif isinstance(value, list):
-                    optional_params["stop_sequences"] = value
-            if param == "max_tokens":
-                optional_params["max_output_tokens"] = value
-            if param == "response_format":  # type: ignore
-                if value["type"] == "json_object":  # type: ignore
-                    if value["type"] == "json_object":  # type: ignore
-                        optional_params["response_mime_type"] = "application/json"
-                    elif value["type"] == "text":  # type: ignore
-                        optional_params["response_mime_type"] = "text/plain"
-                    if "response_schema" in value:  # type: ignore
-                        optional_params["response_mime_type"] = "application/json"
-                        optional_params["response_schema"] = value["response_schema"]  # type: ignore
-                elif value["type"] == "json_schema":  # type: ignore
-                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
-                        optional_params["response_mime_type"] = "application/json"
-                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
-            if (param == "tools" or param == "functions") and isinstance(value, list):
-                optional_params["tools"] = self._map_function(value=value)
-                optional_params["litellm_param_is_function_call"] = (
-                    True if param == "functions" else False
-                )
-            if param == "tool_choice" and (
-                isinstance(value, str) or isinstance(value, dict)
-            ):
-                _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value  # type: ignore
-                )
-                if _tool_choice_value is not None:
-                    optional_params["tool_choice"] = _tool_choice_value
-        return optional_params
-
-    def get_mapped_special_auth_params(self) -> dict:
-        """
-        Common auth params across bedrock/vertex_ai/azure/watsonx
-        """
-        return {"project": "vertex_project", "region_name": "vertex_location"}
-
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
-        mapped_params = self.get_mapped_special_auth_params()
-
-        for param, value in non_default_params.items():
-            if param in mapped_params:
-                optional_params[mapped_params[param]] = value
-        return optional_params
-
-    def get_flagged_finish_reasons(self) -> Dict[str, str]:
-        """
-        Return Dictionary of finish reasons which indicate response was flagged
-
-        and what it means
-        """
-        return {
-            "SAFETY": "The token generation was stopped as the response was flagged for safety reasons. NOTE: When streaming the Candidate.content will be empty if content filters blocked the output.",
-            "RECITATION": "The token generation was stopped as the response was flagged for unauthorized citations.",
-            "BLOCKLIST": "The token generation was stopped as the response was flagged for the terms which are included from the terminology blocklist.",
-            "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
-            "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
-        }
 
 
 class VertexGeminiConfig:
@@ -539,6 +334,7 @@ class VertexGeminiConfig:
             "temperature",
             "top_p",
             "max_tokens",
+            "max_completion_tokens",
             "stream",
             "tools",
             "functions",
@@ -638,7 +434,7 @@ class VertexGeminiConfig:
                     optional_params["stop_sequences"] = [value]
                 elif isinstance(value, list):
                     optional_params["stop_sequences"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and isinstance(value, dict):  # type: ignore
                 if value["type"] == "json_object":
@@ -729,6 +525,108 @@ class VertexGeminiConfig:
         return exception_string
 
 
+class GoogleAIStudioGeminiConfig(
+    VertexGeminiConfig
+):  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
+    """
+    Reference: https://ai.google.dev/api/rest/v1beta/GenerationConfig
+
+    The class `GoogleAIStudioGeminiConfig` provides configuration for the Google AI Studio's Gemini API interface. Below are the parameters:
+
+    - `temperature` (float): This controls the degree of randomness in token selection.
+
+    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
+
+    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
+
+    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
+
+    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'. Other values - `application/json`.
+
+    - `response_schema` (dict): Optional. Output response schema of the generated candidate text when response mime type can have schema. Schema can be objects, primitives or arrays and is a subset of OpenAPI schema. If set, a compatible response_mime_type must also be set. Compatible mimetypes: application/json: Schema for JSON response.
+
+    - `candidate_count` (int): Number of generated responses to return.
+
+    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
+
+    Note: Please make sure to modify the default parameters as required for your use case.
+    """
+
+    temperature: Optional[float] = None
+    max_output_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    response_mime_type: Optional[str] = None
+    response_schema: Optional[dict] = None
+    candidate_count: Optional[int] = None
+    stop_sequences: Optional[list] = None
+
+    def __init__(
+        self,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        response_mime_type: Optional[str] = None,
+        response_schema: Optional[dict] = None,
+        candidate_count: Optional[int] = None,
+        stop_sequences: Optional[list] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "max_completion_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+            "functions",
+            "response_format",
+            "n",
+            "stop",
+        ]
+
+    def map_openai_params(
+        self,
+        model: str,
+        non_default_params: Dict,
+        optional_params: Dict,
+        drop_params: bool,
+    ):
+        # drop frequency_penalty and presence_penalty
+        if "frequency_penalty" in non_default_params:
+            del non_default_params["frequency_penalty"]
+        if "presence_penalty" in non_default_params:
+            del non_default_params["presence_penalty"]
+        return super().map_openai_params(
+            model, non_default_params, optional_params, drop_params
+        )
+
+
 async def make_call(
     client: Optional[AsyncHTTPHandler],
     api_base: str,
@@ -802,14 +700,9 @@ def make_sync_call(
     return completion_stream
 
 
-class VertexLLM(BaseLLM):
+class VertexLLM(VertexBase):
     def __init__(self) -> None:
         super().__init__()
-        self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
-        self._credentials: Optional[Any] = None
-        self.project_id: Optional[str] = None
-        self.async_handler: Optional[AsyncHTTPHandler] = None
 
     def _process_response(
         self,
@@ -887,14 +780,14 @@ class VertexLLM(BaseLLM):
 
                 return model_response
 
-        if len(completion_response["candidates"]) > 0:
+        _candidates = completion_response.get("candidates")
+        if _candidates and len(_candidates) > 0:
             content_policy_violations = (
                 VertexGeminiConfig().get_flagged_finish_reasons()
             )
             if (
-                "finishReason" in completion_response["candidates"][0]
-                and completion_response["candidates"][0]["finishReason"]
-                in content_policy_violations.keys()
+                "finishReason" in _candidates[0]
+                and _candidates[0]["finishReason"] in content_policy_violations.keys()
             ):
                 ## CONTENT POLICY VIOLATION ERROR
                 model_response.choices[0].finish_reason = "content_filter"
@@ -943,55 +836,58 @@ class VertexLLM(BaseLLM):
             content_str = ""
             tools: List[ChatCompletionToolCallChunk] = []
             functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-            for idx, candidate in enumerate(completion_response["candidates"]):
-                if "content" not in candidate:
-                    continue
+            if _candidates:
+                for idx, candidate in enumerate(_candidates):
+                    if "content" not in candidate:
+                        continue
 
-                if "groundingMetadata" in candidate:
-                    grounding_metadata.append(candidate["groundingMetadata"])
+                    if "groundingMetadata" in candidate:
+                        grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
 
-                if "safetyRatings" in candidate:
-                    safety_ratings.append(candidate["safetyRatings"])
+                    if "safetyRatings" in candidate:
+                        safety_ratings.append(candidate["safetyRatings"])
 
-                if "citationMetadata" in candidate:
-                    citation_metadata.append(candidate["citationMetadata"])
-                if "text" in candidate["content"]["parts"][0]:
-                    content_str = candidate["content"]["parts"][0]["text"]
+                    if "citationMetadata" in candidate:
+                        citation_metadata.append(candidate["citationMetadata"])
+                    if "text" in candidate["content"]["parts"][0]:
+                        content_str = candidate["content"]["parts"][0]["text"]
 
-                if "functionCall" in candidate["content"]["parts"][0]:
-                    _function_chunk = ChatCompletionToolCallFunctionChunk(
-                        name=candidate["content"]["parts"][0]["functionCall"]["name"],
-                        arguments=json.dumps(
-                            candidate["content"]["parts"][0]["functionCall"]["args"]
-                        ),
-                    )
-                    if litellm_params.get("litellm_param_is_function_call") is True:
-                        functions = _function_chunk
-                    else:
-                        _tool_response_chunk = ChatCompletionToolCallChunk(
-                            id=f"call_{str(uuid.uuid4())}",
-                            type="function",
-                            function=_function_chunk,
-                            index=candidate.get("index", idx),
+                    if "functionCall" in candidate["content"]["parts"][0]:
+                        _function_chunk = ChatCompletionToolCallFunctionChunk(
+                            name=candidate["content"]["parts"][0]["functionCall"][
+                                "name"
+                            ],
+                            arguments=json.dumps(
+                                candidate["content"]["parts"][0]["functionCall"]["args"]
+                            ),
                         )
-                        tools.append(_tool_response_chunk)
-                chat_completion_message["content"] = (
-                    content_str if len(content_str) > 0 else None
-                )
-                if len(tools) > 0:
-                    chat_completion_message["tool_calls"] = tools
+                        if litellm_params.get("litellm_param_is_function_call") is True:
+                            functions = _function_chunk
+                        else:
+                            _tool_response_chunk = ChatCompletionToolCallChunk(
+                                id=f"call_{str(uuid.uuid4())}",
+                                type="function",
+                                function=_function_chunk,
+                                index=candidate.get("index", idx),
+                            )
+                            tools.append(_tool_response_chunk)
+                    chat_completion_message["content"] = (
+                        content_str if len(content_str) > 0 else None
+                    )
+                    if len(tools) > 0:
+                        chat_completion_message["tool_calls"] = tools
 
-                if functions is not None:
-                    chat_completion_message["function_call"] = functions
-                choice = litellm.Choices(
-                    finish_reason=candidate.get("finishReason", "stop"),
-                    index=candidate.get("index", idx),
-                    message=chat_completion_message,  # type: ignore
-                    logprobs=None,
-                    enhancements=None,
-                )
+                    if functions is not None:
+                        chat_completion_message["function_call"] = functions
+                    choice = litellm.Choices(
+                        finish_reason=candidate.get("finishReason", "stop"),
+                        index=candidate.get("index", idx),
+                        message=chat_completion_message,  # type: ignore
+                        logprobs=None,
+                        enhancements=None,
+                    )
 
-                model_response.choices.append(choice)
+                    model_response.choices.append(choice)
 
             ## GET USAGE ##
             usage = litellm.Usage(
@@ -1038,200 +934,13 @@ class VertexLLM(BaseLLM):
 
         return model_response
 
-    def get_vertex_region(self, vertex_region: Optional[str]) -> str:
-        return vertex_region or "us-central1"
-
-    def load_auth(
-        self, credentials: Optional[str], project_id: Optional[str]
-    ) -> Tuple[Any, str]:
-        import google.auth as google_auth
-        from google.auth import identity_pool
-        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
-        from google.auth.transport.requests import (
-            Request,  # type: ignore[import-untyped]
-        )
-
-        if credentials is not None and isinstance(credentials, str):
-            import google.oauth2.service_account
-
-            verbose_logger.debug(
-                "Vertex: Loading vertex credentials from %s", credentials
-            )
-            verbose_logger.debug(
-                "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
-                credentials,
-                os.path.exists(credentials),
-                os.getcwd(),
-            )
-
-            try:
-                if os.path.exists(credentials):
-                    json_obj = json.load(open(credentials))
-                else:
-                    json_obj = json.loads(credentials)
-            except Exception:
-                raise Exception(
-                    "Unable to load vertex credentials from environment. Got={}".format(
-                        credentials
-                    )
-                )
-
-            # Check if the JSON object contains Workload Identity Federation configuration
-            if "type" in json_obj and json_obj["type"] == "external_account":
-                creds = identity_pool.Credentials.from_info(json_obj)
-            else:
-                creds = (
-                    google.oauth2.service_account.Credentials.from_service_account_info(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
-                )
-
-            if project_id is None:
-                project_id = creds.project_id
-        else:
-            creds, creds_project_id = google_auth.default(
-                quota_project_id=project_id,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
-            if project_id is None:
-                project_id = creds_project_id
-
-        creds.refresh(Request())
-
-        if not project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not isinstance(project_id, str):
-            raise TypeError(
-                f"Expected project_id to be a str but got {type(project_id)}"
-            )
-
-        return creds, project_id
-
-    def refresh_auth(self, credentials: Any) -> None:
-        from google.auth.transport.requests import (
-            Request,  # type: ignore[import-untyped]
-        )
-
-        credentials.refresh(Request())
-
-    def _ensure_access_token(
-        self, credentials: Optional[str], project_id: Optional[str]
-    ) -> Tuple[str, str]:
-        """
-        Returns auth token and project id
-        """
-        if self.access_token is not None:
-            if project_id is not None:
-                return self.access_token, project_id
-            elif self.project_id is not None:
-                return self.access_token, self.project_id
-
-        if not self._credentials:
-            self._credentials, cred_project_id = self.load_auth(
-                credentials=credentials, project_id=project_id
-            )
-            if not self.project_id:
-                self.project_id = project_id or cred_project_id
-        else:
-            self.refresh_auth(self._credentials)
-
-            if not self.project_id:
-                self.project_id = self._credentials.project_id
-
-        if not self.project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not self._credentials or not self._credentials.token:
-            raise RuntimeError("Could not resolve API token from the environment")
-
-        return self._credentials.token, project_id or self.project_id
-
-    def is_using_v1beta1_features(self, optional_params: dict) -> bool:
-        """
-        VertexAI only supports ContextCaching on v1beta1
-
-        use this helper to decide if request should be sent to v1 or v1beta1
-
-        Returns v1beta1 if context caching is enabled
-        Returns v1 in all other cases
-        """
-        if "cached_content" in optional_params:
-            return True
-        if "CachedContent" in optional_params:
-            return True
-        return False
-
-    def _get_token_and_url(
-        self,
-        model: str,
-        gemini_api_key: Optional[str],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        api_base: Optional[str],
-        should_use_v1beta1_features: Optional[bool] = False,
-        mode: all_gemini_url_modes = "chat",
-    ) -> Tuple[Optional[str], str]:
-        """
-        Internal function. Returns the token and url for the call.
-
-        Handles logic if it's google ai studio vs. vertex ai.
-
-        Returns
-            token, url
-        """
-        if custom_llm_provider == "gemini":
-            auth_header = None
-            url, endpoint = _get_gemini_url(
-                mode=mode,
-                model=model,
-                stream=stream,
-                gemini_api_key=gemini_api_key,
-            )
-        else:
-            auth_header, vertex_project = self._ensure_access_token(
-                credentials=vertex_credentials, project_id=vertex_project
-            )
-            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
-
-            ### SET RUNTIME ENDPOINT ###
-            version: Literal["v1beta1", "v1"] = (
-                "v1beta1" if should_use_v1beta1_features is True else "v1"
-            )
-            url, endpoint = _get_vertex_url(
-                mode=mode,
-                model=model,
-                stream=stream,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_api_version=version,
-            )
-
-        if (
-            api_base is not None
-        ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
-            if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
-            else:
-                url = "{}:{}".format(api_base, endpoint)
-
-            if stream is True:
-                url = url + "?alt=sse"
-
-        return auth_header, url
-
     async def async_streaming(
         self,
         model: str,
+        custom_llm_provider: Literal[
+            "vertex_ai", "vertex_ai_beta", "gemini"
+        ],  # if it's vertex_ai or gemini (google ai studio)
         messages: list,
-        api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
         data: dict,
@@ -1242,10 +951,51 @@ class VertexLLM(BaseLLM):
         optional_params: dict,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        api_base: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        vertex_credentials: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
+        extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
         request_body = await async_transform_request_body(**data)  # type: ignore
+
+        should_use_v1beta1_features = self.is_using_v1beta1_features(
+            optional_params=optional_params
+        )
+
+        _auth_header, vertex_project = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        auth_header, api_base = self._get_token_and_url(
+            model=model,
+            gemini_api_key=gemini_api_key,
+            auth_header=_auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=should_use_v1beta1_features,
+        )
+
+        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
 
         request_body_str = json.dumps(request_body)
         streaming_response = CustomStreamWrapper(
@@ -1270,29 +1020,61 @@ class VertexLLM(BaseLLM):
         self,
         model: str,
         messages: list,
-        api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
         data: dict,
+        custom_llm_provider: Literal[
+            "vertex_ai", "vertex_ai_beta", "gemini"
+        ],  # if it's vertex_ai or gemini (google ai studio)
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
         stream,
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
         logger_fn=None,
+        api_base: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        vertex_credentials: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
+        extra_headers: Optional[dict] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
 
+        should_use_v1beta1_features = self.is_using_v1beta1_features(
+            optional_params=optional_params
+        )
+
+        _auth_header, vertex_project = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        auth_header, api_base = self._get_token_and_url(
+            model=model,
+            gemini_api_key=gemini_api_key,
+            auth_header=_auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=should_use_v1beta1_features,
+        )
+
+        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+
         request_body = await async_transform_request_body(**data)  # type: ignore
+        _async_client_params = {}
+        if timeout:
+            _async_client_params["timeout"] = timeout
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
+            client = get_async_httpx_client(
+                params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI
+            )
         else:
             client = client  # type: ignore
         ## LOGGING
@@ -1355,22 +1137,6 @@ class VertexLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
-        should_use_v1beta1_features = self.is_using_v1beta1_features(
-            optional_params=optional_params
-        )
-
-        auth_header, url = self._get_token_and_url(
-            model=model,
-            gemini_api_key=gemini_api_key,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_credentials=vertex_credentials,
-            stream=stream,
-            custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
-        )
-
         transform_request_params = {
             "gemini_api_key": gemini_api_key,
             "messages": messages,
@@ -1385,8 +1151,6 @@ class VertexLLM(BaseLLM):
             "litellm_params": litellm_params,
         }
 
-        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
-
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             ### ASYNC STREAMING
@@ -1394,7 +1158,7 @@ class VertexLLM(BaseLLM):
                 return self.async_streaming(
                     model=model,
                     messages=messages,
-                    api_base=url,
+                    api_base=api_base,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -1406,14 +1170,19 @@ class VertexLLM(BaseLLM):
                     timeout=timeout,
                     client=client,  # type: ignore
                     data=transform_request_params,
-                    headers=headers,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    vertex_credentials=vertex_credentials,
+                    gemini_api_key=gemini_api_key,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
                 )
             ### ASYNC COMPLETION
             return self.async_completion(
                 model=model,
                 messages=messages,
                 data=transform_request_params,  # type: ignore
-                api_base=url,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -1424,10 +1193,38 @@ class VertexLLM(BaseLLM):
                 logger_fn=logger_fn,
                 timeout=timeout,
                 client=client,  # type: ignore
-                headers=headers,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
+                gemini_api_key=gemini_api_key,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
             )
 
-        ## SYNC STREAMING CALL ##
+        should_use_v1beta1_features = self.is_using_v1beta1_features(
+            optional_params=optional_params
+        )
+
+        _auth_header, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            gemini_api_key=gemini_api_key,
+            auth_header=_auth_header,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=should_use_v1beta1_features,
+        )
+        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+
         ## TRANSFORMATION ##
         data = sync_transform_request_body(**transform_request_params)
 
@@ -1442,6 +1239,7 @@ class VertexLLM(BaseLLM):
             },
         )
 
+        ## SYNC STREAMING CALL ##
         if stream is True:
             request_data_str = json.dumps(data)
             streaming_response = CustomStreamWrapper(
@@ -1515,13 +1313,14 @@ class ModelResponseIterator:
 
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
+            gemini_chunk: Optional[Candidates] = None
+            if _candidates and len(_candidates) > 0:
+                gemini_chunk = _candidates[0]
 
-            gemini_chunk = processed_chunk["candidates"][0]
-
-            if "content" in gemini_chunk:
+            if gemini_chunk and "content" in gemini_chunk:
                 if "text" in gemini_chunk["content"]["parts"][0]:
                     text = gemini_chunk["content"]["parts"][0]["text"]
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:
@@ -1540,7 +1339,7 @@ class ModelResponseIterator:
                         index=0,
                     )
 
-            if "finishReason" in gemini_chunk:
+            if gemini_chunk and "finishReason" in gemini_chunk:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
@@ -1618,18 +1417,19 @@ class ModelResponseIterator:
             )
 
     def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
-        chunk = chunk.replace("data:", "")
-        if len(chunk) > 0:
-            """
-            Check if initial chunk valid json
-            - if partial json -> enter accumulated json logic
-            - if valid - continue
-            """
-            if self.chunk_type == "valid_json":
-                return self.handle_valid_json_chunk(chunk=chunk)
-            elif self.chunk_type == "accumulated_json":
-                return self.handle_accumulated_json_chunk(chunk=chunk)
-        else:
+        try:
+            chunk = chunk.replace("data:", "")
+            if len(chunk) > 0:
+                """
+                Check if initial chunk valid json
+                - if partial json -> enter accumulated json logic
+                - if valid - continue
+                """
+                if self.chunk_type == "valid_json":
+                    return self.handle_valid_json_chunk(chunk=chunk)
+                elif self.chunk_type == "accumulated_json":
+                    return self.handle_accumulated_json_chunk(chunk=chunk)
+
             return GenericStreamingChunk(
                 text="",
                 is_finished=False,
@@ -1638,6 +1438,8 @@ class ModelResponseIterator:
                 index=0,
                 tool_use=None,
             )
+        except Exception:
+            raise
 
     def __next__(self):
         try:

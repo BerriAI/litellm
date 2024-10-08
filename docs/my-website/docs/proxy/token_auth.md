@@ -1,16 +1,20 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] JWT-based Auth 
+# JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 
 :::info
 
-This is a new feature, and subject to changes based on feedback.
+✨ JWT-based Auth  is on LiteLLM Enterprise starting at $250/mo
 
-*UPDATE*: This will be moving to the [enterprise tier](./enterprise.md), once it's out of beta (~by end of April).
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
 :::
+
 
 ## Usage
 
@@ -243,3 +247,17 @@ curl --location 'http://0.0.0.0:4000/team/unblock' \
 }'
 ```
 
+
+## Advanced - Upsert Users + Allowed Email Domains 
+
+Allow users who belong to a specific email domain, automatic access to the proxy.
+ 
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_email_jwt_field: "email" # 👈 checks 'email' field in jwt payload
+    user_allowed_email_domain: "my-co.com" # allows user@my-co.com to call proxy
+    user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
+```

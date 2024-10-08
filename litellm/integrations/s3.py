@@ -146,14 +146,14 @@ class S3Logger:
 
             import json
 
-            payload = json.dumps(payload)
+            payload_str = json.dumps(payload)
 
-            print_verbose(f"\ns3 Logger - Logging payload = {payload}")
+            print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
             response = self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_object_key,
-                Body=payload,
+                Body=payload_str,
                 ContentType="application/json",
                 ContentLanguage="en",
                 ContentDisposition=f'inline; filename="{s3_object_download_filename}"',

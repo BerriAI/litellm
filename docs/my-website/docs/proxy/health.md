@@ -48,7 +48,7 @@ litellm --health
 
 ### Embedding Models 
 
-We need some way to know if the model is an embedding model when running checks, if you have this in your config, specifying mode it makes an embedding health check
+To run embedding health checks, specify the mode as "embedding" in your config for the relevant model.
 
 ```yaml
 model_list:
@@ -64,7 +64,7 @@ model_list:
 
 ### Image Generation Models 
 
-We need some way to know if the model is an image generation model when running checks, if you have this in your config, specifying mode it makes an image generation health check
+To run image generation health checks, specify the mode as "image_generation" in your config for the relevant model.
 
 ```yaml
 model_list:
@@ -81,7 +81,8 @@ model_list:
 
 ### Text Completion Models 
 
-We need some way to know if the model is a text completion model when running checks, if you have this in your config, specifying mode it makes an embedding health check
+
+To run `/completions` health checks, specify the mode as "completion" in your config for the relevant model.
 
 ```yaml
 model_list:

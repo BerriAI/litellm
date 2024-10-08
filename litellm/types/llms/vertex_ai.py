@@ -153,6 +153,7 @@ class GenerationConfig(TypedDict, total=False):
     presence_penalty: float
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
+    response_schema: dict
     seed: int
 
 
@@ -283,7 +284,7 @@ class PromptFeedback(TypedDict):
 
 
 class GenerateContentResponseBody(TypedDict, total=False):
-    candidates: Required[List[Candidates]]
+    candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
 
@@ -338,14 +339,36 @@ class InstanceVideo(TypedDict, total=False):
     videoSegmentConfig: Tuple[float, float, float]
 
 
+class InstanceImage(TypedDict, total=False):
+    gcsUri: Optional[str]
+    bytesBase64Encoded: Optional[str]
+    mimeType: Optional[str]
+
+
 class Instance(TypedDict, total=False):
     text: str
-    image: Dict[str, str]
+    image: InstanceImage
     video: InstanceVideo
 
 
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: List[Instance]
+
+
+class VideoEmbedding(TypedDict):
+    startOffsetSec: int
+    endOffsetSec: int
+    embedding: List[float]
+
+
+class MultimodalPrediction(TypedDict, total=False):
+    textEmbedding: List[float]
+    imageEmbedding: List[float]
+    videoEmbeddings: List[VideoEmbedding]
+
+
+class MultimodalPredictions(TypedDict, total=False):
+    predictions: List[MultimodalPrediction]
 
 
 class VertexAICachedContentResponseObject(TypedDict):

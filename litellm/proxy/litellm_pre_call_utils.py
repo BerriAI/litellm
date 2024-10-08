@@ -86,16 +86,17 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.success_callback = []
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
+
         if data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
 
-        if data.callback_name in team_callback_settings_obj.failure_callback:
+        if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = (
+        team_callback_settings_obj.callback_vars[var] = str(
             litellm.utils.get_secret(value, default_value=value) or value
         )
 
@@ -106,7 +107,16 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if user_api_key_dict.team_metadata is not None:
+    if (
+        user_api_key_dict.metadata is not None
+        and "logging" in user_api_key_dict.metadata
+    ):
+        for item in user_api_key_dict.metadata["logging"]:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+    elif user_api_key_dict.team_metadata is not None:
         team_metadata = user_api_key_dict.team_metadata
         if "callback_settings" in team_metadata:
             callback_settings = team_metadata.get("callback_settings", None) or {}
@@ -123,15 +133,7 @@ def _get_dynamic_logging_metadata(
             }
             }
             """
-    elif (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
-            callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
-                team_callback_settings_obj=callback_settings_obj,
-            )
+
     return callback_settings_obj
 
 
@@ -202,6 +204,13 @@ async def add_litellm_data_to_request(
 
     if _metadata_variable_name not in data:
         data[_metadata_variable_name] = {}
+
+    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself
+    if "metadata" in data and data["metadata"] is not None:
+        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
+            data["metadata"]
+        )
+
     data[_metadata_variable_name]["user_api_key"] = user_api_key_dict.api_key
     data[_metadata_variable_name]["user_api_key_alias"] = getattr(
         user_api_key_dict, "key_alias", None
@@ -342,15 +351,8 @@ async def add_litellm_data_to_request(
 
     # Enterprise Only - Check if using tag based routing
     if llm_router and llm_router.enable_tag_filtering is True:
-        if premium_user is not True:
-            verbose_proxy_logger.warning(
-                "router.enable_tag_filtering is on %s \n switched off router.enable_tag_filtering",
-                CommonProxyErrors.not_premium_user.value,
-            )
-            llm_router.enable_tag_filtering = False
-        else:
-            if "tags" in data:
-                data[_metadata_variable_name]["tags"] = data["tags"]
+        if "tags" in data:
+            data[_metadata_variable_name]["tags"] = data["tags"]
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:
@@ -387,6 +389,9 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
+    verbose_proxy_logger.debug(
+        f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+    )
     return data
 
 

@@ -9,7 +9,7 @@ from openai.lib.streaming._assistants import (
     AsyncAssistantStreamManager,
 )
 from openai.pagination import AsyncCursorPage, SyncCursorPage
-from openai.types import Batch, FileObject
+from openai.types import Batch, EmbeddingCreateParams, FileObject
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.thread_create_params import (
@@ -340,14 +340,25 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
 
 class ChatCompletionImageObject(TypedDict):
     type: Literal["image_url"]
-    image_url: ChatCompletionImageUrlObject
+    image_url: Union[str, ChatCompletionImageUrlObject]
+
+
+OpenAIMessageContent = Union[
+    str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
+]
+
+# The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
+AllPromptValues = Union[str, List[str], Iterable[int], Iterable[Iterable[int]], None]
 
 
 class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
-    content: Union[
-        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
-    ]
+    content: OpenAIMessageContent
+
+
+class OpenAITextCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: AllPromptValues
 
 
 class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
@@ -368,14 +379,15 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
 
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str
+    content: Union[str, Iterable[ChatCompletionTextObject]]
     tool_call_id: str
 
 
 class ChatCompletionFunctionMessage(TypedDict):
     role: Literal["function"]
-    content: Optional[str]
+    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
     name: str
+    tool_call_id: Optional[str]
 
 
 class OpenAIChatCompletionSystemMessage(TypedDict, total=False):

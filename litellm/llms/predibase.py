@@ -154,6 +154,7 @@ class PredibaseConfig:
         return [
             "stream",
             "temperature",
+            "max_completion_tokens",
             "max_tokens",
             "top_p",
             "stop",
@@ -181,7 +182,7 @@ class PredibaseConfig:
                 optional_params["stream"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 # HF TGI raises the following exception when max_new_tokens==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
                 if value == 0:
@@ -264,7 +265,7 @@ class PredibaseChatCompletion(BaseLLM):
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise PredibaseError(message=response.text, status_code=422)
         if "error" in completion_response:
             raise PredibaseError(
@@ -347,7 +348,7 @@ class PredibaseChatCompletion(BaseLLM):
                         model_response["choices"][0]["message"].get("content", "")
                     )
                 )  ##[TODO] use a model-specific tokenizer
-            except:
+            except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
         else:

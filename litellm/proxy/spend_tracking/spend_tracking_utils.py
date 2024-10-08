@@ -4,6 +4,8 @@ import secrets
 import traceback
 from typing import Optional
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -52,7 +54,7 @@ def get_logging_payload(
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
     usage = response_obj.get("usage", None) or {}
-    if type(usage) == litellm.Usage:
+    if isinstance(usage, litellm.Usage):
         usage = dict(usage)
     id = response_obj.get("id", kwargs.get("litellm_call_id"))
     api_key = metadata.get("user_api_key", "")
@@ -84,6 +86,7 @@ def get_logging_payload(
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
         requester_ip_address=None,
+        additional_usage_values=None,
     )
     if isinstance(metadata, dict):
         verbose_proxy_logger.debug(
@@ -99,6 +102,15 @@ def get_logging_payload(
                 if key in metadata
             }
         )
+
+    special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
+    additional_usage_values = {}
+    for k, v in usage.items():
+        if k not in special_usage_fields:
+            if isinstance(v, BaseModel):
+                v = v.model_dump()
+            additional_usage_values.update({k: v})
+    clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:
         cache_key = litellm.cache.get_cache_key(**kwargs)

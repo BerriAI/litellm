@@ -8,8 +8,8 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
-| `router_settings`   | litellm Router settings, example `routing_strategy="least-busy"` [**see all**](https://github.com/BerriAI/litellm/blob/6ef0e8485e0e720c0efa6f3075ce8119f2f62eea/litellm/router.py#L64)|
-| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)|
+| `router_settings`   | litellm Router settings, example `routing_strategy="least-busy"` [**see all**](#router-settings)|
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](#all-settings)|
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
@@ -94,17 +94,17 @@ Run with `--detailed_debug` if you need detailed debug logs
 
 ```shell
 $ litellm --config /path/to/config.yaml --detailed_debug
+```
+
 :::
 
-### Using Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
-Calling a model group 
-
-<Tabs>
-<TabItem value="Curl" label="Curl Request">
+#### Step 3: Test it
 
 Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
 
 If multiple with `model_name=gpt-3.5-turbo` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -120,105 +120,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
-</TabItem>
 
-<TabItem value="Curl2" label="Curl Request: Bedrock">
+## LLM configs `model_list`
 
-Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "bedrock-claude-v1",
-      "messages": [
-        {
-          "role": "user",
-          "content": "what llm are you"
-        }
-      ],
-    }
-'
-```
-</TabItem>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-# Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
-
-# Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
-response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
-
-```
-
-</TabItem>
-<TabItem value="langchain" label="Langchain Python">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-
-# Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",  # set openai base to the proxy
-    model = "gpt-3.5-turbo",                
-    temperature=0.1
-)
-
-response = chat(messages)
-print(response)
-
-# Sends request to model where `model_name=bedrock-claude-v1` on config.yaml. 
-claude_chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000", # set openai base to the proxy
-    model = "bedrock-claude-v1",                   
-    temperature=0.1
-)
-
-response = claude_chat(messages)
-print(response)
-```
-
-</TabItem>
-</Tabs>
-
-
-## Save Model-specific params (API Base, Keys, Temperature, Max Tokens, Organization, Headers etc.)
+### Model-specific params (API Base, Keys, Temperature, Max Tokens, Organization, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 [**All input params**](https://docs.litellm.ai/docs/completion/input#input-params-1)
@@ -259,244 +164,17 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
+**Expected Logs:**
 
-## Multiple OpenAI Organizations 
-
-Add all openai models across all OpenAI organizations with just 1 model definition 
-
-```yaml
-  - model_name: *
-    litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-      organization:
-       - org-1 
-       - org-2 
-       - org-3
+Look for this line in your console logs to confirm the config.yaml was loaded in correctly.
+```
+LiteLLM: Proxy initialized with Config, Set models:
 ```
 
-LiteLLM will automatically create separate deployments for each org.
-
-Confirm this via 
-
-```bash
-curl --location 'http://0.0.0.0:4000/v1/model/info' \
---header 'Authorization: Bearer ${LITELLM_KEY}' \
---data ''
-```
-
- 
-## Provider specific wildcard routing 
-**Proxy all models from a provider**
-
-Use this if you want to **proxy all models from a specific provider without defining them on the config.yaml**
-
-**Step 1** - define provider specific routing on config.yaml
-```yaml
-model_list:
-  # provider specific wildcard routing
-  - model_name: "anthropic/*"
-    litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: "groq/*"
-    litellm_params:
-      model: "groq/*"
-      api_key: os.environ/GROQ_API_KEY
-```
-
-Step 2 - Run litellm proxy 
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-Step 3 Test it 
-
-Test with `anthropic/` - all models with `anthropic/` prefix will get routed to `anthropic/*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "anthropic/claude-3-sonnet-20240229",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
-Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "groq/llama3-8b-8192",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
-## Load Balancing 
-
-:::info
-For more on this, go to [this page](https://docs.litellm.ai/docs/proxy/load_balancing)
-:::
-
-Use this to call multiple instances of the same model and configure things like [routing strategy](https://docs.litellm.ai/docs/routing#advanced).
-
-For optimal performance:
-- Set `tpm/rpm` per model deployment. Weighted picks are then based on the established tpm/rpm.
-- Select your optimal routing strategy in `router_settings:routing_strategy`.
-
-LiteLLM supports
-```python
-["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"`
-```
-
-When `tpm/rpm` is set + `routing_strategy==simple-shuffle` litellm will use a weighted pick based on set tpm/rpm. **In our load tests setting tpm/rpm for all deployments + `routing_strategy==simple-shuffle` maximized throughput**
-- When using multiple LiteLLM Servers / Kubernetes set redis settings `router_settings:redis_host` etc
-
-```yaml
-model_list:
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8001
-        rpm: 60      # Optional[int]: When rpm/tpm set - litellm uses weighted pick for load balancing. rpm = Rate limit for this deployment: in requests per minute (rpm).
-        tpm: 1000   # Optional[int]: tpm = Tokens Per Minute 
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8002
-        rpm: 600      
-  - model_name: zephyr-beta
-    litellm_params:
-        model: huggingface/HuggingFaceH4/zephyr-7b-beta
-        api_base: http://0.0.0.0:8003
-        rpm: 60000      
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-        model: gpt-3.5-turbo
-        api_key: <my-openai-key>
-        rpm: 200      
-  - model_name: gpt-3.5-turbo-16k
-    litellm_params:
-        model: gpt-3.5-turbo-16k
-        api_key: <my-openai-key>
-        rpm: 100      
-
-litellm_settings:
-  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
-  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
-  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
-  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
-  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
-
-router_settings: # router_settings are optional
-  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
-  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
-  num_retries: 2
-  timeout: 30                                  # 30 seconds
-  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
-  redis_password: <your redis password>
-  redis_port: 1992
-```
-
-You can view your cost once you set up [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys) or [custom_callbacks](https://docs.litellm.ai/docs/proxy/logging)
-
-## Load API Keys
-
-### Load API Keys / config values from Environment 
-
-If you have secrets saved in your environment, and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. **This works for ANY value on the config.yaml**
-
-```yaml
-os.environ/<YOUR-ENV-VAR> # runs os.getenv("YOUR-ENV-VAR")
-```
-
-```yaml 
-model_list:
-  - model_name: gpt-4-team1
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: azure/chatgpt-v-2
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_version: "2023-05-15"
-      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY # 👈 KEY CHANGE
-```
-
-[**See Code**](https://github.com/BerriAI/litellm/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/litellm/utils.py#L2366)
-
-s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
-
-### Load API Keys from Azure Vault 
-
-1. Install Proxy dependencies 
-```bash
-$ pip install 'litellm[proxy]' 'litellm[extra_proxy]'
-```
-
-2. Save Azure details in your environment
-```bash 
-export["AZURE_CLIENT_ID"]="your-azure-app-client-id"
-export["AZURE_CLIENT_SECRET"]="your-azure-app-client-secret"
-export["AZURE_TENANT_ID"]="your-azure-tenant-id"
-export["AZURE_KEY_VAULT_URI"]="your-azure-key-vault-uri"
-```
-
-3. Add to proxy config.yaml 
-```yaml
-model_list: 
-    - model_name: "my-azure-models" # model alias 
-        litellm_params:
-            model: "azure/<your-deployment-name>"
-            api_key: "os.environ/AZURE-API-KEY" # reads from key vault - get_secret("AZURE_API_KEY")
-            api_base: "os.environ/AZURE-API-BASE" # reads from key vault - get_secret("AZURE_API_BASE")
-
-general_settings:
-  use_azure_key_vault: True
-```
-
-You can now test this by starting your proxy: 
-```bash
-litellm --config /path/to/config.yaml
-```
-
-### Set Custom Prompt Templates
-
-LiteLLM by default checks if a model has a [prompt template and applies it](../completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
-
-**Step 1**: Save your prompt template in a `config.yaml`
-```yaml
-# Model-specific parameters
-model_list:
-  - model_name: mistral-7b # model alias
-    litellm_params: # actual params for litellm.completion()
-      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
-      api_base: "<your-api-base>"
-      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
-      initial_prompt_value: "\n"
-      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
-      final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
-      max_tokens: 4096
-```
-
-**Step 2**: Start server with config
-
-```shell
-$ litellm --config /path/to/config.yaml
-``` 
-
-## Setting Embedding Models 
+### Embedding Models - Use Sagemaker, Bedrock, Azure, OpenAI, XInference
 
 See supported Embedding Providers & Models [here](https://docs.litellm.ai/docs/embedding/supported_embedding)
 
-### Use Sagemaker, Bedrock, Azure, OpenAI, XInference
-#### Create Config.yaml
 
 <Tabs>
 <TabItem value="bedrock" label="Bedrock Completion/Chat">
@@ -653,37 +331,521 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-## ✨ IP Address Filtering
 
-:::info
+### Multiple OpenAI Organizations 
 
-You need a LiteLLM License to unlock this feature. [Grab time](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat), to get one today!
-
-:::
-
-Restrict which IP's can call the proxy endpoints.
+Add all openai models across all OpenAI organizations with just 1 model definition 
 
 ```yaml
-general_settings:
-  allowed_ips: ["192.168.1.1"]
+  - model_name: *
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+      organization:
+       - org-1 
+       - org-2 
+       - org-3
 ```
 
-**Expected Response** (if IP not listed)
+LiteLLM will automatically create separate deployments for each org.
+
+Confirm this via 
 
 ```bash
-{
-    "error": {
-        "message": "Access forbidden: IP address not allowed.",
-        "type": "auth_error",
-        "param": "None",
-        "code": 403
-    }
-}
+curl --location 'http://0.0.0.0:4000/v1/model/info' \
+--header 'Authorization: Bearer ${LITELLM_KEY}' \
+--data ''
+```
+
+ 
+### Provider specific wildcard routing 
+**Proxy all models from a provider**
+
+Use this if you want to **proxy all models from a specific provider without defining them on the config.yaml**
+
+**Step 1** - define provider specific routing on config.yaml
+```yaml
+model_list:
+  # provider specific wildcard routing
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "groq/*"
+    litellm_params:
+      model: "groq/*"
+      api_key: os.environ/GROQ_API_KEY
+```
+
+Step 2 - Run litellm proxy 
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+Step 3 Test it 
+
+Test with `anthropic/` - all models with `anthropic/` prefix will get routed to `anthropic/*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-sonnet-20240229",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
+```
+
+Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "groq/llama3-8b-8192",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
+```
+
+### Load Balancing 
+
+:::info
+For more on this, go to [this page](https://docs.litellm.ai/docs/proxy/load_balancing)
+:::
+
+Use this to call multiple instances of the same model and configure things like [routing strategy](https://docs.litellm.ai/docs/routing#advanced).
+
+For optimal performance:
+- Set `tpm/rpm` per model deployment. Weighted picks are then based on the established tpm/rpm.
+- Select your optimal routing strategy in `router_settings:routing_strategy`.
+
+LiteLLM supports
+```python
+["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"`
+```
+
+When `tpm/rpm` is set + `routing_strategy==simple-shuffle` litellm will use a weighted pick based on set tpm/rpm. **In our load tests setting tpm/rpm for all deployments + `routing_strategy==simple-shuffle` maximized throughput**
+- When using multiple LiteLLM Servers / Kubernetes set redis settings `router_settings:redis_host` etc
+
+```yaml
+model_list:
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+        rpm: 60      # Optional[int]: When rpm/tpm set - litellm uses weighted pick for load balancing. rpm = Rate limit for this deployment: in requests per minute (rpm).
+        tpm: 1000   # Optional[int]: tpm = Tokens Per Minute 
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+        rpm: 600      
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+        rpm: 60000      
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: gpt-3.5-turbo
+        api_key: <my-openai-key>
+        rpm: 200      
+  - model_name: gpt-3.5-turbo-16k
+    litellm_params:
+        model: gpt-3.5-turbo-16k
+        api_key: <my-openai-key>
+        rpm: 100      
+
+litellm_settings:
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
+  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+
+router_settings: # router_settings are optional
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  num_retries: 2
+  timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
+  redis_password: <your redis password>
+  redis_port: 1992
+```
+
+You can view your cost once you set up [Virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys) or [custom_callbacks](https://docs.litellm.ai/docs/proxy/logging)
+
+
+### Load API Keys / config values from Environment 
+
+If you have secrets saved in your environment, and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. **This works for ANY value on the config.yaml**
+
+```yaml
+os.environ/<YOUR-ENV-VAR> # runs os.getenv("YOUR-ENV-VAR")
+```
+
+```yaml 
+model_list:
+  - model_name: gpt-4-team1
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY # 👈 KEY CHANGE
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/litellm/utils.py#L2366)
+
+s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
+
+### Load API Keys from Secret Managers (Azure Vault, etc)
+
+[**Using Secret Managers with LiteLLM Proxy**](../secret)
+
+
+### Set Supported Environments for a model - `production`, `staging`, `development`
+
+Use this if you want to control which model is exposed on a specific litellm environment
+
+Supported Environments:
+- `production`
+- `staging`
+- `development`
+
+1. Set `LITELLM_ENVIRONMENT="<environment>"` in your environment. Can be one of `production`, `staging` or `development`
+
+
+2. For each model set the list of supported environments in `model_info.supported_environments`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+   litellm_params:
+     model: openai/gpt-3.5-turbo
+     api_key: os.environ/OPENAI_API_KEY
+   model_info:
+     supported_environments: ["development", "production", "staging"]
+ - model_name: gpt-4
+   litellm_params:
+     model: openai/gpt-4
+     api_key: os.environ/OPENAI_API_KEY
+   model_info:
+     supported_environments: ["production", "staging"]
+ - model_name: gpt-4o
+   litellm_params:
+     model: openai/gpt-4o
+     api_key: os.environ/OPENAI_API_KEY
+   model_info:
+     supported_environments: ["production"]
 ```
 
 
+### Set Custom Prompt Templates
 
-## Disable Swagger UI 
+LiteLLM by default checks if a model has a [prompt template and applies it](../completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+
+**Step 1**: Save your prompt template in a `config.yaml`
+```yaml
+# Model-specific parameters
+model_list:
+  - model_name: mistral-7b # model alias
+    litellm_params: # actual params for litellm.completion()
+      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
+      api_base: "<your-api-base>"
+      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
+      initial_prompt_value: "\n"
+      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
+      final_prompt_value: "\n"
+      bos_token: " "
+      eos_token: " "
+      max_tokens: 4096
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+``` 
+
+## General Settings `general_settings` (DB Connection, etc)
+
+### Configure DB Pool Limits + Connection Timeouts 
+
+```yaml
+general_settings: 
+  database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
+  database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
+```
+
+## **All settings**
+
+
+```yaml
+environment_variables: {}
+
+model_list:
+  - model_name: string
+    litellm_params: {}
+    model_info:
+      id: string
+      mode: embedding
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+      max_tokens: 2048
+      base_model: gpt-4-1106-preview
+      additionalProp1: {}
+
+litellm_settings:
+  # Logging/Callback settings
+  success_callback: ["langfuse"]  # list of success callbacks
+  failure_callback: ["sentry"]  # list of failure callbacks
+  callbacks: ["otel"]  # list of callbacks - runs on success and failure
+  service_callbacks: ["datadog", "prometheus"]  # logs redis, postgres failures on datadog, prometheus
+  turn_off_message_logging: boolean  # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
+  redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"] # default tags for Langfuse Logging
+  
+  
+  set_verbose: boolean # sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION
+  json_logs: boolean # if true, logs will be in json format
+
+  # Fallbacks, reliability
+  default_fallbacks: ["claude-opus"] # set default_fallbacks, in case a specific model group is misconfigured / bad.
+  content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}] # fallbacks for ContentPolicyErrors
+  context_window_fallbacks: [{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}] # fallbacks for ContextWindowExceededErrors
+
+
+
+  # Caching settings
+  cache: true 
+  cache_params:        # set cache params for redis
+    type: redis        # type of cache to initialize
+
+    # Optional - Redis Settings
+    host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
+    port: 6379  # The port number for the Redis cache. Required if type is "redis".
+    password: "your_password"  # The password for the Redis cache. Required if type is "redis".
+    namespace: "litellm_caching" # namespace for redis cache
+  
+    # Optional - Redis Cluster Settings
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
+
+    # Optional - Redis Sentinel Settings
+    service_name: "mymaster"
+    sentinel_nodes: [["localhost", 26379]]
+
+    # Optional - Qdrant Semantic Cache Settings
+    qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
+    qdrant_collection_name: test_collection
+    qdrant_quantization_config: binary
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+
+    # Optional - S3 Cache Settings
+    s3_bucket_name: cache-bucket-litellm   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 bucket
+
+    # Common Cache settings
+    # Optional - Supported call types for caching
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+    mode: default_off # if default_off, you need to opt in to caching on a per call basis
+    ttl: 600 # ttl for caching
+
+
+callback_settings:
+  otel:
+    message_logging: boolean  # OTEL logging callback specific settings
+
+general_settings:
+  completion_model: string
+  disable_spend_logs: boolean  # turn off writing each transaction to the db
+  disable_master_key_return: boolean  # turn off returning master key on UI (checked on '/user/info' endpoint)
+  disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
+  disable_reset_budget: boolean  # turn off reset budget scheduled task
+  disable_adding_master_key_hash_to_db: boolean  # turn off storing master key hash in db, for spend tracking
+  enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
+  enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
+  allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
+  key_management_system: google_kms  # either google_kms or azure_kms
+  master_key: string
+  database_url: string
+  database_connection_pool_limit: 0  # default 100
+  database_connection_timeout: 0  # default 60s
+  custom_auth: string
+  max_parallel_requests: 0  # the max parallel requests allowed per deployment 
+  global_max_parallel_requests: 0  # the max parallel requests allowed on the proxy all up 
+  infer_model_from_keys: true
+  background_health_checks: true
+  health_check_interval: 300
+  alerting: ["slack", "email"]
+  alerting_threshold: 0
+  use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
+```
+
+### litellm_settings - Reference
+
+| Name | Type | Description |
+|------|------|-------------|
+| success_callback | array of strings | List of success callbacks. [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| failure_callback | array of strings | List of failure callbacks [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| callbacks | array of strings | List of callbacks - runs on success and failure [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| service_callbacks | array of strings | System health monitoring - Logs redis, postgres failures on specified services (e.g. datadog, prometheus) [Doc Metrics](prometheus) |
+| turn_off_message_logging | boolean | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged [Proxy Logging](logging) |
+| modify_params | boolean | If true, allows modifying the parameters of the request before it is sent to the LLM provider |
+| enable_preview_features | boolean | If true, enables preview features - e.g. Azure O1 Models with streaming support.|
+| redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
+| langfuse_default_tags | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
+| set_verbose | boolean | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION |
+| json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
+| default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
+| content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
+| context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
+| cache | boolean | If true, enables caching. [Further docs](./caching) |
+| cache_params | object | Parameters for the cache. [Further docs](./caching) |
+| cache_params.type | string | The type of cache to initialize. Can be one of ["local", "redis", "redis-semantic", "s3", "disk", "qdrant-semantic"]. Defaults to "redis". [Furher docs](./caching) |
+| cache_params.host | string | The host address for the Redis cache. Required if type is "redis". |
+| cache_params.port | integer | The port number for the Redis cache. Required if type is "redis". |
+| cache_params.password | string | The password for the Redis cache. Required if type is "redis". |
+| cache_params.namespace | string | The namespace for the Redis cache. |
+| cache_params.redis_startup_nodes | array of objects | Redis Cluster Settings. [Further docs](./caching) |
+| cache_params.service_name | string | Redis Sentinel Settings. [Further docs](./caching) |
+| cache_params.sentinel_nodes | array of arrays | Redis Sentinel Settings. [Further docs](./caching) |
+| cache_params.ttl | integer | The time (in seconds) to store entries in cache. |
+| cache_params.qdrant_semantic_cache_embedding_model | string | The embedding model to use for qdrant semantic cache. |
+| cache_params.qdrant_collection_name | string | The name of the collection to use for qdrant semantic cache. |
+| cache_params.qdrant_quantization_config | string | The quantization configuration for the qdrant semantic cache. |
+| cache_params.similarity_threshold | float | The similarity threshold for the semantic cache. |
+| cache_params.s3_bucket_name | string | The name of the S3 bucket to use for the semantic cache. |
+| cache_params.s3_region_name | string | The region name for the S3 bucket. |
+| cache_params.s3_aws_access_key_id | string | The AWS access key ID for the S3 bucket. |
+| cache_params.s3_aws_secret_access_key | string | The AWS secret access key for the S3 bucket. |
+| cache_params.s3_endpoint_url | string | Optional - The endpoint URL for the S3 bucket. |
+| cache_params.supported_call_types | array of strings | The types of calls to cache. [Further docs](./caching) |
+| cache_params.mode | string | The mode of the cache. [Further docs](./caching) |
+
+### general_settings - Reference
+
+| Name | Type | Description |
+|------|------|-------------|
+| completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
+| disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
+| disable_retry_on_max_parallel_request_limit_error | boolean | If true, turns off retries when max parallel request limit is reached |
+| disable_reset_budget | boolean | If true, turns off reset budget scheduled task |
+| disable_adding_master_key_hash_to_db | boolean | If true, turns off storing master key hash in db |
+| enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
+| enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
+| allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
+| key_management_system | string | Specifies the key management system. [Doc Secret Managers](../secret) |
+| master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
+| database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
+| database_connection_pool_limit | integer | The limit for database connection pool [Setting DB Connection Pool limit](#configure-db-pool-limits--connection-timeouts) |
+| database_connection_timeout | integer | The timeout for database connections in seconds [Setting DB Connection Pool limit, timeout](#configure-db-pool-limits--connection-timeouts) |
+| custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
+| max_parallel_requests | integer | The max parallel requests allowed per deployment |
+| global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
+| infer_model_from_keys | boolean | If true, infers the model from the provided keys |
+| background_health_checks | boolean | If true, enables background health checks. [Doc on health checks](health) |
+| health_check_interval | integer | The interval for health checks in seconds [Doc on health checks](health) |
+| alerting | array of strings | List of alerting methods [Doc on Slack Alerting](alerting) |
+| alerting_threshold | integer | The threshold for triggering alerts [Doc on Slack Alerting](alerting) |
+| use_client_credentials_pass_through_routes | boolean | If true, uses client credentials for all pass-through routes. [Doc on pass through routes](pass_through) |
+| health_check_details | boolean | If false, hides health check details (e.g. remaining rate limit). [Doc on health checks](health) |
+| public_routes | List[str] | (Enterprise Feature) Control list of public routes |
+| alert_types | List[str] | Control list of alert types to send to slack (Doc on alert types)[./alerting.md] |
+| enforced_params | List[str] | (Enterprise Feature) List of params that must be included in all requests to the proxy |
+| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+| use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
+| service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
+| image_generation_model | str | The default model to use for image generation - ignores model set in request |
+| store_model_in_db | boolean | If true, allows `/model/new` endpoint to store model information in db. Endpoint disabled by default. [Doc on `/model/new` endpoint](./model_management.md#create-a-new-model) |
+| max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
+| max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
+| proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. |
+| proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. |
+| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. |
+| alerting_args | dict | Args for Slack Alerting [Doc on Slack Alerting](./alerting.md) |
+| custom_key_generate | str | Custom function for key generation [Doc on custom key generation](./virtual_keys.md#custom--key-generate) |
+| allowed_ips | List[str] | List of IPs allowed to access the proxy. If not set, all IPs are allowed. |
+| embedding_model | str | The default model to use for embeddings - ignores model set in request |
+| default_team_disabled | boolean | If true, users cannot create 'personal' keys (keys with no team_id). |
+| alert_to_webhook_url | Dict[str] | [Specify a webhook url for each alert type.](./alerting.md#set-specific-slack-channels-per-alert-type) |
+| key_management_settings | List[Dict[str, Any]] | Settings for key management system (e.g. AWS KMS, Azure Key Vault) [Doc on key management](../secret.md) |
+| allow_user_auth | boolean | (Deprecated) old approach for user authentication. |
+| user_api_key_cache_ttl | int | The time (in seconds) to cache user api keys in memory. |
+| disable_prisma_schema_update | boolean | If true, turns off automatic schema updates to DB |
+| litellm_key_header_name | str | If set, allows passing LiteLLM keys as a custom header. [Doc on custom headers](./virtual_keys.md#custom-headers) |
+| moderation_model | str | The default model to use for moderation. |
+| custom_sso | str | Path to a python file that implements custom SSO logic. [Doc on custom SSO](./custom_sso.md) |
+| allow_client_side_credentials | boolean | If true, allows passing client side credentials to the proxy. (Useful when testing finetuning models) [Doc on client side credentials](./virtual_keys.md#client-side-credentials) |
+| admin_only_routes | List[str] | (Enterprise Feature) List of routes that are only accessible to admin users. [Doc on admin only routes](./enterprise#control-available-public-private-routes) |
+| use_azure_key_vault | boolean | If true, load keys from azure key vault | 
+| use_google_kms | boolean | If true, load keys from google kms |
+| spend_report_frequency | str | Specify how often you want a Spend Report to be sent (e.g. "1d", "2d", "30d") [More on this](./alerting.md#spend-report-frequency) |
+| ui_access_mode | Literal["admin_only"] | If set, restricts access to the UI to admin users only. [Docs](./ui.md#restrict-ui-access) |
+| litellm_jwtauth | Dict[str, Any] | Settings for JWT authentication. [Docs](./token_auth.md) |
+| litellm_license | str | The license key for the proxy. [Docs](../enterprise.md#how-does-deployment-with-enterprise-license-work) |
+| oauth2_config_mappings | Dict[str, str] | Define the OAuth2 config mappings | 
+| pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
+| enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+### router_settings - Reference
+
+```yaml
+router_settings:
+  routing_strategy: usage-based-routing-v2 # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  redis_host: <your-redis-host>           # string
+  redis_password: <your-redis-password>   # string
+  redis_port: <your-redis-port>           # string
+  enable_pre_call_check: true             # bool - Before call is made check if a call is within model context window 
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+  disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  enable_tag_filtering: True                # bool - Use tag based routing for requests
+  retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
+    "AuthenticationErrorRetries": 3,
+    "TimeoutErrorRetries": 3,
+    "RateLimitErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4,
+    "InternalServerErrorRetries": 4
+  }
+  allowed_fails_policy: {
+    "BadRequestErrorAllowedFails": 1000, # Allow 1000 BadRequestErrors before cooling down a deployment
+    "AuthenticationErrorAllowedFails": 10, # int 
+    "TimeoutErrorAllowedFails": 12, # int 
+    "RateLimitErrorAllowedFails": 10000, # int 
+    "ContentPolicyViolationErrorAllowedFails": 15, # int 
+    "InternalServerErrorAllowedFails": 20, # int 
+  }
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
+  fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
+```
+
+| Name | Type | Description |
+|------|------|-------------|
+| routing_strategy | string | The strategy used for routing requests. Options: "simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing". Default is "simple-shuffle". [More information here](../routing) |
+| redis_host | string | The host address for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them** |
+| redis_password | string | The password for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them** |
+| redis_port | string | The port number for the Redis server. **Only set this if you have multiple instances of LiteLLM Proxy and want current tpm/rpm tracking to be shared across them**|
+| enable_pre_call_check | boolean | If true, checks if a call is within the model's context window before making the call. [More information here](reliability) |
+| content_policy_fallbacks | array of objects | Specifies fallback models for content policy violations. [More information here](reliability) |
+| fallbacks | array of objects | Specifies fallback models for all types of errors. [More information here](reliability) |
+| enable_tag_filtering | boolean | If true, uses tag based routing for requests [Tag Based Routing](tag_routing) |
+| cooldown_time | integer | The duration (in seconds) to cooldown a model if it exceeds the allowed failures. |
+| disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
+| retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
+| allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
+| allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
+
+## Extras
+
+
+### Disable Swagger UI 
 
 To disable the Swagger docs from the base url, set 
 
@@ -693,75 +855,30 @@ NO_DOCS="True"
 
 in your environment, and restart the proxy. 
 
+### Use CONFIG_FILE_PATH for proxy (Easier Azure container deployment)
 
-## Configure DB Pool Limits + Connection Timeouts 
+1. Setup config.yaml
 
 ```yaml
-general_settings: 
-  database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
-  database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
 ```
 
-## All settings 
+2. Store filepath as env var 
 
-```python
-{
-  "environment_variables": {},
-  "model_list": [
-    {
-      "model_name": "string",
-      "litellm_params": {},
-      "model_info": {
-        "id": "string",
-        "mode": "embedding",
-        "input_cost_per_token": 0,
-        "output_cost_per_token": 0,
-        "max_tokens": 2048,
-        "base_model": "gpt-4-1106-preview",
-        "additionalProp1": {}
-      }
-    }
-  ],
-  "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
-  "general_settings": {
-    "completion_model": "string",
-    "disable_spend_logs": "boolean", # turn off writing each transaction to the db
-    "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
-    "disable_retry_on_max_parallel_request_limit_error": "boolean", # turn off retries when max parallel request limit is reached
-    "disable_reset_budget": "boolean", # turn off reset budget scheduled task
-    "disable_adding_master_key_hash_to_db": "boolean", # turn off storing master key hash in db, for spend tracking
-    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
-    "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
-    "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
-    "key_management_system": "google_kms", # either google_kms or azure_kms
-    "master_key": "string",
-    "database_url": "string",
-    "database_connection_pool_limit": 0, # default 100
-    "database_connection_timeout": 0, # default 60s
-    "database_type": "dynamo_db",
-    "database_args": {
-      "billing_mode": "PROVISIONED_THROUGHPUT",
-      "read_capacity_units": 0,
-      "write_capacity_units": 0,
-      "ssl_verify": true,
-      "region_name": "string",
-      "user_table_name": "LiteLLM_UserTable",
-      "key_table_name": "LiteLLM_VerificationToken",
-      "config_table_name": "LiteLLM_Config",
-      "spend_table_name": "LiteLLM_SpendLogs"
-    },
-    "otel": true,
-    "custom_auth": "string",
-    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
-    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
-    "infer_model_from_keys": true,
-    "background_health_checks": true,
-    "health_check_interval": 300,
-    "alerting": [
-      "string"
-    ],
-    "alerting_threshold": 0
-  }
-}
+```bash
+CONFIG_FILE_PATH="/path/to/config.yaml"
 ```
+
+3. Start Proxy
+
+```bash
+$ litellm 
+
+# RUNNING on http://0.0.0.0:4000
+```
+
 

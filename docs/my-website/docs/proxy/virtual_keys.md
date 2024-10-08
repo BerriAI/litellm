@@ -598,6 +598,44 @@ client = openai.OpenAI(
 </TabItem>
 </Tabs>
 
+### Enable/Disable Virtual Keys
+
+**Disable Keys**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/block' \
+-H 'Authorization: Bearer LITELLM_MASTER_KEY' \
+-H 'Content-Type: application/json' \
+-d '{"key": "KEY-TO-BLOCK"}'
+```
+
+Expected Response: 
+
+```bash
+{
+  ...
+  "blocked": true
+}
+```
+
+**Enable Keys**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/unblock' \
+-H 'Authorization: Bearer LITELLM_MASTER_KEY' \
+-H 'Content-Type: application/json' \
+-d '{"key": "KEY-TO-UNBLOCK"}'
+```
+
+
+```bash
+{
+  ...
+  "blocked": false
+}
+```
+
+
 ### Custom Auth 
 
 You can now override the default api key auth.
@@ -744,8 +782,12 @@ Set `litellm_settings:upperbound_key_generate_params`:
 ```yaml
 litellm_settings:
   upperbound_key_generate_params:
-    max_budget: 100 # upperbound of $100, for all /key/generate requests
-    duration: "30d" # upperbound of 30 days for all /key/generate requests
+    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
+    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
+    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
+    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
+    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
 ```
 
 ** Expected Behavior **

@@ -23,13 +23,13 @@ import asyncio
 import logging
 
 import pytest
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
     user_update,
+    get_users,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
@@ -88,7 +88,6 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import DBClient
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -103,13 +102,12 @@ def prisma_client():
     modified_url = append_query_params(database_url, params)
     os.environ["DATABASE_URL"] = modified_url
 
-    # Assuming DBClient is a class that needs to be instantiated
+    # Assuming PrismaClient is a class that needs to be instantiated
     prisma_client = PrismaClient(
         database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.custom_db_client = None
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
@@ -125,7 +123,6 @@ async def test_regenerate_api_key(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
-    import uuid
 
     # generate new key
     key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
@@ -269,3 +266,111 @@ async def test_regenerate_api_key_with_new_alias_and_expiration(prisma_client):
     now = datetime.now(dt.timezone.utc)
     assert new_key.expires > now + dt.timedelta(days=29)
     assert new_key.expires < now + dt.timedelta(days=31)
+
+
+@pytest.mark.asyncio()
+async def test_regenerate_key_ui(prisma_client):
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    import uuid
+
+    # generate new key
+    key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
+    spend = 100
+    max_budget = 400
+    models = ["fake-openai-endpoint"]
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    print(generated_key)
+
+    # assert the new key works as expected
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body
+    result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
+    print(result)
+
+    # regenerate the key
+    new_key = await regenerate_key_fn(
+        key=generated_key,
+        data=RegenerateKeyRequest(duration=""),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print("response from regenerate_key_fn", new_key)
+
+
+@pytest.mark.asyncio
+async def test_get_users(prisma_client):
+    """
+    Tests /users/list endpoint
+
+    Admin UI calls this endpoint to list all Internal Users
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create some test users
+    test_users = [
+        NewUserRequest(
+            user_id=f"test_user_{i}",
+            user_role=(
+                LitellmUserRoles.INTERNAL_USER.value
+                if i % 2 == 0
+                else LitellmUserRoles.PROXY_ADMIN.value
+            ),
+        )
+        for i in range(5)
+    ]
+    for user in test_users:
+        await new_user(
+            user,
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+
+    # Test get_users without filters
+    result = await get_users(
+        role=None,
+        page=1,
+        page_size=20,
+    )
+    print("get users result", result)
+    assert "users" in result
+
+    for user in result["users"]:
+        user = user.model_dump()
+        assert "user_id" in user
+        assert "spend" in user
+        assert "user_email" in user
+        assert "user_role" in user
+
+    # Clean up test users
+    for user in test_users:
+        await prisma_client.db.litellm_usertable.delete(where={"user_id": user.user_id})

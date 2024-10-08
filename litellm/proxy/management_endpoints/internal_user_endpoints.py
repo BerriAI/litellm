@@ -7,6 +7,8 @@ These are members of a Team on LiteLLM
 /user/new
 /user/update
 /user/delete
+/user/info
+/user/list
 """
 
 import asyncio
@@ -14,6 +16,7 @@ import copy
 import json
 import re
 import secrets
+import time
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -83,7 +86,7 @@ async def new_user(
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
-    if auto_create_key == False:
+    if auto_create_key is False:
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
@@ -132,7 +135,7 @@ async def new_user(
         event = WebhookEvent(
             event="internal_user_created",
             event_group="internal_user",
-            event_message=f"Welcome to LiteLLM Proxy",
+            event_message="Welcome to LiteLLM Proxy",
             token=response.get("token", ""),
             spend=response.get("spend", 0.0),
             max_budget=response.get("max_budget", 0.0),
@@ -156,6 +159,7 @@ async def new_user(
         user_id=response["user_id"],
         user_role=response.get("user_role", None),
         user_email=response.get("user_email", None),
+        user_alias=response.get("user_alias", None),
         teams=response.get("teams", None),
         team_id=response.get("team_id", None),
         metadata=response.get("metadata", None),
@@ -194,7 +198,8 @@ async def user_auth(request: Request):
     - os.environ["SMTP_PASSWORD"]
     - os.environ["SMTP_SENDER_EMAIL"]
     """
-    from litellm.proxy.proxy_server import prisma_client, send_email
+    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.utils import send_email
 
     data = await request.json()  # type: ignore
     user_email = data["user_email"]
@@ -211,7 +216,7 @@ async def user_auth(request: Request):
     )
     ### if so - generate a 24 hr key with that user id
     if response is not None:
-        user_id = response.user_id
+        user_id = response.user_id  # type: ignore
         response = await generate_key_helper_fn(
             request_type="key",
             **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id},  # type: ignore
@@ -271,31 +276,36 @@ async def ui_get_available_role(
     return _data_to_return
 
 
+def get_team_from_list(
+    team_list: Optional[List[LiteLLM_TeamTable]], team_id: str
+) -> Optional[LiteLLM_TeamTable]:
+    if team_list is None:
+        return None
+
+    for team in team_list:
+        if team.team_id == team_id:
+            return team
+    return None
+
+
 @router.get(
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
-    view_all: bool = fastapi.Query(
-        default=False,
-        description="set to true to View all users. When using view_all, don't pass user_id",
-    ),
-    page: Optional[int] = fastapi.Query(
-        default=0,
-        description="Page number for pagination. Only use when view_all is true",
-    ),
-    page_size: Optional[int] = fastapi.Query(
-        default=25,
-        description="Number of items per page. Only use when view_all is true",
-    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [10/07/2024]
+    Note: To get all users (+pagination), use `/user/list` endpoint.
+
+
     Use this to get user information. (user row + all user key info)
 
     Example request
@@ -318,23 +328,12 @@ async def user_info(
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        elif view_all is True:
-            if page is None:
-                page = 0
-            if page_size is None:
-                page_size = 25
-            offset = (page) * page_size  # default is 0
-            limit = page_size  # default is 10
-            user_info = await prisma_client.get_data(
-                table_name="user", query_type="find_all", offset=offset, limit=limit
-            )
-            return user_info
         else:
             user_info = None
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
-        # _DEPRECATED_ check if user in 'member' field
+        # get all teams user belongs to
         teams_1 = await prisma_client.get_data(
             user_id=user_id, table_name="team", query_type="find_all"
         )
@@ -344,6 +343,7 @@ async def user_info(
             for team in teams_1:
                 team_id_list.append(team.team_id)
 
+        teams_2: Optional[Any] = None
         if user_info is not None:
             # *NEW* get all teams in user 'teams' field
             teams_2 = await prisma_client.get_data(
@@ -374,7 +374,7 @@ async def user_info(
                     ),
                     user_api_key_dict=user_api_key_dict,
                 )
-            else:
+            elif caller_user_info is not None:
                 teams_2 = await prisma_client.get_data(
                     team_id_list=caller_user_info.teams,
                     table_name="team",
@@ -394,7 +394,7 @@ async def user_info(
             query_type="find_all",
         )
 
-        if user_info is None:
+        if user_info is None and keys is not None:
             ## make sure we still return a total spend ##
             spend = 0
             for k in keys:
@@ -403,47 +403,50 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = []
-        for key in keys:
-            if (
-                key.token == litellm_master_key_hash
-                and general_settings.get("disable_master_key_return", False)
-                == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
-            ):
-                continue
+        if keys is None:
+            pass
+        else:
+            for key in keys:
+                if (
+                    key.token == litellm_master_key_hash
+                    and general_settings.get("disable_master_key_return", False)
+                    is True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+                ):
+                    continue
 
-            try:
-                key = key.model_dump()  # noqa
-            except:
-                # if using pydantic v1
-                key = key.dict()
-            if (
-                "team_id" in key
-                and key["team_id"] is not None
-                and key["team_id"] != "litellm-dashboard"
-            ):
-                team_info = await prisma_client.get_data(
-                    team_id=key["team_id"], table_name="team"
-                )
-                team_alias = getattr(team_info, "team_alias", None)
-                key["team_alias"] = team_alias
-            else:
-                key["team_alias"] = "None"
-            returned_keys.append(key)
+                try:
+                    key = key.model_dump()  # noqa
+                except Exception:
+                    # if using pydantic v1
+                    key = key.dict()
+                if (
+                    "team_id" in key
+                    and key["team_id"] is not None
+                    and key["team_id"] != "litellm-dashboard"
+                ):
+                    team_info = get_team_from_list(
+                        team_list=teams_1, team_id=key["team_id"]
+                    )
+                    if team_info is not None:
+                        team_alias = getattr(team_info, "team_alias", None)
+                        key["team_alias"] = team_alias
+                    else:
+                        key["team_alias"] = None
+                else:
+                    key["team_alias"] = "None"
+                returned_keys.append(key)
 
-        response_data = {
-            "user_id": user_id,
-            "user_info": user_info,
-            "keys": returned_keys,
-            "teams": team_list,
-        }
+        response_data = UserInfoResponse(
+            user_id=user_id, user_info=user_info, keys=returned_keys, teams=team_list
+        )
+
         return response_data
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -538,6 +541,7 @@ async def user_update(
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
+        response: Optional[Any] = None
         if data.user_id is not None and len(data.user_id) > 0:
             non_default_values["user_id"] = data.user_id  # type: ignore
             verbose_proxy_logger.debug("In update user, user_id condition block.")
@@ -572,7 +576,7 @@ async def user_update(
                         data=non_default_values,
                         table_name="user",
                     )
-        return response
+        return response  # type: ignore
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.error(
@@ -621,7 +625,7 @@ async def user_request_model(request: Request):
         user_id = non_default_values.get("user_id", None)
         justification = non_default_values.get("justification", None)
 
-        response = await prisma_client.insert_data(
+        await prisma_client.insert_data(
             data={
                 "models": new_models,
                 "justification": justification,
@@ -710,16 +714,22 @@ async def user_get_requests():
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.get(
+    "/user/list",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_users(
-    role: str = fastapi.Query(
-        default=None,
-        description="Either 'proxy_admin', 'proxy_viewer', 'app_owner', 'app_user'",
-    )
+    role: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by role"
+    ),
+    page: int = fastapi.Query(default=1, ge=1, description="Page number"),
+    page_size: int = fastapi.Query(
+        default=25, ge=1, le=100, description="Number of items per page"
+    ),
 ):
     """
-    [BETA] This could change without notice. Give feedback - https://github.com/BerriAI/litellm/issues
-
-    Get all users who are a specific `user_role`.
+    Get a paginated list of users, optionally filtered by role.
 
     Used by the UI to populate the user lists.
 
@@ -732,11 +742,36 @@ async def get_users(
             status_code=500,
             detail={"error": f"No db connected. prisma client={prisma_client}"},
         )
-    all_users = await prisma_client.get_data(
-        table_name="user", query_type="find_all", key_val={"user_role": role}
+
+    # Calculate skip and take for pagination
+    skip = (page - 1) * page_size
+    take = page_size
+
+    # Prepare the query
+    query = {}
+    if role:
+        query["user_role"] = role
+
+    # Get total count
+    total_count = await prisma_client.db.litellm_usertable.count(where=query)  # type: ignore
+
+    # Get paginated users
+    users = await prisma_client.db.litellm_usertable.find_many(
+        where=query,  # type: ignore
+        skip=skip,
+        take=take,
     )
 
-    return all_users
+    # Calculate total pages
+    total_pages = -(-total_count // page_size)  # Ceiling division
+
+    return {
+        "users": users,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @router.post(

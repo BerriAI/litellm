@@ -11,9 +11,13 @@ import dotenv
 import httpx
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    HTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 def get_utc_datetime():
@@ -30,7 +34,9 @@ class LagoLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.validate_environment()
-        self.async_http_handler = AsyncHTTPHandler()
+        self.async_http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.sync_http_handler = HTTPHandler()
 
     def validate_environment(self):
@@ -59,8 +65,8 @@ class LagoLogger(CustomLogger):
             raise Exception("Missing keys={} in environment.".format(missing_keys))
 
     def _common_logic(self, kwargs: dict, response_obj) -> dict:
-        call_id = response_obj.get("id", kwargs.get("litellm_call_id"))
-        dt = get_utc_datetime().isoformat()
+        response_obj.get("id", kwargs.get("litellm_call_id"))
+        get_utc_datetime().isoformat()
         cost = kwargs.get("response_cost", None)
         model = kwargs.get("model")
         usage = {}
@@ -80,7 +86,7 @@ class LagoLogger(CustomLogger):
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
         user_id = litellm_params["metadata"].get("user_api_key_user_id", None)
         team_id = litellm_params["metadata"].get("user_api_key_team_id", None)
-        org_id = litellm_params["metadata"].get("user_api_key_org_id", None)
+        litellm_params["metadata"].get("user_api_key_org_id", None)
 
         charge_by: Literal["end_user_id", "team_id", "user_id"] = "end_user_id"
         external_customer_id: Optional[str] = None
@@ -152,8 +158,9 @@ class LagoLogger(CustomLogger):
 
             response.raise_for_status()
         except Exception as e:
-            if hasattr(response, "text"):
-                litellm.print_verbose(f"\nError Message: {response.text}")
+            error_response = getattr(e, "response", None)
+            if error_response is not None and hasattr(error_response, "text"):
+                verbose_logger.debug(f"\nError Message: {error_response.text}")
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -193,5 +200,5 @@ class LagoLogger(CustomLogger):
             verbose_logger.debug(f"Logged Lago Object: {response.text}")
         except Exception as e:
             if response is not None and hasattr(response, "text"):
-                litellm.print_verbose(f"\nError Message: {response.text}")
+                verbose_logger.debug(f"\nError Message: {response.text}")
             raise e

@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import time
 import traceback
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -22,8 +22,25 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_cha
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
-from litellm.rerank_api.types import RerankResponse
+from litellm.llms.azure_ai.cost_calculator import (
+    cost_per_query as azure_ai_rerank_cost_per_query,
+)
+from litellm.llms.AzureOpenAI.cost_calculation import (
+    cost_per_token as azure_openai_cost_per_token,
+)
+from litellm.llms.cohere.cost_calculator import (
+    cost_per_query as cohere_rerank_cost_per_query,
+)
+from litellm.llms.databricks.cost_calculator import (
+    cost_per_token as databricks_cost_per_token,
+)
+from litellm.llms.fireworks_ai.cost_calculator import (
+    cost_per_token as fireworks_ai_cost_per_token,
+)
+from litellm.llms.OpenAI.cost_calculation import cost_per_token as openai_cost_per_token
+from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import PassthroughCallTypes, Usage
 from litellm.utils import (
@@ -42,7 +59,7 @@ from litellm.utils import (
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
-    response_time_ms=None,
+    response_time_ms: Optional[float] = 0.0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
@@ -66,7 +83,7 @@ def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
-    response_time_ms=None,
+    response_time_ms: Optional[float] = 0.0,
     custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CHARACTER PRICING ###
@@ -78,6 +95,8 @@ def cost_per_token(
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
+    ### NUMBER OF QUERIES ###
+    number_of_queries: Optional[int] = None,
     ### CALL TYPE ###
     call_type: Literal[
         "embedding",
@@ -97,7 +116,7 @@ def cost_per_token(
         "rerank",
         "arerank",
     ] = "completion",
-) -> Tuple[float, float]:
+) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -159,7 +178,7 @@ def cost_per_token(
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
 
     model_without_prefix = model
-    model_parts = model.split("/")
+    model_parts = model.split("/", 1)
     if len(model_parts) > 1:
         model_without_prefix = model_parts[1]
     else:
@@ -183,8 +202,33 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-
-    if custom_llm_provider == "vertex_ai":
+    if call_type == "speech" or call_type == "aspeech":
+        prompt_cost, completion_cost = _generic_cost_per_character(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            prompt_characters=prompt_characters,
+            completion_characters=completion_characters,
+            custom_prompt_cost=None,
+            custom_completion_cost=0,
+        )
+        if prompt_cost is None or completion_cost is None:
+            raise ValueError(
+                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
+                    prompt_cost,
+                    completion_cost,
+                    model_without_prefix,
+                    custom_llm_provider,
+                    prompt_characters,
+                    completion_characters,
+                )
+            )
+        return prompt_cost, completion_cost
+    elif call_type == "arerank" or call_type == "rerank":
+        return rerank_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
@@ -212,6 +256,18 @@ def cost_per_token(
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "openai":
+        return openai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
+    elif custom_llm_provider == "databricks":
+        return databricks_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "fireworks_ai":
+        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure":
+        return azure_openai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
@@ -219,27 +275,6 @@ def cost_per_token(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
-    elif call_type == "speech" or call_type == "aspeech":
-        prompt_cost, completion_cost = _generic_cost_per_character(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
-            custom_prompt_cost=None,
-            custom_completion_cost=0,
-        )
-        if prompt_cost is None or completion_cost is None:
-            raise ValueError(
-                "cost for tts call is None. prompt_cost={}, completion_cost={}, model={}, custom_llm_provider={}, prompt_characters={}, completion_characters={}".format(
-                    prompt_cost,
-                    completion_cost,
-                    model_without_prefix,
-                    custom_llm_provider,
-                    prompt_characters,
-                    completion_characters,
-                )
-            )
-        return prompt_cost, completion_cost
     elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
@@ -378,60 +413,22 @@ def cost_per_token(
         )
 
 
-# Extract the number of billion parameters from the model name
-# only used for together_computer LLMs
-def get_model_params_and_category(model_name) -> str:
-    """
-    Helper function for calculating together ai pricing.
-
-    Returns
-    - str - model pricing category if mapped else received model name
-    """
-    import re
-
-    model_name = model_name.lower()
-    re_params_match = re.search(
-        r"(\d+b)", model_name
-    )  # catch all decimals like 3b, 70b, etc
-    category = None
-    if re_params_match is not None:
-        params_match = str(re_params_match.group(1))
-        params_match = params_match.replace("b", "")
-        if params_match is not None:
-            params_billion = float(params_match)
-        else:
-            return model_name
-        # Determine the category based on the number of parameters
-        if params_billion <= 4.0:
-            category = "together-ai-up-to-4b"
-        elif params_billion <= 8.0:
-            category = "together-ai-4.1b-8b"
-        elif params_billion <= 21.0:
-            category = "together-ai-8.1b-21b"
-        elif params_billion <= 41.0:
-            category = "together-ai-21.1b-41b"
-        elif params_billion <= 80.0:
-            category = "together-ai-41.1b-80b"
-        elif params_billion <= 110.0:
-            category = "together-ai-81.1b-110b"
-        if category is not None:
-            return category
-
-    return model_name
-
-
-def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public = (
         0.001400  # assume all calls sent to A100 80GB for now
     )
     if total_time == 0.0:  # total time is in ms
-        start_time = completion_response["created"]
+        start_time = completion_response.get("created", time.time())
         end_time = getattr(completion_response, "ended", time.time())
         total_time = end_time - start_time
 
     return a100_80gb_price_per_second_public * total_time / 1000
+
+
+def has_hidden_params(obj: Any) -> bool:
+    return hasattr(obj, "_hidden_params")
 
 
 def _select_model_name_for_cost_calc(
@@ -456,14 +453,16 @@ def _select_model_name_for_cost_calc(
     if isinstance(completion_response, str):
         return return_model
 
-    elif return_model is None:
+    elif return_model is None and hasattr(completion_response, "get"):
         return_model = completion_response.get("model", "")  # type: ignore
-    if hasattr(completion_response, "_hidden_params"):
+    hidden_params = getattr(completion_response, "_hidden_params", None)
+
+    if hidden_params is not None:
         if (
-            completion_response._hidden_params.get("model", None) is not None
-            and len(completion_response._hidden_params["model"]) > 0
+            hidden_params.get("model", None) is not None
+            and len(hidden_params["model"]) > 0
         ):
-            return_model = completion_response._hidden_params.get("model", model)
+            return_model = hidden_params.get("model", model)
 
     return return_model
 
@@ -474,7 +473,7 @@ def completion_cost(
     prompt="",
     messages: List = [],
     completion="",
-    total_time=0.0,  # used for replicate, sagemaker
+    total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
     call_type: Literal[
         "embedding",
         "aembedding",
@@ -514,7 +513,7 @@ def completion_cost(
         model (str): Optional. The name of the language model used in the completion calls
         prompt (str): Optional. The input prompt passed to the llm
         completion (str): Optional. The output completion text from the llm
-        total_time (float): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
+        total_time (float, int): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
         custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
         custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
 
@@ -553,7 +552,7 @@ def completion_cost(
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
 
-            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(
+            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(  # type: ignore
                 "usage", {}
             )
             if isinstance(usage_obj, BaseModel) and not isinstance(
@@ -564,17 +563,24 @@ def completion_cost(
                     "usage",
                     litellm.Usage(**usage_obj.model_dump()),
                 )
+            if usage_obj is None:
+                _usage = {}
+            elif isinstance(usage_obj, BaseModel):
+                _usage = usage_obj.model_dump()
+            else:
+                _usage = usage_obj
             # get input/output tokens from completion_response
-            prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
-            completion_tokens = completion_response.get("usage", {}).get(
-                "completion_tokens", 0
-            )
-            cache_creation_input_tokens = completion_response.get("usage", {}).get(
-                "cache_creation_input_tokens", 0
-            )
-            cache_read_input_tokens = completion_response.get("usage", {}).get(
-                "cache_read_input_tokens", 0
-            )
+            prompt_tokens = _usage.get("prompt_tokens", 0)
+            completion_tokens = _usage.get("completion_tokens", 0)
+            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
+            cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
+            if (
+                "prompt_tokens_details" in _usage
+                and _usage["prompt_tokens_details"] != {}
+                and _usage["prompt_tokens_details"]
+            ):
+                prompt_tokens_details = _usage.get("prompt_tokens_details", {})
+                cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
             total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(
@@ -583,24 +589,19 @@ def completion_cost(
             model = _select_model_name_for_cost_calc(
                 model=model, completion_response=completion_response
             )
-            if hasattr(completion_response, "_hidden_params"):
-                custom_llm_provider = completion_response._hidden_params.get(
+            hidden_params = getattr(completion_response, "_hidden_params", None)
+            if hidden_params is not None:
+                custom_llm_provider = hidden_params.get(
                     "custom_llm_provider", custom_llm_provider or None
                 )
-                region_name = completion_response._hidden_params.get(
-                    "region_name", region_name
-                )
-                size = completion_response._hidden_params.get(
-                    "optional_params", {}
-                ).get(
+                region_name = hidden_params.get("region_name", region_name)
+                size = hidden_params.get("optional_params", {}).get(
                     "size", "1024-x-1024"
                 )  # openai default
-                quality = completion_response._hidden_params.get(
-                    "optional_params", {}
-                ).get(
+                quality = hidden_params.get("optional_params", {}).get(
                     "quality", "standard"
                 )  # openai default
-                n = completion_response._hidden_params.get("optional_params", {}).get(
+                n = hidden_params.get("optional_params", {}).get(
                     "n", 1
                 )  # openai default
         else:
@@ -638,6 +639,8 @@ def completion_cost(
                 # Vertex Charges Flat $0.20 per image
                 return 0.020
 
+            if size is None:
+                size = "1024-x-1024"  # openai default
             # fix size to match naming convention
             if "x" in size and "-x-" not in size:
                 size = size.replace("x", "-x-")
@@ -676,7 +679,18 @@ def completion_cost(
             call_type == CallTypes.speech.value or call_type == CallTypes.aspeech.value
         ):
             prompt_characters = litellm.utils._count_characters(text=prompt)
-
+        elif (
+            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
+        ):
+            if completion_response is not None and isinstance(
+                completion_response, RerankResponse
+            ):
+                meta_obj = completion_response.meta
+                billed_units = meta_obj.get("billed_units", {}) or {}
+                search_units = (
+                    billed_units.get("search_units") or 1
+                )  # cohere charges per request by default.
+                completion_tokens = search_units
         # Calculate cost based on prompt_tokens, completion_tokens
         if (
             "togethercomputer" in model
@@ -685,14 +699,16 @@ def completion_cost(
         ):
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-            model = get_model_params_and_category(model)
+
+            model = get_model_params_and_category(model, call_type=CallTypes(call_type))
+
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
         elif (
             model in litellm.replicate_models or "replicate" in model
         ) and model not in litellm.model_cost:
             # for unmapped replicate model, default to replicate's time tracking logic
-            return get_replicate_completion_pricing(completion_response, total_time)
+            return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
 
         if model is None:
             raise ValueError(
@@ -781,7 +797,7 @@ def response_cost_calculator(
 ) -> Optional[float]:
     """
     Returns
-    - float or None: cost of response OR none if error.
+    - float or None: cost of response
     """
     try:
         response_cost: float = 0.0
@@ -797,20 +813,10 @@ def response_cost_calculator(
                     call_type=call_type,
                     custom_llm_provider=custom_llm_provider,
                 )
-            elif isinstance(response_object, RerankResponse) and (
-                call_type == "arerank" or call_type == "rerank"
-            ):
-                response_cost = rerank_cost(
-                    rerank_response=response_object,
-                    model=model,
-                    call_type=call_type,
-                    custom_llm_provider=custom_llm_provider,
-                )
             else:
                 if custom_pricing is True:  # override defaults if custom pricing is set
                     base_model = model
                 # base_model defaults to None if not set on model_info
-
                 response_cost = completion_cost(
                     completion_response=response_object,
                     call_type=call_type,
@@ -818,47 +824,34 @@ def response_cost_calculator(
                     custom_llm_provider=custom_llm_provider,
                 )
         return response_cost
-    except litellm.NotFoundError as e:
-        verbose_logger.debug(  # debug since it can be spammy in logs, for calls
-            f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
-        )
-        return None
     except Exception as e:
-        if litellm.suppress_debug_info:  # allow cli tools to suppress this information.
-            verbose_logger.debug(
-                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                    str(e), traceback.format_exc()
-                )
-            )
-        else:
-            verbose_logger.warning(
-                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                    str(e), traceback.format_exc()
-                )
-            )
-        return None
+        raise e
 
 
 def rerank_cost(
-    rerank_response: RerankResponse,
     model: str,
-    call_type: Literal["rerank", "arerank"],
     custom_llm_provider: Optional[str],
-) -> float:
+) -> Tuple[float, float]:
     """
     Returns
     - float or None: cost of response OR none if error.
     """
-    _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+    default_num_queries = 1
+    _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
 
     try:
         if custom_llm_provider == "cohere":
-            return 0.002
+            return cohere_rerank_cost_per_query(
+                model=model, num_queries=default_num_queries
+            )
+        elif custom_llm_provider == "azure_ai":
+            return azure_ai_rerank_cost_per_query(
+                model=model, num_queries=default_num_queries
+            )
         raise ValueError(
             f"invalid custom_llm_provider for rerank model: {model}, custom_llm_provider: {custom_llm_provider}"
         )
     except Exception as e:
-        verbose_logger.exception(
-            f"litellm.cost_calculator.py::rerank_cost - Exception occurred - {str(e)}"
-        )
         raise e

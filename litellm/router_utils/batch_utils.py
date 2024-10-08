@@ -10,7 +10,7 @@ class InMemoryFile(io.BytesIO):
 
 
 def replace_model_in_jsonl(
-    file_content: Union[bytes, IO, Tuple[str, bytes, str]], new_model_name: str
+    file_content: Union[bytes, Tuple[str, bytes, str]], new_model_name: str
 ) -> Optional[InMemoryFile]:
     try:
         # Decode the bytes to a string and split into lines
@@ -23,7 +23,10 @@ def replace_model_in_jsonl(
             file_content_bytes = file_content
 
         # Decode the bytes to a string and split into lines
-        file_content_str = file_content_bytes.decode("utf-8")
+        if isinstance(file_content_bytes, bytes):
+            file_content_str = file_content_bytes.decode("utf-8")
+        else:
+            file_content_str = file_content_bytes
         lines = file_content_str.splitlines()
         modified_lines = []
         for line in lines:
@@ -41,7 +44,7 @@ def replace_model_in_jsonl(
         modified_file_content = "\n".join(modified_lines).encode("utf-8")
         return InMemoryFile(modified_file_content, name="modified_file.jsonl")  # type: ignore
 
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         return None
 
 

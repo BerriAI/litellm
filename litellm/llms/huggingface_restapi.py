@@ -13,6 +13,7 @@ import requests
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.completion import ChatCompletionMessageToolCallParam
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
@@ -139,6 +140,7 @@ class HuggingfaceConfig:
             "stream",
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "stop",
             "n",
@@ -167,7 +169,7 @@ class HuggingfaceConfig:
                 optional_params["stream"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 # HF TGI raises the following exception when max_new_tokens==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
                 if value == 0:
@@ -180,7 +182,7 @@ class HuggingfaceConfig:
         return optional_params
 
     def get_hf_api_key(self) -> Optional[str]:
-        return litellm.utils.get_secret("HUGGINGFACE_API_KEY")
+        return get_secret_str("HUGGINGFACE_API_KEY")
 
 
 def output_parser(generated_text: str):
@@ -239,7 +241,7 @@ def read_tgi_conv_models():
         # Cache the set for future use
         conv_models_cache = conv_models
         return tgi_models, conv_models
-    except:
+    except Exception:
         return set(), set()
 
 
@@ -371,7 +373,7 @@ class Huggingface(BaseLLM):
                 ]["finish_reason"]
                 sum_logprob = 0
                 for token in completion_response[0]["details"]["tokens"]:
-                    if token["logprob"] != None:
+                    if token["logprob"] is not None:
                         sum_logprob += token["logprob"]
                 setattr(model_response.choices[0].message, "_logprob", sum_logprob)  # type: ignore
             if "best_of" in optional_params and optional_params["best_of"] > 1:
@@ -385,7 +387,7 @@ class Huggingface(BaseLLM):
                     ):
                         sum_logprob = 0
                         for token in item["tokens"]:
-                            if token["logprob"] != None:
+                            if token["logprob"] is not None:
                                 sum_logprob += token["logprob"]
                         if len(item["generated_text"]) > 0:
                             message_obj = Message(
@@ -416,7 +418,7 @@ class Huggingface(BaseLLM):
             prompt_tokens = len(
                 encoding.encode(input_text)
             )  ##[TODO] use the llama2 tokenizer here
-        except:
+        except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
         output_text = model_response["choices"][0]["message"].get("content", "")
@@ -428,7 +430,7 @@ class Huggingface(BaseLLM):
                         model_response["choices"][0]["message"].get("content", "")
                     )
                 )  ##[TODO] use the llama2 tokenizer here
-            except:
+            except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
         else:
@@ -552,13 +554,13 @@ class Huggingface(BaseLLM):
                 else:
                     prompt = prompt_factory(model=model, messages=messages)
                 data = {
-                    "inputs": prompt,
+                    "inputs": prompt,  # type: ignore
                     "parameters": optional_params,
                     "stream": (  # type: ignore
                         True
                         if "stream" in optional_params
                         and isinstance(optional_params["stream"], bool)
-                        and optional_params["stream"] == True  # type: ignore
+                        and optional_params["stream"] is True  # type: ignore
                         else False
                     ),
                 }
@@ -587,14 +589,14 @@ class Huggingface(BaseLLM):
                 inference_params.pop("details")
                 inference_params.pop("return_full_text")
                 data = {
-                    "inputs": prompt,
+                    "inputs": prompt,  # type: ignore
                 }
                 if task == "text-generation-inference":
                     data["parameters"] = inference_params
                     data["stream"] = (  # type: ignore
                         True  # type: ignore
                         if "stream" in optional_params
-                        and optional_params["stream"] == True
+                        and optional_params["stream"] is True
                         else False
                     )
                 input_text = prompt
@@ -630,7 +632,7 @@ class Huggingface(BaseLLM):
                     ### ASYNC COMPLETION
                     return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, input_text=input_text, model=model, optional_params=optional_params, timeout=timeout)  # type: ignore
             ### SYNC STREAMING
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 response = requests.post(
                     completion_url,
                     headers=headers,
@@ -690,7 +692,7 @@ class Huggingface(BaseLLM):
                         completion_response = response.json()
                         if isinstance(completion_response, dict):
                             completion_response = [completion_response]
-                    except:
+                    except Exception:
                         import traceback
 
                         raise HuggingfaceError(
@@ -1020,10 +1022,11 @@ class Huggingface(BaseLLM):
             model_response,
             "usage",
             litellm.Usage(
-                **{
-                    "prompt_tokens": input_tokens,
-                    "total_tokens": input_tokens,
-                }
+                prompt_tokens=input_tokens,
+                completion_tokens=input_tokens,
+                total_tokens=input_tokens,
+                prompt_tokens_details=None,
+                completion_tokens_details=None,
             ),
         )
         return model_response

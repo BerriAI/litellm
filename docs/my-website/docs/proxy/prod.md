@@ -18,6 +18,7 @@ general_settings:
   master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
   alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
+  database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
 
 litellm_settings:
   set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
@@ -107,9 +108,9 @@ export LITELLM_SALT_KEY="sk-1234"
 |--------------|-------|
 | Avg latency | `50ms` |
 | Median latency | `51ms` |
-| `/chat/completions` Requests/second | `35` |
-| `/chat/completions` Requests/minute | `2100` |
-| `/chat/completions` Requests/hour | `126K` |
+| `/chat/completions` Requests/second | `100` |
+| `/chat/completions` Requests/minute | `6000` |
+| `/chat/completions` Requests/hour | `360K` |
 
 
 ### Verifying Debugging logs are off

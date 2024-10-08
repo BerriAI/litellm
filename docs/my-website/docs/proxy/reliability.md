@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔥 Load Balancing, Fallbacks, Retries, Timeouts
+# Fallbacks, Load Balancing, Retries
 
 - Quick Start [load balancing](#test---load-balancing)
 - Quick Start [client side fallbacks](#test---client-side-fallbacks)
@@ -699,3 +699,53 @@ print(response)
 ```
 </TabItem>
 </Tabs>
+
+### Setting Fallbacks for Wildcard Models
+
+You can set fallbacks for wildcard models (e.g. `azure/*`) in your config file.
+
+1. Setup config
+```yaml
+model_list:
+  - model_name: "gpt-4o"
+    litellm_params:
+      model: "openai/gpt-4o"
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "azure/*"
+    litellm_params:
+      model: "azure/*"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+
+litellm_settings:
+  fallbacks: [{"gpt-4o": ["azure/gpt-4o"]}]
+```
+
+2. Start Proxy
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": [    
+          {
+            "type": "text",
+            "text": "what color is red"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "mock_testing_fallbacks": true
+}'
+```

@@ -173,6 +173,13 @@ def get_llm_provider(
                     or "https://api.cerebras.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("CEREBRAS_API_KEY")
+            elif custom_llm_provider == "sambanova":
+                api_base = (
+                    api_base
+                    or get_secret("SAMBANOVA_API_BASE")
+                    or "https://api.sambanova.ai/v1"
+                )  # type: ignore
+                dynamic_api_key = api_key or get_secret("SAMBANOVA_API_KEY")
             elif (custom_llm_provider == "ai21_chat") or (
                 custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
             ):
@@ -199,6 +206,14 @@ def get_llm_provider(
                     or "https://codestral.mistral.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("CODESTRAL_API_KEY")
+            elif custom_llm_provider == "hosted_vllm":
+                # vllm is openai compatible, we just need to set this to custom_openai
+                api_base = api_base or get_secret(
+                    "HOSTED_VLLM_API_BASE"
+                )  # type: ignore
+                dynamic_api_key = (
+                    api_key or get_secret("HOSTED_VLLM_API_KEY") or ""
+                )  # vllm does not require an api key
             elif custom_llm_provider == "deepseek":
                 # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
                 api_base = (
@@ -209,7 +224,12 @@ def get_llm_provider(
                 dynamic_api_key = api_key or get_secret("DEEPSEEK_API_KEY")
             elif custom_llm_provider == "fireworks_ai":
                 # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
-                if not model.startswith("accounts/"):
+                if litellm.FireworksAIEmbeddingConfig().is_fireworks_embedding_model(
+                    model=model
+                ):
+                    # fireworks embeddings models do no require accounts/fireworks prefix https://docs.fireworks.ai/api-reference/creates-an-embedding-vector-representing-the-input-text
+                    pass
+                elif not model.startswith("accounts/"):
                     model = f"accounts/fireworks/models/{model}"
                 api_base = (
                     api_base
@@ -236,6 +256,9 @@ def get_llm_provider(
             elif custom_llm_provider == "github":
                 api_base = api_base or get_secret("GITHUB_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
                 dynamic_api_key = api_key or get_secret("GITHUB_API_KEY")
+            elif custom_llm_provider == "litellm_proxy":
+                api_base = api_base or get_secret("LITELLM_PROXY_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
+                dynamic_api_key = api_key or get_secret("LITELLM_PROXY_API_KEY")
 
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
@@ -296,6 +319,8 @@ def get_llm_provider(
                         dynamic_api_key
                     )
                 )
+            if dynamic_api_key is None and api_key is not None:
+                dynamic_api_key = api_key
             return model, custom_llm_provider, dynamic_api_key, api_base
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -336,6 +361,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret("CEREBRAS_API_KEY")
+                    elif endpoint == "https://api.sambanova.ai/v1":
+                        custom_llm_provider = "sambanova"
+                        dynamic_api_key = get_secret("SAMBANOVA_API_KEY")
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret("AI21_API_KEY")
@@ -458,7 +486,7 @@ def get_llm_provider(
         elif model == "*":
             custom_llm_provider = "openai"
         if custom_llm_provider is None or custom_llm_provider == "":
-            if litellm.suppress_debug_info == False:
+            if litellm.suppress_debug_info is False:
                 print()  # noqa
                 print(  # noqa
                     "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa

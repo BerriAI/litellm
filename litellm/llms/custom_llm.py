@@ -36,7 +36,13 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import GenericStreamingChunk, ProviderField
-from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
+from litellm.utils import (
+    CustomStreamWrapper,
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    Usage,
+)
 
 from .base import BaseLLM
 from .prompt_templates.factory import custom_prompt, prompt_factory
@@ -141,6 +147,30 @@ class CustomLLM(BaseLLM):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> AsyncIterator[GenericStreamingChunk]:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    def image_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+    ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
 

@@ -34,6 +34,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.secret_managers.main import get_secret_str
 
 from .streaming_handler import chunk_processor
 from .success_handler import PassThroughEndpointLogging
@@ -72,11 +73,11 @@ async def set_env_variables_in_header(custom_headers: dict):
             if isinstance(
                 _langfuse_public_key, str
             ) and _langfuse_public_key.startswith("os.environ/"):
-                _langfuse_public_key = litellm.get_secret(_langfuse_public_key)
+                _langfuse_public_key = get_secret_str(_langfuse_public_key)
             if isinstance(
                 _langfuse_secret_key, str
             ) and _langfuse_secret_key.startswith("os.environ/"):
-                _langfuse_secret_key = litellm.get_secret(_langfuse_secret_key)
+                _langfuse_secret_key = get_secret_str(_langfuse_secret_key)
             headers["Authorization"] = "Basic " + b64encode(
                 f"{_langfuse_public_key}:{_langfuse_secret_key}".encode("utf-8")
             ).decode("ascii")
@@ -95,9 +96,10 @@ async def set_env_variables_in_header(custom_headers: dict):
                     "pass through endpoint - getting secret for variable name: %s",
                     _variable_name,
                 )
-                _secret_value = litellm.get_secret(_variable_name)
-                new_value = value.replace(_variable_name, _secret_value)
-                headers[key] = new_value
+                _secret_value = get_secret_str(_variable_name)
+                if _secret_value is not None:
+                    new_value = value.replace(_variable_name, _secret_value)
+                    headers[key] = new_value
     return headers
 
 
@@ -349,7 +351,7 @@ async def pass_through_request(
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
-            data=_parsed_body or {},
+            data=_parsed_body,
             call_type="pass_through_endpoint",
         )
 
@@ -576,7 +578,7 @@ def create_pass_through_route(
         adapter_id = str(uuid.uuid4())
         litellm.adapters = [{"id": adapter_id, "adapter": adapter}]
 
-        async def endpoint_func(
+        async def endpoint_func(  # type: ignore
             request: Request,
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -647,9 +649,9 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         verbose_proxy_logger.debug(
             "adding pass through endpoint: %s, dependencies: %s", _path, _dependencies
         )
-        app.add_api_route(
+        app.add_api_route(  # type: ignore
             path=_path,
-            endpoint=create_pass_through_route(
+            endpoint=create_pass_through_route(  # type: ignore
                 _path, _target, _custom_headers, _forward_headers, _dependencies
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],

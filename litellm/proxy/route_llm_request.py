@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from fastapi import (
     Depends,
@@ -37,6 +37,14 @@ ROUTE_ENDPOINT_MAPPING = {
 }
 
 
+class ProxyModelNotFoundError(HTTPException):
+    def __init__(self, route: str, model_name: str):
+        detail = {
+            "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
+        }
+        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -50,6 +58,7 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "_arealtime",  # private function for realtime API
     ],
 ):
     """
@@ -57,8 +66,7 @@ async def route_request(
 
     """
     router_model_names = llm_router.model_names if llm_router is not None else []
-
-    if "api_key" in data:
+    if "api_key" in data or "api_base" in data:
         return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
@@ -110,10 +118,7 @@ async def route_request(
 
     # if no route found then it's a bad request
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail={
-            "error": f"{route_name}: Invalid model name passed in model="
-            + data.get("model", "")
-        },
+    raise ProxyModelNotFoundError(
+        route=route_name,
+        model_name=data.get("model", ""),
     )
