@@ -2771,6 +2771,11 @@ def get_optional_params_embeddings(
 
 
 def _remove_additional_properties(schema):
+    """
+    clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+
+    Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
+    """
     if isinstance(schema, dict):
         # Remove the 'additionalProperties' key if it exists and is set to False
         if "additionalProperties" in schema and schema["additionalProperties"] is False:
@@ -2789,6 +2794,9 @@ def _remove_additional_properties(schema):
 
 
 def _remove_strict_from_schema(schema):
+    """
+    Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
+    """
     if isinstance(schema, dict):
         # Remove the 'additionalProperties' key if it exists and is set to False
         if "strict" in schema:
@@ -3000,37 +3008,6 @@ def get_optional_params(
         non_default_params["response_format"] = type_to_response_format_param(
             response_format=non_default_params["response_format"]
         )
-        # # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
-        if (
-            non_default_params["response_format"] is not None
-            and non_default_params["response_format"]
-            .get("json_schema", {})
-            .get("schema")
-            is not None
-            and custom_llm_provider
-            in [
-                "gemini",
-                "vertex_ai",
-                "vertex_ai_beta",
-            ]
-        ):
-            from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
-                _build_vertex_schema,
-            )
-
-            old_schema = copy.deepcopy(
-                non_default_params["response_format"]
-                .get("json_schema", {})
-                .get("schema")
-            )
-            new_schema = _remove_additional_properties(schema=old_schema)
-            if isinstance(new_schema, list):
-                for item in new_schema:
-                    if isinstance(item, dict):
-                        item = _build_vertex_schema(parameters=item)
-            elif isinstance(new_schema, dict):
-                new_schema = _build_vertex_schema(parameters=new_schema)
-            non_default_params["response_format"]["json_schema"]["schema"] = new_schema
     if "tools" in non_default_params and isinstance(
         non_default_params, list
     ):  # fixes https://github.com/BerriAI/litellm/issues/4933
