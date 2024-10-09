@@ -136,3 +136,27 @@ def get_user_organization_info(
                 _user_organization_role_mapping[_membership.organization_id] = _membership.user_role  # type: ignore
 
     return _user_organizations, _user_organization_role_mapping
+
+
+def _user_is_org_admin(
+    request_data: dict,
+    user_object: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    Helper function to check if user is an org admin for the passed organization_id
+    """
+    if request_data.get("organization_id", None) is None:
+        return False
+
+    if user_object is None:
+        return False
+
+    if user_object.organization_memberships is None:
+        return False
+
+    for _membership in user_object.organization_memberships:
+        if _membership.organization_id == request_data.get("organization_id", None):
+            if _membership.user_role == LitellmUserRoles.ORG_ADMIN.value:
+                return True
+
+    return False

@@ -214,22 +214,20 @@ async def test_org_admin_create_team_permissions(prisma_client):
     )
 
     org_id = response.organization_id
-
-    response = await new_user(
-        data=NewUserRequest(
-            organization_id=org_id, user_role=LitellmUserRoles.ORG_ADMIN
-        )
+    created_user_id = f"new-user-{uuid.uuid4()}"
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
+            organization_id=org_id,
+            member=Member(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
+        ),
+        http_request=None,
     )
 
     # create key with the response["user_id"]
-
     _new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            user_id=response.user_id,
-        ),
+        data=GenerateKeyRequest(user_id=created_user_id),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ORG_ADMIN,
-            user_id=response.user_id,
+            user_role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id
         ),
     )
 
@@ -268,7 +266,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     """
     Create a new org admin
 
-    org admin creates a new user in their org -> success
+    org admin adds a new member to their org -> success
     """
     import json
 
@@ -288,22 +286,21 @@ async def test_org_admin_create_user_permissions(prisma_client):
     )
 
     org_id = response.organization_id
-
-    response = await new_user(
-        data=NewUserRequest(
-            organization_id=org_id, user_role=LitellmUserRoles.ORG_ADMIN
-        )
+    created_user_id = f"new-user-{uuid.uuid4()}"
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
+            organization_id=org_id,
+            member=Member(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
+        ),
+        http_request=None,
     )
 
     # create key with the response["user_id"]
 
     _new_key = await generate_key_fn(
-        data=GenerateKeyRequest(
-            user_id=response.user_id,
-        ),
+        data=GenerateKeyRequest(user_id=created_user_id),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ORG_ADMIN,
-            user_id=response.user_id,
+            user_role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id
         ),
     )
 
@@ -322,7 +319,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     request.body = return_body
     response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
 
-    # after auth - actually create team now
+    # after auth - actually actually add new user to organization
     response = await new_user(
         data=NewUserRequest(
             organization_id=org_id,

@@ -358,6 +358,13 @@ class LiteLLMRoutes(enum.Enum):
         spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
 
+    self_managed_routes = [
+        "/team/member_add",
+        "/team/member_delete",
+    ]  # routes that manage their own allowed/disallowed logic
+
+    ## Org Admin Routes ##
+
     # Routes only an Org Admin Can Access
     org_admin_only_routes = [
         "/organization/info",
@@ -365,12 +372,10 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/member_add",
     ]
 
-    org_admin_allowed_routes = org_admin_only_routes + internal_user_routes
-
-    self_managed_routes = [
-        "/team/member_add",
-        "/team/member_delete",
-    ]  # routes that manage their own allowed/disallowed logic
+    # All routes accesible by an Org Admin
+    org_admin_allowed_routes = (
+        org_admin_only_routes + management_routes + self_managed_routes
+    )
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):

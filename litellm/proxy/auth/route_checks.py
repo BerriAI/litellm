@@ -13,6 +13,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import hash_token
 
+from .auth_checks_organization import _user_is_org_admin
 from .auth_utils import _has_user_setup_sso
 
 
@@ -107,8 +108,8 @@ def non_proxy_admin_allowed_routes_check(
     ):
         pass
     elif (
-        _user_role == LitellmUserRoles.ORG_ADMIN.value
-        and route in LiteLLMRoutes.org_admin_user_routes.value
+        _user_is_org_admin(request_data=request_data, user_object=user_obj)
+        and route in LiteLLMRoutes.org_admin_allowed_routes.value
     ):
         pass
     elif (
