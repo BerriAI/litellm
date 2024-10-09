@@ -201,7 +201,9 @@ def cost_per_token(
         model = model_without_prefix
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    print_verbose(f"Looking up model={model} in model_cost_map")
+    print_verbose(
+        f"Looking up model={model} in model_cost_map, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
+    )
     if call_type == "speech" or call_type == "aspeech":
         if prompt_characters is None or completion_characters is None:
             raise ValueError(

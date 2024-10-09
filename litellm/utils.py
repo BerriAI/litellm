@@ -4877,6 +4877,10 @@ def _strip_model_name(model: str) -> str:
     return strip_finetune
 
 
+def _get_model_info_from_model_cost(key: str) -> dict:
+    return litellm.model_cost[key]
+
+
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -5018,14 +5022,16 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             """
             Check if: (in order of specificity)
             1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
-            2. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            3. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            4. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost if model="groq/llama3-8b-8192" and custom_llm_provider=None
+            2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
+            3. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+            4. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
             5. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
             """
+            _model_info: Optional[Dict[str, Any]] = None
+            key: Optional[str] = None
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
-                _model_info = litellm.model_cost[combined_model_name]
+                _model_info = _get_model_info_from_model_cost(key=key)
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
@@ -5036,58 +5042,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     ].startswith("vertex_ai"):
                         pass
                     else:
-                        raise Exception
-            elif combined_stripped_model_name in litellm.model_cost:
-                key = combined_stripped_model_name
-                _model_info = litellm.model_cost[combined_stripped_model_name]
-                _model_info["supported_openai_params"] = supported_openai_params
-                if (
-                    "litellm_provider" in _model_info
-                    and _model_info["litellm_provider"] != custom_llm_provider
-                ):
-                    if custom_llm_provider == "vertex_ai" and _model_info[
-                        "litellm_provider"
-                    ].startswith("vertex_ai"):
-                        pass
-                    elif custom_llm_provider == "fireworks_ai" and _model_info[
-                        "litellm_provider"
-                    ].startswith("fireworks_ai"):
-                        pass
-                    else:
-                        raise Exception(
-                            "Got provider={}, Expected provider={}, for model={}".format(
-                                _model_info["litellm_provider"],
-                                custom_llm_provider,
-                                model,
-                            )
-                        )
-            elif stripped_model_name in litellm.model_cost:
-                key = stripped_model_name
-                _model_info = litellm.model_cost[stripped_model_name]
-                _model_info["supported_openai_params"] = supported_openai_params
-                if (
-                    "litellm_provider" in _model_info
-                    and _model_info["litellm_provider"] != custom_llm_provider
-                ):
-                    if custom_llm_provider == "vertex_ai" and _model_info[
-                        "litellm_provider"
-                    ].startswith("vertex_ai"):
-                        pass
-                    elif custom_llm_provider == "fireworks_ai" and _model_info[
-                        "litellm_provider"
-                    ].startswith("fireworks_ai"):
-                        pass
-                    else:
-                        raise Exception(
-                            "Got provider={}, Expected provider={}, for model={}".format(
-                                _model_info["litellm_provider"],
-                                custom_llm_provider,
-                                model,
-                            )
-                        )
-            elif model in litellm.model_cost:
+                        _model_info = None
+            if _model_info is None and model in litellm.model_cost:
                 key = model
-                _model_info = litellm.model_cost[model]
+                _model_info = _get_model_info_from_model_cost(key=key)
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
@@ -5102,10 +5060,50 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     ].startswith("fireworks_ai"):
                         pass
                     else:
-                        raise Exception
-            elif split_model in litellm.model_cost:
+                        _model_info = None
+            if (
+                _model_info is None
+                and combined_stripped_model_name in litellm.model_cost
+            ):
+                key = combined_stripped_model_name
+                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info["supported_openai_params"] = supported_openai_params
+                if (
+                    "litellm_provider" in _model_info
+                    and _model_info["litellm_provider"] != custom_llm_provider
+                ):
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    elif custom_llm_provider == "fireworks_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("fireworks_ai"):
+                        pass
+                    else:
+                        _model_info = None
+            if _model_info is None and stripped_model_name in litellm.model_cost:
+                key = stripped_model_name
+                _model_info = _get_model_info_from_model_cost(key=key)
+                _model_info["supported_openai_params"] = supported_openai_params
+                if (
+                    "litellm_provider" in _model_info
+                    and _model_info["litellm_provider"] != custom_llm_provider
+                ):
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    elif custom_llm_provider == "fireworks_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("fireworks_ai"):
+                        pass
+                    else:
+                        _model_info = None
+
+            if _model_info is None and split_model in litellm.model_cost:
                 key = split_model
-                _model_info = litellm.model_cost[split_model]
+                _model_info = _get_model_info_from_model_cost(key=key)
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
@@ -5120,8 +5118,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     ].startswith("fireworks_ai"):
                         pass
                     else:
-                        raise Exception
-            else:
+                        _model_info = None
+            if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
@@ -5189,7 +5187,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 litellm_provider=_model_info.get(
                     "litellm_provider", custom_llm_provider
                 ),
-                mode=_model_info.get("mode"),
+                mode=_model_info.get("mode"),  # type: ignore
                 supported_openai_params=supported_openai_params,
                 supports_system_messages=_model_info.get(
                     "supports_system_messages", None

@@ -2366,12 +2366,12 @@ def test_completion_cost_params():
     Relevant Issue: https://github.com/BerriAI/litellm/issues/6133
     """
     litellm.set_verbose = True
-    # resp1_prompt_cost, resp1_completion_cost = cost_per_token(
-    #     model="gemini-1.5-pro-002",
-    #     prompt_tokens=1000,
-    #     completion_tokens=1000,
-    #     custom_llm_provider="vertex_ai_beta",
-    # )
+    resp1_prompt_cost, resp1_completion_cost = cost_per_token(
+        model="gemini-1.5-pro-002",
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        custom_llm_provider="vertex_ai_beta",
+    )
 
     resp2_prompt_cost, resp2_completion_cost = cost_per_token(
         model="gemini-1.5-pro-002", prompt_tokens=1000, completion_tokens=1000
@@ -2379,5 +2379,5 @@ def test_completion_cost_params():
 
     assert resp2_prompt_cost > 0
 
-    # assert resp1_prompt_cost == resp2_prompt_cost
-    # assert resp1_completion_cost == resp2_completion_cost
+    assert resp1_prompt_cost == resp2_prompt_cost
+    assert resp1_completion_cost == resp2_completion_cost

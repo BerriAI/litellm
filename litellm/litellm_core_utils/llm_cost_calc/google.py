@@ -91,14 +91,12 @@ def cost_per_character(
 
     ## CALCULATE INPUT COST
     if prompt_characters is None:
-        initial_prompt_cost, _ = cost_per_token(
+        prompt_cost, _ = cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
-
-        prompt_cost = initial_prompt_cost * 4
     else:
         try:
             if (
@@ -131,25 +129,21 @@ def cost_per_character(
                     str(e)
                 )
             )
-            initial_prompt_cost, _ = cost_per_token(
+            prompt_cost, _ = cost_per_token(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
 
-            prompt_cost = initial_prompt_cost * 4
-
     ## CALCULATE OUTPUT COST
     if completion_characters is None:
-        _, initial_completion_cost = cost_per_token(
+        _, completion_cost = cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
-
-        completion_cost = initial_completion_cost * 4
     else:
         try:
             if (
@@ -183,14 +177,13 @@ def cost_per_character(
                     str(e)
                 )
             )
-            _, initial_completion_cost = cost_per_token(
+            _, completion_cost = cost_per_token(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
 
-            completion_cost = initial_completion_cost * 4
     return prompt_cost, completion_cost
 
 
