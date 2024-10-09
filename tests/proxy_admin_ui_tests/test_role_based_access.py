@@ -39,6 +39,10 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     update_key_fn,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.organization_endpoints import (
+    new_organization,
+    organization_member_add,
+)
 
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
@@ -56,7 +60,6 @@ from litellm.proxy.proxy_server import (
     moderations,
     new_end_user,
     user_api_key_auth,
-    new_organization,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
@@ -76,23 +79,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching import DualCache
-from litellm.proxy._types import (
-    DynamoDBArgs,
-    GenerateKeyRequest,
-    NewOrganizationRequest,
-    RegenerateKeyRequest,
-    KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
-    NewCustomerRequest,
-    NewTeamRequest,
-    NewUserRequest,
-    ProxyErrorTypes,
-    ProxyException,
-    UpdateKeyRequest,
-    UpdateTeamRequest,
-    UpdateUserRequest,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import *
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -124,7 +111,7 @@ def prisma_client():
 """
 RBAC Tests
 
-1. create a new user with an organization id 
+1. Add a user to an organization
     - test 1 - if organization_id does exist expect to create a new user and user, organization relation
 
 2. org admin creates team in his org → success 
@@ -139,8 +126,6 @@ RBAC Tests
 @pytest.mark.parametrize(
     "user_role",
     [
-        None,
-        LitellmUserRoles.PROXY_ADMIN,
         LitellmUserRoles.ORG_ADMIN,
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
@@ -148,13 +133,16 @@ RBAC Tests
 )
 async def test_create_new_user_in_organization(prisma_client, user_role):
     """
-    Create a new user in an organization and assert the user object is created with the correct organization memberships / roles
+
+    Add a member to an organization and assert the user object is created with the correct organization memberships / roles
     """
     master_key = "sk-1234"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
+
+    created_user_id = f"new-user-{uuid.uuid4()}"
 
     response = await new_organization(
         data=NewOrganizationRequest(
@@ -167,8 +155,12 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
 
     org_id = response.organization_id
 
-    response = await new_user(
-        data=NewUserRequest(organization_id=org_id, user_role=user_role)
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
+            organization_id=org_id,
+            member=Member(role=user_role, user_id=created_user_id),
+        ),
+        http_request=None,
     )
 
     print("new user response", response)
@@ -176,7 +168,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
     # call get_user_object
 
     user_object = await get_user_object(
-        user_id=response.user_id,  # type: ignore
+        user_id=created_user_id,
         prisma_client=prisma_client,
         user_api_key_cache=DualCache(),
         user_id_upsert=False,
@@ -188,7 +180,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
 
     _membership = user_object.organization_memberships[0]
 
-    assert _membership.user_id == response.user_id
+    assert _membership.user_id == created_user_id
     assert _membership.organization_id == org_id
 
     if user_role != None:
