@@ -2381,3 +2381,38 @@ def test_completion_cost_params():
 
     assert resp1_prompt_cost == resp2_prompt_cost
     assert resp1_completion_cost == resp2_completion_cost
+
+    resp3_prompt_cost, resp3_completion_cost = cost_per_token(
+        model="vertex_ai/gemini-1.5-pro-002", prompt_tokens=1000, completion_tokens=1000
+    )
+
+    assert resp3_prompt_cost > 0
+
+    assert resp3_prompt_cost == resp1_prompt_cost
+    assert resp3_completion_cost == resp1_completion_cost
+
+
+def test_completion_cost_params_2():
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/6133
+    """
+    litellm.set_verbose = True
+
+    prompt_characters = 1000
+    completion_characters = 1000
+    resp1_prompt_cost, resp1_completion_cost = cost_per_token(
+        model="gemini-1.5-pro-002",
+        prompt_characters=prompt_characters,
+        completion_characters=completion_characters,
+        prompt_tokens=1000,
+        completion_tokens=1000,
+    )
+
+    print(resp1_prompt_cost, resp1_completion_cost)
+
+    model_info = litellm.get_model_info("gemini-1.5-pro-002")
+    input_cost_per_character = model_info["input_cost_per_character"]
+    output_cost_per_character = model_info["output_cost_per_character"]
+
+    assert resp1_prompt_cost == input_cost_per_character * prompt_characters
+    assert resp1_completion_cost == output_cost_per_character * completion_characters
