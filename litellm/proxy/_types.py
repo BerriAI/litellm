@@ -380,18 +380,6 @@ class LiteLLMRoutes(enum.Enum):
 #     ] = ["management_routes"]
 
 
-# class LiteLLMAllowedRoutes(LiteLLMBase):
-#     """
-#     Defines allowed routes based on key type.
-
-#     Types = ["admin", "team", "user", "unmapped"]
-#     """
-
-#     admin_allowed_routes: List[
-#         Literal["openai_routes", "info_routes", "management_routes", "spend_tracking_routes", "global_spend_tracking_routes"]
-#     ] = ["management_routes"]
-
-
 class LiteLLM_JWTAuth(LiteLLMBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
