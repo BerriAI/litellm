@@ -3197,7 +3197,7 @@ def get_optional_params(
 
         if stream:
             optional_params["stream"] = stream
-            #return optional_params
+            # return optional_params
         if max_tokens is not None:
             if "vicuna" in model or "flan" in model:
                 optional_params["max_length"] = max_tokens
@@ -9260,10 +9260,6 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
             processed_headers[k] = v
         else:
             additional_headers["{}-{}".format("llm_provider", k)] = v
-    ## GUARANTEE OPENAI HEADERS IN RESPONSE
-    for item in OPENAI_RESPONSE_HEADERS:
-        if item not in openai_headers:
-            openai_headers[item] = None
 
     additional_headers = {
         **openai_headers,
