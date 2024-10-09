@@ -701,7 +701,6 @@ class NewUserRequest(_GenerateKeyRequest):
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.ORG_ADMIN,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.TEAM,
@@ -723,7 +722,6 @@ class NewUserResponse(GenerateKeyResponse):
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.ORG_ADMIN,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.TEAM,
@@ -747,7 +745,6 @@ class UpdateUserRequest(GenerateRequestBase):
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.ORG_ADMIN,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.TEAM,
@@ -826,8 +823,6 @@ class Member(LiteLLMBase):
         LitellmUserRoles.ORG_ADMIN,
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        LitellmUserRoles.TEAM,
-        LitellmUserRoles.CUSTOMER,
         # older Member roles
         "admin",
         "user",
