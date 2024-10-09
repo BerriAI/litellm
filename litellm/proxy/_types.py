@@ -713,8 +713,6 @@ class NewUserRequest(_GenerateKeyRequest):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     teams: Optional[list] = None
@@ -733,8 +731,6 @@ class NewUserResponse(GenerateKeyResponse):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     teams: Optional[list] = None
@@ -755,8 +751,6 @@ class UpdateUserRequest(GenerateRequestBase):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     max_budget: Optional[float] = None

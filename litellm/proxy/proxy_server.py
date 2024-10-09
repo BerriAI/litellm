@@ -7990,6 +7990,14 @@ async def login(request: Request):
 
     # check if we can find the `username` in the db. on the ui, users can enter username=their email
     _user_row = None
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        ]
+    ] = None
     if prisma_client is not None:
         _user_row = await prisma_client.db.litellm_usertable.find_first(
             where={"user_email": {"equals": username}}
