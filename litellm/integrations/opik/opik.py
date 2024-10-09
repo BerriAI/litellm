@@ -195,9 +195,12 @@ class OpikLogger(CustomBatchLogger):
 
         # Extract trace_id and parent_span_id
         current_span_data = litellm_opik_metadata.get("current_span_data", None)
-        if current_span_data:
+        if isinstance(current_span_data, dict):
             trace_id = current_span_data.get("trace_id", None)
             parent_span_id = current_span_data.get("id", None)
+        elif current_span_data:
+            trace_id = current_span_data.trace_id
+            parent_span_id = current_span_data.id
         else:
             trace_id = None
             parent_span_id = None
@@ -230,6 +233,8 @@ class OpikLogger(CustomBatchLogger):
         # Create metadata object, we add the opik metadata first and then
         # update it with the standard_logging_object metadata
         metadata = litellm_opik_metadata
+        if "current_span_data" in metadata:
+            del metadata["current_span_data"]
         metadata["created_from"] = "litellm"
         
         metadata.update(standard_logging_object.get("metadata", {}))

@@ -25,7 +25,7 @@ from litellm.integrations.opik.opik import OpikLogger
 import litellm
 
 opik_logger = OpikLogger()
-litellm.callbacks = [test_opik_logger]
+litellm.callbacks = [opik_logger]
 ```
 
 Full examples:
@@ -35,14 +35,16 @@ from litellm.integrations.opik.opik import OpikLogger
 import litellm
 import os
 
+# Configure the Opik API key or call opik.configure()
 os.environ["OPIK_API_KEY"] = ""
+os.environ["OPIK_WORKSPACE"] = ""
 
 # LLM provider API Keys:
 os.environ["OPENAI_API_KEY"] = ""
 
 # set "opik" as a callback, litellm will send the data to an Opik server (such as comet.com)
 opik_logger = OpikLogger()
-litellm.callbacks = [test_opik_logger]
+litellm.callbacks = [opik_logger]
 
 # openai call
 response = litellm.completion(
@@ -63,7 +65,8 @@ from opik.opik_context import get_current_span_data
 from litellm.integrations.opik.opik import OpikLogger
 import litellm
 
-litellm.success_callback = ["opik"]
+opik_logger = OpikLogger()
+litellm.callbacks = [opik_logger]
 
 @track()
 def streaming_function(input):
