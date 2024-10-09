@@ -247,20 +247,37 @@ async def organization_member_add(
     If user doesn't exist, new user row will also be added to User Table
 
     Only proxy_admin or org_admin of organization, allowed to access this endpoint.
-    ```
 
+    # Parameters:
+
+    - organization_id: str (required)
+    - member: Union[List[Member], Member] (required)
+        - role: Literal[LitellmUserRoles] (required)
+        - user_id: Optional[str]
+        - user_email: Optional[str]
+
+    Note: Either user_id or user_email must be provided for each member.
+
+    Example:
+    ```
     curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
-    -d '{"organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "internal_user", "user_id": "krrish247652@berri.ai"}}'
-
+    -d '{
+        "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
+        "member": {
+            "role": "internal_user",
+            "user_id": "krrish247652@berri.ai"
+        },
+        "max_budget_in_organization": 100.0
+    }'
+    ```
 
     The following is executed in this function:
 
     1. Check if organization exists
     2. Creates a new Internal User if the user_id or user_email is not found in LiteLLM_UserTable
     3. Add Internal User to the `LiteLLM_OrganizationMembership` table
-    ```
     """
     try:
         from litellm.proxy.proxy_server import (
