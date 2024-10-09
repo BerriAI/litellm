@@ -240,24 +240,24 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             await litellm.proxy.proxy_server.prisma_client.connect()
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            request = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER)
-            key = await new_user(
-                request,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
-                    user_id="1234",
-                ),
+            user_api_key_dict = UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
             )
+            request = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER)
+            key = await new_user(request, user_api_key_dict=user_api_key_dict)
             print(key)
             user_id = key.user_id
 
             # check /user/info to verify user_role was set correctly
-            new_user_info = await user_info(user_id=user_id)
+            new_user_info = await user_info(
+                user_id=user_id, user_api_key_dict=user_api_key_dict
+            )
             new_user_info = new_user_info.user_info
             print("new_user_info=", new_user_info)
-            assert new_user_info.user_role == LitellmUserRoles.INTERNAL_USER
-            assert new_user_info.user_id == user_id
+            assert new_user_info["user_role"] == LitellmUserRoles.INTERNAL_USER
+            assert new_user_info["user_id"] == user_id
 
             generated_key = key.key
             bearer_token = "Bearer " + generated_key

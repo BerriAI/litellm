@@ -1919,6 +1919,10 @@ class TeamInfoResponseObject(TypedDict):
     team_memberships: List[LiteLLM_TeamMembership]
 
 
+class TeamListResponseObject(LiteLLM_TeamTable):
+    team_memberships: List[LiteLLM_TeamMembership]
+
+
 class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
