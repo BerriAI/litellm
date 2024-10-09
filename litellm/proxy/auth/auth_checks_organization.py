@@ -33,7 +33,7 @@ def organization_role_based_access_check(
     if route == "/organization/new":
         if user_object.user_role != LitellmUserRoles.PROXY_ADMIN.value:
             raise ProxyException(
-                message=f"Only proxy admins can create new organizations",
+                message=f"Only proxy admins can create new organizations. You are {user_object.user_role}",
                 type=ProxyErrorTypes.auth_error.value,
                 param="user_role",
                 code=status.HTTP_401_UNAUTHORIZED,
@@ -126,7 +126,6 @@ def get_user_organization_info(
             - Dictionary mapping organization IDs to user roles
     """
     _user_organizations: List[str] = []
-    user_organizations_with_alias: List[Tuple[str, str]] = []
     _user_organization_role_mapping: Dict[str, Optional[LitellmUserRoles]] = {}
 
     if user_object.organization_memberships is not None:
