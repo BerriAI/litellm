@@ -138,6 +138,7 @@ class AzureOpenAIConfig:
             "stream_options",
             "stop",
             "max_tokens",
+            "max_retries",
             "max_completion_tokens",
             "tools",
             "tool_choice",
@@ -584,7 +585,7 @@ class AzureChatCompletion(BaseLLM):
                     status_code=422, message="Missing model or messages"
                 )
 
-            max_retries = optional_params.pop("max_retries", 2)
+            max_retries = optional_params.get("max_retries", 2)
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###

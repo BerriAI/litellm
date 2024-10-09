@@ -3817,6 +3817,8 @@ def get_optional_params(
             optional_params["temperature"] = temperature
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
+        if max_retries is not None:
+            optional_params["max_retries"] = max_retries
         if top_p is not None:
             optional_params["top_p"] = top_p
         if stream is not None:
@@ -4450,6 +4452,7 @@ def get_supported_openai_params(
         return [
             "temperature",
             "max_tokens",
+            "max_retries",
             "top_p",
             "stream",
             "stop",
