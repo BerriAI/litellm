@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     TeamAddMemberResponse,
     TeamBase,
     TeamInfoResponseObject,
+    TeamListResponseObject,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
     TeamMemberUpdateRequest,
@@ -44,6 +45,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
+from litellm.proxy.utils import PrismaClient
 
 router = APIRouter()
 
@@ -56,6 +58,27 @@ def _is_user_team_admin(
             return True
 
     return False
+
+
+async def get_all_team_memberships(
+    prisma_client: PrismaClient, team_id: List[str], user_id: Optional[str] = None
+) -> List[LiteLLM_TeamMembership]:
+    """Get all team memberships for a given user"""
+    ## GET ALL MEMBERSHIPS ##
+    team_memberships = await prisma_client.db.litellm_teammembership.find_many(
+        where=(
+            {"user_id": user_id, "team_id": {"in": team_id}}
+            if user_id is not None
+            else {"team_id": {"in": team_id}}
+        ),
+        include={"litellm_budget_table": True},
+    )
+
+    returned_tm: List[LiteLLM_TeamMembership] = []
+    for tm in team_memberships:
+        returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
+
+    return returned_tm
 
 
 #### TEAM MANAGEMENT ####
@@ -1077,14 +1100,9 @@ async def team_info(
             key.pop("token", None)
 
         ## GET ALL MEMBERSHIPS ##
-        team_memberships = await prisma_client.db.litellm_teammembership.find_many(
-            where={"team_id": team_id},
-            include={"litellm_budget_table": True},
+        returned_tm = await get_all_team_memberships(
+            prisma_client, [team_id], user_id=None
         )
-
-        returned_tm: List[LiteLLM_TeamMembership] = []
-        for tm in team_memberships:
-            returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
         if isinstance(team_info, dict):
             _team_info = LiteLLM_TeamTable(**team_info)
@@ -1188,11 +1206,12 @@ async def unblock_team(
 @management_endpoint_wrapper
 async def list_team(
     http_request: Request,
+    user_id: Optional[str] = fastapi.Query(
+        default=None, description="Only return teams which this 'user_id' belongs to"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [Admin-only] List all available teams
-
     ```
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
         --header 'Authorization: Bearer sk-1234'
@@ -1208,11 +1227,12 @@ async def list_team(
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        and user_api_key_dict.user_id != user_id
     ):
         raise HTTPException(
             status_code=401,
             detail={
-                "error": "Admin-only endpoint. Your user role={}".format(
+                "error": "Only admin users can query all teams/other teams. Your user role={}".format(
                     user_api_key_dict.user_role
                 )
             },
@@ -1226,4 +1246,37 @@ async def list_team(
 
     response = await prisma_client.db.litellm_teamtable.find_many()
 
-    return response
+    filtered_response = []
+    if user_id:
+        for team in response:
+            if team.members_with_roles:
+                for member in team.members_with_roles:
+                    if (
+                        "user_id" in member
+                        and member["user_id"] is not None
+                        and member["user_id"] == user_id
+                    ):
+                        filtered_response.append(team)
+
+    else:
+        filtered_response = response
+
+    _team_ids = [team.team_id for team in filtered_response]
+    returned_tm = await get_all_team_memberships(
+        prisma_client, _team_ids, user_id=user_id
+    )
+
+    returned_responses: List[TeamListResponseObject] = []
+    for team in filtered_response:
+        _team_memberships: List[LiteLLM_TeamMembership] = []
+        for tm in returned_tm:
+            if tm.team_id == team.team_id:
+                _team_memberships.append(tm)
+        returned_responses.append(
+            TeamListResponseObject(
+                **team.model_dump(),
+                team_memberships=_team_memberships,
+            )
+        )
+
+    return returned_responses

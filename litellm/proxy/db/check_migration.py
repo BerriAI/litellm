@@ -79,7 +79,6 @@ def check_prisma_schema_diff_helper(db_url: str) -> Tuple[bool, List[str]]:
                 print(command)  # noqa: T201
             return True, sql_commands
         else:
-            print("No changes required.")  # noqa: T201
             return False, []
     except subprocess.CalledProcessError as e:
         error_message = f"Failed to generate migration diff. Error: {e.stderr}"

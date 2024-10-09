@@ -4,6 +4,7 @@ import copy
 import inspect
 import os
 import traceback
+from typing import Optional
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.utils import StandardLoggingPayload
 
 
 class LangFuseLogger:
@@ -502,7 +504,15 @@ class LangFuseLogger:
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
 
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
+
             clean_metadata["litellm_response_cost"] = cost
+            if standard_logging_object is not None:
+                clean_metadata["hidden_params"] = standard_logging_object[
+                    "hidden_params"
+                ]
 
             if (
                 litellm.langfuse_default_tags is not None
