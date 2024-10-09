@@ -238,13 +238,13 @@ model LiteLLM_TeamMembership {
 
 model LiteLLM_OrganizationMembership {
   // Use this table to track Internal User and Organization membership. Helps tracking a users role within an Organization
-  user_id    String
-  organization_id String
-  user_role  String?
-  spend      Float    @default(0.0)
-  budget_id String?
-  created_at    DateTime               @default(now()) @map("created_at")
-  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  user_id         String?
+  organization_id String?
+  user_role       String?
+  spend           Float?    @default(0.0)
+  budget_id       String?
+  created_at      DateTime?               @default(now()) @map("created_at")
+  updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
 
   // relations
   user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
