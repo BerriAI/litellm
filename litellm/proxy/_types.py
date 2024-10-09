@@ -872,10 +872,11 @@ class GlobalEndUsersSpend(LiteLLMBase):
     endTime: Optional[datetime] = None
 
 
-class TeamMemberAddRequest(LiteLLMBase):
-    team_id: str
+#### Organization / Team Member Requests ####
+
+
+class MemberAddRequest(LiteLLMBase):
     member: Union[List[Member], Member]
-    max_budget_in_team: Optional[float] = None  # Users max budget within the team
 
     def __init__(self, **data):
         member_data = data.get("member")
@@ -893,8 +894,7 @@ class TeamMemberAddRequest(LiteLLMBase):
         super().__init__(**data)
 
 
-class TeamMemberDeleteRequest(LiteLLMBase):
-    team_id: str
+class MemberDeleteRequest(LiteLLMBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
@@ -906,15 +906,52 @@ class TeamMemberDeleteRequest(LiteLLMBase):
         return values
 
 
+class MemberUpdateResponse(LiteLLMBase):
+    user_id: str
+    user_email: Optional[str] = None
+
+
+# Team Member Requests
+class TeamMemberAddRequest(MemberAddRequest):
+    team_id: str
+    max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+
+class TeamMemberDeleteRequest(MemberDeleteRequest):
+    team_id: str
+
+
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: float
 
 
-class TeamMemberUpdateResponse(LiteLLMBase):
+class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
-    user_id: str
-    user_email: Optional[str] = None
     max_budget_in_team: float
+
+
+# Organization Member Requests
+class OrganizationMemberAddRequest(MemberAddRequest):
+    organization_id: str
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
+
+
+class OrganizationMemberDeleteRequest(MemberDeleteRequest):
+    organization_id: str
+
+
+class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
+    max_budget_in_organization: float
+
+
+class OrganizationMemberUpdateResponse(MemberUpdateResponse):
+    organization_id: str
+    max_budget_in_organization: float
+
+
+##########################################
 
 
 class UpdateTeamRequest(LiteLLMBase):
