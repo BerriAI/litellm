@@ -65,6 +65,9 @@ async def get_all_team_memberships(
 ) -> List[LiteLLM_TeamMembership]:
     """Get all team memberships for a given user"""
     ## GET ALL MEMBERSHIPS ##
+    if not isinstance(user_id, str):
+        user_id = str(user_id)
+
     team_memberships = await prisma_client.db.litellm_teammembership.find_many(
         where=(
             {"user_id": user_id, "team_id": {"in": team_id}}
