@@ -26,6 +26,7 @@ model LiteLLM_BudgetTable {
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
+  organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
 }
 
 // Models on proxy
@@ -118,7 +119,10 @@ model LiteLLM_UserTable {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
-    litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+
+    // relations
+    litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
+    organization_memberships LiteLLM_OrganizationMembership[]
     invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
@@ -230,6 +234,24 @@ model LiteLLM_TeamMembership {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
+}
+
+model LiteLLM_OrganizationMembership {
+  // Use this table to track Internal User and Organization membership. Helps tracking a users role within an Organization
+  user_id         String?
+  organization_id String?
+  user_role       String?
+  spend           Float?    @default(0.0)
+  budget_id       String?
+  created_at      DateTime?               @default(now()) @map("created_at")
+  updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
+
+  // relations
+  user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  
+  @@id([user_id, organization_id])
+  @@unique([user_id, organization_id])
 }
 
 model LiteLLM_InvitationLink {

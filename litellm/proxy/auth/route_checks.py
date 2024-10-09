@@ -13,10 +13,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import hash_token
 
+from .auth_checks_organization import _user_is_org_admin
 from .auth_utils import _has_user_setup_sso
 
 
-def non_admin_allowed_routes_check(
+def non_proxy_admin_allowed_routes_check(
     user_obj: Optional[LiteLLM_UserTable],
     _user_role: Optional[LitellmUserRoles],
     route: str,
@@ -26,7 +27,7 @@ def non_admin_allowed_routes_check(
     request_data: dict,
 ):
     """
-    Checks if Non-Admin User is allowed to access the route
+    Checks if Non Proxy Admin User is allowed to access the route
     """
 
     # Check user has defined custom admin routes
@@ -104,6 +105,11 @@ def non_admin_allowed_routes_check(
     elif (
         _user_role == LitellmUserRoles.INTERNAL_USER.value
         and route in LiteLLMRoutes.internal_user_routes.value
+    ):
+        pass
+    elif (
+        _user_is_org_admin(request_data=request_data, user_object=user_obj)
+        and route in LiteLLMRoutes.org_admin_allowed_routes.value
     ):
         pass
     elif (

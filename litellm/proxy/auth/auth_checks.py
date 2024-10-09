@@ -32,6 +32,8 @@ from litellm.proxy.auth.route_checks import is_llm_api_route
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
+from .auth_checks_organization import organization_role_based_access_check
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -63,6 +65,7 @@ def common_checks(
     7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     8. [OPTIONAL] If guardrails modified - is request allowed to change this
     9. Check if request body is safe
+    10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
@@ -73,6 +76,7 @@ def common_checks(
     if (
         _model is not None
         and team_object is not None
+        and team_object.models is not None
         and len(team_object.models) > 0
         and _model not in team_object.models
     ):
@@ -202,6 +206,12 @@ def common_checks(
                     "error": "Your team does not have permission to modify guardrails."
                 },
             )
+
+    # 10 [OPTIONAL] Organization RBAC checks
+    organization_role_based_access_check(
+        user_object=user_object, route=route, request_body=request_body
+    )
+
     return True
 
 
@@ -403,16 +413,29 @@ async def get_user_object(
     try:
 
         response = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_id}
+            where={"user_id": user_id}, include={"organization_memberships": True}
         )
 
         if response is None:
             if user_id_upsert:
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id}
+                    data={"user_id": user_id},
+                    include={"organization_memberships": True},
                 )
             else:
                 raise Exception
+
+        if (
+            response.organization_memberships is not None
+            and len(response.organization_memberships) > 0
+        ):
+            # dump each organization membership to type LiteLLM_OrganizationMembershipTable
+            _dumped_memberships = [
+                membership.model_dump()
+                for membership in response.organization_memberships
+                if membership is not None
+            ]
+            response.organization_memberships = _dumped_memberships
 
         _response = LiteLLM_UserTable(**dict(response))
         response_dict = _response.model_dump()
@@ -421,9 +444,9 @@ async def get_user_object(
         await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
 
         return _response
-    except Exception:  # if user not in db
+    except Exception as e:  # if user not in db
         raise ValueError(
-            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call."
+            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
         )
 
 
