@@ -87,8 +87,8 @@ def cost_per_token(
     custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CHARACTER PRICING ###
-    prompt_characters: int = 0,
-    completion_characters: int = 0,
+    prompt_characters: Optional[int] = None,
+    completion_characters: Optional[int] = None,
     ### PROMPT CACHING PRICING ### - used for anthropic
     cache_creation_input_tokens: Optional[int] = 0,
     cache_read_input_tokens: Optional[int] = 0,
@@ -203,6 +203,16 @@ def cost_per_token(
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
     if call_type == "speech" or call_type == "aspeech":
+        if prompt_characters is None or completion_characters is None:
+            raise ValueError(
+                "prompt_characters and completion_characters must be provided for tts calls. prompt_characters={}, completion_characters={}, model={}, custom_llm_provider={}, call_type={}".format(
+                    prompt_characters,
+                    completion_characters,
+                    model,
+                    custom_llm_provider,
+                    call_type,
+                )
+            )
         prompt_cost, completion_cost = _generic_cost_per_character(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
@@ -232,10 +242,6 @@ def cost_per_token(
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
             call_type=call_type,
         )
         if cost_router == "cost_per_character":
