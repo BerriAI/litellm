@@ -22,7 +22,7 @@ Role-based access control (RBAC) is based on Organizations, Teams and Internal U
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
 
-## Managing Organizations 
+## Onboarding Organizations 
 
 ### 1. Creating a new Organization
 
