@@ -34,6 +34,7 @@ class LitellmUserRoles(str, enum.Enum):
     Admin Roles:
     PROXY_ADMIN: admin over the platform
     PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+    ORG_ADMIN: admin over a specific organization, can create teams, users only within their organization
 
     Internal User Roles:
     INTERNAL_USER: can login, view/create/delete their own keys, view their spend
@@ -52,6 +53,9 @@ class LitellmUserRoles(str, enum.Enum):
     # Admin Roles
     PROXY_ADMIN = "proxy_admin"
     PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
+
+    # Organization admins
+    ORG_ADMIN = "org_admin"
 
     # Internal User Roles
     INTERNAL_USER = "internal_user"
@@ -358,6 +362,20 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
     ]  # routes that manage their own allowed/disallowed logic
+
+    ## Org Admin Routes ##
+
+    # Routes only an Org Admin Can Access
+    org_admin_only_routes = [
+        "/organization/info",
+        "/organization/delete",
+        "/organization/member_add",
+    ]
+
+    # All routes accesible by an Org Admin
+    org_admin_allowed_routes = (
+        org_admin_only_routes + management_routes + self_managed_routes
+    )
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -695,12 +713,9 @@ class NewUserRequest(_GenerateKeyRequest):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     teams: Optional[list] = None
-    organization_id: Optional[str] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -716,12 +731,9 @@ class NewUserResponse(GenerateKeyResponse):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     teams: Optional[list] = None
-    organization_id: Optional[str] = None
     user_alias: Optional[str] = None
 
 
@@ -739,8 +751,6 @@ class UpdateUserRequest(GenerateRequestBase):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     max_budget: Optional[float] = None
@@ -811,7 +821,14 @@ class DeleteCustomerRequest(LiteLLMBase):
 
 
 class Member(LiteLLMBase):
-    role: Literal["admin", "user"]
+    role: Literal[
+        LitellmUserRoles.ORG_ADMIN,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        # older Member roles
+        "admin",
+        "user",
+    ]
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
@@ -855,51 +872,6 @@ class GlobalEndUsersSpend(LiteLLMBase):
     api_key: Optional[str] = None
     startTime: Optional[datetime] = None
     endTime: Optional[datetime] = None
-
-
-class TeamMemberAddRequest(LiteLLMBase):
-    team_id: str
-    member: Union[List[Member], Member]
-    max_budget_in_team: Optional[float] = None  # Users max budget within the team
-
-    def __init__(self, **data):
-        member_data = data.get("member")
-        if isinstance(member_data, list):
-            # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [Member(**item) for item in member_data]
-            # Replace member_data with the list of Member objects
-            data["member"] = members
-        elif isinstance(member_data, dict):
-            # If member is a dictionary, convert it to a single Member object
-            member = Member(**member_data)
-            # Replace member_data with the single Member object
-            data["member"] = member
-        # Call the superclass __init__ method to initialize the object
-        super().__init__(**data)
-
-
-class TeamMemberDeleteRequest(LiteLLMBase):
-    team_id: str
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values):
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
-
-
-class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
-    max_budget_in_team: float
-
-
-class TeamMemberUpdateResponse(LiteLLMBase):
-    team_id: str
-    user_id: str
-    user_email: Optional[str] = None
-    max_budget_in_team: float
 
 
 class UpdateTeamRequest(LiteLLMBase):
@@ -1444,6 +1416,26 @@ class LiteLLM_Config(LiteLLMBase):
     param_value: Dict
 
 
+class LiteLLM_OrganizationMembershipTable(LiteLLMBase):
+    """
+    This is the table that track what organizations a user belongs to and users spend within the organization
+    """
+
+    user_id: str
+    organization_id: str
+    user_role: Optional[str] = None
+    spend: float = 0.0
+    budget_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLM_UserTable(LiteLLMBase):
     user_id: str
     max_budget: Optional[float]
@@ -1455,6 +1447,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
+    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1907,9 +1900,97 @@ class LiteLLM_TeamMembership(LiteLLMBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
+#### Organization / Team Member Requests ####
+
+
+class MemberAddRequest(LiteLLMBase):
+    member: Union[List[Member], Member]
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [Member(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = Member(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
+        super().__init__(**data)
+
+
 class TeamAddMemberResponse(LiteLLM_TeamTable):
     updated_users: List[LiteLLM_UserTable]
     updated_team_memberships: List[LiteLLM_TeamMembership]
+
+
+class OrganizationAddMemberResponse(LiteLLMBase):
+    organization_id: str
+    updated_users: List[LiteLLM_UserTable]
+    updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable]
+
+
+class MemberDeleteRequest(LiteLLMBase):
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
+
+class MemberUpdateResponse(LiteLLMBase):
+    user_id: str
+    user_email: Optional[str] = None
+
+
+# Team Member Requests
+class TeamMemberAddRequest(MemberAddRequest):
+    team_id: str
+    max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+
+class TeamMemberDeleteRequest(MemberDeleteRequest):
+    team_id: str
+
+
+class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
+    max_budget_in_team: float
+
+
+class TeamMemberUpdateResponse(MemberUpdateResponse):
+    team_id: str
+    max_budget_in_team: float
+
+
+# Organization Member Requests
+class OrganizationMemberAddRequest(MemberAddRequest):
+    organization_id: str
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
+
+
+class OrganizationMemberDeleteRequest(MemberDeleteRequest):
+    organization_id: str
+
+
+class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
+    max_budget_in_organization: float
+
+
+class OrganizationMemberUpdateResponse(MemberUpdateResponse):
+    organization_id: str
+    max_budget_in_organization: float
+
+
+##########################################
 
 
 class TeamInfoResponseObject(TypedDict):
