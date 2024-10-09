@@ -3,7 +3,7 @@
 import asyncio
 import os
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 
@@ -192,9 +192,11 @@ class LiteralAILogger(CustomBatchLogger):
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
         settings = logging_payload["model_parameters"]
-
         messages = logging_payload["messages"]
-        choices = logging_payload.get("response", {}).get("choices", [])
+        response = logging_payload["response"]
+        choices: List = []
+        if isinstance(response, dict) and "choices" in response:
+            choices = response["choices"]
         message_completion = choices[0]["message"] if choices else None
         prompt_id = None
         variables = None
