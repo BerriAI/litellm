@@ -85,7 +85,7 @@ class OpenAIO1Config(OpenAIGPTConfig):
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
-                if temperature_value == 0 or temperature_value == 1:
+                if temperature_value == 1:
                     optional_params["temperature"] = temperature_value
                 else:
                     ## UNSUPPORTED TOOL CHOICE VALUE

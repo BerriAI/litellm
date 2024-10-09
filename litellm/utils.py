@@ -3197,7 +3197,7 @@ def get_optional_params(
 
         if stream:
             optional_params["stream"] = stream
-            return optional_params
+            #return optional_params
         if max_tokens is not None:
             if "vicuna" in model or "flan" in model:
                 optional_params["max_length"] = max_tokens
@@ -7244,34 +7244,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_bedrock_stream(self, chunk):
-        return {
-            "text": chunk["text"],
-            "is_finished": chunk["is_finished"],
-            "finish_reason": chunk["finish_reason"],
-        }
-
-    def handle_sagemaker_stream(self, chunk):
-        if "data: [DONE]" in chunk:
-            text = ""
-            is_finished = True
-            finish_reason = "stop"
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        elif isinstance(chunk, dict):
-            if chunk["is_finished"] is True:
-                finish_reason = "stop"
-            else:
-                finish_reason = ""
-            return {
-                "text": chunk["text"],
-                "is_finished": chunk["is_finished"],
-                "finish_reason": finish_reason,
-            }
-
     def handle_watsonx_stream(self, chunk):
         try:
             if isinstance(chunk, dict):
@@ -7419,6 +7391,10 @@ class CustomStreamWrapper:
             model_response._hidden_params = hidden_params
         model_response._hidden_params["custom_llm_provider"] = _logging_obj_llm_provider
         model_response._hidden_params["created_at"] = time.time()
+        model_response._hidden_params = {
+            **model_response._hidden_params,
+            **self._hidden_params,
+        }
 
         if (
             len(model_response.choices) > 0

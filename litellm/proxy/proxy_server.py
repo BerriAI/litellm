@@ -6029,8 +6029,7 @@ async def end_user_info(
         )
 
     user_info = await prisma_client.db.litellm_endusertable.find_first(
-        where={"user_id": end_user_id},
-        include={"litellm_budget_table": True}
+        where={"user_id": end_user_id}, include={"litellm_budget_table": True}
     )
 
     if user_info is None:
@@ -6235,7 +6234,7 @@ async def delete_end_user(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def list_team(
+async def list_end_user(
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):

@@ -23,16 +23,18 @@ if (isLocal != true) {
 console.log("isLocal:", isLocal);
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
-type UserSpendData = {
-  spend: number;
-  max_budget?: number | null;
-};
-
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
+}
+
+
+export type UserInfo = {
+  models: string[];
+  max_budget?: number | null;
+  spend: number;
 }
 
 function getCookie(name: string) {
@@ -74,7 +76,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setKeys,
   premiumUser,
 }) => {
-  const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
+  const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
   );
 
@@ -186,14 +188,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
                 response
               )}; team values: ${Object.entries(response.teams)}`
             );
-            // if (userRole == "Admin") {
-            //   const globalSpend = await getTotalSpendCall(accessToken);
-            //   setUserSpendData(globalSpend);
-            //   console.log("globalSpend:", globalSpend);
-            // } else {
-            //   );
-            // }
+
             setUserSpendData(response["user_info"]);
+            console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
             setKeys(response["keys"]); // Assuming this is the correct path to your data
             setTeams(response["teams"]);
             const teamsArray = [...response["teams"]];
@@ -352,6 +349,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setSelectedTeam={setSelectedTeam}
             userRole={userRole}
             proxySettings={proxySettings}
+            userInfo={userSpendData}
           />
         </Col>
       </Grid>
