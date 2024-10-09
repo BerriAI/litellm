@@ -883,88 +883,6 @@ class GlobalEndUsersSpend(LiteLLMBase):
     endTime: Optional[datetime] = None
 
 
-#### Organization / Team Member Requests ####
-
-
-class MemberAddRequest(LiteLLMBase):
-    member: Union[List[Member], Member]
-
-    def __init__(self, **data):
-        member_data = data.get("member")
-        if isinstance(member_data, list):
-            # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [Member(**item) for item in member_data]
-            # Replace member_data with the list of Member objects
-            data["member"] = members
-        elif isinstance(member_data, dict):
-            # If member is a dictionary, convert it to a single Member object
-            member = Member(**member_data)
-            # Replace member_data with the single Member object
-            data["member"] = member
-        # Call the superclass __init__ method to initialize the object
-        super().__init__(**data)
-
-
-class MemberDeleteRequest(LiteLLMBase):
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values):
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
-
-
-class MemberUpdateResponse(LiteLLMBase):
-    user_id: str
-    user_email: Optional[str] = None
-
-
-# Team Member Requests
-class TeamMemberAddRequest(MemberAddRequest):
-    team_id: str
-    max_budget_in_team: Optional[float] = None  # Users max budget within the team
-
-
-class TeamMemberDeleteRequest(MemberDeleteRequest):
-    team_id: str
-
-
-class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
-    max_budget_in_team: float
-
-
-class TeamMemberUpdateResponse(MemberUpdateResponse):
-    team_id: str
-    max_budget_in_team: float
-
-
-# Organization Member Requests
-class OrganizationMemberAddRequest(MemberAddRequest):
-    organization_id: str
-    max_budget_in_organization: Optional[float] = (
-        None  # Users max budget within the organization
-    )
-
-
-class OrganizationMemberDeleteRequest(MemberDeleteRequest):
-    organization_id: str
-
-
-class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
-    max_budget_in_organization: float
-
-
-class OrganizationMemberUpdateResponse(MemberUpdateResponse):
-    organization_id: str
-    max_budget_in_organization: float
-
-
-##########################################
-
-
 class UpdateTeamRequest(LiteLLMBase):
     """
     UpdateTeamRequest, used by /team/update when you need to update a team
@@ -1991,9 +1909,98 @@ class LiteLLM_TeamMembership(LiteLLMBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
-class TeamAddMemberResponse(LiteLLM_TeamTable):
+#### Organization / Team Member Requests ####
+
+
+class MemberAddRequest(LiteLLMBase):
+    member: Union[List[Member], Member]
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [Member(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = Member(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
+        super().__init__(**data)
+
+
+class AddMemberResponse(LiteLLM_TeamTable):
     updated_users: List[LiteLLM_UserTable]
+
+
+class TeamAddMemberResponse(AddMemberResponse):
     updated_team_memberships: List[LiteLLM_TeamMembership]
+
+
+class OrganizationAddMemberResponse(AddMemberResponse):
+    updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable]
+
+
+class MemberDeleteRequest(LiteLLMBase):
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
+
+class MemberUpdateResponse(LiteLLMBase):
+    user_id: str
+    user_email: Optional[str] = None
+
+
+# Team Member Requests
+class TeamMemberAddRequest(MemberAddRequest):
+    team_id: str
+    max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+
+class TeamMemberDeleteRequest(MemberDeleteRequest):
+    team_id: str
+
+
+class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
+    max_budget_in_team: float
+
+
+class TeamMemberUpdateResponse(MemberUpdateResponse):
+    team_id: str
+    max_budget_in_team: float
+
+
+# Organization Member Requests
+class OrganizationMemberAddRequest(MemberAddRequest):
+    organization_id: str
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
+
+
+class OrganizationMemberDeleteRequest(MemberDeleteRequest):
+    organization_id: str
+
+
+class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
+    max_budget_in_organization: float
+
+
+class OrganizationMemberUpdateResponse(MemberUpdateResponse):
+    organization_id: str
+    max_budget_in_organization: float
+
+
+##########################################
 
 
 class TeamInfoResponseObject(TypedDict):
