@@ -358,9 +358,14 @@ class LiteLLMRoutes(enum.Enum):
         spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
 
-    org_admin_user_routes = [
+    # Routes only an Org Admin Can Access
+    org_admin_only_routes = [
+        "/organization/info",
+        "/organization/delete",
         "/organization/member_add",
-    ] + internal_user_routes
+    ]
+
+    org_admin_allowed_routes = org_admin_only_routes + internal_user_routes
 
     self_managed_routes = [
         "/team/member_add",

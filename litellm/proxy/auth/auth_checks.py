@@ -207,16 +207,10 @@ def common_checks(
                 },
             )
 
-    # 10 [OPTIONAL] Organization checks - is user_object.organization_memberships
-    if (
-        user_object
-        and user_object.organization_memberships is not None
-        and len(user_object.organization_memberships) > 0
-    ):
-        # check if user is in any of the organizations
-        organization_role_based_access_check(
-            user_object=user_object, route=route, request_body=request_body
-        )
+    # 10 [OPTIONAL] Organization RBAC checks
+    organization_role_based_access_check(
+        user_object=user_object, route=route, request_body=request_body
+    )
 
     return True
 
