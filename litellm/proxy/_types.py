@@ -718,7 +718,6 @@ class NewUserRequest(_GenerateKeyRequest):
         ]
     ] = None
     teams: Optional[list] = None
-    organization_id: Optional[str] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -739,7 +738,6 @@ class NewUserResponse(GenerateKeyResponse):
         ]
     ] = None
     teams: Optional[list] = None
-    organization_id: Optional[str] = None
     user_alias: Optional[str] = None
 
 

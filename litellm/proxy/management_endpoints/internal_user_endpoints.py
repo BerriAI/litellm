@@ -63,7 +63,6 @@ async def new_user(
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - teams: Optional[list] - specify a list of team id's a user belongs to.
-    - organization_id: Optional[str] - specify the org a user belongs to. when specified a user will be added to the organization.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
@@ -136,17 +135,6 @@ async def new_user(
                 scope={"type": "http", "path": "/user/new"},
             ),
             user_api_key_dict=user_api_key_dict,
-        )
-
-    if data_json.get("organization_id", None) is not None:
-        # default to adding users as `INTERNAL_USER_VIEW_ONLY` if no role specified for organizations
-        _user_role: LitellmUserRoles = (
-            data_json.get("user_role", None) or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-        )
-        await add_internal_user_to_organization(
-            user_id=data_json.get("user_id", None),
-            organization_id=data_json["organization_id"],
-            user_role=_user_role,
         )
 
     if data.send_invite_email is True:
