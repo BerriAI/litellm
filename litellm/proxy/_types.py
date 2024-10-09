@@ -276,24 +276,19 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
     ]
 
-    # Management Routes for creating new keys, users, teams, models
-    management_create_routes = [
-        "/key/generate",
-        "/user/new",
-        "/team/new",
-        "/model/new",
-    ]
-
     management_routes = [  # key
+        "/key/generate",
         "/key/update",
         "/key/delete",
         "/key/info",
         "/key/health",
         # user
+        "/user/new",
         "/user/update",
         "/user/delete",
         "/user/info",
         # team
+        "/team/new",
         "/team/update",
         "/team/delete",
         "/team/list",
@@ -301,10 +296,11 @@ class LiteLLMRoutes(enum.Enum):
         "/team/block",
         "/team/unblock",
         # model
+        "/model/new",
         "/model/update",
         "/model/delete",
         "/model/info",
-    ] + management_create_routes
+    ]
 
     spend_tracking_routes = [
         # spend
@@ -358,18 +354,30 @@ class LiteLLMRoutes(enum.Enum):
         + sso_only_routes
     )
 
-    # routes for role = ADMIN
-    # Org Admins can do all management routes within their organization
-    org_admin_user_routes = internal_user_routes + management_routes
-
     internal_user_view_only_routes = (
         spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
     )
+
+    org_admin_user_routes = [
+        "/organization/member_add",
+    ] + internal_user_routes
 
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
     ]  # routes that manage their own allowed/disallowed logic
+
+
+# class LiteLLMAllowedRoutes(LiteLLMBase):
+#     """
+#     Defines allowed routes based on key type.
+
+#     Types = ["admin", "team", "user", "unmapped"]
+#     """
+
+#     admin_allowed_routes: List[
+#         Literal["openai_routes", "info_routes", "management_routes", "spend_tracking_routes", "global_spend_tracking_routes"]
+#     ] = ["management_routes"]
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
