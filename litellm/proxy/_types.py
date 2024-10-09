@@ -1931,15 +1931,14 @@ class MemberAddRequest(LiteLLMBase):
         super().__init__(**data)
 
 
-class AddMemberResponse(LiteLLM_TeamTable):
+class TeamAddMemberResponse(LiteLLM_TeamTable):
     updated_users: List[LiteLLM_UserTable]
-
-
-class TeamAddMemberResponse(AddMemberResponse):
     updated_team_memberships: List[LiteLLM_TeamMembership]
 
 
-class OrganizationAddMemberResponse(AddMemberResponse):
+class OrganizationAddMemberResponse(LiteLLMBase):
+    organization_id: str
+    updated_users: List[LiteLLM_UserTable]
     updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable]
 
 

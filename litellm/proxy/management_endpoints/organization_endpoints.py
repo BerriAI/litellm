@@ -262,56 +262,73 @@ async def organization_member_add(
     3. Add Internal User to the `LiteLLM_OrganizationMembership` table
     ```
     """
-
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
-
-    # Check if organization exists
-    existing_organization_row = (
-        await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": data.organization_id}
-        )
-    )
-    if existing_organization_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": f"Organization not found for organization_id={getattr(data, 'organization_id', None)}"
-            },
+    try:
+        from litellm.proxy.proxy_server import (
+            litellm_proxy_admin_name,
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
         )
 
-    members: List[Member]
-    if isinstance(data.member, List):
-        members = data.member
-    else:
-        members = [data.member]
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    updated_users: List[LiteLLM_UserTable] = []
-    updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable] = []
-
-    for member in members:
-        updated_user, updated_organization_membership = (
-            await add_member_to_organization(
-                member=member,
-                organization_id=data.organization_id,
-                prisma_client=prisma_client,
+        # Check if organization exists
+        existing_organization_row = (
+            await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": data.organization_id}
             )
         )
+        if existing_organization_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Organization not found for organization_id={getattr(data, 'organization_id', None)}"
+                },
+            )
 
-        updated_users.append(updated_user)
-        updated_organization_memberships.append(updated_organization_membership)
+        members: List[Member]
+        if isinstance(data.member, List):
+            members = data.member
+        else:
+            members = [data.member]
 
-    return OrganizationAddMemberResponse(
-        updated_users=updated_users,
-        updated_organization_memberships=updated_organization_memberships,
-    )
+        updated_users: List[LiteLLM_UserTable] = []
+        updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable] = []
+
+        for member in members:
+            updated_user, updated_organization_membership = (
+                await add_member_to_organization(
+                    member=member,
+                    organization_id=data.organization_id,
+                    prisma_client=prisma_client,
+                )
+            )
+
+            updated_users.append(updated_user)
+            updated_organization_memberships.append(updated_organization_membership)
+
+        return OrganizationAddMemberResponse(
+            organization_id=data.organization_id,
+            updated_users=updated_users,
+            updated_organization_memberships=updated_organization_memberships,
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type=ProxyErrorTypes.auth_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type=ProxyErrorTypes.auth_error,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 async def add_member_to_organization(
@@ -329,14 +346,20 @@ async def add_member_to_organization(
 
     try:
         user_object: Optional[LiteLLM_UserTable] = None
-
+        existing_user_id_row = None
+        existing_user_email_row = None
         ## Check if user exists in LiteLLM_UserTable - user exists - either the user_id or user_email is in LiteLLM_UserTable
-        existing_user_id_row = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": member.user_id}
-        )
-        existing_user_email_row = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_email": member.user_email}
-        )
+        if member.user_id is not None:
+            existing_user_id_row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": member.user_id}
+            )
+
+        if member.user_email is not None:
+            existing_user_email_row = (
+                await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_email": member.user_email}
+                )
+            )
 
         ## If user does not exist, create a new user
         if existing_user_id_row is None and existing_user_email_row is None:
@@ -380,7 +403,7 @@ async def add_member_to_organization(
                 data={
                     "organization_id": organization_id,
                     "user_id": user_object.user_id,
-                    "role": member.role,
+                    "user_role": member.role,
                 }
             )
         )
