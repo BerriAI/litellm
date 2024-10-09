@@ -34,7 +34,7 @@ class LitellmUserRoles(str, enum.Enum):
     Admin Roles:
     PROXY_ADMIN: admin over the platform
     PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
-    ADMIN: admin over a specific organization, can create teams, users only within their organization
+    ORG_ADMIN: admin over a specific organization, can create teams, users only within their organization
 
     Internal User Roles:
     INTERNAL_USER: can login, view/create/delete their own keys, view their spend
@@ -55,7 +55,7 @@ class LitellmUserRoles(str, enum.Enum):
     PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
 
     # Organization admins
-    ADMIN = "admin"
+    ORG_ADMIN = "org_admin"
 
     # Internal User Roles
     INTERNAL_USER = "internal_user"
@@ -705,7 +705,7 @@ class NewUserRequest(_GenerateKeyRequest):
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.ADMIN,
+            LitellmUserRoles.ORG_ADMIN,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.TEAM,
@@ -727,7 +727,7 @@ class NewUserResponse(GenerateKeyResponse):
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.ADMIN,
+            LitellmUserRoles.ORG_ADMIN,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.TEAM,
@@ -751,7 +751,7 @@ class UpdateUserRequest(GenerateRequestBase):
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.ADMIN,
+            LitellmUserRoles.ORG_ADMIN,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
             LitellmUserRoles.TEAM,
@@ -826,7 +826,18 @@ class DeleteCustomerRequest(LiteLLMBase):
 
 
 class Member(LiteLLMBase):
-    role: Literal["admin", "user"]
+    role: Literal[
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.ORG_ADMIN,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+        # older Member roles
+        "admin",
+        "user",
+    ]
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 

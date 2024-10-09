@@ -141,7 +141,7 @@ RBAC Tests
     [
         None,
         LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.ADMIN,
+        LitellmUserRoles.ORG_ADMIN,
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ],
@@ -224,7 +224,9 @@ async def test_org_admin_create_team_permissions(prisma_client):
     org_id = response.organization_id
 
     response = await new_user(
-        data=NewUserRequest(organization_id=org_id, user_role=LitellmUserRoles.ADMIN)
+        data=NewUserRequest(
+            organization_id=org_id, user_role=LitellmUserRoles.ORG_ADMIN
+        )
     )
 
     # create key with the response["user_id"]
@@ -234,7 +236,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
             user_id=response.user_id,
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ADMIN,
+            user_role=LitellmUserRoles.ORG_ADMIN,
             user_id=response.user_id,
         ),
     )
@@ -262,7 +264,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
         http_request=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_id=response.user_id,
-            user_role=LitellmUserRoles.ADMIN,
+            user_role=LitellmUserRoles.ORG_ADMIN,
         ),
     )
 
@@ -296,7 +298,9 @@ async def test_org_admin_create_user_permissions(prisma_client):
     org_id = response.organization_id
 
     response = await new_user(
-        data=NewUserRequest(organization_id=org_id, user_role=LitellmUserRoles.ADMIN)
+        data=NewUserRequest(
+            organization_id=org_id, user_role=LitellmUserRoles.ORG_ADMIN
+        )
     )
 
     # create key with the response["user_id"]
@@ -306,7 +310,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
             user_id=response.user_id,
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ADMIN,
+            user_role=LitellmUserRoles.ORG_ADMIN,
             user_id=response.user_id,
         ),
     )
@@ -333,7 +337,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_id=response.user_id,
-            user_role=LitellmUserRoles.ADMIN,
+            user_role=LitellmUserRoles.ORG_ADMIN,
         ),
     )
 
@@ -378,7 +382,9 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     org_without_admins = response2.organization_id
 
     response = await new_user(
-        data=NewUserRequest(organization_id=org_id, user_role=LitellmUserRoles.ADMIN)
+        data=NewUserRequest(
+            organization_id=org_id, user_role=LitellmUserRoles.ORG_ADMIN
+        )
     )
 
     # create key with the response["user_id"]
@@ -388,7 +394,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
             user_id=response.user_id,
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ADMIN,
+            user_role=LitellmUserRoles.ORG_ADMIN,
             user_id=response.user_id,
         ),
     )

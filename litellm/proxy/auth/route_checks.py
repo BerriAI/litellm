@@ -107,7 +107,7 @@ def non_proxy_admin_allowed_routes_check(
     ):
         pass
     elif (
-        _user_role == LitellmUserRoles.ADMIN.value
+        _user_role == LitellmUserRoles.ORG_ADMIN.value
         and route in LiteLLMRoutes.org_admin_user_routes.value
     ):
         pass
