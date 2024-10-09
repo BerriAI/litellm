@@ -71,7 +71,7 @@ jobs:
         with:
           context: .
           push: true
-          file: ./litellm-js/spend-logs/Dockerfile
+          file: ./extras/litellm-js/spend-logs/Dockerfile
           tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
       
   build-and-push-image:
@@ -227,7 +227,7 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          file: ./litellm-js/spend-logs/Dockerfile
+          file: ./extras/litellm-js/spend-logs/Dockerfile
           push: true
           tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8

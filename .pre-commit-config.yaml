@@ -33,7 +33,7 @@ repos:
     hooks:
     -   id: check-files-match
         name: Check if files match
-        entry: python3 ci_cd/check_files_match.py
+        entry: python3 extras/ci_cd/check_files_match.py
         language: system
     # -   id: check-file-length
     #     name: Check file length
