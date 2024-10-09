@@ -17,7 +17,7 @@ import secrets
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -26,6 +26,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_helpers.utils import (
+    get_new_internal_user_defaults,
+    management_endpoint_wrapper,
+)
+from litellm.proxy.utils import PrismaClient
 from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
@@ -220,3 +225,169 @@ async def info_organization(data: OrganizationRequest):
     )
 
     return response
+
+
+@router.post(
+    "/organization/member_add",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=OrganizationAddMemberResponse,
+)
+@management_endpoint_wrapper
+async def organization_member_add(
+    data: OrganizationMemberAddRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [BETA]
+
+    Add new members (either via user_email or user_id) to an organization
+
+    If user doesn't exist, new user row will also be added to User Table
+
+    Only proxy_admin or org_admin of organization, allowed to access this endpoint.
+    ```
+
+    curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
+    -H 'Authorization: Bearer sk-1234' \
+    -H 'Content-Type: application/json' \
+    -d '{"organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "internal_user", "user_id": "krrish247652@berri.ai"}}'
+
+
+    The following is executed in this function:
+
+    1. Check if organization exists
+    2. Creates a new Internal User if the user_id or user_email is not found in LiteLLM_UserTable
+    3. Add Internal User to the `LiteLLM_OrganizationMembership` table
+    ```
+    """
+
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    # Check if organization exists
+    existing_organization_row = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": data.organization_id}
+        )
+    )
+    if existing_organization_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Organization not found for organization_id={getattr(data, 'organization_id', None)}"
+            },
+        )
+
+    members: List[Member]
+    if isinstance(data.member, List):
+        members = data.member
+    else:
+        members = [data.member]
+
+    updated_users: List[LiteLLM_UserTable] = []
+    updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable] = []
+
+    for member in members:
+        updated_user, updated_organization_membership = (
+            await add_member_to_organization(
+                member=member,
+                organization_id=data.organization_id,
+                prisma_client=prisma_client,
+            )
+        )
+
+        updated_users.append(updated_user)
+        updated_organization_memberships.append(updated_organization_membership)
+
+    return OrganizationAddMemberResponse(
+        updated_users=updated_users,
+        updated_organization_memberships=updated_organization_memberships,
+    )
+
+
+async def add_member_to_organization(
+    member: Member,
+    organization_id: str,
+    prisma_client: PrismaClient,
+) -> Tuple[LiteLLM_UserTable, LiteLLM_OrganizationMembershipTable]:
+    """
+    Add a member to an organization
+
+    - Checks if member.user_id or member.user_email is in LiteLLM_UserTable
+    - If not found, create a new user in LiteLLM_UserTable
+    - Add user to organization in LiteLLM_OrganizationMembership
+    """
+
+    try:
+        user_object: Optional[LiteLLM_UserTable] = None
+
+        ## Check if user exists in LiteLLM_UserTable - user exists - either the user_id or user_email is in LiteLLM_UserTable
+        existing_user_id_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": member.user_id}
+        )
+        existing_user_email_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_email": member.user_email}
+        )
+
+        ## If user does not exist, create a new user
+        if existing_user_id_row is None and existing_user_email_row is None:
+            # Create a new user - since user does not exist
+            user_id: str = member.user_id or str(uuid.uuid4())
+            new_user_defaults = get_new_internal_user_defaults(
+                user_id=user_id,
+                user_email=member.user_email,
+            )
+
+            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            if _returned_user is not None:
+                user_object = LiteLLM_UserTable(**_returned_user.model_dump())
+        elif existing_user_email_row is not None and len(existing_user_email_row) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Multiple users with this email found in db. Please use 'user_id' instead."
+                },
+            )
+        elif existing_user_email_row is not None:
+            user_object = LiteLLM_UserTable(**existing_user_email_row.model_dump())
+        elif existing_user_id_row is not None:
+            user_object = LiteLLM_UserTable(**existing_user_id_row.model_dump())
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"User not found for user_id={member.user_id} and user_email={member.user_email}"
+                },
+            )
+
+        if user_object is None:
+            raise ValueError(
+                f"User does not exist in LiteLLM_UserTable. user_id={member.user_id} and user_email={member.user_email}"
+            )
+
+        # Add user to organization
+        _organization_membership = (
+            await prisma_client.db.litellm_organizationmembership.create(
+                data={
+                    "organization_id": organization_id,
+                    "user_id": user_object.user_id,
+                    "role": member.role,
+                }
+            )
+        )
+        organization_membership = LiteLLM_OrganizationMembershipTable(
+            **_organization_membership.model_dump()
+        )
+        return user_object, organization_membership
+
+    except Exception as e:
+        raise ValueError(f"Error adding member to organization: {e}")
