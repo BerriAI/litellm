@@ -12,7 +12,7 @@ Role-based access control (RBAC) is based on Organizations, Teams and Internal U
 
 **Admin Roles**
   - `proxy_admin`: admin over the platform
-  - `proxy_admin_viewer`: can login, view all keys, view all spend. **Cannot** create/delete keys, add new users.
+  - `proxy_admin_viewer`: can login, view all keys, view all spend. **Cannot** create keys/delete keys/add new users
 
 **Organization Roles**
   - `org_admin`: admin over the organization. Can create teams and users within their organization
