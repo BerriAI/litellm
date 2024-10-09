@@ -15,7 +15,7 @@ Role-based access control (RBAC) is based on Organizations, Teams and Internal U
   - `proxy_admin_viewer`: can login, view all keys, view all spend. **Cannot** create/delete keys, add new users.
 
 **Organization Roles**
-  - `organization_admin`: admin over the organization. Can create teams and users within their organization
+  - `org_admin`: admin over the organization. Can create teams and users within their organization
 
 **Internal User Roles**
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
@@ -62,22 +62,22 @@ Expected Response
 ```
 
 
-### 2. Adding an `organization_admin` to an Organization
+### 2. Adding an `org_admin` to an Organization
 
-Create a user (ishaan@berri.ai) as an `organization_admin` for the `marketing_department` Organization (from [step 1](#1-creating-a-new-organization))
+Create a user (ishaan@berri.ai) as an `org_admin` for the `marketing_department` Organization (from [step 1](#1-creating-a-new-organization))
 
 Users with the following roles can call `/organization/member_add`
 - `proxy_admin`
-- `organization_admin` only within their own organization
+- `org_admin` only within their own organization
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
-    -d '{"organization_id": "ad15e8ca-12ae-46f4-8659-d02debef1b23", "member": {"role": "organization_admin", "user_id": "ishaan@berri.ai"}}'
+    -d '{"organization_id": "ad15e8ca-12ae-46f4-8659-d02debef1b23", "member": {"role": "org_admin", "user_id": "ishaan@berri.ai"}}'
 ```
 
-Now a user with user_id = `ishaan@berri.ai` and role = `organization_admin` has been created in the `marketing_department` Organization
+Now a user with user_id = `ishaan@berri.ai` and role = `org_admin` has been created in the `marketing_department` Organization
 
 Create a Virtual Key for user_id = `ishaan@berri.ai`. The User can then use the Virtual key for their Organization Admin Operations
 
@@ -103,7 +103,7 @@ Expected Response
 
 ### 3. `Organization Admin` - Create a Team
 
-The organization admin will use the virtual key created in [step 2](#2-adding-an-organization_admin-to-an-organization) to create a `Team` within the `marketing_department` Organization
+The organization admin will use the virtual key created in [step 2](#2-adding-an-org_admin-to-an-organization) to create a `Team` within the `marketing_department` Organization
 
 ```shell
 curl --location 'http://0.0.0.0:4000/team/new' \
@@ -111,7 +111,7 @@ curl --location 'http://0.0.0.0:4000/team/new' \
     --header 'Content-Type: application/json' \
     --data '{
         "team_alias": "engineering_team",
-        "organization_id": "ad15e8ca-12ae-46f4-8659-d02debef1b23",
+        "organization_id": "ad15e8ca-12ae-46f4-8659-d02debef1b23"
     }'
 ```
 
@@ -130,7 +130,7 @@ Expected Response
 
 ### `Organization Admin` - Add an `Internal User`
 
-The organization admin will use the virtual key created in [step 2](#2-adding-an-organization_admin-to-an-organization) to add an Internal User to the `engineering_team` Team. 
+The organization admin will use the virtual key created in [step 2](#2-adding-an-org_admin-to-an-organization) to add an Internal User to the `engineering_team` Team. 
 
 - We will assign role=`internal_user` so the user can create Virtual Keys for themselves
 - `team_id` is from [step 3](#3-organization-admin---create-a-team)
@@ -139,7 +139,7 @@ The organization admin will use the virtual key created in [step 2](#2-adding-an
 curl -X POST 'http://0.0.0.0:4000/team/member_add' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
-    -d '{"team_id": "01044ee8-441b-45f4-be7d-c70e002722d8",, "member": {"role": "internal_user", "user_id": "krrish@berri.ai"}}'
+    -d '{"team_id": "01044ee8-441b-45f4-be7d-c70e002722d8", "member": {"role": "internal_user", "user_id": "krrish@berri.ai"}}'
 
 ```
 
