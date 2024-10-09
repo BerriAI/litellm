@@ -349,7 +349,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setSelectedTeam={setSelectedTeam}
             userRole={userRole}
             proxySettings={proxySettings}
+            setProxySettings={setProxySettings}
             userInfo={userSpendData}
+            accessToken={accessToken}
           />
         </Col>
       </Grid>
