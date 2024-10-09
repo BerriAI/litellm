@@ -69,11 +69,11 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Run prisma ./deploy/docker/entrypoint.sh
           command: |
             set +e
             chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            ./deploy/docker/entrypoint.sh
             set -e
       - run:
           name: Black Formatting
@@ -128,11 +128,11 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Run prisma ./deploy/docker/entrypoint.sh
           command: |
             set +e
             chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            ./deploy/docker/entrypoint.sh
             set -e
       # Run pytest and generate JUnit XML report
       - run:
@@ -331,7 +331,7 @@ jobs:
       - run:
           name: Build Docker image
           command: |
-            docker build -t myapp . -f ./docker/Dockerfile.database
+            docker build -t myapp . -f ./deploy/docker/Dockerfile.database
       - run:
           name: Run Docker container
           command: |
@@ -417,7 +417,7 @@ jobs:
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          command: docker build -t my-app:latest -f ./deploy/docker/Dockerfile.database .
       - run:
           name: Run Docker container
           command: |
@@ -525,7 +525,7 @@ jobs:
             pip install "PyGithub==1.59.1"
       - run:
           name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          command: docker build -t my-app:latest -f ./deploy/docker/Dockerfile.database .
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -634,7 +634,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.59.0"
       - run:
           name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          command: docker build -t my-app:latest -f ./deploy/docker/Dockerfile.database .
       - run:
           name: Run Docker container
           command: |
@@ -803,7 +803,7 @@ jobs:
             npx playwright install
       - run:
           name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          command: docker build -t my-app:latest -f ./deploy/docker/Dockerfile.database .
       - run:
           name: Run Docker container
           command: |
