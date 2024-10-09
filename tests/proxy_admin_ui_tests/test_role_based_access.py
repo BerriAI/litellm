@@ -224,11 +224,10 @@ async def test_org_admin_create_team_permissions(prisma_client):
     )
 
     # create key with the response["user_id"]
+    # proxy admin will generate key for org admin
     _new_key = await generate_key_fn(
         data=GenerateKeyRequest(user_id=created_user_id),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id=created_user_id),
     )
 
     new_key = _new_key.key
@@ -254,7 +253,6 @@ async def test_org_admin_create_team_permissions(prisma_client):
         http_request=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_id=response.user_id,
-            user_role=LitellmUserRoles.ORG_ADMIN,
         ),
     )
 
@@ -264,9 +262,10 @@ async def test_org_admin_create_team_permissions(prisma_client):
 @pytest.mark.asyncio
 async def test_org_admin_create_user_permissions(prisma_client):
     """
-    Create a new org admin
+    1. Create a new org admin
 
-    org admin adds a new member to their org -> success
+    2. org admin adds a new member to their org -> success (using using /organization/member_add)
+
     """
     import json
 
@@ -276,6 +275,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
+    # create new org
     response = await new_organization(
         data=NewOrganizationRequest(
             organization_alias=f"new-org-{uuid.uuid4()}",
@@ -284,7 +284,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
             user_role=LitellmUserRoles.PROXY_ADMIN,
         ),
     )
-
+    # Create Org Admin
     org_id = response.organization_id
     created_user_id = f"new-user-{uuid.uuid4()}"
     response = await organization_member_add(
@@ -295,22 +295,19 @@ async def test_org_admin_create_user_permissions(prisma_client):
         http_request=None,
     )
 
-    # create key with the response["user_id"]
-
+    # create key with for Org Admin
     _new_key = await generate_key_fn(
         data=GenerateKeyRequest(user_id=created_user_id),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id
-        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id=created_user_id),
     )
 
     new_key = _new_key.key
 
     print("user api key auth response", response)
 
-    # Create /user/new request -> expect auth to pass
+    # Create /organization/member_add request -> expect auth to pass
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/user/new")
+    request._url = URL(url="/organization/member_add")
 
     async def return_body():
         body = {"organization_id": org_id}
@@ -320,14 +317,15 @@ async def test_org_admin_create_user_permissions(prisma_client):
     response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
 
     # after auth - actually actually add new user to organization
-    response = await new_user(
-        data=NewUserRequest(
+    new_internal_user_for_org = f"new-org-user-{uuid.uuid4()}"
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
             organization_id=org_id,
+            member=Member(
+                role=LitellmUserRoles.INTERNAL_USER, user_id=new_internal_user_for_org
+            ),
         ),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_id=response.user_id,
-            user_role=LitellmUserRoles.ORG_ADMIN,
-        ),
+        http_request=request,
     )
 
     print("response from new team")
@@ -347,7 +345,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
-
+    created_user_id = f"new-user-{uuid.uuid4()}"
     response = await new_organization(
         data=NewOrganizationRequest(
             organization_alias=f"new-org-{uuid.uuid4()}",
@@ -366,25 +364,27 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
         ),
     )
 
-    org_id = response.organization_id
+    org1_id = response.organization_id  # has an admin
 
-    org_without_admins = response2.organization_id
+    org2_id = response2.organization_id  # does not have an org admin
 
-    response = await new_user(
-        data=NewUserRequest(
-            organization_id=org_id, user_role=LitellmUserRoles.ORG_ADMIN
-        )
+    # Create Org Admin for Org1
+    created_user_id = f"new-user-{uuid.uuid4()}"
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
+            organization_id=org1_id,
+            member=Member(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
+        ),
+        http_request=None,
     )
-
-    # create key with the response["user_id"]
 
     _new_key = await generate_key_fn(
         data=GenerateKeyRequest(
-            user_id=response.user_id,
+            user_id=created_user_id,
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.ORG_ADMIN,
-            user_id=response.user_id,
+            user_id=created_user_id,
         ),
     )
 
@@ -392,12 +392,12 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
 
     print("user api key auth response", response)
 
-    # Create /user/new request in organization=org_without_admins -> expect fail
+    # Add a new request in organization=org_without_admins -> expect fail (organization/member_add)
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/user/new")
+    request._url = URL(url="/organization/member_add")
 
     async def return_body():
-        body = {"organization_id": org_without_admins}
+        body = {"organization_id": org2_id}
         return bytes(json.dumps(body), "utf-8")
 
     request.body = return_body
@@ -411,7 +411,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
         print("got exception", e)
         print("exception.message", e.message)
         assert (
-            "You are not a member of the organization specified in the request body. Passed organization_id"
+            "You do not have a role within the selected organization. Passed organization_id"
             in e.message
         )
 
@@ -420,7 +420,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     request._url = URL(url="/team/new")
 
     async def return_body():
-        body = {"organization_id": org_without_admins}
+        body = {"organization_id": org2_id}
         return bytes(json.dumps(body), "utf-8")
 
     request.body = return_body
@@ -428,12 +428,12 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     try:
         response = await user_api_key_auth(request=request, api_key="Bearer " + new_key)
         pytest.fail(
-            f"This should have failed!. creating a user in an org without admins"
+            f"This should have failed!. Org Admin creating a team in an org where they are not an admin"
         )
     except Exception as e:
         print("got exception", e)
         print("exception.message", e.message)
         assert (
-            "You are not a member of the organization specified in the request body"
-            in e.message
+            "You do not have the required role to call" in e.message
+            and org2_id in e.message
         )

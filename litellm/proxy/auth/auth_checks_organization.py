@@ -77,7 +77,7 @@ def organization_role_based_access_check(
 
         if user_role != LitellmUserRoles.ORG_ADMIN.value:
             raise ProxyException(
-                message=f"You do not have the required role to perform this action. Your role is {user_role} in Organization {passed_organization_id}",
+                message=f"You do not have the required role to perform {route} in Organization {passed_organization_id}. Your role is {user_role} in Organization {passed_organization_id}",
                 type=ProxyErrorTypes.auth_error.value,
                 param="user_role",
                 code=status.HTTP_401_UNAUTHORIZED,
@@ -89,7 +89,7 @@ def organization_role_based_access_check(
         )
         if (
             user_object.organization_memberships is not None
-            and len(user_object.organization_memberships) > 1
+            and len(user_object.organization_memberships) > 0
         ):
             if passed_organization_id is None:
                 raise ProxyException(
