@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Optional, Final, Dict
+from typing import Optional, Final, Dict, List
 import configparser
 from litellm.types.utils import ModelResponse
 
@@ -95,3 +95,12 @@ def create_usage_object(usage):
    if usage.total_tokens is not None:
       usage_dict["total_tokens"] = usage.total_tokens
    return usage_dict
+
+def _remove_nulls(x):
+    x_ = {k:v for k,v in x.items() if v is not None}
+    return x_
+
+def get_traces_and_spans_from_payload(payload: List):
+    traces = [_remove_nulls(x) for x in payload if "type" not in x]
+    spans = [_remove_nulls(x) for x in payload if "type" in x]
+    return traces, spans

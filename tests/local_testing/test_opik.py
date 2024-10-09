@@ -11,7 +11,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_logger
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -84,6 +84,49 @@ async def test_opik_logging_http_request():
             if isinstance(cb, OpikLogger):
                 await cb.async_httpx_client.client.aclose()
 
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_sync_opik_logging_http_request():
+    """
+    - Test that HTTP requests are made to Opik
+    - Traces and spans are batched correctly
+    """
+    try:
+        from litellm.integrations.opik.opik import OpikLogger
+
+        os.environ["OPIK_URL_OVERRIDE"] = "https://fake.comet.com/opik/api"
+        os.environ["OPIK_API_KEY"] = "anything"
+        os.environ["OPIK_WORKSPACE"] = "anything"
+
+        # Initialize OpikLogger
+        test_opik_logger = OpikLogger()
+
+        litellm.callbacks = [test_opik_logger]
+        litellm.set_verbose = True
+
+        # Create a mock for the clients's post method
+        mock_post = Mock()
+        mock_post.return_value.status_code = 204
+        mock_post.return_value.text = "Accepted"
+        test_opik_logger.sync_httpx_client.post = mock_post
+
+        # Make multiple calls to ensure we don't hit the batch size
+        for _ in range(5):
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
+        
+        # Need to wait for a short amount of time as the log_success callback is called in a different thread
+        time.sleep(1)
+
+        # Check that 5 spans and 5 traces were sent
+        assert mock_post.call_count == 10, f"Expected 10 HTTP requests, but got {mock_post.call_count}"
+        
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

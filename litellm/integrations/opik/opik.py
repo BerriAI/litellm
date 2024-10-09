@@ -11,12 +11,14 @@ import traceback
 from .utils import (
     get_opik_config_variable,
     create_uuid7,
-    create_usage_object
+    create_usage_object,
+    get_traces_and_spans_from_payload
 )
 
 import asyncio
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    _get_httpx_client,
     httpxSpecialProvider,
 )
 
@@ -31,31 +33,48 @@ class OpikLogger(CustomBatchLogger):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-
-        self.opik_base_url = get_opik_config_variable(
-            "url_override",
-            user_value=kwargs.get("url", None),
-            default_value="https://www.comet.com/opik/api"
-        )
-        self.opik_api_key = get_opik_config_variable(
-            "api_key",
-            user_value=kwargs.get("api_key", None),
-            default_value=None
-        )
-        self.opik_workspace = get_opik_config_variable(
-            "workspace",
-            user_value=kwargs.get("workspace", None),
-            default_value=None
-        )
+        self.sync_httpx_client = _get_httpx_client()
 
         self.opik_project_name = get_opik_config_variable(
             "project_name",
             user_value=kwargs.get("project_name", None),
             default_value="Default Project"
         )
+
+        opik_base_url = get_opik_config_variable(
+            "url_override",
+            user_value=kwargs.get("url", None),
+            default_value="https://www.comet.com/opik/api"
+        )
+        opik_api_key = get_opik_config_variable(
+            "api_key",
+            user_value=kwargs.get("api_key", None),
+            default_value=None
+        )
+        opik_workspace = get_opik_config_variable(
+            "workspace",
+            user_value=kwargs.get("workspace", None),
+            default_value=None
+        )
+
+        self.trace_url = f"{opik_base_url}/v1/private/traces/batch"
+        self.span_url = f"{opik_base_url}/v1/private/spans/batch"
         
-        asyncio.create_task(self.periodic_flush())
-        self.flush_lock = asyncio.Lock()
+        self.headers = {}
+        if opik_workspace:
+            self.headers["Comet-Workspace"] = opik_workspace
+        
+        if opik_api_key:
+            self.headers["authorization"] = opik_api_key
+        
+        try:
+            asyncio.create_task(self.periodic_flush())
+            self.flush_lock = asyncio.Lock()
+        except Exception as e:
+            verbose_logger.debug(
+                f"OpikLogger - Asynchronous processing not initialized as we are not running in an async context"
+            )
+            self.flush_lock = None
 
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
@@ -79,6 +98,23 @@ class OpikLogger(CustomBatchLogger):
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
             )
     
+    def _sync_send(self, url: str, headers: Dict[str, str], batch: List[Dict]):
+        try:
+            response = self.sync_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=batch
+            )
+            response.raise_for_status()
+            if response.status_code != 204:
+                raise Exception(
+                    f"Response from opik API status_code: {response.status_code}, text: {response.text}"
+                )
+        except Exception as e:
+            verbose_logger.exception(
+                f"OpikLogger failed to send batch - {str(e)}\n{traceback.format_exc()}"
+            )
+
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             opik_payload = self._create_opik_payload(
@@ -88,12 +124,11 @@ class OpikLogger(CustomBatchLogger):
                 end_time=end_time
             )
 
-            self.log_queue.extend(opik_payload)
-            verbose_logger.debug(f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds...")
-
-            if len(self.log_queue) >= self.batch_size:
-                verbose_logger.debug("OpikLogger - Flushing batch")
-                self.flush_queue()
+            traces, spans = get_traces_and_spans_from_payload(opik_payload)
+            if len(traces) > 0:
+                self._sync_send(self.trace_url, self.headers, {"traces": traces})
+            if len(spans) > 0:
+                self._sync_send(self.span_url, self.headers, {"spans": spans})
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
@@ -118,38 +153,33 @@ class OpikLogger(CustomBatchLogger):
                 )
         except Exception as e:
             verbose_logger.exception(
-                f"OpikLogger failed to send trace batch - {str(e)}\n{traceback.format_exc()}"
+                f"OpikLogger failed to send batch - {str(e)}\n{traceback.format_exc()}"
             )
 
-    async def async_send_batch(self):
-        verbose_logger.exception("Calling async_send_batch")
-        if not self.log_queue:
-            return
-        
-        trace_url = f"{self.opik_base_url}/v1/private/traces/batch"
-        span_url = f"{self.opik_base_url}/v1/private/spans/batch"
-
-        # Create headers
+    def _create_opik_headers(self):
         headers = {}
         if self.opik_workspace:
             headers["Comet-Workspace"] = self.opik_workspace
         
         if self.opik_api_key:
             headers["authorization"] = self.opik_api_key
+        return headers
 
+
+    async def async_send_batch(self):
+        verbose_logger.exception("Calling async_send_batch")
+        if not self.log_queue:
+            return
+        
         # Split the log_queue into traces and spans
-        def remove_nulls(x):
-            x_ = {k:v for k,v in x.items() if v is not None}
-            return x_
-
-        traces = [remove_nulls(x) for x in self.log_queue if "type" not in x]
-        spans = [remove_nulls(x) for x in self.log_queue if "type" in x]
-
+        traces, spans = get_traces_and_spans_from_payload(self.log_queue)
+        
         # Send trace batch
         if len(traces) > 0:
-            await self._submit_batch(trace_url, headers, {"traces": traces})
+            await self._submit_batch(self.trace_url, self.headers, {"traces": traces})
         if len(spans) > 0:
-            await self._submit_batch(span_url, headers, {"spans": spans})
+            await self._submit_batch(self.span_url, self.headers, {"spans": spans})
+
 
     def _create_opik_payload(self, kwargs, response_obj, start_time, end_time) -> List[Dict]:
         
