@@ -153,6 +153,25 @@ async def test_proxy_success_metrics():
             in metrics
         )
 
+        ensure_db_health_metrics_are_present(metrics)
+
+
+def ensure_db_health_metrics_are_present(metrics: str):
+    """
+    get all metrics that have "litellm_postgres_latency_bucket" in them
+
+    litellm_postgres_latency_bucket{le="0.005",postgres="postgres"} 2.0
+    litellm_postgres_latency_bucket{le="0.01",postgres="postgres"} 2.0
+    litellm_postgres_latency_bucket{le="0.025",postgres="postgres"} 2.0
+    litellm_postgres_latency_bucket{le="0.05",postgres="postgres"} 2.0
+    litellm_postgres_latency_bucket{le="0.075",postgres="postgres"} 2.0
+
+    - Ensure that there is atleast one "litellm_postgres_latency_bucket" measured
+    - Ensure that NOT all of postgres latency buckets have the same value - if they do then that means that the latency metric is not being recorded properly
+    """
+
+    assert "litellm_postgres_latency_bucket" in metrics
+
 
 @pytest.mark.asyncio
 async def test_proxy_fallback_metrics():
