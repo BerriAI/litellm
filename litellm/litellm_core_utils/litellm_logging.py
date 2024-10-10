@@ -435,20 +435,6 @@ class Logging:
                             level="info",
                         )
 
-                    # MLflow trace logging needs be done synchronously to render the trace in the
-                    # notebook. Therefore, we use post_call handler instead of the success_handler
-                    # which is executed asynchronously.
-                    elif callback == "mlflow":
-                        global mlflowLogger
-                        if mlflowLogger is None:
-                            mlflowLogger = MlflowLogger()
-
-                        mlflowLogger.log_pre_api_call(
-                            model=self.model,
-                            messages=self.messages,
-                            kwargs=self.model_call_details
-                        )
-
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
                             model=self.model,
@@ -553,21 +539,6 @@ class Logging:
                             category="litellm.llm_call",
                             message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
-                        )
-
-                    # MLflow trace logging needs be done synchronously to render the trace in the
-                    # notebook. Therefore, we use post_call handler instead of the success_handler
-                    # which is executed asynchronously.
-                    elif callback == "mlflow":
-                        global mlflowLogger
-                        if mlflowLogger is None:
-                            mlflowLogger = MlflowLogger()
-
-                        mlflowLogger.log_post_api_call(
-                            kwargs=self.model_call_details,
-                            response_obj=original_response,
-                            start_time=self.start_time,
-                            end_time=datetime.datetime.now(),
                         )
 
                     elif isinstance(callback, CustomLogger):  # custom logger class
@@ -1250,6 +1221,20 @@ class Logging:
                                 end_time=end_time,
                                 print_verbose=print_verbose,
                             )
+
+                    if callback == "mlflow":
+                        global mlflowLogger
+
+                        if mlflowLogger is None:
+                            mlflowLogger = MlflowLogger()
+
+                        mlflowLogger.log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -1945,6 +1930,19 @@ class Logging:
                             end_time=end_time,
                             level=LogfireLevel.ERROR.value,  # type: ignore
                             print_verbose=print_verbose,
+                        )
+
+                    if callback == "mlflow":
+                        global mlflowLogger
+
+                        if mlflowLogger is None:
+                            mlflowLogger = MlflowLogger()
+
+                        mlflowLogger.log_failure_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
                         )
 
                 except Exception as e:
