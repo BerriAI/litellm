@@ -4846,6 +4846,8 @@ def image_generation(
                 model_response = custom_handler.aimage_generation(  # type: ignore
                     model=model,
                     prompt=prompt,
+                    api_key=api_key,
+                    api_base=api_base,
                     model_response=model_response,
                     optional_params=optional_params,
                     logging_obj=litellm_logging_obj,
@@ -4861,6 +4863,8 @@ def image_generation(
                 model_response = custom_handler.image_generation(
                     model=model,
                     prompt=prompt,
+                    api_key=api_key,
+                    api_base=api_base,
                     model_response=model_response,
                     optional_params=optional_params,
                     logging_obj=litellm_logging_obj,
