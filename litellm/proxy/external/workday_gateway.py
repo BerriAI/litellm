@@ -17,7 +17,7 @@ async def call_workday_gateway(data):
 
         payload = prepare_payload(data, gemini_model)
         print(f"calling workday gateway: {api_gateway}, payload: {payload}")
-        response = requests.post(url=api_gateway, json=payload, verify=false)
+        response = requests.post(url=api_gateway, json=payload, verify=False)
         print(f"gateway response code : {response.status_code}")
         if response.status_code != 200:
             raise Exception(f"Gateway error: {response.status_code}, {response.text}")
