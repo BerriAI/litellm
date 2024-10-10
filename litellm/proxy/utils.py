@@ -157,7 +157,8 @@ def wrapper_log_db_redis_calls(func):
 
             # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
             if "PROXY" not in func.__name__:
-                proxy_logging_obj: ProxyLogging = kwargs["proxy_logging_obj"]
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
                 await proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
@@ -198,25 +199,22 @@ def wrapper_log_db_redis_calls(func):
             return result
         except Exception as e:
             end_time = datetime.now()
-            if (
-                "proxy_logging_obj" in kwargs
-                and kwargs["proxy_logging_obj"] is not None
-            ):
-                proxy_logging_obj: ProxyLogging = kwargs["proxy_logging_obj"]
-                await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
-                    error=e,
-                    service=ServiceTypes.DB,
-                    call_type=func.__name__,
-                    parent_otel_span=kwargs.get("parent_otel_span", None),
-                    duration=(end_time - start_time).total_seconds(),
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "function_name": func.__name__,
-                        "function_kwargs": kwargs,
-                        "function_args": args,
-                    },
-                )
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                error=e,
+                service=ServiceTypes.DB,
+                call_type=func.__name__,
+                parent_otel_span=kwargs.get("parent_otel_span", None),
+                duration=(end_time - start_time).total_seconds(),
+                start_time=start_time,
+                end_time=end_time,
+                event_metadata={
+                    "function_name": func.__name__,
+                    "function_kwargs": kwargs,
+                    "function_args": args,
+                },
+            )
             raise e
 
     return wrapper
