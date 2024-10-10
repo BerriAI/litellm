@@ -7,6 +7,7 @@ import os
 import time
 import types
 import uuid
+from copy import deepcopy
 from enum import Enum
 from functools import partial
 from typing import (
@@ -65,9 +66,11 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
+from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...base import BaseLLM
 from ..common_utils import (
     VertexAIError,
+    _build_vertex_schema,
     _get_gemini_url,
     _get_vertex_url,
     all_gemini_url_modes,
@@ -376,7 +379,10 @@ class VertexGeminiConfig:
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
-
+        # remove 'additionalProperties' from tools
+        value = _remove_additional_properties(value)
+        # remove 'strict' from tools
+        value = _remove_strict_from_schema(value)
         for tool in value:
             openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
                 None
@@ -437,6 +443,10 @@ class VertexGeminiConfig:
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and isinstance(value, dict):  # type: ignore
+                # remove 'additionalProperties' from json schema
+                value = _remove_additional_properties(value)
+                # remove 'strict' from json schema
+                value = _remove_strict_from_schema(value)
                 if value["type"] == "json_object":
                     optional_params["response_mime_type"] = "application/json"
                 elif value["type"] == "text":
@@ -448,6 +458,19 @@ class VertexGeminiConfig:
                     if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
                         optional_params["response_mime_type"] = "application/json"
                         optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
+
+                if "response_schema" in optional_params and isinstance(
+                    optional_params["response_schema"], dict
+                ):
+                    old_schema = deepcopy(optional_params["response_schema"])
+
+                    if isinstance(old_schema, list):
+                        for item in old_schema:
+                            if isinstance(item, dict):
+                                item = _build_vertex_schema(parameters=item)
+                    elif isinstance(old_schema, dict):
+                        old_schema = _build_vertex_schema(parameters=old_schema)
+                    optional_params["response_schema"] = old_schema
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":

@@ -87,8 +87,8 @@ def cost_per_token(
     custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CHARACTER PRICING ###
-    prompt_characters: int = 0,
-    completion_characters: int = 0,
+    prompt_characters: Optional[int] = None,
+    completion_characters: Optional[int] = None,
     ### PROMPT CACHING PRICING ### - used for anthropic
     cache_creation_input_tokens: Optional[int] = 0,
     cache_read_input_tokens: Optional[int] = 0,
@@ -201,13 +201,24 @@ def cost_per_token(
         model = model_without_prefix
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    print_verbose(f"Looking up model={model} in model_cost_map")
+    print_verbose(
+        f"Looking up model={model} in model_cost_map, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
+    )
     if call_type == "speech" or call_type == "aspeech":
+        if prompt_characters is None:
+            raise ValueError(
+                "prompt_characters must be provided for tts calls. prompt_characters={}, model={}, custom_llm_provider={}, call_type={}".format(
+                    prompt_characters,
+                    model,
+                    custom_llm_provider,
+                    call_type,
+                )
+            )
         prompt_cost, completion_cost = _generic_cost_per_character(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
+            completion_characters=0,
             custom_prompt_cost=None,
             custom_completion_cost=0,
         )
@@ -232,10 +243,6 @@ def cost_per_token(
         cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
-            prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
             call_type=call_type,
         )
         if cost_router == "cost_per_character":
@@ -542,9 +549,9 @@ def completion_cost(
             model = "dall-e-2"  # for dall-e-2, azure expects an empty model name
         # Handle Inputs to completion_cost
         prompt_tokens = 0
-        prompt_characters = 0
+        prompt_characters: Optional[int] = None
         completion_tokens = 0
-        completion_characters = 0
+        completion_characters: Optional[int] = None
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
         if completion_response is not None and (
@@ -721,10 +728,8 @@ def completion_cost(
                 prompt_string = litellm.utils.get_formatted_prompt(
                     data={"messages": messages}, call_type="completion"
                 )
-            else:
-                prompt_string = ""
 
-            prompt_characters = litellm.utils._count_characters(text=prompt_string)
+                prompt_characters = litellm.utils._count_characters(text=prompt_string)
             if completion_response is not None and isinstance(
                 completion_response, ModelResponse
             ):
