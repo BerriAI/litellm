@@ -1,12 +1,13 @@
 import json
 import threading
 from typing import Optional
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.utils import verbose_logger
 
 import mlflow
-from mlflow.entities import Span, SpanEvent, SpanType, SpanStatusCode
+from mlflow.entities import Span, SpanEvent, SpanStatusCode, SpanType
 from mlflow.tracking import MlflowClient
+
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.utils import verbose_logger
 
 
 class MlflowLogger(CustomLogger):
@@ -16,14 +17,13 @@ class MlflowLogger(CustomLogger):
         self._stream_id_to_span = {}
         self._lock = threading.Lock()  # lock for _stream_id_to_span
 
-
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Log the success event as an MLflow span.
         Note that this method is called asynchronously in the background thread.
         """
         try:
-            verbose_logger.debug(f"MLflow logging start for success event")
+            verbose_logger.debug("MLflow logging start for success event")
 
             if kwargs.get("stream"):
                 self._handle_stream_event(kwargs, response_obj, start_time, end_time)
@@ -37,8 +37,7 @@ class MlflowLogger(CustomLogger):
                     end_time_ns=end_time_ns,
                 )
         except Exception:
-            verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
-
+            verbose_logger.debug("MLflow Logging Error", stack_info=True)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -46,7 +45,7 @@ class MlflowLogger(CustomLogger):
         Note that this method is called *synchronously* unlike the success handler.
         """
         try:
-            verbose_logger.debug(f"MLflow logging start for failure event")
+            verbose_logger.debug("MLflow logging start for failure event")
 
             span = self._start_span_or_trace(kwargs, start_time)
 
@@ -59,9 +58,7 @@ class MlflowLogger(CustomLogger):
                 "exception.stacktrace": kwargs.get("traceback_exception"),
             }
             event = SpanEvent(
-                name="exception",
-                timestamp=end_time_ns,
-                attributes=exception_attributes
+                name="exception", timestamp=end_time_ns, attributes=exception_attributes
             )
             span.add_event(event)
 
@@ -73,8 +70,7 @@ class MlflowLogger(CustomLogger):
             )
 
         except Exception:
-            verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
-
+            verbose_logger.debug("MLflow Logging Error", stack_info=True)
 
     def _handle_stream_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -115,19 +111,17 @@ class MlflowLogger(CustomLogger):
             with self._lock:
                 self._stream_id_to_span.pop(litellm_call_id)
 
-
     def _add_chunk_events(self, span, response_obj):
         try:
             for choice in response_obj.choices:
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={"delta": json.dumps(choice.delta.model_dump())}
+                        attributes={"delta": json.dumps(choice.delta.model_dump())},
                     )
                 )
         except Exception:
             verbose_logger.debug("Error adding chunk events to span", stack_info=True)
-
 
     def _construct_input(self, kwargs):
         """Construct span inputs with optional parameters"""
@@ -137,7 +131,6 @@ class MlflowLogger(CustomLogger):
                 inputs[key] = value
         return inputs
 
-
     def _extract_attributes(self, kwargs):
         """
         Extract span attributes from kwargs
@@ -146,37 +139,38 @@ class MlflowLogger(CustomLogger):
         canonical information for logging. If it is not present, we extract
         subset of attributes from other kwargs.
         """
-        attributes = (
-            {
-                "litellm_call_id": kwargs.get("litellm_call_id"),
-                "call_type": kwargs.get("call_type"),
-                "model": kwargs.get("model"),
-            }
-        )
+        attributes = {
+            "litellm_call_id": kwargs.get("litellm_call_id"),
+            "call_type": kwargs.get("call_type"),
+            "model": kwargs.get("model"),
+        }
         standard_obj = kwargs.get("standard_logging_object")
         if standard_obj:
-            attributes.update({
-                "api_base": standard_obj.get("api_base"),
-                "cache_hit": standard_obj.get("cache_hit"),
-                "usage": {
-                    "completion_tokens": standard_obj.get("completion_token"),
-                    "prompt_tokens" : standard_obj.get("prompt_token"),
-                    "total_tokens": standard_obj.get("total_token"),
-                },
-                "raw_llm_response": standard_obj.get("response"),
-                "response_cost": standard_obj.get("response_cost"),
-                "saved_cache_cost": standard_obj.get("saved_cache_cost"),
-            })
+            attributes.update(
+                {
+                    "api_base": standard_obj.get("api_base"),
+                    "cache_hit": standard_obj.get("cache_hit"),
+                    "usage": {
+                        "completion_tokens": standard_obj.get("completion_token"),
+                        "prompt_tokens": standard_obj.get("prompt_token"),
+                        "total_tokens": standard_obj.get("total_token"),
+                    },
+                    "raw_llm_response": standard_obj.get("response"),
+                    "response_cost": standard_obj.get("response_cost"),
+                    "saved_cache_cost": standard_obj.get("saved_cache_cost"),
+                }
+            )
         else:
             litellm_params = kwargs.get("litellm_params", {})
-            attributes.update({
-                "model": kwargs.get("model"),
-                "cache_hit": kwargs.get("cache_hit"),
-                "custom_llm_provider": kwargs.get("custom_llm_provider"),
-                "api_base": litellm_params.get("api_base"),
-                "response_cost": kwargs.get("response_cost"),
-            })
-
+            attributes.update(
+                {
+                    "model": kwargs.get("model"),
+                    "cache_hit": kwargs.get("cache_hit"),
+                    "custom_llm_provider": kwargs.get("custom_llm_provider"),
+                    "api_base": litellm_params.get("api_base"),
+                    "response_cost": kwargs.get("response_cost"),
+                }
+            )
 
     def _get_span_type(self, call_type: Optional[str]) -> str:
         if call_type in ["completion", "acompletion"]:
@@ -185,7 +179,6 @@ class MlflowLogger(CustomLogger):
             return SpanType.EMBEDDING
         else:
             return SpanType.LLM
-
 
     def _start_span_or_trace(self, kwargs, start_time) -> Span:
         """
@@ -220,7 +213,6 @@ class MlflowLogger(CustomLogger):
                 attributes=attributes,
                 start_time_ns=start_time_ns,
             )
-
 
     def _end_span_or_trace(self, span, outputs, end_time_ns, status):
         """End an MLflow span or a trace."""

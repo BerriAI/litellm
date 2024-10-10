@@ -4,7 +4,7 @@ import litellm
 
 
 def test_mlflow_logging():
-    litellm.input_callback = ["mlflow"]
+    litellm.success_callback = ["mlflow"]
     litellm.failure_callback = ["mlflow"]
 
     litellm.completion(
@@ -17,7 +17,7 @@ def test_mlflow_logging():
 
 @pytest.mark.asyncio()
 async def test_async_mlflow_logging():
-    litellm.input_callback = ["mlflow"]
+    litellm.success_callback = ["mlflow"]
     litellm.failure_callback = ["mlflow"]
 
     await litellm.acompletion(

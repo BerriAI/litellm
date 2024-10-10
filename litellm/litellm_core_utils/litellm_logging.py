@@ -665,7 +665,6 @@ class Logging:
                             message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
-
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_post_api_call(
                             kwargs=self.model_call_details,
