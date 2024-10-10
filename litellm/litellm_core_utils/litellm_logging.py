@@ -27,6 +27,7 @@ from litellm.caching import DualCache, InMemoryCache, S3Cache
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.mlflow import MlflowLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -552,6 +553,7 @@ class Logging:
                             message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
+
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
                             model=self.model,
@@ -662,6 +664,7 @@ class Logging:
                             message=f"Model Call Details post-call: {details_to_log}",
                             level="info",
                         )
+
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_post_api_call(
                             kwargs=self.model_call_details,
@@ -1376,6 +1379,20 @@ class Logging:
                                 end_time=end_time,
                                 print_verbose=print_verbose,
                             )
+
+                    if callback == "mlflow":
+                        global mlflowLogger
+
+                        if mlflowLogger is None:
+                            mlflowLogger = MlflowLogger()
+
+                        mlflowLogger.log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2103,6 +2120,19 @@ class Logging:
                             print_verbose=print_verbose,
                         )
 
+                    if callback == "mlflow":
+                        global mlflowLogger
+
+                        if mlflowLogger is None:
+                            mlflowLogger = MlflowLogger()
+
+                        mlflowLogger.log_failure_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {str(e)}"
@@ -2245,7 +2275,7 @@ def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, mlflowLogger
 
     try:
         for callback in callback_list:
@@ -2345,6 +2375,8 @@ def set_callbacks(callback_list, function_id=None):
                     liteDebuggerClient = LiteDebugger(email=litellm.email)
                 else:
                     liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
+            elif callback == "mlflow":
+                mlflowLogger = MlflowLogger()
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
