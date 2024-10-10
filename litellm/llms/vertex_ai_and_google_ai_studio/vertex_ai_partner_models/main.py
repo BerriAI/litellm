@@ -9,7 +9,7 @@ import httpx  # type: ignore
 import litellm
 from litellm.utils import ModelResponse
 
-from ...base import BaseLLM
+from ..vertex_llm_base import VertexBase
 
 
 class VertexPartnerProvider(str, Enum):
@@ -38,7 +38,9 @@ def create_vertex_url(
     partner: VertexPartnerProvider,
     stream: Optional[bool],
     model: str,
+    api_base: Optional[str] = None,
 ) -> str:
+    """Return the base url for the vertex partner models"""
     if partner == VertexPartnerProvider.llama:
         return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     elif partner == VertexPartnerProvider.mistralai:
@@ -58,7 +60,7 @@ def create_vertex_url(
             return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
 
 
-class VertexAIPartnerModels(BaseLLM):
+class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
 
@@ -70,6 +72,7 @@ class VertexAIPartnerModels(BaseLLM):
         print_verbose: Callable,
         encoding,
         logging_obj,
+        api_base: Optional[str],
         optional_params: dict,
         custom_prompt_dict: dict,
         headers: Optional[dict],
@@ -137,12 +140,27 @@ class VertexAIPartnerModels(BaseLLM):
             elif "claude" in model:
                 partner = VertexPartnerProvider.claude
 
-            api_base = create_vertex_url(
+            default_api_base = create_vertex_url(
                 vertex_location=vertex_location or "us-central1",
                 vertex_project=vertex_project or project_id,
                 partner=partner,  # type: ignore
                 stream=stream,
                 model=model,
+            )
+
+            if len(default_api_base.split(":")) > 1:
+                endpoint = default_api_base.split(":")[-1]
+            else:
+                endpoint = ""
+
+            _, api_base = self._check_custom_proxy(
+                api_base=api_base,
+                custom_llm_provider="vertex_ai",
+                gemini_api_key=None,
+                endpoint=endpoint,
+                stream=stream,
+                auth_header=None,
+                url=default_api_base,
             )
 
             model = model.split("@")[0]
