@@ -205,11 +205,10 @@ def cost_per_token(
         f"Looking up model={model} in model_cost_map, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
     )
     if call_type == "speech" or call_type == "aspeech":
-        if prompt_characters is None or completion_characters is None:
+        if prompt_characters is None:
             raise ValueError(
-                "prompt_characters and completion_characters must be provided for tts calls. prompt_characters={}, completion_characters={}, model={}, custom_llm_provider={}, call_type={}".format(
+                "prompt_characters must be provided for tts calls. prompt_characters={}, model={}, custom_llm_provider={}, call_type={}".format(
                     prompt_characters,
-                    completion_characters,
                     model,
                     custom_llm_provider,
                     call_type,
@@ -219,7 +218,7 @@ def cost_per_token(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             prompt_characters=prompt_characters,
-            completion_characters=completion_characters,
+            completion_characters=0,
             custom_prompt_cost=None,
             custom_completion_cost=0,
         )
