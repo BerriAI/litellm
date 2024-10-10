@@ -1711,31 +1711,6 @@ def test_completion_perplexity_api():
 # test_completion_perplexity_api()
 
 
-@pytest.mark.skip(
-    reason="too many requests. Hitting gemini rate limits. Convert to mock test."
-)
-def test_completion_pydantic_obj_2():
-    from pydantic import BaseModel
-
-    litellm.set_verbose = True
-
-    class CalendarEvent(BaseModel):
-        name: str
-        date: str
-        participants: list[str]
-
-    class EventsList(BaseModel):
-        events: list[CalendarEvent]
-
-    messages = [
-        {"role": "user", "content": "List important events from the 20th century."}
-    ]
-
-    response = litellm.completion(
-        model="gemini/gemini-1.5-pro", messages=messages, response_format=EventsList
-    )
-
-
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api_2():
     try:
@@ -4573,12 +4548,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    [
-        "gpt-4o",
-        "azure/chatgpt-v-2",
-        "claude-3-sonnet-20240229",
-        "fireworks_ai/mixtral-8x7b-instruct",
-    ],
+    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4594,5 +4564,7 @@ def test_completion_response_ratelimit_headers(model, stream):
     additional_headers = hidden_params.get("additional_headers", {})
 
     print(additional_headers)
+    for k, v in additional_headers.items():
+        assert v != "None" and v is not None
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers

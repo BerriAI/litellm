@@ -2209,3 +2209,28 @@ async def test_redis_proxy_batch_redis_get_cache():
 
     print(response._hidden_params)
     assert "cache_key" in response._hidden_params
+
+
+def test_logging_turn_off_message_logging_streaming():
+    litellm.turn_off_message_logging = True
+    mock_obj = Cache(type="local")
+    litellm.cache = mock_obj
+
+    with patch.object(mock_obj, "add_cache", new=MagicMock()) as mock_client:
+        print(f"mock_obj.add_cache: {mock_obj.add_cache}")
+
+        resp = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hello",
+            stream=True,
+        )
+
+        for chunk in resp:
+            continue
+
+        time.sleep(1)
+
+        mock_client.assert_called_once()
+
+        assert mock_client.call_args.args[0].choices[0].message.content == "hello"
