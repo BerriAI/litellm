@@ -117,10 +117,7 @@ from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
-from .llms.vertex_ai_and_google_ai_studio import (
-    vertex_ai_anthropic,
-    vertex_ai_non_gemini,
-)
+from .llms.vertex_ai_and_google_ai_studio import vertex_ai_non_gemini
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
@@ -2228,31 +2225,12 @@ def completion(  # type: ignore
             )
 
             new_params = deepcopy(optional_params)
-            if "claude-3" in model:
-                model_response = vertex_ai_anthropic.completion(
-                    model=model,
-                    messages=messages,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=new_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    vertex_location=vertex_ai_location,
-                    vertex_project=vertex_ai_project,
-                    vertex_credentials=vertex_credentials,
-                    logging_obj=logging,
-                    acompletion=acompletion,
-                    headers=headers,
-                    custom_prompt_dict=custom_prompt_dict,
-                    timeout=timeout,
-                    client=client,
-                )
-            elif (
+            if (
                 model.startswith("meta/")
                 or model.startswith("mistral")
                 or model.startswith("codestral")
                 or model.startswith("jamba")
+                or model.startswith("claude")
             ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,

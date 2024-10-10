@@ -16,6 +16,7 @@ class VertexPartnerProvider(str, Enum):
     mistralai = "mistralai"
     llama = "llama"
     ai21 = "ai21"
+    claude = "claude"
 
 
 class VertexAIError(Exception):
@@ -31,30 +32,35 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+def create_vertex_url(
+    vertex_location: str,
+    vertex_project: str,
+    partner: VertexPartnerProvider,
+    stream: Optional[bool],
+    model: str,
+) -> str:
+    if partner == VertexPartnerProvider.llama:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
+    elif partner == VertexPartnerProvider.mistralai:
+        if stream:
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
+        else:
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+    elif partner == VertexPartnerProvider.ai21:
+        if stream:
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
+        else:
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
+    elif partner == VertexPartnerProvider.claude:
+        if stream:
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
+        else:
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+
+
 class VertexAIPartnerModels(BaseLLM):
     def __init__(self) -> None:
         pass
-
-    def create_vertex_url(
-        self,
-        vertex_location: str,
-        vertex_project: str,
-        partner: VertexPartnerProvider,
-        stream: Optional[bool],
-        model: str,
-    ) -> str:
-        if partner == VertexPartnerProvider.llama:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
-        elif partner == VertexPartnerProvider.mistralai:
-            if stream:
-                return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
-            else:
-                return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
-        elif partner == VertexPartnerProvider.ai21:
-            if stream:
-                return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
-            else:
-                return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
 
     def completion(
         self,
@@ -80,6 +86,7 @@ class VertexAIPartnerModels(BaseLLM):
             import vertexai
             from google.cloud import aiplatform
 
+            from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.databricks.chat import DatabricksChatCompletion
             from litellm.llms.OpenAI.openai import OpenAIChatCompletion
             from litellm.llms.text_completion_codestral import CodestralTextCompletion
@@ -112,6 +119,7 @@ class VertexAIPartnerModels(BaseLLM):
 
             openai_like_chat_completions = DatabricksChatCompletion()
             codestral_fim_completions = CodestralTextCompletion()
+            anthropic_chat_completions = AnthropicChatCompletion()
 
             ## CONSTRUCT API BASE
             stream: bool = optional_params.get("stream", False) or False
@@ -126,8 +134,10 @@ class VertexAIPartnerModels(BaseLLM):
             elif "jamba" in model:
                 partner = VertexPartnerProvider.ai21
                 optional_params["custom_endpoint"] = True
+            elif "claude" in model:
+                partner = VertexPartnerProvider.claude
 
-            api_base = self.create_vertex_url(
+            api_base = create_vertex_url(
                 vertex_location=vertex_location or "us-central1",
                 vertex_project=vertex_project or project_id,
                 partner=partner,  # type: ignore
@@ -157,6 +167,35 @@ class VertexAIPartnerModels(BaseLLM):
                     logger_fn=logger_fn,
                     timeout=timeout,
                     encoding=encoding,
+                )
+            elif "claude" in model:
+                if headers is None:
+                    headers = {}
+                headers.update({"Authorization": "Bearer {}".format(access_token)})
+
+                optional_params.update(
+                    {
+                        "anthropic_version": "vertex-2023-10-16",
+                        "is_vertex_request": True,
+                    }
+                )
+                return anthropic_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,  # for calculating input/output tokens
+                    api_key=access_token,
+                    logging_obj=logging_obj,
+                    headers=headers,
+                    timeout=timeout,
+                    client=client,
                 )
 
             return openai_like_chat_completions.completion(
