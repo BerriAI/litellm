@@ -18,7 +18,7 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 import litellm
-from litellm import get_secret
+from litellm import get_secret, get_secret_str
 
 from ._logging import verbose_logger
 
@@ -138,6 +138,13 @@ def _get_redis_client_logic(**env_overrides):
 
     if _sentinel_nodes is not None and isinstance(_sentinel_nodes, str):
         redis_kwargs["sentinel_nodes"] = json.loads(_sentinel_nodes)
+
+    _sentinel_password: Optional[str] = redis_kwargs.get(
+        "sentinel_password", None
+    ) or get_secret_str("REDIS_SENTINEL_PASSWORD")
+
+    if _sentinel_password is not None:
+        redis_kwargs["sentinel_password"] = _sentinel_password
 
     _service_name: Optional[str] = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
         "REDIS_SERVICE_NAME"
