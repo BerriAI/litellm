@@ -147,13 +147,8 @@ def log_to_opentelemetry(func):
             end_time = datetime.now()
 
             # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
-            if (
-                "parent_otel_span" in kwargs
-                and kwargs["parent_otel_span"] is not None
-                and "proxy_logging_obj" in kwargs
-                and kwargs["proxy_logging_obj"] is not None
-            ):
-                proxy_logging_obj = kwargs["proxy_logging_obj"]
+            if "PROXY" not in func.__name__:
+                proxy_logging_obj: ProxyLogging = kwargs["proxy_logging_obj"]
                 await proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
@@ -178,19 +173,18 @@ def log_to_opentelemetry(func):
                 parent_otel_span = _get_parent_otel_span_from_kwargs(
                     kwargs=passed_kwargs
                 )
-                if parent_otel_span is not None:
-                    from litellm.proxy.proxy_server import proxy_logging_obj
+                from litellm.proxy.proxy_server import proxy_logging_obj
 
-                    metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
-                    await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                        service=ServiceTypes.BATCH_WRITE_TO_DB,
-                        call_type=func.__name__,
-                        parent_otel_span=parent_otel_span,
-                        duration=0.0,
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_metadata=metadata,
-                    )
+                metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
+                await proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.BATCH_WRITE_TO_DB,
+                    call_type=func.__name__,
+                    parent_otel_span=parent_otel_span,
+                    duration=0.0,
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata=metadata,
+                )
             # end of logging to otel
             return result
         except Exception as e:
