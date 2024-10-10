@@ -29,7 +29,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import is_llm_api_route
-from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
+from litellm.proxy.utils import PrismaClient, ProxyLogging, wrapper_log_db_redis_calls
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
@@ -283,7 +283,7 @@ def get_actual_routes(allowed_routes: list) -> list:
     return actual_routes
 
 
-@log_to_opentelemetry
+@wrapper_log_db_redis_calls
 async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -382,7 +382,7 @@ def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
     return False
 
 
-@log_to_opentelemetry
+@wrapper_log_db_redis_calls
 async def get_user_object(
     user_id: str,
     prisma_client: Optional[PrismaClient],
@@ -513,7 +513,7 @@ async def _delete_cache_key_object(
         )
 
 
-@log_to_opentelemetry
+@wrapper_log_db_redis_calls
 async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
@@ -586,7 +586,7 @@ async def get_team_object(
         )
 
 
-@log_to_opentelemetry
+@wrapper_log_db_redis_calls
 async def get_key_object(
     hashed_token: str,
     prisma_client: Optional[PrismaClient],
@@ -652,7 +652,7 @@ async def get_key_object(
         )
 
 
-@log_to_opentelemetry
+@wrapper_log_db_redis_calls
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],

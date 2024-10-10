@@ -137,14 +137,23 @@ def safe_deep_copy(data):
     return new_data
 
 
-def log_to_opentelemetry(func):
+def wrapper_log_db_redis_calls(func):
+    """
+    Wrapper function to handle service logging for db and redis calls.
+
+    On success calls ServiceLogging.async_service_success_hook
+    On failure calls ServiceLogging.async_service_failure_hook
+
+    Responsible for logging system health to OTEL, Prometheus, Datadog, etc.
+    """
+
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = datetime.now()
 
         try:
             result = await func(*args, **kwargs)
-            end_time = datetime.now()
+            end_time: datetime = datetime.now()
 
             # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
             if "PROXY" not in func.__name__:
@@ -153,7 +162,7 @@ def log_to_opentelemetry(func):
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
                     parent_otel_span=kwargs["parent_otel_span"],
-                    duration=0.0,
+                    duration=(end_time - start_time).total_seconds(),
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
@@ -180,7 +189,7 @@ def log_to_opentelemetry(func):
                     service=ServiceTypes.BATCH_WRITE_TO_DB,
                     call_type=func.__name__,
                     parent_otel_span=parent_otel_span,
-                    duration=0.0,
+                    duration=(end_time - start_time).total_seconds(),
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata=metadata,
@@ -201,7 +210,7 @@ def log_to_opentelemetry(func):
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
                     parent_otel_span=kwargs["parent_otel_span"],
-                    duration=0.0,
+                    duration=(end_time - start_time).total_seconds(),
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
@@ -1419,7 +1428,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    @log_to_opentelemetry
+    @wrapper_log_db_redis_calls
     async def get_data(
         self,
         token: Optional[Union[str, list]] = None,

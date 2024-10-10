@@ -124,7 +124,7 @@ from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
-from litellm.proxy.auth.auth_checks import log_to_opentelemetry
+from litellm.proxy.auth.auth_checks import wrapper_log_db_redis_calls
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
@@ -751,7 +751,7 @@ async def _PROXY_failure_handler(
     pass
 
 
-@log_to_opentelemetry
+@wrapper_log_db_redis_calls
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
