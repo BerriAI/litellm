@@ -161,7 +161,7 @@ def wrapper_log_db_redis_calls(func):
                 await proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
-                    parent_otel_span=kwargs["parent_otel_span"],
+                    parent_otel_span=kwargs.get("parent_otel_span", None),
                     duration=(end_time - start_time).total_seconds(),
                     start_time=start_time,
                     end_time=end_time,
@@ -199,17 +199,15 @@ def wrapper_log_db_redis_calls(func):
         except Exception as e:
             end_time = datetime.now()
             if (
-                "parent_otel_span" in kwargs
-                and kwargs["parent_otel_span"] is not None
-                and "proxy_logging_obj" in kwargs
+                "proxy_logging_obj" in kwargs
                 and kwargs["proxy_logging_obj"] is not None
             ):
-                proxy_logging_obj = kwargs["proxy_logging_obj"]
+                proxy_logging_obj: ProxyLogging = kwargs["proxy_logging_obj"]
                 await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
                     error=e,
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
-                    parent_otel_span=kwargs["parent_otel_span"],
+                    parent_otel_span=kwargs.get("parent_otel_span", None),
                     duration=(end_time - start_time).total_seconds(),
                     start_time=start_time,
                     end_time=end_time,
