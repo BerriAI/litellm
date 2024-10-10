@@ -322,6 +322,36 @@ def test_openai_extra_headers():
 
 
 @pytest.mark.parametrize(
+    "provider",
+    [
+        "openai",
+        "groq",
+        "azure",
+    ]
+)
+def test_max_retries(provider):
+    optional_params = litellm.utils.get_optional_params(
+        model="",
+        custom_llm_provider=provider,
+        max_retries=0,
+    )
+    assert optional_params["max_retries"] == 0
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "openai",
+        "groq",
+        "azure",
+    ]
+)
+def test_supported_open_ai_params_max_retries(provider):
+    supported_params = litellm.utils.get_supported_openai_params("", provider)
+    assert "max_retries" in supported_params
+
+
+@pytest.mark.parametrize(
     "api_version",
     [
         "2024-02-01",
