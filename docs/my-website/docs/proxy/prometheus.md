@@ -27,8 +27,7 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
+  callbacks: ["prometheus"]
 ```
 
 Start the proxy
