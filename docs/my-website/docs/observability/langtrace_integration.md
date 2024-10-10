@@ -1,12 +1,15 @@
 import Image from '@theme/IdealImage';
 
-# 🔥 Langtrace AI
+# Langtrace AI
+
 Monitor, evaluate & improve your LLM apps
 
 ## Pre-Requisites
+
 Make an account on [Langtrace AI](https://langtrace.ai/login)
 
 ## Quick Start
+
 Use just 2 lines of code, to instantly log your responses **across all providers** with langtrace
 
 ```python
@@ -40,4 +43,21 @@ response = completion(
     ],
 )
 print(response)
+```
+
+### Using with LiteLLM Proxy
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["langtrace"]
+
+environment_variables:
+  LANGTRACE_API_KEY: "141a****"
 ```
