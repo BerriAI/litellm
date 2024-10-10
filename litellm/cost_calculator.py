@@ -550,9 +550,9 @@ def completion_cost(
             model = "dall-e-2"  # for dall-e-2, azure expects an empty model name
         # Handle Inputs to completion_cost
         prompt_tokens = 0
-        prompt_characters = 0
+        prompt_characters: Optional[int] = None
         completion_tokens = 0
-        completion_characters = 0
+        completion_characters: Optional[int] = None
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
         if completion_response is not None and (
@@ -729,10 +729,8 @@ def completion_cost(
                 prompt_string = litellm.utils.get_formatted_prompt(
                     data={"messages": messages}, call_type="completion"
                 )
-            else:
-                prompt_string = ""
 
-            prompt_characters = litellm.utils._count_characters(text=prompt_string)
+                prompt_characters = litellm.utils._count_characters(text=prompt_string)
             if completion_response is not None and isinstance(
                 completion_response, ModelResponse
             ):

@@ -2416,3 +2416,74 @@ def test_completion_cost_params_2():
 
     assert resp1_prompt_cost == input_cost_per_character * prompt_characters
     assert resp1_completion_cost == output_cost_per_character * completion_characters
+
+
+def test_completion_cost_params_gemini_3():
+    from litellm.utils import Choices, Message, ModelResponse, Usage
+
+    from litellm.litellm_core_utils.llm_cost_calc.google import cost_per_character
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = ModelResponse(
+        id="chatcmpl-61043504-4439-48be-9996-e29bdee24dc3",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Sí. \n",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1728529259,
+        model="gemini-1.5-flash",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=2,
+            prompt_tokens=3771,
+            total_tokens=3773,
+            completion_tokens_details=None,
+            prompt_tokens_details=None,
+        ),
+        vertex_ai_grounding_metadata=[],
+        vertex_ai_safety_results=[
+            [
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "probability": "NEGLIGIBLE",
+                },
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"},
+                {"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"},
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "probability": "NEGLIGIBLE",
+                },
+            ]
+        ],
+        vertex_ai_citation_metadata=[],
+    )
+
+    pc, cc = cost_per_character(
+        **{
+            "model": "gemini-1.5-flash",
+            "custom_llm_provider": "vertex_ai",
+            "prompt_tokens": 3771,
+            "completion_tokens": 2,
+            "prompt_characters": None,
+            "completion_characters": 3,
+        }
+    )
+
+    model_info = litellm.get_model_info("gemini-1.5-flash")
+
+    assert round(pc, 10) == round(3771 * model_info["input_cost_per_token"], 10)
+    assert round(cc, 10) == round(
+        3 * model_info["output_cost_per_character"],
+        10,
+    )

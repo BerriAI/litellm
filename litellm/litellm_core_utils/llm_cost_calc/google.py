@@ -169,7 +169,7 @@ def cost_per_character(
                     model, model_info
                 )
                 completion_cost = (
-                    completion_tokens * model_info["output_cost_per_character"]
+                    completion_characters * model_info["output_cost_per_character"]
                 )
         except Exception as e:
             verbose_logger.debug(
