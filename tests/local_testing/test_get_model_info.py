@@ -68,3 +68,9 @@ def test_get_model_info_finetuned_models():
     info = litellm.get_model_info("ft:gpt-3.5-turbo:my-org:custom_suffix:id")
     print("info", info)
     assert info["input_cost_per_token"] == 0.000003
+
+
+def test_get_model_info_gemini_pro():
+    info = litellm.get_model_info("gemini-1.5-pro-002")
+    print("info", info)
+    assert info["key"] == "gemini-1.5-pro-002"

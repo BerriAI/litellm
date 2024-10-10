@@ -1414,6 +1414,7 @@ def test_logging_standard_payload_llm_headers(stream):
     with patch.object(
         customHandler, "log_success_event", new=MagicMock()
     ) as mock_client:
+
         resp = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
