@@ -346,6 +346,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
+        self.service_logging_obj = ServiceLogging()
         self.premium_user = premium_user
 
     def update_values(
@@ -393,7 +394,6 @@ class ProxyLogging:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
-        self.service_logging_obj = ServiceLogging()
         litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
         litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
         litellm.callbacks.append(self.cache_control_check)  # type: ignore
