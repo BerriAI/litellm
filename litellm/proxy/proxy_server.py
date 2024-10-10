@@ -5553,7 +5553,7 @@ async def anthropic_response(
             and data["model"] not in router_model_names
             and (
                 llm_router.default_deployment is not None
-                or len(llm_router.provider_default_deployments) > 0
+                or len(llm_router.pattern_router.patterns) > 0
             )
         ):  # model in router deployments, calling a specific deployment on the router
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
