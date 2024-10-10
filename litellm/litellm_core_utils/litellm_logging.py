@@ -2357,7 +2357,6 @@ def _init_custom_logger_compatible_class(
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
-    premium_user: Optional[bool] = None,
 ) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
@@ -2404,17 +2403,9 @@ def _init_custom_logger_compatible_class(
             if isinstance(callback, PrometheusLogger):
                 return callback  # type: ignore
 
-        if premium_user:
-            _prometheus_logger = PrometheusLogger()
-            _in_memory_loggers.append(_prometheus_logger)
-            return _prometheus_logger  # type: ignore
-        elif premium_user is False:
-            verbose_logger.warning(
-                f"🚨🚨🚨 Prometheus Metrics is on LiteLLM Enterprise\n🚨 {CommonProxyErrors.not_premium_user.value}"
-            )
-            return None
-        else:
-            return None
+        _prometheus_logger = PrometheusLogger()
+        _in_memory_loggers.append(_prometheus_logger)
+        return _prometheus_logger  # type: ignore
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):
