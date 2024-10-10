@@ -4149,10 +4149,6 @@ class Router:
             ),
         )
 
-        provider_specific_deployment = re.match(
-            rf"{custom_llm_provider}/\*$", deployment.model_name
-        )
-
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
         if deployment.model_name == "*":
