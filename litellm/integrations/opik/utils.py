@@ -1,10 +1,12 @@
+import configparser
 import os
 import time
-from typing import Optional, Final, Dict, List
-import configparser
+from typing import Dict, Final, List, Optional
+
 from litellm.types.utils import ModelResponse
 
 CONFIG_FILE_PATH_DEFAULT: Final[str] = "~/.opik.config"
+
 
 def create_uuid7():
     ns = time.time_ns()
@@ -36,6 +38,7 @@ def create_uuid7():
     rand = os.urandom(6)
     return f"{t1:>08x}-{t2:>04x}-{t3:>04x}-{t4:>04x}-{rand.hex()}"
 
+
 def _read_opik_config_file() -> Dict[str, str]:
     config_path = os.path.expanduser(CONFIG_FILE_PATH_DEFAULT)
 
@@ -51,15 +54,15 @@ def _read_opik_config_file() -> Dict[str, str]:
 
     return {}
 
-def _get_env_variable(key: str) -> str:
+
+def _get_env_variable(key: str) -> Optional[str]:
     env_prefix = "opik_"
     return os.getenv((env_prefix + key).upper(), None)
 
+
 def get_opik_config_variable(
-        key: str,
-        user_value: Optional[str] = None,
-        default_value: Optional[str] = None
-    ) -> str:
+    key: str, user_value: Optional[str] = None, default_value: Optional[str] = None
+) -> Optional[str]:
     """
     Get the configuration value of a variable, order priority is:
     1. user provided value
@@ -70,35 +73,38 @@ def get_opik_config_variable(
     # Return user provided value if it is not None
     if user_value is not None:
         return user_value
-    
+
     # Return environment variable if it is not None
     env_value = _get_env_variable(key)
     if env_value is not None:
         return env_value
-    
+
     # Return value from Opik configuration file if it is not None
     config_values = _read_opik_config_file()
 
     if key in config_values:
         return config_values[key]
-        
+
     # Return default value if it is not None
     return default_value
 
-def create_usage_object(usage):
-   usage_dict = {}
 
-   if usage.completion_tokens is not None:
-      usage_dict["completion_tokens"] = usage.completion_tokens
-   if usage.prompt_tokens is not None:
-      usage_dict["prompt_tokens"] = usage.prompt_tokens
-   if usage.total_tokens is not None:
-      usage_dict["total_tokens"] = usage.total_tokens
-   return usage_dict
+def create_usage_object(usage):
+    usage_dict = {}
+
+    if usage.completion_tokens is not None:
+        usage_dict["completion_tokens"] = usage.completion_tokens
+    if usage.prompt_tokens is not None:
+        usage_dict["prompt_tokens"] = usage.prompt_tokens
+    if usage.total_tokens is not None:
+        usage_dict["total_tokens"] = usage.total_tokens
+    return usage_dict
+
 
 def _remove_nulls(x):
-    x_ = {k:v for k,v in x.items() if v is not None}
+    x_ = {k: v for k, v in x.items() if v is not None}
     return x_
+
 
 def get_traces_and_spans_from_payload(payload: List):
     traces = [_remove_nulls(x) for x in payload if "type" not in x]
