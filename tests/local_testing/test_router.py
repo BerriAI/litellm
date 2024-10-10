@@ -73,6 +73,7 @@ async def test_router_provider_wildcard_routing():
     Pass list of orgs in 1 model definition,
     expect a unique deployment for each to be created
     """
+    litellm.set_verbose = True
     router = litellm.Router(
         model_list=[
             {
@@ -122,6 +123,48 @@ async def test_router_provider_wildcard_routing():
     )
 
     print("response 3 = ", response3)
+
+
+@pytest.mark.asyncio()
+async def test_router_provider_wildcard_routing_regex():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/fo::*:static::*",
+                "litellm_params": {
+                    "model": "openai/fo::*:static::*",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+            },
+            {
+                "model_name": "openai/foo3::hello::*",
+                "litellm_params": {
+                    "model": "openai/foo3::hello::*",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+            },
+        ]
+    )
+
+    print("router model list = ", router.get_model_list())
+
+    response1 = await router.acompletion(
+        model="openai/fo::anything-can-be-here::static::anything-can-be-here",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 1 = ", response1)
+
+    response2 = await router.acompletion(
+        model="openai/foo3::hello::static::anything-can-be-here",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 2 = ", response2)
 
 
 def test_router_specific_model_via_id():
