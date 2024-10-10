@@ -76,6 +76,7 @@ from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
+from ..integrations.opik.opik import OpikLogger
 from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prometheus_services import PrometheusServicesLogger
 from ..integrations.prompt_layer import PromptLayerLogger
@@ -2430,6 +2431,14 @@ def _init_custom_logger_compatible_class(
         _gcs_bucket_logger = GCSBucketLogger()
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger  # type: ignore
+    elif logging_integration == "opik":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpikLogger):
+                return callback  # type: ignore
+
+        _opik_logger = OpikLogger()
+        _in_memory_loggers.append(_opik_logger)
+        return _opik_logger  # type: ignore
     elif logging_integration == "arize":
         if "ARIZE_SPACE_KEY" not in os.environ:
             raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
@@ -2562,6 +2571,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
+                return callback
+    elif logging_integration == "opik":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpikLogger):
                 return callback
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry
