@@ -47,14 +47,14 @@ A number of these headers could be useful for troubleshooting, but the
 `x-litellm-call-id` is the one that is most useful for tracking a request across
 components in your system, including in logging tools.
 
-## Redacting UserAPIKeyInfo
+## Redacting UserAPIKeyInfo 
 
-Redact information about the user api key (hashed token, user_id, team id, etc.), from logs.
+Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
 
 Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
 
 ```yaml
-litellm_settings:
+litellm_settings: 
   callbacks: ["langfuse"]
   redact_user_api_key_info: true
 ```
@@ -85,7 +85,7 @@ class StandardLoggingPayload(TypedDict):
     cache_hit: Optional[bool]
     cache_key: Optional[str]
     saved_cache_cost: Optional[float]
-    request_tags: list
+    request_tags: list                         
     end_user: Optional[str]
     requester_ip_address: Optional[str]         # IP address of requester
     requester_metadata: Optional[dict]          # metadata passed in request in the "metadata" field
@@ -262,16 +262,15 @@ print(response)
 ### Team based Logging to Langfuse
 
 [👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging)
-
-<!--
+<!-- 
 
 **Example:**
 
-This config would send langfuse logs to 2 different langfuse projects, based on the team id
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
 
 ```yaml
 litellm_settings:
-  default_team_settings:
+  default_team_settings: 
     - team_id: my-secret-project
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
@@ -282,7 +281,7 @@ litellm_settings:
       langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
 ```
 
-Now, when you [generate keys](./virtual_keys.md) for this team-id
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
@@ -293,7 +292,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 All requests made with these keys will log data to their team-specific logging. -->
 
-### Redacting Messages, Response Content from Langfuse Logging
+### Redacting Messages, Response Content from Langfuse Logging 
 
 Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
 
@@ -325,26 +324,27 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+
 ### LiteLLM-specific Tags on Langfuse - `cache_hit`, `cache_key`
 
 Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields
 
-| LiteLLM specific field    | Description                                                                             | Example Value                           |
-| ------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------- |
-| `cache_hit`               | Indicates whether a cache hit occured (True) or not (False)                             | `true`, `false`                         |
-| `cache_key`               | The Cache key used for this request                                                     | `d2b758c****`                           |
-| `proxy_base_url`          | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server | `https://proxy.example.com`             |
-| `user_api_key_alias`      | An alias for the LiteLLM Virtual Key.                                                   | `prod-app1`                             |
-| `user_api_key_user_id`    | The unique ID associated with a user's API key.                                         | `user_123`, `user_456`                  |
-| `user_api_key_user_email` | The email associated with a user's API key.                                             | `user@example.com`, `admin@example.com` |
-| `user_api_key_team_alias` | An alias for a team associated with an API key.                                         | `team_alpha`, `dev_team`                |
+| LiteLLM specific field               | Description                                           | Example Value                                       |
+|------------------------|-------------------------------------------------------|------------------------------------------------|
+| `cache_hit`            | Indicates whether a cache hit occured (True) or not (False)   | `true`, `false`                                |
+| `cache_key`            | The Cache key used for this request                | `d2b758c****`|
+| `proxy_base_url`       | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server                | `https://proxy.example.com`|
+| `user_api_key_alias`   | An alias for the LiteLLM Virtual Key.| `prod-app1`        |
+| `user_api_key_user_id` | The unique ID associated with a user's API key.       | `user_123`, `user_456`                         |
+| `user_api_key_user_email` | The email associated with a user's API key.        | `user@example.com`, `admin@example.com`        |
+| `user_api_key_team_alias` | An alias for a team associated with an API key.    | `team_alpha`, `dev_team`                       |
+
 
 **Usage**
 
 Specify `langfuse_default_tags` to control what litellm fields get logged on Langfuse
 
-Example config.yaml
-
+Example config.yaml 
 ```yaml
 model_list:
   - model_name: gpt-4
@@ -357,23 +357,12 @@ litellm_settings:
   success_callback: ["langfuse"]
 
   # 👇 Key Change
-  langfuse_default_tags:
-    [
-      "cache_hit",
-      "cache_key",
-      "proxy_base_url",
-      "user_api_key_alias",
-      "user_api_key_user_id",
-      "user_api_key_user_email",
-      "user_api_key_team_alias",
-      "semantic-similarity",
-      "proxy_base_url",
-    ]
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
 ```
 
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
 
-Use this when you want to view the RAW curl request sent from LiteLLM to the LLM API
+Use this when you want to view the RAW curl request sent from LiteLLM to the LLM API 
 
 <Tabs>
 
@@ -476,7 +465,7 @@ You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL comma
 
 ## Logging Proxy Input/Output in OpenTelemetry format
 
-:::info
+:::info 
 
 [Optional] Customize OTEL Service Name and OTEL TRACER NAME by setting the following variables in your environment
 
@@ -536,30 +525,30 @@ This is the Span from OTEL Logging
 
 ```json
 {
-  "name": "litellm-acompletion",
-  "context": {
-    "trace_id": "0x8d354e2346060032703637a0843b20a3",
-    "span_id": "0xd8d3476a2eb12724",
-    "trace_state": "[]"
-  },
-  "kind": "SpanKind.INTERNAL",
-  "parent_id": null,
-  "start_time": "2024-06-04T19:46:56.415888Z",
-  "end_time": "2024-06-04T19:46:56.790278Z",
-  "status": {
-    "status_code": "OK"
-  },
-  "attributes": {
-    "model": "llama3-8b-8192"
-  },
-  "events": [],
-  "links": [],
-  "resource": {
-    "attributes": {
-      "service.name": "litellm"
+    "name": "litellm-acompletion",
+    "context": {
+        "trace_id": "0x8d354e2346060032703637a0843b20a3",
+        "span_id": "0xd8d3476a2eb12724",
+        "trace_state": "[]"
     },
-    "schema_url": ""
-  }
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": null,
+    "start_time": "2024-06-04T19:46:56.415888Z",
+    "end_time": "2024-06-04T19:46:56.790278Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "model": "llama3-8b-8192"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "litellm"
+        },
+        "schema_url": ""
+    }
 }
 ```
 
@@ -847,7 +836,7 @@ We use `litellm.integrations.custom_logger` for this, **more details about litel
 
 Define your custom callback class in a python file.
 
-Here's an example custom logger for tracking `key, user, model, prompt, response, tokens, cost`. We create a file called `custom_callbacks.py` and initialize `proxy_handler_instance`
+Here's an example custom logger for tracking `key, user, model, prompt, response, tokens, cost`. We create a file called `custom_callbacks.py` and initialize `proxy_handler_instance` 
 
 ```python
 from litellm.integrations.custom_logger import CustomLogger
@@ -856,19 +845,19 @@ import litellm
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
 class MyCustomHandler(CustomLogger):
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model, messages, kwargs): 
         print(f"Pre-API Call")
-
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         print(f"Post-API Call")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
-
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        
+    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print("On Success")
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -886,7 +875,7 @@ class MyCustomHandler(CustomLogger):
         # Calculate cost using  litellm.completion_cost()
         cost = litellm.completion_cost(completion_response=response_obj)
         response = response_obj
-        # tokens used in response
+        # tokens used in response 
         usage = response_obj["usage"]
 
         print(
@@ -902,7 +891,7 @@ class MyCustomHandler(CustomLogger):
         )
         return
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         try:
             print(f"On Async Failure !")
             print("\nkwargs", kwargs)
@@ -922,7 +911,7 @@ class MyCustomHandler(CustomLogger):
             # Calculate cost using  litellm.completion_cost()
             cost = litellm.completion_cost(completion_response=response_obj)
             print("now checking response obj")
-
+            
             print(
                 f"""
                     Model: {model},
@@ -946,7 +935,7 @@ proxy_handler_instance = MyCustomHandler()
 
 #### Step 2 - Pass your custom callback class in `config.yaml`
 
-We pass the custom callback class defined in **Step1** to the config.yaml.
+We pass the custom callback class defined in **Step1** to the config.yaml. 
 Set `callbacks` to `python_filename.logger_instance_name`
 
 In the config below, we pass
@@ -964,6 +953,7 @@ model_list:
 
 litellm_settings:
   callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
+
 ```
 
 #### Step 3 - Start proxy + test request
@@ -1044,7 +1034,7 @@ class MyCustomHandler(CustomLogger):
 }
 ```
 
-#### Logging `model_info` set in config.yaml
+#### Logging `model_info` set in config.yaml 
 
 Here is how to log the `model_info` set in your proxy `config.yaml`. Information on setting `model_info` on [config.yaml](https://docs.litellm.ai/docs/proxy/configs)
 
@@ -1061,7 +1051,7 @@ class MyCustomHandler(CustomLogger):
 **Expected Output**
 
 ```json
-{ "mode": "embedding", "input_cost_per_token": 0.002 }
+{'mode': 'embedding', 'input_cost_per_token': 0.002}
 ```
 
 ### Logging responses from proxy
@@ -1141,7 +1131,7 @@ Use this if you:
 
 #### Step 1. Create your generic logging API endpoint
 
-Set up a generic API endpoint that can receive data in JSON format. The data will be included within a "data" field.
+Set up a generic API endpoint that can receive data in JSON format. The data will be included within a "data" field. 
 
 Your server should support the following Request format:
 
@@ -1224,7 +1214,7 @@ litellm_settings:
   success_callback: ["generic"]
 ```
 
-Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API
+Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 ## Logging LLM IO to Langsmith
 
@@ -1244,13 +1234,14 @@ environment_variables:
   LANGSMITH_BASE_URL: "https://api.smith.langchain.com" # (Optional - only needed if you have a custom Langsmith instance)
 ```
 
+
 2. Start Proxy
 
 ```
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it!
+3. Test it! 
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -1266,9 +1257,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
-
 Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
+
 
 ## Logging LLM IO to Arize AI
 
@@ -1286,9 +1277,9 @@ litellm_settings:
   callbacks: ["arize"]
 
 environment_variables:
-  ARIZE_SPACE_KEY: "d0*****"
-  ARIZE_API_KEY: "141a****"
-  ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize api endpoint
+    ARIZE_SPACE_KEY: "d0*****"
+    ARIZE_API_KEY: "141a****"
+    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize api endpoint
 ```
 
 2. Start Proxy
@@ -1297,7 +1288,7 @@ environment_variables:
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it!
+3. Test it! 
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -1313,7 +1304,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
-
 Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
 
@@ -1338,17 +1328,17 @@ export GALILEO_USERNAME=""
 export GALILEO_PASSWORD=""
 ```
 
-### Quick Start
+### Quick Start 
 
 1. Add to Config.yaml
 
 ```yaml
 model_list:
-  - litellm_params:
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      api_key: my-fake-key
-      model: openai/my-fake-model
-    model_name: fake-openai-endpoint
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
 
 litellm_settings:
   success_callback: ["galileo"] # 👈 KEY CHANGE
@@ -1360,7 +1350,7 @@ litellm_settings:
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it!
+3. Test it! 
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -1391,17 +1381,17 @@ export OPENMETER_API_ENDPOINT="" # defaults to https://openmeter.cloud
 export OPENMETER_API_KEY=""
 ```
 
-### Quick Start
+### Quick Start 
 
 1. Add to Config.yaml
 
 ```yaml
 model_list:
-  - litellm_params:
-      api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
-      api_key: my-fake-key
-      model: openai/my-fake-model
-    model_name: fake-openai-endpoint
+- litellm_params:
+    api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
 
 litellm_settings:
   success_callback: ["openmeter"] # 👈 KEY CHANGE
@@ -1413,7 +1403,7 @@ litellm_settings:
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it!
+3. Test it! 
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -1489,9 +1479,9 @@ Expected output on Datadog
 
 ## Logging Proxy Input/Output - DynamoDB
 
-We will use the `--config` to set
+We will use the `--config` to set 
 
-- `litellm.success_callback = ["dynamodb"]`
+- `litellm.success_callback = ["dynamodb"]` 
 - `litellm.dynamodb_table_name = "your-table-name"`
 
 This will log all successfull LLM calls to DynamoDB
@@ -1615,7 +1605,7 @@ Your logs should be available on DynamoDB
 
 ## Logging Proxy Input/Output - Sentry
 
-If api calls fail (llm/database) you can log those to Sentry:
+If api calls fail (llm/database) you can log those to Sentry: 
 
 **Step 1** Install Sentry
 
@@ -1629,7 +1619,7 @@ pip install --upgrade sentry-sdk
 export SENTRY_DSN="your-sentry-dsn"
 ```
 
-```yaml
+```yaml 
 model_list:
  - model_name: gpt-3.5-turbo
     litellm_params:
@@ -1637,7 +1627,7 @@ model_list:
 litellm_settings:
   # other settings
   failure_callback: ["sentry"]
-general_settings:
+general_settings: 
   database_url: "my-bad-url" # set a fake url to trigger a sentry exception
 ```
 
