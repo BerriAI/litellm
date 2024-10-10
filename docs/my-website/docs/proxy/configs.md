@@ -375,6 +375,10 @@ model_list:
     litellm_params:
       model: "groq/*"
       api_key: os.environ/GROQ_API_KEY
+  - model_name: "fo::*:static::*" # all requests matching this pattern will be routed to this deployment, example: model="fo::hi::static::hi" will be routed to deployment: "openai/fo::*:static::*"
+    litellm_params:
+      model: "openai/fo::*:static::*"
+      api_key: os.environ/OPENAI_API_KEY
 ```
 
 Step 2 - Run litellm proxy 
@@ -405,6 +409,19 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "groq/llama3-8b-8192",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
+```
+
+Test with `fo::*::static::*` - all requests matching this pattern will be routed to `openai/fo::*:static::*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fo::hi::static::hi",
     "messages": [
       {"role": "user", "content": "Hello, Claude!"}
     ]

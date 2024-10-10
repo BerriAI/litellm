@@ -109,7 +109,7 @@ async def route_request(
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
                 llm_router.default_deployment is not None
-                or len(llm_router.provider_default_deployments) > 0
+                or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
 
