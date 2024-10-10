@@ -12,7 +12,7 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
@@ -215,7 +215,12 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+
+    sentinel_kwargs: Optional[Dict] = None
+    if sentinel_password:
+        sentinel_kwargs = {"password": sentinel_password}
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -225,7 +230,9 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
-    sentinel = async_redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+    sentinel = async_redis.Sentinel(
+        sentinel_nodes, socket_timeout=0.1, sentinel_kwargs=sentinel_kwargs
+    )
 
     # Return the master instance for the given service
 
