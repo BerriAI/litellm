@@ -22,7 +22,11 @@ from litellm.types.integrations.s3 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
-from .custom_logger import CustomLogger
+
+# Default Flush interval and batch size for s3
+# Flush to s3 every 10 seconds OR every 1K requests in memory
+DEFAULT_S3_FLUSH_INTERVAL_SECONDS = 10
+DEFAULT_S3_BATCH_SIZE = 1000
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
@@ -39,8 +43,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_aws_access_key_id: Optional[str] = None,
         s3_aws_secret_access_key: Optional[str] = None,
         s3_aws_session_token: Optional[str] = None,
-        s3_flush_interval: Optional[int] = None,
-        s3_batch_size: Optional[int] = None,
+        s3_flush_interval: Optional[int] = DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
+        s3_batch_size: Optional[int] = DEFAULT_S3_BATCH_SIZE,
         s3_config=None,
         **kwargs,
     ):
@@ -82,9 +86,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 # done reading litellm.s3_callback_params
 
                 s3_flush_interval = litellm.s3_callback_params.get(
-                    "s3_flush_interval", None
+                    "s3_flush_interval", DEFAULT_S3_FLUSH_INTERVAL_SECONDS
                 )
-                s3_batch_size = litellm.s3_callback_params.get("s3_batch_size", None)
+                s3_batch_size = litellm.s3_callback_params.get(
+                    "s3_batch_size", DEFAULT_S3_BATCH_SIZE
+                )
 
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
@@ -221,6 +227,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Prepare the URL
             url = f"https://{self.bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
+
+            if self.s3_endpoint_url:
+                url = self.s3_endpoint_url + "/" + batch_logging_element.s3_object_key
 
             # Convert JSON to string
             json_string = json.dumps(batch_logging_element.payload)
