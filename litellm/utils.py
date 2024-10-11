@@ -197,7 +197,6 @@ lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
-s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
 greenscaleLogger = None
@@ -1799,8 +1798,9 @@ def calculate_tiles_needed(
     total_tiles = tiles_across * tiles_down
     return total_tiles
 
+
 def get_image_type(image_data: bytes) -> Union[str, None]:
-    """ take an image (really only the first ~100 bytes max are needed)
+    """take an image (really only the first ~100 bytes max are needed)
     and return 'png' 'gif' 'jpeg' 'heic' or None. method added to
     allow deprecation of imghdr in 3.13"""
 

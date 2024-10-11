@@ -13,8 +13,10 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.utils import StandardLoggingPayload
 
+from .custom_logger import CustomLogger
 
-class S3Logger:
+
+class S3Logger(CustomLogger):
     # Class variables or attributes
     def __init__(
         self,
@@ -84,12 +86,7 @@ class S3Logger:
             print_verbose(f"Got exception on init s3 client {str(e)}")
             raise e
 
-    async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
-    ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
-
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
                 f"s3 Logging - Enters logging function for model {kwargs}"
