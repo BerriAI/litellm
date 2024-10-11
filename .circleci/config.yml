@@ -1,4 +1,7 @@
 version: 4.3.4
+orbs:
+  codecov: codecov/codecov@4.0.1
+
 jobs:
   local_testing:
     docker:
@@ -105,6 +108,8 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+      
+      - codecov/upload
   ui_endpoint_testing:
     docker:
       - image: cimg/python:3.11
@@ -176,6 +181,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+      - codecov/upload
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
         - image: cimg/python:3.11
@@ -206,6 +212,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+      - codecov/upload
   load_testing:
     docker:
       - image: cimg/python:3.11
@@ -267,7 +274,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-
+      - codecov/upload
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -844,9 +851,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-orbs:
-  codecov: codecov/codecov@4.0.1
-
 workflows:
   version: 2
   build_and_test:
@@ -948,8 +952,4 @@ workflows:
             branches:
               only:
                 - main
-  upload-to-codecov:
-    jobs:
-      - checkout 
-      - codecov/upload
       
