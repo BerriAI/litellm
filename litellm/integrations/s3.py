@@ -40,6 +40,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_aws_access_key_id: Optional[str] = None,
         s3_aws_secret_access_key: Optional[str] = None,
         s3_aws_session_token: Optional[str] = None,
+        s3_flush_interval: Optional[int] = None,
+        s3_batch_size: Optional[int] = None,
         s3_config=None,
         **kwargs,
     ):
@@ -79,6 +81,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_path = litellm.s3_callback_params.get("s3_path")
                 # done reading litellm.s3_callback_params
 
+                s3_flush_interval = litellm.s3_callback_params.get(
+                    "s3_flush_interval", None
+                )
+                s3_batch_size = litellm.s3_callback_params.get("s3_batch_size", None)
+
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
@@ -96,8 +103,17 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
+
+            verbose_logger.debug(
+                f"s3 flush interval: {s3_flush_interval}, s3 batch size: {s3_batch_size}"
+            )
             # Call CustomLogger's __init__
-            CustomBatchLogger.__init__(self, flush_lock=self.flush_lock)
+            CustomBatchLogger.__init__(
+                self,
+                flush_lock=self.flush_lock,
+                flush_interval=s3_flush_interval,
+                batch_size=s3_batch_size,
+            )
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
