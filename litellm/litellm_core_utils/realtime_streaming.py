@@ -28,7 +28,7 @@ import asyncio
 import concurrent.futures
 import traceback
 from asyncio import Task
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from .litellm_logging import Logging as LiteLLMLogging
 
@@ -37,12 +37,10 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
 
 class RealTimeStreaming:
-    import websockets
-
     def __init__(
         self,
         websocket: Any,
-        backend_ws: websockets.WebSocketClientProtocol,  # type: ignore
+        backend_ws: Any,
         logging_obj: Optional[LiteLLMLogging] = None,
     ):
         self.websocket = websocket
@@ -51,7 +49,7 @@ class RealTimeStreaming:
         self.messages: List = []
         self.input_message: Dict = {}
 
-    def store_message(self, message: str):
+    def store_message(self, message: Union[str, bytes]):
         """Store message in list"""
         self.messages.append(message)
 
@@ -71,6 +69,8 @@ class RealTimeStreaming:
             executor.submit(self.logging_obj.success_handler(self.messages))
 
     async def backend_to_client_send_messages(self):
+        import websockets
+
         try:
             while True:
                 message = await self.backend_ws.recv()
@@ -78,7 +78,7 @@ class RealTimeStreaming:
 
                 ## LOGGING
                 self.store_message(message)
-        except self.websockets.exceptions.ConnectionClosed:  # type: ignore
+        except websockets.exceptions.ConnectionClosed:  # type: ignore
             pass
         except Exception as e:
             pass
@@ -97,6 +97,7 @@ class RealTimeStreaming:
             pass
 
     async def bidirectional_forward(self):
+
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()
