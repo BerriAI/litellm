@@ -80,7 +80,7 @@ class RealTimeStreaming:
                 self.store_message(message)
         except websockets.exceptions.ConnectionClosed:  # type: ignore
             pass
-        except Exception as e:
+        except Exception:
             pass
         finally:
             await self.log_messages()
