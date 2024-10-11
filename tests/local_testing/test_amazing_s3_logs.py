@@ -15,6 +15,7 @@ import time, random
 from litellm._logging import verbose_logger
 import logging
 import pytest
+import boto3
 
 
 @pytest.mark.asyncio
@@ -37,6 +38,20 @@ async def test_basic_s3_logging():
     print(f"response: {response}")
 
     await asyncio.sleep(3)
+
+
+def list_all_s3_objects(bucket_name):
+    s3 = boto3.client("s3")
+
+    paginator = s3.get_paginator("list_objects_v2")
+    total_objects = 0
+
+    for page in paginator.paginate(Bucket=bucket_name):
+        if "Contents" in page:
+            total_objects += len(page["Contents"])
+
+    print(f"Total number of objects in {bucket_name}: {total_objects}")
+    return total_objects
 
 
 def test_s3_logging():
