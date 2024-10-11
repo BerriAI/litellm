@@ -2531,6 +2531,31 @@ def _init_custom_logger_compatible_class(
             dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
         _in_memory_loggers.append(dynamic_rate_limiter_obj)
         return dynamic_rate_limiter_obj  # type: ignore
+    elif logging_integration == "langtrace":
+        if "LANGTRACE_API_KEY" not in os.environ:
+            raise ValueError("LANGTRACE_API_KEY not found in environment variables")
+
+        from litellm.integrations.opentelemetry import (
+            OpenTelemetry,
+            OpenTelemetryConfig,
+        )
+
+        otel_config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="https://langtrace.ai/api/trace",
+        )
+        os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+            f"api_key={os.getenv('LANGTRACE_API_KEY')}"
+        )
+        for callback in _in_memory_loggers:
+            if (
+                isinstance(callback, OpenTelemetry)
+                and callback.callback_name == "langtrace"
+            ):
+                return callback  # type: ignore
+        _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
+        _in_memory_loggers.append(_otel_logger)
+        return _otel_logger  # type: ignore
 
 
 def get_custom_logger_compatible_class(
@@ -2612,6 +2637,19 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, _PROXY_DynamicRateLimitHandler):
                 return callback  # type: ignore
+
+    elif logging_integration == "langtrace":
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        if "LANGTRACE_API_KEY" not in os.environ:
+            raise ValueError("LANGTRACE_API_KEY not found in environment variables")
+
+        for callback in _in_memory_loggers:
+            if (
+                isinstance(callback, OpenTelemetry)
+                and callback.callback_name == "langtrace"
+            ):
+                return callback
     return None
 
 
