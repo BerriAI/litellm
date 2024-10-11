@@ -1348,6 +1348,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
       ],
     }
 '
+```
+
 ## Logging LLM IO to Galileo
 
 [BETA]
