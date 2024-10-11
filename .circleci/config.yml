@@ -844,6 +844,9 @@ jobs:
       - store_test_results:
           path: test-results
 
+orbs:
+  codecov: codecov/codecov@4.0.1
+
 workflows:
   version: 2
   build_and_test:
@@ -945,3 +948,8 @@ workflows:
             branches:
               only:
                 - main
+  upload-to-codecov:
+    jobs:
+      - checkout 
+      - codecov/upload
+      
