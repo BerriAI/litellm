@@ -39,9 +39,20 @@ async def test_basic_s3_logging():
 
     await asyncio.sleep(12)
 
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+
+    # assert that atlest one key has response.id in it
+    assert any(response.id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    # delete all objects
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
+
 
 def list_all_s3_objects(bucket_name):
     s3 = boto3.client("s3")
+
+    all_s3_keys = []
 
     paginator = s3.get_paginator("list_objects_v2")
     total_objects = 0
@@ -49,11 +60,17 @@ def list_all_s3_objects(bucket_name):
     for page in paginator.paginate(Bucket=bucket_name):
         if "Contents" in page:
             total_objects += len(page["Contents"])
+            all_s3_keys.extend([obj["Key"] for obj in page["Contents"]])
 
     print(f"Total number of objects in {bucket_name}: {total_objects}")
-    return total_objects
+    print(all_s3_keys)
+    return total_objects, all_s3_keys
 
 
+list_all_s3_objects("load-testing-oct")
+
+
+@pytest.mark.skip(reason="AWS Suspended Account")
 def test_s3_logging():
     # all s3 requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel
