@@ -12,10 +12,33 @@ import litellm
 litellm.num_retries = 3
 
 import time, random
+from litellm._logging import verbose_logger
+import logging
 import pytest
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
+@pytest.mark.asyncio
+async def test_basic_s3_logging():
+    verbose_logger.setLevel(level=logging.DEBUG)
+    litellm.success_callback = ["s3"]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "litellm-proxy",
+        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "This is a test"}],
+        mock_response="It's simple to use and easy to get started",
+    )
+    print(f"response: {response}")
+
+    await asyncio.sleep(3)
+
+
 def test_s3_logging():
     # all s3 requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel
