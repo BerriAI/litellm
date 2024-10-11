@@ -28,7 +28,7 @@ import asyncio
 import concurrent.futures
 import traceback
 from asyncio import Task
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from .litellm_logging import Logging as LiteLLMLogging
 
@@ -48,8 +48,8 @@ class RealTimeStreaming:
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
-        self.messages = []
-        self.input_message = {}
+        self.messages: List = []
+        self.input_message: Dict = {}
 
     def store_message(self, message: str):
         """Store message in list"""
