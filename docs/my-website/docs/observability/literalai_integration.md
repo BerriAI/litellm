@@ -22,6 +22,7 @@ import os
 
 os.environ["LITERAL_API_KEY"] = ""
 os.environ['OPENAI_API_KEY']= ""
+os.environ['LITERAL_BATCH_SIZE'] = "1" # You won't see logs appear until the batch is full and sent
 
 litellm.success_callback = ["literalai"] # Log Input/Output to LiteralAI
 litellm.failure_callback = ["literalai"] # Log Errors to LiteralAI
@@ -46,7 +47,7 @@ import os
 
 os.environ["LITERAL_API_KEY"] = ""
 os.environ['OPENAI_API_KEY']= ""
-os.environ['LITERAL_BATCH_SIZE'] = "1" # You won't see log appear until the batch is full and sent
+os.environ['LITERAL_BATCH_SIZE'] = "1" # You won't see logs appear until the batch is full and sent
 
 litellm.input_callback = ["literalai"] # Support other Literal AI decorators and prompt templates
 litellm.success_callback = ["literalai"] # Log Input/Output to LiteralAI
