@@ -74,34 +74,37 @@ class ServiceLogging(CustomLogger):
         )
 
         for callback in litellm.service_callback:
-            if callback == "prometheus_system":
-                await self.init_prometheus_services_logger_if_none()
-                await self.prometheusServicesLogger.async_service_success_hook(
-                    payload=payload
-                )
-            elif callback == "datadog":
-                from litellm.integrations.datadog.datadog import DataDogLogger
+            try:
+                if callback == "prometheus_system":
+                    await self.init_prometheus_services_logger_if_none()
+                    await self.prometheusServicesLogger.async_service_success_hook(
+                        payload=payload
+                    )
+                elif callback == "datadog":
+                    from litellm.integrations.datadog.datadog import DataDogLogger
 
-                await self.init_datadog_logger_if_none()
-                await self.dd_logger.async_service_success_hook(
-                    payload=payload,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata=event_metadata,
-                )
-            elif callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
-                from litellm.proxy.proxy_server import open_telemetry_logger
+                    await self.init_datadog_logger_if_none()
+                    await self.dd_logger.async_service_success_hook(
+                        payload=payload,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata=event_metadata,
+                    )
+                elif callback == "otel":
+                    from litellm.integrations.opentelemetry import OpenTelemetry
+                    from litellm.proxy.proxy_server import open_telemetry_logger
 
-                await self.init_otel_logger_if_none()
-                await self.otel_logger.async_service_success_hook(
-                    payload=payload,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata=event_metadata,
-                )
+                    await self.init_otel_logger_if_none()
+                    await self.otel_logger.async_service_success_hook(
+                        payload=payload,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata=event_metadata,
+                    )
+            except Exception as e:
+                verbose_logger.exception(f"Error in async_service_success_hook: {e}")
 
     async def init_prometheus_services_logger_if_none(self):
         """
@@ -176,42 +179,45 @@ class ServiceLogging(CustomLogger):
             call_type=call_type,
         )
         for callback in litellm.service_callback:
-            if callback == "prometheus_system":
-                await self.init_prometheus_services_logger_if_none()
-                await self.prometheusServicesLogger.async_service_failure_hook(
-                    payload=payload
-                )
-            elif callback == "datadog":
-                await self.init_datadog_logger_if_none()
-                await self.dd_logger.async_service_failure_hook(
-                    payload=payload,
-                    error=error_message,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata=event_metadata,
-                )
-            elif callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
-                from litellm.proxy.proxy_server import open_telemetry_logger
-
-                await self.init_otel_logger_if_none()
-
-                if not isinstance(error, str):
-                    error = str(error)
-
-                if (
-                    parent_otel_span is not None
-                    and open_telemetry_logger is not None
-                    and isinstance(open_telemetry_logger, OpenTelemetry)
-                ):
-                    await self.otel_logger.async_service_success_hook(
+            try:
+                if callback == "prometheus_system":
+                    await self.init_prometheus_services_logger_if_none()
+                    await self.prometheusServicesLogger.async_service_failure_hook(
+                        payload=payload
+                    )
+                elif callback == "datadog":
+                    await self.init_datadog_logger_if_none()
+                    await self.dd_logger.async_service_failure_hook(
                         payload=payload,
+                        error=error_message,
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
                         event_metadata=event_metadata,
                     )
+                elif callback == "otel":
+                    from litellm.integrations.opentelemetry import OpenTelemetry
+                    from litellm.proxy.proxy_server import open_telemetry_logger
+
+                    await self.init_otel_logger_if_none()
+
+                    if not isinstance(error, str):
+                        error = str(error)
+
+                    if (
+                        parent_otel_span is not None
+                        and open_telemetry_logger is not None
+                        and isinstance(open_telemetry_logger, OpenTelemetry)
+                    ):
+                        await self.otel_logger.async_service_success_hook(
+                            payload=payload,
+                            parent_otel_span=parent_otel_span,
+                            start_time=start_time,
+                            end_time=end_time,
+                            event_metadata=event_metadata,
+                        )
+            except Exception as e:
+                verbose_logger.exception(f"Error in async_service_failure_hook: {e}")
 
     async def async_post_call_failure_hook(
         self,
