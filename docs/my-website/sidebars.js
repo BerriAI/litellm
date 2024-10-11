@@ -273,6 +273,7 @@ const sidebars = {
         "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
+        "observability/literalai_integration",
         "observability/opentelemetry_integration",
         "observability/logfire_integration",
         "observability/arize_integration",
