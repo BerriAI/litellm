@@ -23,7 +23,7 @@ async def test_basic_s3_logging():
     verbose_logger.setLevel(level=logging.DEBUG)
     litellm.success_callback = ["s3"]
     litellm.s3_callback_params = {
-        "s3_bucket_name": "litellm-proxy",
+        "s3_bucket_name": "load-testing-oct",
         "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
         "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
         "s3_region_name": "us-west-2",
@@ -37,7 +37,7 @@ async def test_basic_s3_logging():
     )
     print(f"response: {response}")
 
-    await asyncio.sleep(3)
+    await asyncio.sleep(12)
 
 
 def list_all_s3_objects(bucket_name):

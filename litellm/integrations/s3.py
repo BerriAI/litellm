@@ -1,17 +1,15 @@
-#### What this does ####
-#    On success + failure, log events to Supabase
+"""
+s3 Bucket Logging Integration
+
+async_log_success_event: Processes the event, stores it in memory for 10 seconds or until MAX_BATCH_SIZE and then flushes to s3 
+
+NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to upload each element individually
+NOTE 2: We create a httpx client with a concurrent limit of 1 to upload to s3. Files should get uploaded BUT they should not impact latency of LLM calling logic
+"""
 
 import asyncio
-import datetime
 import json
-import os
-import subprocess
-import sys
-import traceback
-import uuid
-from typing import Optional
-
-import httpx
+from typing import Dict, List, Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -20,6 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.s3 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
@@ -45,12 +44,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_config=None,
         **kwargs,
     ):
-        import boto3
-
         try:
             verbose_logger.debug(
                 f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
             )
+
+            # IMPORTANT: We use a concurrent limit of 1 to upload to s3
+            # Files should get uploaded BUT they should not impact latency of LLM calling logic
             self.async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback,
                 params={"concurrent_limit": 1},
@@ -114,6 +114,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 flush_interval=s3_flush_interval,
                 batch_size=s3_batch_size,
             )
+            self.log_queue: List[s3BatchLoggingElement] = []
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
@@ -121,59 +122,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             print_verbose(f"Got exception on init s3 client {str(e)}")
             raise e
-
-    async def upload_data_to_s3(self, data: StandardLoggingPayload):
-        try:
-            import hashlib
-
-            import boto3
-            import requests
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
-        credentials: Credentials = self.get_credentials(
-            aws_access_key_id=self.s3_aws_access_key_id,
-            aws_secret_access_key=self.s3_aws_secret_access_key,
-            aws_session_token=self.s3_aws_session_token,
-            aws_region_name=self.s3_region_name,
-        )
-        object_name = uuid.uuid4().hex
-        # Prepare the URL
-        url = f"https://{self.bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{object_name}"
-
-        # Convert JSON to string
-        json_string = json.dumps(data)
-
-        # Calculate SHA256 hash of the content
-        content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
-
-        # Prepare the request
-        headers = {
-            "Content-Type": "application/json",
-            "x-amz-content-sha256": content_hash,
-        }
-        req = requests.Request("PUT", url, data=json_string, headers=headers)
-        prepped = req.prepare()
-
-        # Sign the request
-        aws_request = AWSRequest(
-            method=prepped.method,
-            url=prepped.url,
-            data=prepped.body,
-            headers=prepped.headers,
-        )
-        SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
-
-        # Prepare the signed headers
-        signed_headers = dict(aws_request.headers.items())
-
-        # Make the request
-        asyncio.create_task(
-            self.async_httpx_client.put(url, data=json_string, headers=signed_headers)
-        )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -230,9 +178,17 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 + ".json"
             )
 
-            verbose_logger.debug("\ns3 Logger - Logging payload = %s", payload)
+            s3_batch_logging_element = s3BatchLoggingElement(
+                payload=payload,  # type: ignore
+                s3_object_key=s3_object_key,
+                s3_object_download_filename=s3_object_download_filename,
+            )
 
-            self.log_queue.append(payload)
+            verbose_logger.debug(
+                "\ns3 Logger - Logging payload = %s", s3_batch_logging_element
+            )
+
+            self.log_queue.append(s3_batch_logging_element)
             verbose_logger.debug(
                 "s3 logging: queue length %s, batch size %s",
                 len(self.log_queue),
@@ -243,6 +199,65 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
+
+    async def upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
+        try:
+            import hashlib
+
+            import boto3
+            import requests
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.credentials import Credentials
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        try:
+            credentials: Credentials = self.get_credentials(
+                aws_access_key_id=self.s3_aws_access_key_id,
+                aws_secret_access_key=self.s3_aws_secret_access_key,
+                aws_session_token=self.s3_aws_session_token,
+                aws_region_name=self.s3_region_name,
+            )
+
+            # Prepare the URL
+            url = f"https://{self.bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
+
+            # Convert JSON to string
+            json_string = json.dumps(batch_logging_element.payload)
+
+            # Calculate SHA256 hash of the content
+            content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
+
+            # Prepare the request
+            headers = {
+                "Content-Type": "application/json",
+                "x-amz-content-sha256": content_hash,
+                "Content-Language": "en",
+                "Content-Disposition": f'inline; filename="{batch_logging_element.s3_object_download_filename}"',
+                "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
+            }
+            req = requests.Request("PUT", url, data=json_string, headers=headers)
+            prepped = req.prepare()
+
+            # Sign the request
+            aws_request = AWSRequest(
+                method=prepped.method,
+                url=prepped.url,
+                data=prepped.body,
+                headers=prepped.headers,
+            )
+            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+
+            # Prepare the signed headers
+            signed_headers = dict(aws_request.headers.items())
+
+            # Make the request
+            response = await self.async_httpx_client.put(
+                url, data=json_string, headers=signed_headers
+            )
+            response.raise_for_status()
+        except Exception as e:
+            verbose_logger.exception(f"Error uploading to s3: {str(e)}")
 
     async def async_send_batch(self):
         """
