@@ -122,9 +122,9 @@ class OpenTelemetry(CustomLogger):
     async def async_service_success_hook(
         self,
         payload: ServiceLoggerPayload,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
@@ -173,10 +173,10 @@ class OpenTelemetry(CustomLogger):
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
         error: Optional[str] = "",
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
@@ -568,8 +568,13 @@ class OpenTelemetry(CustomLogger):
                     _raw_response,
                 )
 
-    def _to_ns(self, dt):
-        return int(dt.timestamp() * 1e9)
+    def _to_ns(self, dt: Union[datetime, float]) -> int:
+        if isinstance(dt, float):
+            return int(dt * 1e9)
+        elif isinstance(dt, datetime):
+            return int(dt.timestamp() * 1e9)
+        else:
+            raise ValueError(f"Unsupported type for _to_ns: {type(dt)}")
 
     def _get_span_name(self, kwargs):
         return LITELLM_REQUEST_SPAN_NAME
@@ -696,8 +701,8 @@ class OpenTelemetry(CustomLogger):
         _start_time_ns = 0
         _end_time_ns = 0
 
-        start_time = logging_payload.start_time
-        end_time = logging_payload.end_time
+        start_time = logging_payload.start_time or datetime.now()
+        end_time = logging_payload.end_time or datetime.now()
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -742,8 +747,8 @@ class OpenTelemetry(CustomLogger):
         _start_time_ns = 0
         _end_time_ns = 0
 
-        start_time = logging_payload.start_time
-        end_time = logging_payload.end_time
+        start_time = logging_payload.start_time or datetime.now()
+        end_time = logging_payload.end_time or datetime.now()
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
