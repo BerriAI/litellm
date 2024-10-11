@@ -5,6 +5,8 @@ Class to handle llm wildcard routing and regex pattern matching
 import re
 from typing import Dict, List, Optional
 
+from litellm._logging import verbose_router_logger
+
 
 class PatternMatchRouter:
     """
@@ -72,9 +74,12 @@ class PatternMatchRouter:
         Returns:
             Optional[List[Deployment]]: llm deployments
         """
-        for pattern, llm_deployments in self.patterns.items():
-            if re.match(pattern, request):
-                return llm_deployments
+        try:
+            for pattern, llm_deployments in self.patterns.items():
+                if re.match(pattern, request):
+                    return llm_deployments
+        except Exception as e:
+            verbose_router_logger.error(f"Error in PatternMatchRouter.route: {str(e)}")
         return None  # No matching pattern found
 
 
