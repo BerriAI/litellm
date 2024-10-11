@@ -30,6 +30,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
             pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
@@ -102,14 +103,17 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
+            python -m pytest -vv tests/local_testing --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
           no_output_timeout: 120m
 
       # Store test results
       - store_test_results:
           path: test-results
-      
-      - codecov/upload
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .coverage
+            - coverage.xml
   ui_endpoint_testing:
     docker:
       - image: cimg/python:3.11
@@ -181,7 +185,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-      - codecov/upload
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
         - image: cimg/python:3.11
@@ -212,7 +215,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-      - codecov/upload
   load_testing:
     docker:
       - image: cimg/python:3.11
@@ -274,7 +276,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-      - codecov/upload
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -685,6 +686,24 @@ jobs:
       - store_test_results:
           path: test-results
 
+  upload-coverage:
+    docker:
+      - image: cimg/python:3.9
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Combine Coverage
+          command: |
+            python -m venv venv
+            . venv/bin/activate
+            pip install coverage
+            coverage combine
+            coverage xml
+      - codecov/upload:
+          file: ./coverage.xml
+
   publish_to_pypi:
     docker:
       - image: cimg/python:3.8
@@ -861,6 +880,9 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - upload-coverage:
+          requires:
+            - local_testing
       - litellm_assistants_api_testing:
           filters:
               branches:
