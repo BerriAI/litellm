@@ -890,6 +890,8 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_ping",
+                        start_time=start_time,
+                        end_time=end_time,
                     )
                 )
                 return response
@@ -904,6 +906,8 @@ class RedisCache(BaseCache):
                         duration=_duration,
                         error=e,
                         call_type="async_ping",
+                        start_time=start_time,
+                        end_time=end_time,
                     )
                 )
                 verbose_logger.error(
