@@ -1,34 +1,39 @@
 import React from "react";
 import SearchBar from "@theme-original/SearchBar";
 
-import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
-import { usePluginData } from "@docusaurus/useGlobalData";
-
 export default function SearchBarWrapper(props) {
-  const { siteConfig } = useDocusaurusContext();
-  const { options } = usePluginData("docusaurus-theme-search-pagefind");
-
-  const [path, setPath] = React.useState("");
   const [loaded, setLoaded] = React.useState(false);
-
-  React.useEffect(() => {
-    setPath(`${siteConfig.baseUrl}pagefind/pagefind.js`);
-  }, [siteConfig]);
 
   React.useEffect(() => {
     Promise.all([
       import("@getcanary/web/components/canary-root"),
-      import("@getcanary/web/components/canary-provider-pagefind"),
+      import("@getcanary/web/components/canary-provider-cloud"),
       import("@getcanary/web/components/canary-modal"),
       import("@getcanary/web/components/canary-trigger-logo"),
+      import("@getcanary/web/components/canary-input"),
       import("@getcanary/web/components/canary-content"),
       import("@getcanary/web/components/canary-search"),
-      import("@getcanary/web/components/canary-search-input"),
-      import("@getcanary/web/components/canary-search-results-tabs"),
+      import("@getcanary/web/components/canary-search-results"),
+      import("@getcanary/web/components/canary-search-match-github-issue"),
+      import("@getcanary/web/components/canary-search-match-github-discussion"),
+      import("@getcanary/web/components/canary-ask"),
+      import("@getcanary/web/components/canary-ask-results"),
+      import("@getcanary/web/components/canary-filter-tabs-glob.js"),
+      import("@getcanary/web/components/canary-filter-tags.js"),
+      import("@getcanary/web/components/canary-footer.js"),
     ])
       .then(() => setLoaded(true))
       .catch(console.error);
   }, []);
+
+  const PUBLIC_KEY = "cp1a506f13";
+
+  const TAGS = "All,Proxy";
+
+  const TABS = JSON.stringify([
+    { name: "Docs", pattern: "**/docs.litellm.ai/**" },
+    { name: "Github", pattern: "**/github.com/**" },
+  ]);
 
   return (
     <div
@@ -39,7 +44,7 @@ export default function SearchBarWrapper(props) {
         gap: "6px",
       }}
     >
-      {!loaded || !path ? (
+      {!loaded ? (
         <button
           style={{
             fontSize: "2rem",
@@ -54,21 +59,29 @@ export default function SearchBarWrapper(props) {
         </button>
       ) : (
         <canary-root framework="docusaurus">
-          <canary-provider-pagefind options={JSON.stringify(options)}>
+          <canary-provider-cloud project-key={PUBLIC_KEY}>
             <canary-modal>
               <canary-trigger-logo slot="trigger"></canary-trigger-logo>
               <canary-content slot="content">
+                <canary-filter-tags
+                  slot="head"
+                  tags={TAGS}
+                ></canary-filter-tags>
+                <canary-input slot="input" autofocus></canary-input>
                 <canary-search slot="mode">
-                  <canary-search-input slot="input"></canary-search-input>
-                  <canary-search-results-tabs
-                    slot="body"
-                    tabs={JSON.stringify(options.tabs)}
-                    group
-                  ></canary-search-results-tabs>
+                  <canary-filter-tabs-glob
+                    slot="head"
+                    tabs={TABS}
+                  ></canary-filter-tabs-glob>
+                  <canary-search-results slot="body"></canary-search-results>
                 </canary-search>
+                <canary-ask slot="mode">
+                  <canary-ask-results slot="body"></canary-ask-results>
+                </canary-ask>
+                <canary-footer slot="footer"></canary-footer>
               </canary-content>
             </canary-modal>
-          </canary-provider-pagefind>
+          </canary-provider-cloud>
         </canary-root>
       )}
 
