@@ -1,16 +1,7 @@
 model_list:
   - model_name: db-openai-endpoint
     litellm_params:
-      model: openai/gpt-5
+      model: openai/gpt-4
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwaz.app/
-  - model_name: db-openai-endpoint
-    litellm_params:
-      model: openai/gpt-5
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwxaz.app/
-
-litellm_settings:
-  callbacks: ["prometheus"]
-
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
