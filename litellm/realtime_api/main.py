@@ -107,6 +107,7 @@ async def _arealtime(
         await openai_realtime.async_realtime(
             model=model,
             websocket=websocket,
+            logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
             client=None,
