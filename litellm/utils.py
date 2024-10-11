@@ -1410,6 +1410,8 @@ def client(original_function):
                     )
                 else:
                     return result
+            elif call_type == CallTypes.arealtime.value:
+                return result
 
             # ADD HIDDEN PARAMS - additional call metadata
             if hasattr(result, "_hidden_params"):
