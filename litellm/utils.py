@@ -197,7 +197,6 @@ lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
-s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
 greenscaleLogger = None

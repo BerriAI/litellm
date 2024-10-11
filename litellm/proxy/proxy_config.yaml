@@ -1,16 +1,17 @@
 model_list:
   - model_name: db-openai-endpoint
     litellm_params:
-      model: openai/gpt-5
+      model: openai/gpt-4
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwaz.app/
-  - model_name: db-openai-endpoint
-    litellm_params:
-      model: openai/gpt-5
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwxaz.app/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
-  callbacks: ["prometheus"]
+  success_callback: ["s3"]
+  turn_off_message_logging: true
+  s3_callback_params:
+    s3_bucket_name: load-testing-oct   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
 
 
