@@ -1307,6 +1307,47 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
 
+
+## Logging LLM IO to Langtrace
+
+1. Set `success_callback: ["langtrace"]` on litellm config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["langtrace"]
+
+environment_variables:
+    LANGTRACE_API_KEY: "141a****"
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, Claude gm!"
+        }
+      ],
+    }
+'
 ## Logging LLM IO to Galileo
 
 [BETA]

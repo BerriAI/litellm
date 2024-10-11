@@ -352,6 +352,13 @@ class OpenTelemetry(CustomLogger):
 
                 set_arize_ai_attributes(span, kwargs, response_obj)
                 return
+            elif self.callback_name == "langtrace":
+                from litellm.integrations.langtrace import LangtraceAttributes
+
+                LangtraceAttributes().set_langtrace_attributes(
+                    span, kwargs, response_obj
+                )
+                return
             from litellm.proxy._types import SpanAttributes
 
             optional_params = kwargs.get("optional_params", {})
