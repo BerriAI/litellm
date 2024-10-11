@@ -11,7 +11,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
-  callbacks: ["prometheus"]
+  callbacks: ["prometheus", "otel"]
   service_callback: ["prometheus_system"]
 
 

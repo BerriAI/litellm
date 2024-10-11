@@ -54,9 +54,9 @@ class ServiceLogging(CustomLogger):
         service: ServiceTypes,
         call_type: str,
         duration: float,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
         """
@@ -72,6 +72,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
         )
+
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -94,19 +95,13 @@ class ServiceLogging(CustomLogger):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()
-
-                if (
-                    parent_otel_span is not None
-                    and open_telemetry_logger is not None
-                    and isinstance(open_telemetry_logger, OpenTelemetry)
-                ):
-                    await self.otel_logger.async_service_success_hook(
-                        payload=payload,
-                        parent_otel_span=parent_otel_span,
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_metadata=event_metadata,
-                    )
+                await self.otel_logger.async_service_success_hook(
+                    payload=payload,
+                    parent_otel_span=parent_otel_span,
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata=event_metadata,
+                )
 
     async def init_prometheus_services_logger_if_none(self):
         """
@@ -156,9 +151,9 @@ class ServiceLogging(CustomLogger):
         duration: float,
         error: Union[str, Exception],
         call_type: str,
+        start_time: Union[datetime, float],
+        end_time: Union[datetime, float],
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
         """
@@ -253,6 +248,8 @@ class ServiceLogging(CustomLogger):
                 service=ServiceTypes.LITELLM,
                 duration=_duration,
                 call_type=kwargs["call_type"],
+                start_time=start_time,
+                end_time=end_time,
             )
         except Exception as e:
             raise e
