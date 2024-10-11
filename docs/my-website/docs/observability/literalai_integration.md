@@ -22,6 +22,7 @@ import os
 
 os.environ["LITERAL_API_KEY"] = ""
 os.environ['OPENAI_API_KEY']= ""
+os.environ['LITERAL_BATCH_SIZE'] = "1" # You won't see logs appear until the batch is full and sent
 
 litellm.success_callback = ["literalai"] # Log Input/Output to LiteralAI
 litellm.failure_callback = ["literalai"] # Log Errors to LiteralAI
@@ -46,6 +47,7 @@ import os
 
 os.environ["LITERAL_API_KEY"] = ""
 os.environ['OPENAI_API_KEY']= ""
+os.environ['LITERAL_BATCH_SIZE'] = "1" # You won't see logs appear until the batch is full and sent
 
 litellm.input_callback = ["literalai"] # Support other Literal AI decorators and prompt templates
 litellm.success_callback = ["literalai"] # Log Input/Output to LiteralAI
@@ -60,7 +62,8 @@ def my_agent(question: str):
         model="gpt-3.5-turbo",
         messages=[
             {"role": "user", "content": question}
-        ]
+        ],
+        metadata={"literalai_parent_id": literalai_client.get_current_step().id}
     )
     return response
 
