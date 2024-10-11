@@ -19,7 +19,8 @@ import boto3
 
 
 @pytest.mark.asyncio
-async def test_basic_s3_logging():
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_basic_s3_logging(sync_mode):
     verbose_logger.setLevel(level=logging.DEBUG)
     litellm.success_callback = ["s3"]
     litellm.s3_callback_params = {
@@ -30,11 +31,18 @@ async def test_basic_s3_logging():
     }
     litellm.set_verbose = True
 
-    response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "This is a test"}],
-        mock_response="It's simple to use and easy to get started",
-    )
+    if sync_mode is True:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+        )
+    else:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+        )
     print(f"response: {response}")
 
     await asyncio.sleep(12)
