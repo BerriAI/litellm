@@ -117,10 +117,7 @@ from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
-from .llms.vertex_ai_and_google_ai_studio import (
-    vertex_ai_anthropic,
-    vertex_ai_non_gemini,
-)
+from .llms.vertex_ai_and_google_ai_studio import vertex_ai_non_gemini
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
@@ -747,6 +744,11 @@ def completion(  # type: ignore
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
     headers = kwargs.get("headers", None) or extra_headers
+    if headers is None:
+        headers = {}
+
+    if extra_headers is not None:
+        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -964,7 +966,6 @@ def completion(  # type: ignore
             max_retries=max_retries,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
-            extra_headers=extra_headers,
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
@@ -1067,6 +1068,9 @@ def completion(  # type: ignore
 
             headers = headers or litellm.headers
 
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
             if (
                 litellm.enable_preview_features
                 and litellm.AzureOpenAIO1Config().is_o1_model(model=model)
@@ -1166,6 +1170,9 @@ def completion(  # type: ignore
 
             headers = headers or litellm.headers
 
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
             ## LOAD CONFIG - if set
             config = litellm.AzureOpenAIConfig.get_config()
             for k, v in config.items():
@@ -1222,6 +1229,9 @@ def completion(  # type: ignore
             )
 
             headers = headers or litellm.headers
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
 
             ## LOAD CONFIG - if set
             config = litellm.AzureAIStudioConfig.get_config()
@@ -1303,6 +1313,9 @@ def completion(  # type: ignore
             )
 
             headers = headers or litellm.headers
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAITextCompletionConfig.get_config()
@@ -1465,6 +1478,9 @@ def completion(  # type: ignore
             )
 
             headers = headers or litellm.headers
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
@@ -2228,31 +2244,12 @@ def completion(  # type: ignore
             )
 
             new_params = deepcopy(optional_params)
-            if "claude-3" in model:
-                model_response = vertex_ai_anthropic.completion(
-                    model=model,
-                    messages=messages,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=new_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    vertex_location=vertex_ai_location,
-                    vertex_project=vertex_ai_project,
-                    vertex_credentials=vertex_credentials,
-                    logging_obj=logging,
-                    acompletion=acompletion,
-                    headers=headers,
-                    custom_prompt_dict=custom_prompt_dict,
-                    timeout=timeout,
-                    client=client,
-                )
-            elif (
+            if (
                 model.startswith("meta/")
                 or model.startswith("mistral")
                 or model.startswith("codestral")
                 or model.startswith("jamba")
+                or model.startswith("claude")
             ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
@@ -2263,6 +2260,7 @@ def completion(  # type: ignore
                     litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
+                    api_base=api_base,
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
@@ -4848,6 +4846,8 @@ def image_generation(
                 model_response = custom_handler.aimage_generation(  # type: ignore
                     model=model,
                     prompt=prompt,
+                    api_key=api_key,
+                    api_base=api_base,
                     model_response=model_response,
                     optional_params=optional_params,
                     logging_obj=litellm_logging_obj,
@@ -4863,6 +4863,8 @@ def image_generation(
                 model_response = custom_handler.image_generation(
                     model=model,
                     prompt=prompt,
+                    api_key=api_key,
+                    api_base=api_base,
                     model_response=model_response,
                     optional_params=optional_params,
                     logging_obj=litellm_logging_obj,

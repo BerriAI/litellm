@@ -237,6 +237,14 @@ class LangFuseLogger:
                 output = response_obj.results
             elif (
                 kwargs.get("call_type") is not None
+                and kwargs.get("call_type") == "_arealtime"
+                and response_obj is not None
+                and isinstance(response_obj, list)
+            ):
+                input = kwargs.get("input")
+                output = response_obj
+            elif (
+                kwargs.get("call_type") is not None
                 and kwargs.get("call_type") == "pass_through_endpoint"
                 and response_obj is not None
                 and isinstance(response_obj, dict)
