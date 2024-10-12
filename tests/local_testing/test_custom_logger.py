@@ -41,7 +41,6 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print("Pre-API Call")
-        traceback.print_stack()
         self.data_sent_to_api = kwargs["additional_args"].get("complete_input_dict", {})
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
