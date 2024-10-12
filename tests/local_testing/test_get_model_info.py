@@ -74,3 +74,16 @@ def test_get_model_info_gemini_pro():
     info = litellm.get_model_info("gemini-1.5-pro-002")
     print("info", info)
     assert info["key"] == "gemini-1.5-pro-002"
+
+
+@pytest.mark.parametrize("model", ["gpt-35-turbo", "ada"])
+def test_get_model_info_azure_gpt_35(model):
+    info = litellm.get_model_info(model)
+    print("info", info)
+    assert info["key"] == "azure/" + model
+
+
+@pytest.mark.parametrize("model", ["together-ai-embedding-up-to-150m"])
+def test_get_model_info_together_ai(model):
+    info = litellm.get_model_info(model)
+    print("info", info)
