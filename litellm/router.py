@@ -2995,10 +2995,10 @@ class Router:
         self, kwargs: dict, model_group: Optional[str] = None
     ):
         """
-        Helper function to mock a rate limit error for testing purposes.
+        Helper function to raise a mock litellm.RateLimitError error for testing purposes.
 
         Raises:
-            mock error when `mock_testing_rate_limit_error=True` passed in request params
+            litellm.RateLimitError error when `mock_testing_rate_limit_error=True` passed in request params
         """
         mock_testing_rate_limit_error: Optional[bool] = kwargs.pop(
             "mock_testing_rate_limit_error", None
