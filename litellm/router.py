@@ -2867,9 +2867,6 @@ class Router:
             f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
         )
         original_function = kwargs.pop("original_function")
-        mock_testing_rate_limit_error = kwargs.pop(
-            "mock_testing_rate_limit_error", None
-        )
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
@@ -2877,7 +2874,7 @@ class Router:
         content_policy_fallbacks = kwargs.pop(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
-        model_group = kwargs.get("model")
+        model_group: Optional[str] = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
         ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
@@ -2891,18 +2888,9 @@ class Router:
             f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
         )
         try:
-            if (
-                mock_testing_rate_limit_error is not None
-                and mock_testing_rate_limit_error is True
-            ):
-                verbose_router_logger.info(
-                    "litellm.router.py::async_function_with_retries() - mock_testing_rate_limit_error=True. Raising litellm.RateLimitError."
-                )
-                raise litellm.RateLimitError(
-                    model=model_group,
-                    llm_provider="",
-                    message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
-                )
+            self._handle_mock_testing_rate_limit_error(
+                model_group=model_group, kwargs=kwargs
+            )
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await self.make_call(original_function, *args, **kwargs)
 
@@ -3002,6 +2990,31 @@ class Router:
         await self.set_response_headers(response=response, model_group=model_group)
 
         return response
+
+    def _handle_mock_testing_rate_limit_error(
+        self, kwargs: dict, model_group: Optional[str] = None
+    ):
+        """
+        Helper function to mock a rate limit error for testing purposes.
+
+        Raises:
+            mock error when `mock_testing_rate_limit_error=True` passed in request params
+        """
+        mock_testing_rate_limit_error: Optional[bool] = kwargs.pop(
+            "mock_testing_rate_limit_error", None
+        )
+        if (
+            mock_testing_rate_limit_error is not None
+            and mock_testing_rate_limit_error is True
+        ):
+            verbose_router_logger.info(
+                f"litellm.router.py::_mock_rate_limit_error() - Raising mock RateLimitError for model={model_group}"
+            )
+            raise litellm.RateLimitError(
+                model=model_group,
+                llm_provider="",
+                message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
+            )
 
     def should_retry_this_error(
         self,
