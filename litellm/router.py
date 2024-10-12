@@ -770,8 +770,9 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="client"
+            model_client = self._get_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
             self.total_calls[model_name] += 1
 
