@@ -109,11 +109,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .coverage
-            - coverage.xml
   ui_endpoint_testing:
     docker:
       - image: cimg/python:3.11
@@ -262,6 +257,7 @@ jobs:
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.21.1"
       # Run pytest and generate JUnit XML report
@@ -270,12 +266,24 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/llm_translation --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
-
+        
+      # Check file locations
+      - run:
+          name: Check coverage file location
+          command: |
+            echo "Current directory:"
+            ls -la
+            echo "\nContents of tests/llm_translation:"
+            ls -la tests/llm_translation
       # Store test results
       - store_test_results:
           path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - coverage.xml
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -880,9 +888,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - upload-coverage:
-          requires:
-            - local_testing
       - litellm_assistants_api_testing:
           filters:
               branches:
@@ -937,6 +942,9 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - upload-coverage:
+          requires:
+            - llm_translation_testing
       - db_migration_disable_update_check:
           filters:
             branches:
