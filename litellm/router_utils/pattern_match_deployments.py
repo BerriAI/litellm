@@ -82,6 +82,7 @@ class PatternMatchRouter:
                     return llm_deployments
         except Exception as e:
             verbose_router_logger.debug(f"Error in PatternMatchRouter.route: {str(e)}")
+
         return None  # No matching pattern found
 
 
