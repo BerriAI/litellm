@@ -7,18 +7,9 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 import asyncio
 from typing import Any, Optional
 
+from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ..openai import OpenAIChatCompletion
-
-
-async def forward_messages(client_ws: Any, backend_ws: Any):
-    import websockets
-
-    try:
-        while True:
-            message = await backend_ws.recv()
-            await client_ws.send_text(message)
-    except websockets.exceptions.ConnectionClosed:  # type: ignore
-        pass
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -35,6 +26,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         self,
         model: str,
         websocket: Any,
+        logging_obj: LiteLLMLogging,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
@@ -57,25 +49,26 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "OpenAI-Beta": "realtime=v1",
                 },
             ) as backend_ws:
-                forward_task = asyncio.create_task(
-                    forward_messages(websocket, backend_ws)
+                realtime_streaming = RealTimeStreaming(
+                    websocket, backend_ws, logging_obj
                 )
-
-                try:
-                    while True:
-                        message = await websocket.receive_text()
-                        await backend_ws.send(message)
-                except websockets.exceptions.ConnectionClosed:  # type: ignore
-                    forward_task.cancel()
-                finally:
-                    if not forward_task.done():
-                        forward_task.cancel()
-                        try:
-                            await forward_task
-                        except asyncio.CancelledError:
-                            pass
+                await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             await websocket.close(code=e.status_code, reason=str(e))
         except Exception as e:
-            await websocket.close(code=1011, reason=f"Internal server error: {str(e)}")
+            try:
+                await websocket.close(
+                    code=1011, reason=f"Internal server error: {str(e)}"
+                )
+            except RuntimeError as close_error:
+                if "already completed" in str(close_error) or "websocket.close" in str(
+                    close_error
+                ):
+                    # The WebSocket is already closed or the response is completed, so we can ignore this error
+                    pass
+                else:
+                    # If it's a different RuntimeError, we might want to log it or handle it differently
+                    raise Exception(
+                        f"Unexpected error while closing WebSocket: {close_error}"
+                    )

@@ -7,6 +7,8 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 import asyncio
 from typing import Any, Optional
 
+from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ..azure import AzureChatCompletion
 
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -44,6 +46,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_version: Optional[str] = None,
         azure_ad_token: Optional[str] = None,
         client: Optional[Any] = None,
+        logging_obj: Optional[LiteLLMLogging] = None,
         timeout: Optional[float] = None,
     ):
         import websockets
@@ -62,23 +65,10 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     "api-key": api_key,  # type: ignore
                 },
             ) as backend_ws:
-                forward_task = asyncio.create_task(
-                    forward_messages(websocket, backend_ws)
+                realtime_streaming = RealTimeStreaming(
+                    websocket, backend_ws, logging_obj
                 )
-
-                try:
-                    while True:
-                        message = await websocket.receive_text()
-                        await backend_ws.send(message)
-                except websockets.exceptions.ConnectionClosed:  # type: ignore
-                    forward_task.cancel()
-                finally:
-                    if not forward_task.done():
-                        forward_task.cancel()
-                        try:
-                            await forward_task
-                        except asyncio.CancelledError:
-                            pass
+                await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             await websocket.close(code=e.status_code, reason=str(e))

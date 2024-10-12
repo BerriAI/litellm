@@ -12,7 +12,70 @@ import litellm
 litellm.num_retries = 3
 
 import time, random
+from litellm._logging import verbose_logger
+import logging
 import pytest
+import boto3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_basic_s3_logging(sync_mode):
+    verbose_logger.setLevel(level=logging.DEBUG)
+    litellm.success_callback = ["s3"]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+
+    if sync_mode is True:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+        )
+    else:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+        )
+    print(f"response: {response}")
+
+    await asyncio.sleep(12)
+
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+
+    # assert that atlest one key has response.id in it
+    assert any(response.id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    # delete all objects
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
+
+
+def list_all_s3_objects(bucket_name):
+    s3 = boto3.client("s3")
+
+    all_s3_keys = []
+
+    paginator = s3.get_paginator("list_objects_v2")
+    total_objects = 0
+
+    for page in paginator.paginate(Bucket=bucket_name):
+        if "Contents" in page:
+            total_objects += len(page["Contents"])
+            all_s3_keys.extend([obj["Key"] for obj in page["Contents"]])
+
+    print(f"Total number of objects in {bucket_name}: {total_objects}")
+    print(all_s3_keys)
+    return total_objects, all_s3_keys
+
+
+list_all_s3_objects("load-testing-oct")
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")

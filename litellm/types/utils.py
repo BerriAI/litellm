@@ -129,6 +129,7 @@ class CallTypes(Enum):
     speech = "speech"
     rerank = "rerank"
     arerank = "arerank"
+    arealtime = "_arealtime"
 
 
 class PassthroughCallTypes(Enum):

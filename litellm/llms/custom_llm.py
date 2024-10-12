@@ -153,6 +153,8 @@ class CustomLLM(BaseLLM):
         self,
         model: str,
         prompt: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: Any,
@@ -166,6 +168,12 @@ class CustomLLM(BaseLLM):
         model: str,
         prompt: str,
         model_response: ImageResponse,
+        api_key: Optional[
+            str
+        ],  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
+        api_base: Optional[
+            str
+        ],  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
         optional_params: dict,
         logging_obj: Any,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
