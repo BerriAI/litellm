@@ -21,7 +21,6 @@ class CustomBatchLogger(CustomLogger):
         self,
         flush_lock: Optional[asyncio.Lock] = None,
         batch_size: Optional[int] = DEFAULT_BATCH_SIZE,
-        flush_interval: Optional[int] = DEFAULT_FLUSH_INTERVAL_SECONDS,
         **kwargs,
     ) -> None:
         """
@@ -29,7 +28,7 @@ class CustomBatchLogger(CustomLogger):
             flush_lock (Optional[asyncio.Lock], optional): Lock to use when flushing the queue. Defaults to None. Only used for custom loggers that do batching
         """
         self.log_queue: List = []
-        self.flush_interval = flush_interval or DEFAULT_FLUSH_INTERVAL_SECONDS
+        self.flush_interval = DEFAULT_FLUSH_INTERVAL_SECONDS  # 10 seconds
         self.batch_size: int = batch_size or DEFAULT_BATCH_SIZE
         self.last_flush_time = time.time()
         self.flush_lock = flush_lock
