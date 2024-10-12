@@ -725,7 +725,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine ./llm_translation_coverage ./litellm_router_coverage
+            coverage combine llm_translation_coverage litellm_router_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
