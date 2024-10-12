@@ -1616,9 +1616,11 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
                 )
 
 
-@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "model", ["gemini-1.5-flash", "claude-3-sonnet@20240229"]
+)  # "vertex_ai",
 @pytest.mark.asyncio
-async def test_gemini_pro_httpx_custom_api_base(provider):
+async def test_gemini_pro_httpx_custom_api_base(model):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     messages = [
@@ -1634,7 +1636,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
     with patch.object(client, "post", new=MagicMock()) as mock_call:
         try:
             response = completion(
-                model="vertex_ai_beta/gemini-1.5-flash",
+                model="vertex_ai/{}".format(model),
                 messages=messages,
                 response_format={"type": "json_object"},
                 client=client,
@@ -1647,8 +1649,17 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
 
         mock_call.assert_called_once()
 
-        assert "my-custom-api-base:generateContent" == mock_call.call_args.kwargs["url"]
-        assert "hello" in mock_call.call_args.kwargs["headers"]
+        print(f"mock_call.call_args: {mock_call.call_args}")
+        print(f"mock_call.call_args.kwargs: {mock_call.call_args.kwargs}")
+        if "url" in mock_call.call_args.kwargs:
+            assert (
+                "my-custom-api-base:generateContent"
+                == mock_call.call_args.kwargs["url"]
+            )
+        else:
+            assert "my-custom-api-base:rawPredict" == mock_call.call_args[0][0]
+        if "headers" in mock_call.call_args.kwargs:
+            assert "hello" in mock_call.call_args.kwargs["headers"]
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")

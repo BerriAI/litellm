@@ -1692,6 +1692,10 @@ class ProxyConfig:
                         else:
                             litellm.success_callback.append(callback)
                             if "prometheus" in callback:
+                                if not premium_user:
+                                    raise Exception(
+                                        CommonProxyErrors.not_premium_user.value
+                                    )
                                 verbose_proxy_logger.debug(
                                     "Starting Prometheus Metrics on /metrics"
                                 )
@@ -5433,12 +5437,11 @@ async def moderations(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.moderations(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),

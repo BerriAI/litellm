@@ -197,7 +197,6 @@ lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
-s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
 greenscaleLogger = None
@@ -1410,6 +1409,8 @@ def client(original_function):
                     )
                 else:
                     return result
+            elif call_type == CallTypes.arealtime.value:
+                return result
 
             # ADD HIDDEN PARAMS - additional call metadata
             if hasattr(result, "_hidden_params"):
@@ -1799,8 +1800,9 @@ def calculate_tiles_needed(
     total_tiles = tiles_across * tiles_down
     return total_tiles
 
+
 def get_image_type(image_data: bytes) -> Union[str, None]:
-    """ take an image (really only the first ~100 bytes max are needed)
+    """take an image (really only the first ~100 bytes max are needed)
     and return 'png' 'gif' 'jpeg' 'heic' or None. method added to
     allow deprecation of imghdr in 3.13"""
 
@@ -4336,16 +4338,18 @@ def get_api_base(
         _optional_params.vertex_location is not None
         and _optional_params.vertex_project is not None
     ):
-        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
-            create_vertex_anthropic_url,
+        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
+            VertexPartnerProvider,
+            create_vertex_url,
         )
 
         if "claude" in model:
-            _api_base = create_vertex_anthropic_url(
+            _api_base = create_vertex_url(
                 vertex_location=_optional_params.vertex_location,
                 vertex_project=_optional_params.vertex_project,
                 model=model,
                 stream=stream,
+                partner=VertexPartnerProvider.claude,
             )
         else:
 
@@ -4442,19 +4446,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
-        return [
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stream",
-            "stop",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "seed",
-            "extra_headers",
-            "extra_body",
-        ]
+        return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepseek":
@@ -4599,6 +4591,8 @@ def get_supported_openai_params(
                 return (
                     litellm.MistralTextCompletionConfig().get_supported_openai_params()
                 )
+            if model.startswith("claude"):
+                return litellm.VertexAIAnthropicConfig().get_supported_openai_params()
             return litellm.VertexAIConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
