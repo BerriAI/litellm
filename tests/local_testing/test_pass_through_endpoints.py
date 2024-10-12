@@ -40,6 +40,36 @@ def client():
 
 
 @pytest.mark.asyncio
+async def test_pass_through_endpoint_no_headers(client, monkeypatch):
+    # Mock the httpx.AsyncClient.request method
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
+    import litellm
+
+    # Define a pass-through endpoint
+    pass_through_endpoints = [
+        {
+            "path": "/test-endpoint",
+            "target": "https://api.example.com/v1/chat/completions",
+        }
+    ]
+
+    # Initialize the pass-through endpoint
+    await initialize_pass_through_endpoints(pass_through_endpoints)
+    general_settings: dict = (
+        getattr(litellm.proxy.proxy_server, "general_settings", {}) or {}
+    )
+    general_settings.update({"pass_through_endpoints": pass_through_endpoints})
+    setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+
+    # Make a request to the pass-through endpoint
+    response = client.post("/test-endpoint", json={"prompt": "Hello, world!"})
+
+    # Assert the response
+    assert response.status_code == 200
+    assert response.json() == {"message": "Mocked response"}
+
+
+@pytest.mark.asyncio
 async def test_pass_through_endpoint(client, monkeypatch):
     # Mock the httpx.AsyncClient.request method
     monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
