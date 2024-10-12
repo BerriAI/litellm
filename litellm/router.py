@@ -3252,9 +3252,6 @@ class Router:
             f"Inside function with retries: args - {args}; kwargs - {kwargs}"
         )
         original_function = kwargs.pop("original_function")
-        mock_testing_rate_limit_error = kwargs.pop(
-            "mock_testing_rate_limit_error", None
-        )
         num_retries = kwargs.pop("num_retries")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.pop(
@@ -3267,18 +3264,9 @@ class Router:
 
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
-            if (
-                mock_testing_rate_limit_error is not None
-                and mock_testing_rate_limit_error is True
-            ):
-                verbose_router_logger.info(
-                    "litellm.router.py::async_function_with_retries() - mock_testing_rate_limit_error=True. Raising litellm.RateLimitError."
-                )
-                raise litellm.RateLimitError(
-                    model=model_group,
-                    llm_provider="",
-                    message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
-                )
+            self._handle_mock_testing_rate_limit_error(
+                kwargs=kwargs, model_group=model_group
+            )
             response = original_function(*args, **kwargs)
             return response
         except Exception as e:
