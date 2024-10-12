@@ -176,8 +176,13 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing/test_router.py --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_router_coverage.xml
+            mv .coverage litellm_router_coverage
       # Store test results
       - store_test_results:
           path: test-results
@@ -185,8 +190,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - coverage.xml
-            - .coverage
+            - litellm_router_coverage.xml
+            - litellm_router_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
         - image: cimg/python:3.11
@@ -275,6 +280,11 @@ jobs:
             ls
             python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml llm_translation_coverage.xml
+            mv .coverage llm_translation_coverage
         
       # Store test results
       - store_test_results:
@@ -282,8 +292,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - coverage.xml
-            - .coverage
+            - llm_translation_coverage.xml
+            - .llm_translation_coverage
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -715,7 +725,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine
+            coverage combine ./llm_translation_coverage ./litellm_router_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
