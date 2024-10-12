@@ -716,7 +716,6 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
