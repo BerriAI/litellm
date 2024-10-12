@@ -5169,8 +5169,28 @@ class Router:
 
         if model not in self.model_names:
             # check if provider/ specific wildcard routing use pattern matching
-            _pattern_router_response = self.pattern_router.route(model)
+            custom_llm_provider: Optional[str] = None
+            try:
+                (
+                    _,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = litellm.get_llm_provider(model=model)
+            except Exception:
+                # get_llm_provider raises exception when provider is unknown
+                pass
 
+            """
+            self.pattern_router.route(model):
+                does exact pattern matching. Example openai/gpt-3.5-turbo gets routed to pattern openai/*
+
+            self.pattern_router.route(f"{custom_llm_provider}/{model}"):
+                does pattern matching using litellm.get_llm_provider(), example claude-3-5-sonnet-20240620 gets routed to anthropic/* since 'claude-3-5-sonnet-20240620' is an Anthropic Model
+            """
+            _pattern_router_response = self.pattern_router.route(
+                model
+            ) or self.pattern_router.route(f"{custom_llm_provider}/{model}")
             if _pattern_router_response is not None:
                 provider_deployments = []
                 for deployment in _pattern_router_response:
