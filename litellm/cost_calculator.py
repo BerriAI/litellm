@@ -379,6 +379,60 @@ def _select_model_name_for_cost_calc(
     return return_model
 
 
+def _image_gen_cost_calc(
+    custom_llm_provider: Optional[str],
+    size: Optional[str],
+    model: Optional[str],
+    quality: Optional[str],
+    n: Optional[int],
+):
+    if custom_llm_provider == "vertex_ai":
+        # https://cloud.google.com/vertex-ai/generative-ai/pricing
+        # Vertex Charges Flat $0.20 per image
+        return 0.020
+
+    if size is None:
+        size = "1024-x-1024"  # openai default
+    # fix size to match naming convention
+    if "x" in size and "-x-" not in size:
+        size = size.replace("x", "-x-")
+    image_gen_model_name = f"{size}/{model}"
+    image_gen_model_name_with_quality = image_gen_model_name
+    if quality is not None:
+        image_gen_model_name_with_quality = f"{quality}/{image_gen_model_name}"
+    if "-x-" in size:
+        height_str, width_str = size.split("-x-")
+        height = int(height_str)
+        width = int(width_str)
+    else:
+        height = 1024  # if it's 1024-x-1024 vs. 1024x1024
+        width = 1024
+    verbose_logger.debug(f"image_gen_model_name: {image_gen_model_name}")
+    verbose_logger.debug(
+        f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}"
+    )
+    if image_gen_model_name in litellm.model_cost:
+        return (
+            litellm.model_cost[image_gen_model_name]["input_cost_per_pixel"]
+            * height
+            * width
+            * n
+        )
+    elif image_gen_model_name_with_quality in litellm.model_cost:
+        return (
+            litellm.model_cost[image_gen_model_name_with_quality][
+                "input_cost_per_pixel"
+            ]
+            * height
+            * width
+            * n
+        )
+    else:
+        raise Exception(
+            f"Model={image_gen_model_name} not found in completion cost model map"
+        )
+
+
 def completion_cost(
     completion_response=None,
     model: Optional[str] = None,
@@ -546,47 +600,13 @@ def completion_cost(
             or call_type == PassthroughCallTypes.passthrough_image_generation.value
         ):
             ### IMAGE GENERATION COST CALCULATION ###
-            if custom_llm_provider == "vertex_ai":
-                # https://cloud.google.com/vertex-ai/generative-ai/pricing
-                # Vertex Charges Flat $0.20 per image
-                return 0.020
-
-            if size is None:
-                size = "1024-x-1024"  # openai default
-            # fix size to match naming convention
-            if "x" in size and "-x-" not in size:
-                size = size.replace("x", "-x-")
-            image_gen_model_name = f"{size}/{model}"
-            image_gen_model_name_with_quality = image_gen_model_name
-            if quality is not None:
-                image_gen_model_name_with_quality = f"{quality}/{image_gen_model_name}"
-            size = size.split("-x-")
-            height = int(size[0])  # if it's 1024-x-1024 vs. 1024x1024
-            width = int(size[1])
-            verbose_logger.debug(f"image_gen_model_name: {image_gen_model_name}")
-            verbose_logger.debug(
-                f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}"
+            return _image_gen_cost_calc(
+                custom_llm_provider=custom_llm_provider,
+                size=size,
+                model=model,
+                quality=quality,
+                n=n,
             )
-            if image_gen_model_name in litellm.model_cost:
-                return (
-                    litellm.model_cost[image_gen_model_name]["input_cost_per_pixel"]
-                    * height
-                    * width
-                    * n
-                )
-            elif image_gen_model_name_with_quality in litellm.model_cost:
-                return (
-                    litellm.model_cost[image_gen_model_name_with_quality][
-                        "input_cost_per_pixel"
-                    ]
-                    * height
-                    * width
-                    * n
-                )
-            else:
-                raise Exception(
-                    f"Model={image_gen_model_name} not found in completion cost model map"
-                )
         elif (
             call_type == CallTypes.speech.value or call_type == CallTypes.aspeech.value
         ):
@@ -663,9 +683,8 @@ def completion_cost(
             cache_read_input_tokens=cache_read_input_tokens,
             call_type=call_type,
         )
-        _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+        return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
-        return _final_cost
     except Exception as e:
         raise e
 
