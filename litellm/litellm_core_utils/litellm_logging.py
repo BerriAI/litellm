@@ -422,67 +422,70 @@ class Logging:
         ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
 
+        # User Logging -> if you pass in a custom logging function
+        headers = additional_args.get("headers", {})
+        if headers is None:
+            headers = {}
+        data = additional_args.get("complete_input_dict", {})
+        api_base = str(additional_args.get("api_base", ""))
+        query_params = additional_args.get("query_params", {})
+        if "key=" in api_base:
+            # Find the position of "key=" in the string
+            key_index = api_base.find("key=") + 4
+            # Mask the last 5 characters after "key="
+            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
+        else:
+            masked_api_base = api_base
+        self.model_call_details["litellm_params"]["api_base"] = masked_api_base
+        masked_headers = {
+            k: (
+                (v[:-44] + "*" * 44)
+                if (isinstance(v, str) and len(v) > 44)
+                else "*****"
+            )
+            for k, v in headers.items()
+        }
+        formatted_headers = " ".join(
+            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+        )
+
+        verbose_logger.debug(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
+
+        curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
+        curl_command += "curl -X POST \\\n"
+        curl_command += f"{api_base} \\\n"
+        curl_command += (
+            f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
+        )
+        curl_command += f"-d '{str(data)}'\n"
+        if additional_args.get("request_str", None) is not None:
+            # print the sagemaker / bedrock client request
+            curl_command = "\nRequest Sent from LiteLLM:\n"
+            curl_command += additional_args.get("request_str", None)
+        elif api_base == "":
+            curl_command = self.model_call_details
+
+        if json_logs:
+            verbose_logger.debug(
+                "POST Request Sent from LiteLLM",
+                extra={"api_base": {api_base}, **masked_headers},
+            )
+        else:
+            print_verbose(f"\033[92m{curl_command}\033[0m\n", log_level="DEBUG")
+
+        return curl_command
+
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
-            self._pre_call(
+            curl_command = self._pre_call(
                 input=input,
                 api_key=api_key,
                 model=model,
                 additional_args=additional_args,
             )
 
-            # User Logging -> if you pass in a custom logging function
-            headers = additional_args.get("headers", {})
-            if headers is None:
-                headers = {}
-            data = additional_args.get("complete_input_dict", {})
-            api_base = str(additional_args.get("api_base", ""))
-            query_params = additional_args.get("query_params", {})
-            if "key=" in api_base:
-                # Find the position of "key=" in the string
-                key_index = api_base.find("key=") + 4
-                # Mask the last 5 characters after "key="
-                masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-            else:
-                masked_api_base = api_base
-            self.model_call_details["litellm_params"]["api_base"] = masked_api_base
-            masked_headers = {
-                k: (
-                    (v[:-44] + "*" * 44)
-                    if (isinstance(v, str) and len(v) > 44)
-                    else "*****"
-                )
-                for k, v in headers.items()
-            }
-            formatted_headers = " ".join(
-                [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
-            )
-
-            verbose_logger.debug(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
-
-            curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
-            curl_command += "curl -X POST \\\n"
-            curl_command += f"{api_base} \\\n"
-            curl_command += (
-                f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
-            )
-            curl_command += f"-d '{str(data)}'\n"
-            if additional_args.get("request_str", None) is not None:
-                # print the sagemaker / bedrock client request
-                curl_command = "\nRequest Sent from LiteLLM:\n"
-                curl_command += additional_args.get("request_str", None)
-            elif api_base == "":
-                curl_command = self.model_call_details
-
-            if json_logs:
-                verbose_logger.debug(
-                    "POST Request Sent from LiteLLM",
-                    extra={"api_base": {api_base}, **masked_headers},
-                )
-            else:
-                print_verbose(f"\033[92m{curl_command}\033[0m\n", log_level="DEBUG")
             # log raw request to provider (like LangFuse) -- if opted in.
             if log_raw_request_response is True:
                 _litellm_params = self.model_call_details.get("litellm_params", {})
@@ -573,9 +576,6 @@ class Logging:
                             str(e)
                         )
                     )
-                    verbose_logger.debug(
-                        f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
-                    )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
         except Exception as e:
@@ -583,9 +583,6 @@ class Logging:
                 "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
                     str(e)
                 )
-            )
-            verbose_logger.error(
-                f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
             )
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
@@ -2210,7 +2207,7 @@ class Logging:
         return None
 
 
-def set_callbacks(callback_list, function_id=None):
+def set_callbacks(callback_list, function_id=None):  # ruff: noqa: PLR0915
     """
     Globally sets the callback client
     """
