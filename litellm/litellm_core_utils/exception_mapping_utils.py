@@ -104,7 +104,7 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
     return _response_headers
 
 
-def exception_type(  # type: ignore
+def exception_type(  # type: ignore  # ruff: noqa: PLR0915
     model,
     original_exception,
     custom_llm_provider,

@@ -350,7 +350,7 @@ class LangFuseLogger:
             )
         )
 
-    def _log_langfuse_v2(
+    def _log_langfuse_v2(  # ruff: noqa: PLR0915
         self,
         user_id,
         metadata,
