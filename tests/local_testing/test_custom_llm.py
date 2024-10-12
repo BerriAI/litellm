@@ -368,7 +368,7 @@ async def test_simple_image_generation_async():
 
 
 @pytest.mark.asyncio
-async def test_image_generation_async_with_api_key_and_api_base():
+async def test_image_generation_async_additional_params():
     my_custom_llm = MyCustomLLM()
     litellm.custom_provider_map = [
         {"provider": "custom_llm", "custom_handler": my_custom_llm}
@@ -383,6 +383,7 @@ async def test_image_generation_async_with_api_key_and_api_base():
                 prompt="Hello world",
                 api_key="my-api-key",
                 api_base="my-api-base",
+                my_custom_param="my-custom-param",
             )
 
             print(resp)
@@ -393,3 +394,6 @@ async def test_image_generation_async_with_api_key_and_api_base():
 
         mock_client.call_args.kwargs["api_key"] == "my-api-key"
         mock_client.call_args.kwargs["api_base"] == "my-api-base"
+        mock_client.call_args.kwargs["optional_params"] == {
+            "my_custom_param": "my-custom-param"
+        }
