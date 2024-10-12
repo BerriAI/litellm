@@ -702,6 +702,14 @@ jobs:
       - checkout
       - attach_workspace:
           at: .
+      # Check file locations
+      - run:
+          name: Check coverage file location
+          command: |
+            echo "Current directory:"
+            ls -la
+            echo "\nContents of tests/llm_translation:"
+            ls -la tests/llm_translation
       - run:
           name: Combine Coverage
           command: |
