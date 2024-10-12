@@ -52,7 +52,7 @@ def get_response_body(response: httpx.Response):
         return response.text
 
 
-async def set_env_variables_in_header(custom_headers: dict):
+async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optional[dict]:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
 
@@ -62,6 +62,8 @@ async def set_env_variables_in_header(custom_headers: dict):
 
     {"Authorization": "bearer os.environ/COHERE_API_KEY"}
     """
+    if custom_headers is None:
+        return None
     headers = {}
     for key, value in custom_headers.items():
         # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
