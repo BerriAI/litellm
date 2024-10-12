@@ -757,7 +757,7 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            model_client = self._get_model_client(
+            model_client = self._get_async_openai_model_client(
                 deployment=deployment,
                 kwargs=kwargs,
             )
@@ -855,7 +855,15 @@ class Router:
             elif k == "metadata":
                 kwargs[k].update(v)
 
-    def _get_model_client(self, deployment: dict, kwargs: dict):
+    def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
+        """
+        Helper to get AsyncOpenAI or AsyncAzureOpenAI client that was created for the deployment
+
+        The same OpenAI client is re-used to optimize latency / performance in production
+
+        If dynamic api key is provided:
+            Do not re-use the client. Pass model_client=None. The OpenAI/ AzureOpenAI client will be recreated in the handler for the llm provider
+        """
         potential_model_client = self._get_client(
             deployment=deployment, kwargs=kwargs, client_type="async"
         )
@@ -1228,19 +1236,10 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
 
             self.total_calls[model_name] += 1
 
@@ -1307,19 +1306,10 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
 
             self.total_calls[model_name] += 1
             response = litellm.aimage_generation(
@@ -1426,19 +1416,10 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
 
             self.total_calls[model_name] += 1
             response = litellm.atranscription(
@@ -1610,19 +1591,10 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
             timeout: Optional[Union[float, int]] = self._get_timeout(
@@ -1691,19 +1663,10 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
             timeout: Optional[Union[float, int]] = self._get_timeout(
@@ -1858,19 +1821,10 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
             response = litellm.atext_completion(
@@ -1964,19 +1918,10 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
             response = litellm.aadapter_completion(
@@ -2141,19 +2086,10 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
 
             self.total_calls[model_name] += 1
             response = litellm.aembedding(
@@ -2248,19 +2184,10 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
             ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
@@ -2378,19 +2305,10 @@ class Router:
                 elif k == metadata_variable_name:
                     kwargs[k].update(v)
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment,
+                kwargs=kwargs,
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
             ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
