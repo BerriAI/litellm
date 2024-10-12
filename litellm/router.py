@@ -5059,23 +5059,16 @@ class Router:
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
 
-            # filter out the deployments currently cooling down
-            deployments_to_remove = []
-            # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
             cooldown_deployments = await _async_get_cooldown_deployments(
                 litellm_router_instance=self
             )
             verbose_router_logger.debug(
                 f"async cooldown deployments: {cooldown_deployments}"
             )
-            # Find deployments in model_list whose model_id is cooling down
-            for deployment in healthy_deployments:
-                deployment_id = deployment["model_info"]["id"]
-                if deployment_id in cooldown_deployments:
-                    deployments_to_remove.append(deployment)
-            # remove unhealthy deployments from healthy deployments
-            for deployment in deployments_to_remove:
-                healthy_deployments.remove(deployment)
+            healthy_deployments = self._filter_cooldown_deployments(
+                healthy_deployments=healthy_deployments,
+                cooldown_deployments=cooldown_deployments,
+            )
 
             # filter pre-call checks
             _allowed_model_region = (
@@ -5209,19 +5202,11 @@ class Router:
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
 
-        # filter out the deployments currently cooling down
-        deployments_to_remove = []
-        # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
         cooldown_deployments = _get_cooldown_deployments(litellm_router_instance=self)
-        verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
-        # Find deployments in model_list whose model_id is cooling down
-        for deployment in healthy_deployments:
-            deployment_id = deployment["model_info"]["id"]
-            if deployment_id in cooldown_deployments:
-                deployments_to_remove.append(deployment)
-        # remove unhealthy deployments from healthy deployments
-        for deployment in deployments_to_remove:
-            healthy_deployments.remove(deployment)
+        healthy_deployments = self._filter_cooldown_deployments(
+            healthy_deployments=healthy_deployments,
+            cooldown_deployments=cooldown_deployments,
+        )
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -5304,6 +5289,33 @@ class Router:
             f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
         )
         return deployment
+
+    def _filter_cooldown_deployments(
+        self, healthy_deployments: List[Dict], cooldown_deployments: List[str]
+    ) -> List[Dict]:
+        """
+        Filters out the deployments currently cooling down from the list of healthy deployments
+
+        Args:
+            healthy_deployments: List of healthy deployments
+            cooldown_deployments: List of model_ids cooling down. cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
+
+        Returns:
+            List of healthy deployments
+        """
+        # filter out the deployments currently cooling down
+        deployments_to_remove = []
+        verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
+        # Find deployments in model_list whose model_id is cooling down
+        for deployment in healthy_deployments:
+            deployment_id = deployment["model_info"]["id"]
+            if deployment_id in cooldown_deployments:
+                deployments_to_remove.append(deployment)
+
+        # remove unhealthy deployments from healthy deployments
+        for deployment in deployments_to_remove:
+            healthy_deployments.remove(deployment)
+        return healthy_deployments
 
     def _track_deployment_metrics(self, deployment, response=None):
         try:
