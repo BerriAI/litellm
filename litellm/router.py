@@ -614,7 +614,6 @@ class Router:
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         model_name = None
-        traceback.print_stack()
         try:
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
