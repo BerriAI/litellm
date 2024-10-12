@@ -408,7 +408,6 @@ class ProxyLogging:
                     callback,
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
-                    premium_user=self.premium_user,
                 )
                 if callback is None:
                     continue

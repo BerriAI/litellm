@@ -28,7 +28,6 @@ from typing import (
     Union,
 )
 from unittest.mock import AsyncMock, MagicMock, patch
-
 import httpx
 from dotenv import load_dotenv
 
@@ -226,6 +225,8 @@ class MyCustomLLM(CustomLLM):
         self,
         model: str,
         prompt: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: Any,
@@ -242,6 +243,8 @@ class MyCustomLLM(CustomLLM):
         self,
         model: str,
         prompt: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: Any,
@@ -362,3 +365,31 @@ async def test_simple_image_generation_async():
     )
 
     print(resp)
+
+
+@pytest.mark.asyncio
+async def test_image_generation_async_with_api_key_and_api_base():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+
+    with patch.object(
+        my_custom_llm, "aimage_generation", new=AsyncMock()
+    ) as mock_client:
+        try:
+            resp = await litellm.aimage_generation(
+                model="custom_llm/my-fake-model",
+                prompt="Hello world",
+                api_key="my-api-key",
+                api_base="my-api-base",
+            )
+
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_awaited_once()
+
+        mock_client.call_args.kwargs["api_key"] == "my-api-key"
+        mock_client.call_args.kwargs["api_base"] == "my-api-base"

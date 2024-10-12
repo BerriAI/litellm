@@ -241,6 +241,8 @@ def initialize_callbacks_on_proxy(
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
+            if premium_user is not True:
+                raise Exception(CommonProxyErrors.not_premium_user.value)
             from litellm.proxy.proxy_server import app
 
             verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")

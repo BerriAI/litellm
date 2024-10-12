@@ -53,6 +53,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
+    "s3",
     "opik",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
@@ -931,7 +932,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.transformation impor
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (

@@ -60,7 +60,7 @@ class PatternMatchRouter:
         regex = re.escape(regex).replace(r"\.\*", ".*")
         return f"^{regex}$"
 
-    def route(self, request: str) -> Optional[List[Dict]]:
+    def route(self, request: Optional[str]) -> Optional[List[Dict]]:
         """
         Route a requested model to the corresponding llm deployments based on the regex pattern
 
@@ -69,17 +69,20 @@ class PatternMatchRouter:
         if no pattern is found, return None
 
         Args:
-            request: str
+            request: Optional[str]
 
         Returns:
             Optional[List[Deployment]]: llm deployments
         """
         try:
+            if request is None:
+                return None
             for pattern, llm_deployments in self.patterns.items():
                 if re.match(pattern, request):
                     return llm_deployments
         except Exception as e:
-            verbose_router_logger.error(f"Error in PatternMatchRouter.route: {str(e)}")
+            verbose_router_logger.debug(f"Error in PatternMatchRouter.route: {str(e)}")
+
         return None  # No matching pattern found
 
 
