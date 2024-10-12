@@ -284,6 +284,7 @@ jobs:
           root: .
           paths:
             - coverage.xml
+            - .coverage
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
