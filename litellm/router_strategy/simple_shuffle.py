@@ -23,7 +23,21 @@ def simple_shuffle(
     healthy_deployments: Union[List[Any], Dict[Any, Any]],
     model: str,
 ) -> Dict:
-    # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
+    """
+    Returns a random deployment from the list of healthy deployments.
+
+    If weights are provided, it will return a deployment based on the weights.
+
+    If users pass `rpm` or `tpm`, we do a random weighted pick - based on `rpm`/`tpm`.
+
+    Args:
+        llm_router_instance: LitellmRouter instance
+        healthy_deployments: List of healthy deployments
+        model: Model name
+
+    Returns:
+        Dict: A single healthy deployment
+    """
 
     ############## Check if 'weight' param set for a weighted pick #################
     weight = healthy_deployments[0].get("litellm_params").get("weight", None)
