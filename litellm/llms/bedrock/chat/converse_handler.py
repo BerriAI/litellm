@@ -1,6 +1,6 @@
 import json
 import urllib
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Tuple, Union
 
 import httpx
 
@@ -110,6 +110,32 @@ class BedrockConverseLLM(BaseAWSLLM):
             str: The double-encoded model ID.
         """
         return urllib.parse.quote(model_id, safe="")  # type: ignore
+
+    def set_bedrock_converse_runtime_endpoint(
+        self,
+        api_base: Optional[str],
+        aws_bedrock_runtime_endpoint: Optional[str],
+        aws_region_name: str,
+        stream: Optional[bool],
+        provider: str,
+        modelId: str,
+    ) -> Tuple[str, str]:
+        """
+        Set the runtime endpoint for the Bedrock Converse API.
+        """
+        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
+        if (stream is not None and stream is True) and provider != "ai21":
+            endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse-stream"
+        else:
+            endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse"
+
+        return endpoint_url, proxy_endpoint_url
 
     async def async_streaming(
         self,
@@ -283,18 +309,14 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        endpoint_url, proxy_endpoint_url = self.set_bedrock_converse_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
+            stream=stream,
+            provider=provider,
+            modelId=modelId,
         )
-        if (stream is not None and stream is True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse"
-
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
         ## TRANSFORMATION ##
