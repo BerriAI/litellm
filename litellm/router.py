@@ -32,6 +32,8 @@ from openai import AsyncOpenAI
 from typing_extensions import overload
 
 import litellm
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
 from litellm.assistants.main import AssistantDeleted
@@ -3661,9 +3663,10 @@ class Router:
             kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
 
-            exception_headers = litellm.utils._get_litellm_response_headers(
+            exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
                 original_exception=exception
             )
+
             _time_to_cooldown = kwargs.get("litellm_params", {}).get(
                 "cooldown_time", self.cooldown_time
             )

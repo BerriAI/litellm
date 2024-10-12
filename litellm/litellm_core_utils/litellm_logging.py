@@ -84,6 +84,7 @@ from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
+from .exception_mapping_utils import _get_response_headers
 
 try:
     from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -1813,6 +1814,7 @@ class Logging:
                 logging_obj=self,
                 status="failure",
                 error_str=str(exception),
+                original_exception=exception,
             )
         )
         return start_time, end_time
@@ -2654,6 +2656,7 @@ def get_standard_logging_object_payload(
     logging_obj: Logging,
     status: StandardLoggingPayloadStatus,
     error_str: Optional[str] = None,
+    original_exception: Optional[Exception] = None,
 ) -> Optional[StandardLoggingPayload]:
     try:
         if kwargs is None:
@@ -2669,6 +2672,19 @@ def get_standard_logging_object_payload(
             response_obj = init_response_obj
         else:
             response_obj = {}
+
+        if original_exception is not None and hidden_params is None:
+            response_headers = _get_response_headers(original_exception)
+            if response_headers is not None:
+                hidden_params = dict(
+                    StandardLoggingHiddenParams(
+                        additional_headers=dict(response_headers),
+                        model_id=None,
+                        cache_key=None,
+                        api_base=None,
+                        response_cost=None,
+                    )
+                )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {})

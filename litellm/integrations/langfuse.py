@@ -191,7 +191,6 @@ class LangFuseLogger:
                         pass
 
             # end of processing langfuse ########################
-
             if (
                 level == "ERROR"
                 and status_message is not None
