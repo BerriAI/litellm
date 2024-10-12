@@ -5181,19 +5181,16 @@ class Router:
                 # get_llm_provider raises exception when provider is unknown
                 pass
 
-            _custom_llm_provider_pattern = self.pattern_router.route(
-                f"{custom_llm_provider}/*"
-            )
-            # check if custom_llm_provider
-            if _custom_llm_provider_pattern is not None:
-                provider_deployments = []
-                for deployment in _custom_llm_provider_pattern:
-                    dep = copy.deepcopy(deployment)
-                    dep["litellm_params"]["model"] = model
-                    provider_deployments.append(dep)
-                return model, provider_deployments
+            """
+            self.pattern_router.route(model):
+                does exact pattern matching. Example openai/gpt-3.5-turbo gets routed to pattern openai/*
 
-            _pattern_router_response = self.pattern_router.route(model)
+            self.pattern_router.route(f"{custom_llm_provider}/{model}"):
+                does pattern matching using litellm.get_llm_provider(), example claude-3-5-sonnet-20240620 gets routed to anthropic/* since 'claude-3-5-sonnet-20240620' is an Anthropic Model
+            """
+            _pattern_router_response = self.pattern_router.route(
+                model
+            ) or self.pattern_router.route(f"{custom_llm_provider}/{model}")
             if _pattern_router_response is not None:
                 provider_deployments = []
                 for deployment in _pattern_router_response:
