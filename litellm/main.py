@@ -835,7 +835,7 @@ def completion(  # type: ignore
             deployments = [
                 m["litellm_params"] for m in model_list if m["model_name"] == model
             ]
-            return batch_completion_models(deployments=deployments, **args)
+            return litellm.batch_completion_models(deployments=deployments, **args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
