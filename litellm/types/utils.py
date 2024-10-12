@@ -1418,3 +1418,17 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
+
+
+CachingSupportedCallTypes = Literal[
+    "completion",
+    "acompletion",
+    "embedding",
+    "aembedding",
+    "atranscription",
+    "transcription",
+    "atext_completion",
+    "text_completion",
+    "arerank",
+    "rerank",
+]

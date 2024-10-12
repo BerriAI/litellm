@@ -20,13 +20,13 @@ from datetime import timedelta
 from enum import Enum
 from typing import Any, List, Literal, Optional, Tuple, Union
 
-from openai._models import BaseModel as OpenAIObject
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import CachingSupportedCallTypes, all_litellm_params
 
 
 def print_verbose(print_statement):
@@ -2139,20 +2139,7 @@ class Cache:
         default_in_memory_ttl: Optional[float] = None,
         default_in_redis_ttl: Optional[float] = None,
         similarity_threshold: Optional[float] = None,
-        supported_call_types: Optional[
-            List[
-                Literal[
-                    "completion",
-                    "acompletion",
-                    "embedding",
-                    "aembedding",
-                    "atranscription",
-                    "transcription",
-                    "atext_completion",
-                    "text_completion",
-                ]
-            ]
-        ] = [
+        supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
             "completion",
             "acompletion",
             "embedding",
@@ -2161,6 +2148,8 @@ class Cache:
             "transcription",
             "atext_completion",
             "text_completion",
+            "arerank",
+            "rerank",
         ],
         # s3 Bucket, boto3 configuration
         s3_bucket_name: Optional[str] = None,
@@ -2353,9 +2342,20 @@ class Cache:
             "file",
             "language",
         ]
+        rerank_only_kwargs = [
+            "top_n",
+            "rank_fields",
+            "return_documents",
+            "max_chunks_per_doc",
+            "documents",
+            "query",
+        ]
         # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
         combined_kwargs = (
-            completion_kwargs + embedding_only_kwargs + transcription_only_kwargs
+            completion_kwargs
+            + embedding_only_kwargs
+            + transcription_only_kwargs
+            + rerank_only_kwargs
         )
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
@@ -2557,7 +2557,7 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
-                if isinstance(result, OpenAIObject):
+                if isinstance(result, BaseModel):
                     result = result.model_dump_json()
 
                 ## DEFAULT TTL ##
@@ -2778,20 +2778,7 @@ def enable_cache(
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
-    supported_call_types: Optional[
-        List[
-            Literal[
-                "completion",
-                "acompletion",
-                "embedding",
-                "aembedding",
-                "atranscription",
-                "transcription",
-                "atext_completion",
-                "text_completion",
-            ]
-        ]
-    ] = [
+    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
         "completion",
         "acompletion",
         "embedding",
@@ -2800,6 +2787,8 @@ def enable_cache(
         "transcription",
         "atext_completion",
         "text_completion",
+        "arerank",
+        "rerank",
     ],
     **kwargs,
 ):
@@ -2847,20 +2836,7 @@ def update_cache(
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
-    supported_call_types: Optional[
-        List[
-            Literal[
-                "completion",
-                "acompletion",
-                "embedding",
-                "aembedding",
-                "atranscription",
-                "transcription",
-                "atext_completion",
-                "text_completion",
-            ]
-        ]
-    ] = [
+    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
         "completion",
         "acompletion",
         "embedding",
@@ -2869,6 +2845,8 @@ def update_cache(
         "transcription",
         "atext_completion",
         "text_completion",
+        "arerank",
+        "rerank",
     ],
     **kwargs,
 ):

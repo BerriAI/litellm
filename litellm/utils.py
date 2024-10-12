@@ -82,6 +82,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
     OPENAI_RESPONSE_HEADERS,
@@ -720,6 +721,7 @@ def client(original_function):
             or kwargs.get("atext_completion", False) is True
             or kwargs.get("atranscription", False) is True
             or kwargs.get("arerank", False) is True
+            or kwargs.get("_arealtime", False) is True
         ):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
@@ -819,6 +821,8 @@ def client(original_function):
                 and kwargs.get("acompletion", False) is not True
                 and kwargs.get("aimg_generation", False) is not True
                 and kwargs.get("atranscription", False) is not True
+                and kwargs.get("arerank", False) is not True
+                and kwargs.get("_arealtime", False) is not True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose("INSIDE CHECKING CACHE")
@@ -835,7 +839,6 @@ def client(original_function):
                     )
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result is not None:
-                        print_verbose("Cache Hit!")
                         if "detail" in cached_result:
                             # implies an error occurred
                             pass
@@ -867,7 +870,13 @@ def client(original_function):
                                     response_object=cached_result,
                                     response_type="embedding",
                                 )
-
+                            elif call_type == CallTypes.rerank.value and isinstance(
+                                cached_result, dict
+                            ):
+                                cached_result = convert_to_model_response_object(
+                                    response_object=cached_result,
+                                    response_type="rerank",
+                                )
                             # LOG SUCCESS
                             cache_hit = True
                             end_time = datetime.datetime.now()
@@ -916,6 +925,12 @@ def client(original_function):
                                 target=logging_obj.success_handler,
                                 args=(cached_result, start_time, end_time, cache_hit),
                             ).start()
+                            cache_key = kwargs.get("preset_cache_key", None)
+                            if (
+                                isinstance(cached_result, BaseModel)
+                                or isinstance(cached_result, CustomStreamWrapper)
+                            ) and hasattr(cached_result, "_hidden_params"):
+                                cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
                             return cached_result
                     else:
                         print_verbose(
@@ -991,8 +1006,7 @@ def client(original_function):
             if (
                 litellm.cache is not None
                 and litellm.cache.supported_call_types is not None
-                and str(original_function.__name__)
-                in litellm.cache.supported_call_types
+                and call_type in litellm.cache.supported_call_types
             ) and (kwargs.get("cache", {}).get("no-store", False) is not True):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
@@ -1257,6 +1271,14 @@ def client(original_function):
                                 model_response_object=EmbeddingResponse(),
                                 response_type="embedding",
                             )
+                        elif call_type == CallTypes.arerank.value and isinstance(
+                            cached_result, dict
+                        ):
+                            cached_result = convert_to_model_response_object(
+                                response_object=cached_result,
+                                model_response_object=None,
+                                response_type="rerank",
+                            )
                         elif call_type == CallTypes.atranscription.value and isinstance(
                             cached_result, dict
                         ):
@@ -1460,6 +1482,7 @@ def client(original_function):
                     isinstance(result, litellm.ModelResponse)
                     or isinstance(result, litellm.EmbeddingResponse)
                     or isinstance(result, TranscriptionResponse)
+                    or isinstance(result, RerankResponse)
                 ):
                     if (
                         isinstance(result, EmbeddingResponse)
@@ -5880,10 +5903,16 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 def convert_to_model_response_object(
     response_object: Optional[dict] = None,
     model_response_object: Optional[
-        Union[ModelResponse, EmbeddingResponse, ImageResponse, TranscriptionResponse]
+        Union[
+            ModelResponse,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            RerankResponse,
+        ]
     ] = None,
     response_type: Literal[
-        "completion", "embedding", "image_generation", "audio_transcription"
+        "completion", "embedding", "image_generation", "audio_transcription", "rerank"
     ] = "completion",
     stream=False,
     start_time=None,
@@ -6132,6 +6161,27 @@ def convert_to_model_response_object(
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
+
+            return model_response_object
+        elif response_type == "rerank" and (
+            model_response_object is None
+            or isinstance(model_response_object, RerankResponse)
+        ):
+            if response_object is None:
+                raise Exception("Error in response object format")
+
+            if model_response_object is None:
+                model_response_object = RerankResponse(**response_object)
+                return model_response_object
+
+            if "id" in response_object:
+                model_response_object.id = response_object["id"]
+
+            if "meta" in response_object:
+                model_response_object.meta = response_object["meta"]
+
+            if "results" in response_object:
+                model_response_object.results = response_object["results"]
 
             return model_response_object
     except Exception:
