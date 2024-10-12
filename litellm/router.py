@@ -763,10 +763,8 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            timeout = self._get_timeout(
-                deployment=deployment,
-                kwargs=kwargs,
-                data=data,
+            timeout: Optional[Union[float, int]] = self._get_timeout(
+                kwargs=kwargs, data=data
             )
 
             _response = litellm.acompletion(
@@ -875,9 +873,9 @@ class Router:
 
         return model_client
 
-    def _get_timeout(self, deployment: dict, kwargs: dict, data: dict):
-        return (
-            deployment.get(
+    def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
+        timeout = (
+            data.get(
                 "timeout", None
             )  # timeout set on litellm_params for this deployment
             or data.get(
@@ -888,6 +886,8 @@ class Router:
                 "timeout", None
             )  # this uses default_litellm_params when nothing is set
         )
+
+        return timeout
 
     async def abatch_completion(
         self,
@@ -1625,14 +1625,9 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
 
-            timeout = (
-                data.get(
-                    "timeout", None
-                )  # timeout set on litellm_params for this deployment
-                or self.timeout  # timeout set on router
-                or kwargs.get(
-                    "timeout", None
-                )  # this uses default_litellm_params when nothing is set
+            timeout: Optional[Union[float, int]] = self._get_timeout(
+                kwargs=kwargs,
+                data=data,
             )
 
             response = await litellm.amoderation(
@@ -1711,14 +1706,9 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
 
-            timeout = (
-                data.get(
-                    "timeout", None
-                )  # timeout set on litellm_params for this deployment
-                or self.timeout  # timeout set on router
-                or kwargs.get(
-                    "timeout", None
-                )  # this uses default_litellm_params when nothing is set
+            timeout: Optional[Union[float, int]] = self._get_timeout(
+                kwargs=kwargs,
+                data=data,
             )
 
             response = await litellm.arerank(
