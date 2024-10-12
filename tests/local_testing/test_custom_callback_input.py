@@ -1385,9 +1385,9 @@ def test_logging_standard_payload_failure_call():
             resp = litellm.completion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
-                mock_response="litellm.RateLimitError",
+                api_key="my-bad-api-key",
             )
-        except litellm.RateLimitError:
+        except litellm.AuthenticationError:
             pass
 
         mock_client.assert_called_once()
@@ -1401,6 +1401,7 @@ def test_logging_standard_payload_failure_call():
         standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
             "kwargs"
         ]["standard_logging_object"]
+        assert "additional_headers" in standard_logging_object["hidden_params"]
 
 
 @pytest.mark.parametrize("stream", [True, False])

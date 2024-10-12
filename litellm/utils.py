@@ -60,7 +60,6 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.exception_mapping_utils import (
-    _get_litellm_response_headers,
     _get_response_headers,
     exception_type,
     get_error_message,
