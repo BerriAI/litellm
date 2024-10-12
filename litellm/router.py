@@ -756,7 +756,6 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
             )
-
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -766,53 +765,20 @@ class Router:
 
             # debug how often this deployment picked
             self._track_deployment_metrics(deployment=deployment)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
-            kwargs.setdefault("metadata", {}).update(
-                {
-                    "deployment": deployment["litellm_params"]["model"],
-                    "model_info": deployment.get("model_info", {}),
-                    "api_base": deployment.get("litellm_params", {}).get("api_base"),
-                }
-            )
-            kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
-
             model_name = data["model"]
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs and v is not None
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
 
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="client"
             )
-
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
             self.total_calls[model_name] += 1
 
-            timeout = (
-                data.get(
-                    "timeout", None
-                )  # timeout set on litellm_params for this deployment
-                or data.get(
-                    "request_timeout", None
-                )  # timeout set on litellm_params for this deployment
-                or self.timeout  # timeout set on router
-                or kwargs.get(
-                    "timeout", None
-                )  # this uses default_litellm_params when nothing is set
+            timeout = self._get_timeout(
+                deployment=deployment,
+                kwargs=kwargs,
+                data=data,
             )
 
             _response = litellm.acompletion(
@@ -880,6 +846,55 @@ class Router:
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
+
+    def _update_kwargs_with_deployment(self, deployment: dict, kwargs: dict) -> None:
+        kwargs.setdefault("metadata", {}).update(
+            {
+                "deployment": deployment["litellm_params"]["model"],
+                "model_info": deployment.get("model_info", {}),
+                "api_base": deployment.get("litellm_params", {}).get("api_base"),
+            }
+        )
+        kwargs["model_info"] = deployment.get("model_info", {})
+        for k, v in self.default_litellm_params.items():
+            if (
+                k not in kwargs and v is not None
+            ):  # prioritize model-specific params > default router params
+                kwargs[k] = v
+            elif k == "metadata":
+                kwargs[k].update(v)
+
+    def _get_model_client(self, deployment: dict, kwargs: dict):
+        potential_model_client = self._get_client(
+            deployment=deployment, kwargs=kwargs, client_type="async"
+        )
+
+        # check if provided keys == client keys #
+        dynamic_api_key = kwargs.get("api_key", None)
+        if (
+            dynamic_api_key is not None
+            and potential_model_client is not None
+            and dynamic_api_key != potential_model_client.api_key
+        ):
+            model_client = None
+        else:
+            model_client = potential_model_client
+
+        return model_client
+
+    def _get_timeout(self, deployment: dict, kwargs: dict, data: dict):
+        return (
+            deployment.get(
+                "timeout", None
+            )  # timeout set on litellm_params for this deployment
+            or data.get(
+                "request_timeout", None
+            )  # timeout set on litellm_params for this deployment
+            or self.timeout  # timeout set on router
+            or kwargs.get(
+                "timeout", None
+            )  # this uses default_litellm_params when nothing is set
+        )
 
     async def abatch_completion(
         self,
