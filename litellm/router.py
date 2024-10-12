@@ -5169,8 +5169,31 @@ class Router:
 
         if model not in self.model_names:
             # check if provider/ specific wildcard routing use pattern matching
-            _pattern_router_response = self.pattern_router.route(model)
+            custom_llm_provider: Optional[str] = None
+            try:
+                (
+                    _,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = litellm.get_llm_provider(model=model)
+            except Exception:
+                # get_llm_provider raises exception when provider is unknown
+                pass
 
+            _custom_llm_provider_pattern = self.pattern_router.route(
+                f"{custom_llm_provider}/*"
+            )
+            # check if custom_llm_provider
+            if _custom_llm_provider_pattern is not None:
+                provider_deployments = []
+                for deployment in _custom_llm_provider_pattern:
+                    dep = copy.deepcopy(deployment)
+                    dep["litellm_params"]["model"] = model
+                    provider_deployments.append(dep)
+                return model, provider_deployments
+
+            _pattern_router_response = self.pattern_router.route(model)
             if _pattern_router_response is not None:
                 provider_deployments = []
                 for deployment in _pattern_router_response:
