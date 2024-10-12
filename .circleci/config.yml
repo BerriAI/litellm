@@ -954,6 +954,7 @@ workflows:
       - upload-coverage:
           requires:
             - llm_translation_testing
+            - litellm_router_testing
       - db_migration_disable_update_check:
           filters:
             branches:
