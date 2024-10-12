@@ -184,6 +184,108 @@ class HuggingfaceConfig:
     def get_hf_api_key(self) -> Optional[str]:
         return get_secret_str("HUGGINGFACE_API_KEY")
 
+    def _transform_input(
+        self,
+        task: hf_tasks,
+        messages: list,
+        optional_params: dict,
+        custom_prompt_dict: dict,
+        model: str,
+    ) -> Tuple[dict, dict, str]:
+        """
+        Transform the input for the Huggingface API.
+
+        Returns:
+            Tuple[dict, dict, str]: The transformed data, optional parameters, and input text.
+        """
+        if task == "conversational":
+            inference_params = copy.deepcopy(optional_params)
+            inference_params.pop("details")
+            inference_params.pop("return_full_text")
+            past_user_inputs = []
+            generated_responses = []
+            text = ""
+            for message in messages:
+                if message["role"] == "user":
+                    if text != "":
+                        past_user_inputs.append(text)
+                    text = message["content"]
+                elif message["role"] == "assistant" or message["role"] == "system":
+                    generated_responses.append(message["content"])
+            data = {
+                "inputs": {
+                    "text": text,
+                    "past_user_inputs": past_user_inputs,
+                    "generated_responses": generated_responses,
+                },
+                "parameters": inference_params,
+            }
+            input_text = "".join(message["content"] for message in messages)
+        elif task == "text-generation-inference":
+            # always send "details" and "return_full_text" as params
+            if model in custom_prompt_dict:
+                # check if the model has a registered custom prompt
+                model_prompt_details = custom_prompt_dict[model]
+                prompt = custom_prompt(
+                    role_dict=model_prompt_details.get("roles", None),
+                    initial_prompt_value=model_prompt_details.get(
+                        "initial_prompt_value", ""
+                    ),
+                    final_prompt_value=model_prompt_details.get(
+                        "final_prompt_value", ""
+                    ),
+                    messages=messages,
+                )
+            else:
+                prompt: str = prompt_factory(model=model, messages=messages)  # type: ignore
+            data = {
+                "inputs": prompt,  # type: ignore
+                "parameters": optional_params,
+                "stream": (  # type: ignore
+                    True
+                    if "stream" in optional_params
+                    and isinstance(optional_params["stream"], bool)
+                    and optional_params["stream"] is True  # type: ignore
+                    else False
+                ),
+            }
+            input_text = prompt
+        else:
+            # Non TGI and Conversational llms
+            # We need this branch, it removes 'details' and 'return_full_text' from params
+            if model in custom_prompt_dict:
+                # check if the model has a registered custom prompt
+                model_prompt_details = custom_prompt_dict[model]
+                prompt = custom_prompt(
+                    role_dict=model_prompt_details.get("roles", {}),
+                    initial_prompt_value=model_prompt_details.get(
+                        "initial_prompt_value", ""
+                    ),
+                    final_prompt_value=model_prompt_details.get(
+                        "final_prompt_value", ""
+                    ),
+                    bos_token=model_prompt_details.get("bos_token", ""),
+                    eos_token=model_prompt_details.get("eos_token", ""),
+                    messages=messages,
+                )
+            else:
+                prompt: str = prompt_factory(model=model, messages=messages)  # type: ignore
+            inference_params = copy.deepcopy(optional_params)
+            inference_params.pop("details")
+            inference_params.pop("return_full_text")
+            data = {
+                "inputs": prompt,  # type: ignore
+            }
+            if task == "text-generation-inference":
+                data["parameters"] = inference_params
+                data["stream"] = (  # type: ignore
+                    True  # type: ignore
+                    if "stream" in optional_params and optional_params["stream"] is True
+                    else False
+                )
+            input_text = prompt
+        return data, optional_params, input_text
+
 
 def output_parser(generated_text: str):
     """
@@ -513,93 +615,13 @@ class Huggingface(BaseLLM):
             # Pop the keys from the dictionary after iteration
             for k in keys_to_pop:
                 optional_params.pop(k)
-            if task == "conversational":
-                inference_params = copy.deepcopy(optional_params)
-                inference_params.pop("details")
-                inference_params.pop("return_full_text")
-                past_user_inputs = []
-                generated_responses = []
-                text = ""
-                for message in messages:
-                    if message["role"] == "user":
-                        if text != "":
-                            past_user_inputs.append(text)
-                        text = message["content"]
-                    elif message["role"] == "assistant" or message["role"] == "system":
-                        generated_responses.append(message["content"])
-                data = {
-                    "inputs": {
-                        "text": text,
-                        "past_user_inputs": past_user_inputs,
-                        "generated_responses": generated_responses,
-                    },
-                    "parameters": inference_params,
-                }
-                input_text = "".join(message["content"] for message in messages)
-            elif task == "text-generation-inference":
-                # always send "details" and "return_full_text" as params
-                if model in custom_prompt_dict:
-                    # check if the model has a registered custom prompt
-                    model_prompt_details = custom_prompt_dict[model]
-                    prompt = custom_prompt(
-                        role_dict=model_prompt_details.get("roles", None),
-                        initial_prompt_value=model_prompt_details.get(
-                            "initial_prompt_value", ""
-                        ),
-                        final_prompt_value=model_prompt_details.get(
-                            "final_prompt_value", ""
-                        ),
-                        messages=messages,
-                    )
-                else:
-                    prompt = prompt_factory(model=model, messages=messages)
-                data = {
-                    "inputs": prompt,  # type: ignore
-                    "parameters": optional_params,
-                    "stream": (  # type: ignore
-                        True
-                        if "stream" in optional_params
-                        and isinstance(optional_params["stream"], bool)
-                        and optional_params["stream"] is True  # type: ignore
-                        else False
-                    ),
-                }
-                input_text = prompt
-            else:
-                # Non TGI and Conversational llms
-                # We need this branch, it removes 'details' and 'return_full_text' from params
-                if model in custom_prompt_dict:
-                    # check if the model has a registered custom prompt
-                    model_prompt_details = custom_prompt_dict[model]
-                    prompt = custom_prompt(
-                        role_dict=model_prompt_details.get("roles", {}),
-                        initial_prompt_value=model_prompt_details.get(
-                            "initial_prompt_value", ""
-                        ),
-                        final_prompt_value=model_prompt_details.get(
-                            "final_prompt_value", ""
-                        ),
-                        bos_token=model_prompt_details.get("bos_token", ""),
-                        eos_token=model_prompt_details.get("eos_token", ""),
-                        messages=messages,
-                    )
-                else:
-                    prompt = prompt_factory(model=model, messages=messages)
-                inference_params = copy.deepcopy(optional_params)
-                inference_params.pop("details")
-                inference_params.pop("return_full_text")
-                data = {
-                    "inputs": prompt,  # type: ignore
-                }
-                if task == "text-generation-inference":
-                    data["parameters"] = inference_params
-                    data["stream"] = (  # type: ignore
-                        True  # type: ignore
-                        if "stream" in optional_params
-                        and optional_params["stream"] is True
-                        else False
-                    )
-                input_text = prompt
+            data, optional_params, input_text = HuggingfaceConfig()._transform_input(
+                task=task,
+                messages=messages,
+                optional_params=optional_params,
+                custom_prompt_dict=custom_prompt_dict,
+                model=model,
+            )
 
             ### RE-ADD SPECIAL PARAMS
             if len(special_params_dict.keys()) > 0:
@@ -619,11 +641,6 @@ class Huggingface(BaseLLM):
             )
             ## COMPLETION CALL
 
-            # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
-            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-            if ssl_verify in ["True", "False"]:
-                ssl_verify = bool(ssl_verify)
-
             if acompletion is True:
                 ### ASYNC STREAMING
                 if optional_params.get("stream", False):
@@ -633,21 +650,19 @@ class Huggingface(BaseLLM):
                     return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, input_text=input_text, model=model, optional_params=optional_params, timeout=timeout)  # type: ignore
             ### SYNC STREAMING
             if "stream" in optional_params and optional_params["stream"] is True:
-                response = requests.post(
+                response = litellm.module_level_client.post(
                     completion_url,
                     headers=headers,
                     data=json.dumps(data),
                     stream=optional_params["stream"],
-                    verify=ssl_verify,
                 )
                 return response.iter_lines()
             ### SYNC COMPLETION
             else:
-                response = requests.post(
+                response = litellm.module_level_client.post(
                     completion_url,
                     headers=headers,
                     data=json.dumps(data),
-                    verify=ssl_verify,
                 )
 
                 ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
@@ -748,35 +763,36 @@ class Huggingface(BaseLLM):
 
         response = None
         try:
-            async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
-                response = await client.post(url=api_base, json=data, headers=headers)
-                response_json = response.json()
-                if response.status_code != 200:
-                    if "error" in response_json:
-                        raise HuggingfaceError(
-                            status_code=response.status_code,
-                            message=response_json["error"],
-                            request=response.request,
-                            response=response,
-                        )
-                    else:
-                        raise HuggingfaceError(
-                            status_code=response.status_code,
-                            message=response.text,
-                            request=response.request,
-                            response=response,
-                        )
+            response = await litellm.module_level_aclient.post(
+                url=api_base, json=data, headers=headers, timeout=timeout
+            )
+            response_json = response.json()
+            if response.status_code != 200:
+                if "error" in response_json:
+                    raise HuggingfaceError(
+                        status_code=response.status_code,
+                        message=response_json["error"],
+                        request=response.request,
+                        response=response,
+                    )
+                else:
+                    raise HuggingfaceError(
+                        status_code=response.status_code,
+                        message=response.text,
+                        request=response.request,
+                        response=response,
+                    )
 
-                ## RESPONSE OBJECT
-                return self.convert_to_model_response_object(
-                    completion_response=response_json,
-                    model_response=model_response,
-                    task=task,
-                    encoding=encoding,
-                    input_text=input_text,
-                    model=model,
-                    optional_params=optional_params,
-                )
+            ## RESPONSE OBJECT
+            return self.convert_to_model_response_object(
+                completion_response=response_json,
+                model_response=model_response,
+                task=task,
+                encoding=encoding,
+                input_text=input_text,
+                model=model,
+                optional_params=optional_params,
+            )
         except Exception as e:
             if isinstance(e, httpx.TimeoutException):
                 raise HuggingfaceError(status_code=500, message="Request Timeout Error")

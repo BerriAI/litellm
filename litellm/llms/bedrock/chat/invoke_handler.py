@@ -308,7 +308,7 @@ class BedrockLLM(BaseAWSLLM):
                     prompt += f"{message['content']}"
         return prompt, chat_history  # type: ignore
 
-    def process_response(
+    def process_response(  # ruff: noqa: PLR0915
         self,
         model: str,
         response: Union[requests.Response, httpx.Response],
