@@ -4523,7 +4523,6 @@ async def test_dynamic_azure_params(stream, sync_mode):
         try:
             mock_client.assert_not_called()
         except Exception as e:
-            traceback.print_stack()
             raise e
 
 
