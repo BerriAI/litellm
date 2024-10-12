@@ -175,11 +175,17 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       # Store test results
       - store_test_results:
           path: test-results
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - coverage.xml
+            - .coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
         - image: cimg/python:3.11
@@ -269,14 +275,6 @@ jobs:
             python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
         
-      # Check file locations
-      - run:
-          name: Check coverage file location
-          command: |
-            echo "Current directory:"
-            ls -la
-            echo "\nContents of tests/llm_translation:"
-            ls -la tests/llm_translation
       # Store test results
       - store_test_results:
           path: test-results
@@ -716,6 +714,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
+            coverage combine
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
