@@ -37,6 +37,9 @@ def test_batch_completions():
         print(result)
         print(len(result))
         assert len(result) == 3
+
+        for response in result:
+            assert response.choices[0].message.content is not None
     except Timeout as e:
         print(f"IN TIMEOUT")
         pass

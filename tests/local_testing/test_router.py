@@ -124,6 +124,11 @@ async def test_router_provider_wildcard_routing():
 
     print("response 3 = ", response3)
 
+    response4 = await router.acompletion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
 
 @pytest.mark.asyncio()
 async def test_router_provider_wildcard_routing_regex():
