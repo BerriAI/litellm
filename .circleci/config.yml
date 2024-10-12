@@ -293,7 +293,7 @@ jobs:
           root: .
           paths:
             - llm_translation_coverage.xml
-            - .llm_translation_coverage
+            - llm_translation_coverage
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
