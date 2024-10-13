@@ -103,12 +103,22 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants"
           no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml local_testing_coverage.xml
+            mv .coverage local_testing_coverage
 
       # Store test results
       - store_test_results:
           path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - local_testing_coverage.xml
+            - local_testing_coverage
   ui_endpoint_testing:
     docker:
       - image: cimg/python:3.11
@@ -725,7 +735,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage litellm_router_coverage
+            coverage combine llm_translation_coverage litellm_router_coverage local_testing_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -965,6 +975,7 @@ workflows:
           requires:
             - llm_translation_testing
             - litellm_router_testing
+            - local_testing
       - db_migration_disable_update_check:
           filters:
             branches:
