@@ -1498,7 +1498,7 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-    async def load_config(
+    async def load_config(  # ruff: noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
     ):
         """
