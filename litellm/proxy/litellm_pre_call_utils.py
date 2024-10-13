@@ -211,28 +211,26 @@ async def add_litellm_data_to_request(
             data["metadata"]
         )
 
-    data[_metadata_variable_name]["user_api_key"] = user_api_key_dict.api_key
-    data[_metadata_variable_name]["user_api_key_alias"] = getattr(
-        user_api_key_dict, "key_alias", None
-    )
-    data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
-        user_api_key_dict, "end_user_max_budget", None
-    )
+    logged_user_api_key_fields = [
+        "api_key",
+        "key_alias",
+        "end_user_max_budget",
+        "user_id",
+        "org_id",
+        "team_id",
+        "team_alias",
+    ]
+    for field in logged_user_api_key_fields:
+        data[_metadata_variable_name]["user_api_key_{}".format(field)] = getattr(
+            user_api_key_dict, field, None
+        )
+
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
         data[_metadata_variable_name]["global_max_parallel_requests"] = (
             general_settings.get("global_max_parallel_requests", None)
         )
-
-    data[_metadata_variable_name]["user_api_key_user_id"] = user_api_key_dict.user_id
-    data[_metadata_variable_name]["user_api_key_org_id"] = user_api_key_dict.org_id
-    data[_metadata_variable_name]["user_api_key_team_id"] = getattr(
-        user_api_key_dict, "team_id", None
-    )
-    data[_metadata_variable_name]["user_api_key_team_alias"] = getattr(
-        user_api_key_dict, "team_alias", None
-    )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
