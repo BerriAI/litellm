@@ -315,8 +315,8 @@ async def _check_pass_through_auth(
     route: str,
     request: Request,
     pass_through_endpoints: Optional[List[dict]],
-    api_key: Optional[str],
-) -> Tuple[Optional[UserAPIKeyAuth], Optional[str]]:
+    api_key: str,
+) -> Tuple[Optional[UserAPIKeyAuth], str]:
     """
     Check if the route is a pass-through endpoint.
     If so, check if the user has provided an api key in the litellm_user_api_key header.
@@ -339,7 +339,7 @@ async def _check_pass_through_auth(
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
                 ## IF AUTH DISABLED
                 if endpoint.get("auth") is not True:
-                    return UserAPIKeyAuth(), None
+                    return UserAPIKeyAuth(), api_key
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
                 if (
@@ -368,7 +368,7 @@ async def _check_pass_through_auth(
                             isinstance(request.headers, dict)
                             and request.headers.get(key=header_key) is not None  # type: ignore
                         ):
-                            api_key = request.headers.get(key=header_key)  # type: ignore
+                            api_key = request.headers.get(key=header_key) or ""  # type: ignore
 
     return None, api_key
 
