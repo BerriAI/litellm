@@ -1062,6 +1062,95 @@ async def update_database(
         )
 
 
+### UPDATE CACHED KEY SPEND ###
+async def _update_key_cache(token: str, response_cost: float) -> List[Tuple[Any, Any]]:
+    values_to_update_in_cache: List[Tuple[Any, Any]] = []
+    # Fetch the existing cost for the given token
+    if isinstance(token, str) and token.startswith("sk-"):
+        hashed_token = hash_token(token=token)
+    else:
+        hashed_token = token
+    verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
+    existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
+    verbose_proxy_logger.debug(
+        f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
+    )
+    verbose_proxy_logger.debug(
+        f"_update_key_cache: existing spend: {existing_spend_obj}"
+    )
+    if existing_spend_obj is None:
+        return
+    else:
+        existing_spend = existing_spend_obj.spend
+    # Calculate the new cost by adding the existing cost and response_cost
+    new_spend = existing_spend + response_cost
+
+    ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
+    if (
+        existing_spend_obj.soft_budget_cooldown is False
+        and existing_spend_obj.litellm_budget_table is not None
+        and (
+            _is_projected_spend_over_limit(
+                current_spend=new_spend,
+                soft_budget_limit=existing_spend_obj.litellm_budget_table[
+                    "soft_budget"
+                ],
+            )
+            is True
+        )
+    ):
+        projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
+            current_spend=new_spend,
+            soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
+                "soft_budget", None
+            ),
+        )  # type: ignore
+        soft_limit = existing_spend_obj.litellm_budget_table.get(
+            "soft_budget", float("inf")
+        )
+        call_info = CallInfo(
+            token=existing_spend_obj.token or "",
+            spend=new_spend,
+            key_alias=existing_spend_obj.key_alias,
+            max_budget=soft_limit,
+            user_id=existing_spend_obj.user_id,
+            projected_spend=projected_spend,
+            projected_exceeded_date=projected_exceeded_date,
+        )
+        # alert user
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="projected_limit_exceeded",
+                user_info=call_info,
+            )
+        )
+        # set cooldown on alert
+
+    if (
+        existing_spend_obj is not None
+        and getattr(existing_spend_obj, "team_spend", None) is not None
+    ):
+        existing_team_spend = existing_spend_obj.team_spend or 0
+        # Calculate the new cost by adding the existing cost and response_cost
+        existing_spend_obj.team_spend = existing_team_spend + response_cost
+
+    if (
+        existing_spend_obj is not None
+        and getattr(existing_spend_obj, "team_member_spend", None) is not None
+    ):
+        existing_team_member_spend = existing_spend_obj.team_member_spend or 0
+        # Calculate the new cost by adding the existing cost and response_cost
+        existing_spend_obj.team_member_spend = (
+            existing_team_member_spend + response_cost
+        )
+
+    # Update the cost column for the given token
+    existing_spend_obj.spend = new_spend
+    values_to_update_in_cache.append((hashed_token, existing_spend_obj))
+
+    return values_to_update_in_cache
+
+
 async def update_cache(
     token: Optional[str],
     user_id: Optional[str],
@@ -1075,93 +1164,11 @@ async def update_cache(
 
     Put any alerting logic in here.
     """
-
     values_to_update_in_cache: List[Tuple[Any, Any]] = []
-
-    ### UPDATE KEY SPEND ###
-    async def _update_key_cache(token: str, response_cost: float):
-        # Fetch the existing cost for the given token
-        if isinstance(token, str) and token.startswith("sk-"):
-            hashed_token = hash_token(token=token)
-        else:
-            hashed_token = token
-        verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
-        verbose_proxy_logger.debug(
-            f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
+    if token is not None and response_cost is not None:
+        values_to_update_in_cache = await _update_key_cache(
+            token=token, response_cost=response_cost
         )
-        verbose_proxy_logger.debug(
-            f"_update_key_cache: existing spend: {existing_spend_obj}"
-        )
-        if existing_spend_obj is None:
-            return
-        else:
-            existing_spend = existing_spend_obj.spend
-        # Calculate the new cost by adding the existing cost and response_cost
-        new_spend = existing_spend + response_cost
-
-        ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
-        if (
-            existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.litellm_budget_table is not None
-            and (
-                _is_projected_spend_over_limit(
-                    current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.litellm_budget_table[
-                        "soft_budget"
-                    ],
-                )
-                is True
-            )
-        ):
-            projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
-                current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
-                    "soft_budget", None
-                ),
-            )  # type: ignore
-            soft_limit = existing_spend_obj.litellm_budget_table.get(
-                "soft_budget", float("inf")
-            )
-            call_info = CallInfo(
-                token=existing_spend_obj.token or "",
-                spend=new_spend,
-                key_alias=existing_spend_obj.key_alias,
-                max_budget=soft_limit,
-                user_id=existing_spend_obj.user_id,
-                projected_spend=projected_spend,
-                projected_exceeded_date=projected_exceeded_date,
-            )
-            # alert user
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="projected_limit_exceeded",
-                    user_info=call_info,
-                )
-            )
-            # set cooldown on alert
-
-        if (
-            existing_spend_obj is not None
-            and getattr(existing_spend_obj, "team_spend", None) is not None
-        ):
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if (
-            existing_spend_obj is not None
-            and getattr(existing_spend_obj, "team_member_spend", None) is not None
-        ):
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = (
-                existing_team_member_spend + response_cost
-            )
-
-        # Update the cost column for the given token
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():

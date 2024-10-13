@@ -448,7 +448,7 @@ async def _pre_key_auth_check_utils(
     request_data: dict,
     request: Request,
     route: str,
-    api_key: Optional[str],
+    api_key: str,
     general_settings: dict,
     jwt_handler: JWTHandler,
     user_custom_auth: Optional[Callable],
@@ -461,13 +461,16 @@ async def _pre_key_auth_check_utils(
     master_key: Optional[str],
     end_user_params: dict,
     parent_otel_span: Optional[Span],
-) -> Tuple[Optional[UserAPIKeyAuth], PreKeyAuthCheckUtilsResponse]:
+) -> Tuple[Optional[UserAPIKeyAuth], PreKeyAuthCheckUtilsResponse, str]:
     """
     - For routing to other auth flows (custom_auth/jwt/pass-through/oauth2)
     - checking if master key is sufficient
 
     Returns:
         Optional[UserAPIKeyAuth]: UserAPIKeyAuth object if the user is authenticated
+        PreKeyAuthCheckUtilsResponse: Enum to check if auth token should be returned or run through validation checks
+        api_key: str if api_key was passed in, None otherwise
+
     """
     await pre_db_read_auth_checks(
         request_data=request_data,
@@ -519,6 +522,7 @@ async def _pre_key_auth_check_utils(
         return (
             UserAPIKeyAuth.model_validate(response),
             PreKeyAuthCheckUtilsResponse.RETURN,
+            api_key,
         )
 
     ### LITELLM-DEFINED AUTH FUNCTION ###
@@ -542,18 +546,17 @@ async def _pre_key_auth_check_utils(
         return (
             UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
             PreKeyAuthCheckUtilsResponse.RETURN,
+            api_key,
         )
     elif is_pass_through_provider_route(route=route):
         if should_run_auth_on_pass_through_provider_route(route=route) is False:
             return (
                 UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
                 PreKeyAuthCheckUtilsResponse.RETURN,
+                api_key,
             )
 
     ########## End of Route Checks Before Reading DB / Cache for "token" ########
-    if api_key is None:
-        raise ValueError(CommonProxyErrors.no_api_key.value)
-
     if general_settings.get("enable_oauth2_auth", False) is True:
         # return UserAPIKeyAuth object
         # helper to check if the api_key is a valid oauth2 token
@@ -567,12 +570,14 @@ async def _pre_key_auth_check_utils(
         return (
             await check_oauth2_token(token=api_key),
             PreKeyAuthCheckUtilsResponse.RETURN,
+            api_key,
         )
 
     if general_settings.get("enable_oauth2_proxy_auth", False) is True:
         return (
             await handle_oauth2_proxy_request(request=request),
             PreKeyAuthCheckUtilsResponse.RETURN,
+            api_key,
         )
 
     if general_settings.get("enable_jwt_auth", False) is True:
@@ -591,7 +596,11 @@ async def _pre_key_auth_check_utils(
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
         if potential_user_api_key_auth is not None:
-            return potential_user_api_key_auth, PreKeyAuthCheckUtilsResponse.RETURN
+            return (
+                potential_user_api_key_auth,
+                PreKeyAuthCheckUtilsResponse.RETURN,
+                api_key,
+            )
     #### ELSE ####
     ## CHECK PASS-THROUGH ENDPOINTS ##
     potential_user_api_key_auth, api_key = await _check_pass_through_auth(
@@ -601,7 +610,11 @@ async def _pre_key_auth_check_utils(
         api_key=api_key,
     )
     if potential_user_api_key_auth is not None:
-        return potential_user_api_key_auth, PreKeyAuthCheckUtilsResponse.RETURN
+        return (
+            potential_user_api_key_auth,
+            PreKeyAuthCheckUtilsResponse.RETURN,
+            api_key,
+        )
     ## FIN PASS THROUGH ENDPOINT ##
     if master_key is None:
         if isinstance(api_key, str):
@@ -612,6 +625,7 @@ async def _pre_key_auth_check_utils(
                     parent_otel_span=parent_otel_span,
                 ),
                 PreKeyAuthCheckUtilsResponse.RETURN,
+                api_key,
             )
         else:
             return (
@@ -620,6 +634,7 @@ async def _pre_key_auth_check_utils(
                     parent_otel_span=parent_otel_span,
                 ),
                 PreKeyAuthCheckUtilsResponse.RETURN,
+                api_key,
             )
     elif api_key is None:  # only require api key if master key is set
         raise Exception("No api key passed in.")
@@ -634,6 +649,7 @@ async def _pre_key_auth_check_utils(
             return (
                 UserAPIKeyAuth(),
                 PreKeyAuthCheckUtilsResponse.RETURN,
+                api_key,
             )
         else:
             raise HTTPException(
@@ -670,7 +686,7 @@ async def _pre_key_auth_check_utils(
             end_user_params=end_user_params,
         )
 
-        return valid_token, PreKeyAuthCheckUtilsResponse.RETURN
+        return valid_token, PreKeyAuthCheckUtilsResponse.RETURN, api_key
 
     if (
         valid_token is not None
@@ -737,7 +753,7 @@ async def _pre_key_auth_check_utils(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        return _user_api_key_obj, PreKeyAuthCheckUtilsResponse.RETURN
+        return _user_api_key_obj, PreKeyAuthCheckUtilsResponse.RETURN, api_key
 
     ## IF it's not a master key
     ## Route should not be in master_key_only_routes
@@ -763,7 +779,7 @@ async def _pre_key_auth_check_utils(
     ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
         raise Exception(CommonProxyErrors.db_not_connected_error.value)
 
-    return valid_token, PreKeyAuthCheckUtilsResponse.CHECK
+    return valid_token, PreKeyAuthCheckUtilsResponse.CHECK, api_key
 
 
 async def _post_key_auth_check_utils(
@@ -790,9 +806,14 @@ async def _post_key_auth_check_utils(
     # sso/login, ui/login, /key functions and /user functions
     # this will never be allowed to call /chat/completions
     if valid_token is None:
-        raise HTTPException(401, detail="Invalid API key")
+        raise HTTPException(401, detail=CommonProxyErrors.invalid_api_key.value)
     if valid_token.token is None:
-        raise HTTPException(401, detail="Invalid API key, no token associated")
+        raise HTTPException(
+            401,
+            detail="{}, no token associated".format(
+                CommonProxyErrors.invalid_api_key.value
+            ),
+        )
     api_key = valid_token.token
 
     # Add hashed token to cache
@@ -873,9 +894,7 @@ async def _post_key_auth_check_utils(
                 raise Exception(
                     f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
                 )
-    if valid_token is None:
-        # No token was found when looking up in the DB
-        raise Exception("Invalid proxy server token passed")
+
     if valid_token_dict is not None:
         return _return_user_api_key_auth_obj(
             user_obj=user_obj,
@@ -977,7 +996,7 @@ async def user_api_key_auth(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-        valid_token, potential_pre_key_auth_check_response = (
+        valid_token, potential_pre_key_auth_check_response, api_key = (
             await _pre_key_auth_check_utils(
                 request=request,
                 request_data=request_data,
