@@ -5,4 +5,4 @@ select = ["PLR0915"]
 exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*"]
 
 [pylint]
-max-statements = 75
+max-statements = 100

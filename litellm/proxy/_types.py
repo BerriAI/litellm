@@ -1031,8 +1031,12 @@ class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     budget_id: Optional[str] = None
-
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_TeamMemberTableCachedObj(LiteLLM_TeamMemberTable):
+    last_refreshed_at: Optional[float] = None
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -1855,6 +1859,7 @@ class CommonProxyErrors(str, enum.Enum):
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat. \nPricing: https://www.litellm.ai/#pricing"
+    no_api_key = "No api key passed in."
 
 
 class SpendCalculateRequest(LiteLLMBase):

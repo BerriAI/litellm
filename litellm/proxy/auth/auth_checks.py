@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamMemberTableCachedObj,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
@@ -48,6 +49,7 @@ def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
+    team_member_object: Optional[LiteLLM_TeamMemberTableCachedObj],
     end_user_object: Optional[LiteLLM_EndUserTable],
     global_proxy_spend: Optional[float],
     general_settings: dict,
@@ -124,6 +126,22 @@ def common_checks(
                 message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
             )
     ## 4.2 check team member budget, if team key
+    if (
+        team_member_object is not None
+        and team_member_object.litellm_budget_table is not None
+    ):
+        team_member_budget = team_member_object.litellm_budget_table.max_budget
+        if (
+            team_member_budget is not None
+            and team_member_budget > 0
+            and team_member_object.spend is not None
+        ):
+            if team_member_object.spend > team_member_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=team_member_object.spend,
+                    max_budget=team_member_budget,
+                )
+
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
         end_user_budget = end_user_object.litellm_budget_table.max_budget
@@ -213,6 +231,10 @@ def common_checks(
     )
 
     return True
+
+
+def _key_only_checks():
+    pass
 
 
 def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
@@ -459,6 +481,26 @@ async def _cache_management_object(
     await user_api_key_cache.async_set_cache(key=key, value=value)
 
 
+async def _cache_team_member_object(
+    team_id: str,
+    user_id: str,
+    team_table: LiteLLM_TeamMemberTableCachedObj,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    key = f"{team_id}_{user_id}"
+
+    ## CACHE REFRESH TIME!
+    team_table.last_refreshed_at = time.time()
+
+    await _cache_management_object(
+        key=key,
+        value=team_table,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 async def _cache_team_object(
     team_id: str,
     team_table: LiteLLM_TeamTableCachedObj,
@@ -587,6 +629,85 @@ async def get_team_object(
 
 
 @log_to_opentelemetry
+async def get_team_member_object(
+    team_id: str,
+    user_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    check_cache_only: Optional[bool] = None,
+) -> LiteLLM_TeamMemberTableCachedObj:
+    """
+    - Check if team id in proxy Team Table
+    - if valid, return LiteLLM_TeamTable object with defined limits
+    - if not, then raise an error
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    key = f"{team_id}_{user_id}"
+    cached_team_obj: Optional[LiteLLM_TeamMemberTableCachedObj] = None
+
+    ## CHECK REDIS CACHE ##
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
+    ):
+        cached_team_obj = (
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
+                key=key
+            )
+        )
+
+    if cached_team_obj is None:
+        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    if cached_team_obj is not None:
+        if isinstance(cached_team_obj, dict):
+            return LiteLLM_TeamMemberTableCachedObj(**cached_team_obj)
+        elif isinstance(cached_team_obj, LiteLLM_TeamMemberTableCachedObj):
+            return cached_team_obj
+
+    if check_cache_only:
+        raise Exception(
+            f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+        )
+
+    # else, check db
+    try:
+        response = await prisma_client.db.litellm_teammembership.find_first(
+            where={
+                "user_id": user_id,
+                "team_id": team_id,
+            },  # type: ignore
+            include={"litellm_budget_table": True},
+        )
+
+        if response is None:
+            raise Exception
+
+        _response = LiteLLM_TeamMemberTableCachedObj(**response.dict())
+        # save the team object to cache
+        await _cache_team_member_object(
+            team_id=team_id,
+            user_id=user_id,
+            team_table=_response,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        return _response
+    except Exception:
+        raise Exception(
+            f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        )
+
+
+@log_to_opentelemetry
 async def get_key_object(
     hashed_token: str,
     prisma_client: Optional[PrismaClient],
@@ -693,7 +814,7 @@ async def get_org_object(
         )
 
 
-async def can_key_call_model(
+def can_key_call_model(
     model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
 ) -> Literal[True]:
     """

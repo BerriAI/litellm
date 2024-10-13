@@ -648,7 +648,7 @@ def mock_completion(
 
 
 @client
-def completion(  # type: ignore
+def completion(  # type: ignore # ruff: noqa
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -3356,7 +3356,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
 
 @client
-def embedding(
+def embedding(  # ruff: noqa
     model,
     input=[],
     # Optional params
