@@ -859,6 +859,197 @@ router_settings:
 | allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
 | allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
 
+### environment variables - Reference
+
+| Name | Description |
+|------|-------------|
+| ACTIONS_ID_TOKEN_REQUEST_TOKEN | Token for requesting ID in GitHub Actions
+| ACTIONS_ID_TOKEN_REQUEST_URL | URL for requesting ID token in GitHub Actions
+| AISPEND_ACCOUNT_ID | Account ID for AI Spend
+| AISPEND_API_KEY | API Key for AI Spend
+| ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
+| ARIZE_API_KEY | API key for Arize platform integration
+| ARIZE_SPACE_KEY | Space key for Arize platform
+| ATHINA_API_KEY | API key for Athina service
+| AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
+| AWS_ACCESS_KEY_ID | Access Key ID for AWS services
+| AWS_PROFILE_NAME | AWS CLI profile name to be used
+| AWS_REGION_NAME | Default AWS region for service interactions
+| AWS_ROLE_NAME | Role name for AWS IAM usage
+| AWS_SECRET_ACCESS_KEY | Secret Access Key for AWS services
+| AWS_SESSION_NAME | Name for AWS session
+| AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
+| AZURE_API_VERSION | Version of the Azure API being used
+| AZURE_AUTHORITY_HOST | Azure authority host URL
+| AZURE_CLIENT_ID | Client ID for Azure services
+| AZURE_CLIENT_SECRET | Client secret for Azure services
+| AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
+| AZURE_KEY_VAULT_URI | URI for Azure Key Vault
+| AZURE_TENANT_ID | Tenant ID for Azure Active Directory
+| BERRISPEND_ACCOUNT_ID | Account ID for BerriSpend service
+| BRAINTRUST_API_KEY | API key for Braintrust integration
+| CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
+| CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
+| CLICKHOUSE_HOST | Host for ClickHouse database
+| CLICKHOUSE_PASSWORD | Password for ClickHouse authentication
+| CLICKHOUSE_PORT | Port for ClickHouse database connection
+| CLICKHOUSE_USERNAME | Username for ClickHouse authentication
+| CONFIG_FILE_PATH | File path for configuration file
+| CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
+| DATABASE_HOST | Hostname for the database server
+| DATABASE_NAME | Name of the database
+| DATABASE_PASSWORD | Password for the database user
+| DATABASE_PORT | Port number for database connection
+| DATABASE_SCHEMA | Schema name used in the database
+| DATABASE_URL | Connection URL for the database
+| DATABASE_USER | Username for database connection
+| DATABASE_USERNAME | Alias for database user
+| DATABRICKS_API_BASE | Base URL for Databricks API
+| DD_BASE_URL | Base URL for Datadog integration
+| DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
+| _DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
+| DD_API_KEY | API key for Datadog integration
+| DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
+| DD_SOURCE | Source identifier for Datadog logs
+| DEBUG_OTEL | Enable debug mode for OpenTelemetry
+| DIRECT_URL | Direct URL for service endpoint
+| DISABLE_ADMIN_UI | Toggle to disable the admin UI
+| DISABLE_SCHEMA_UPDATE | Toggle to disable schema updates
+| DOCS_DESCRIPTION | Description text for documentation pages
+| DOCS_FILTERED | Flag indicating filtered documentation
+| DOCS_TITLE | Title of the documentation pages
+| EMAIL_SUPPORT_CONTACT | Support contact email address
+| GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
+| GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
+| GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
+| GENERIC_CLIENT_ID | Client ID for generic OAuth providers
+| GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
+| GENERIC_CLIENT_STATE | State parameter for generic client authentication
+| GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
+| GENERIC_SCOPE | Scope settings for generic OAuth providers
+| GENERIC_TOKEN_ENDPOINT | Token endpoint for generic OAuth providers
+| GENERIC_USER_DISPLAY_NAME_ATTRIBUTE | Attribute for user's display name in generic auth
+| GENERIC_USER_EMAIL_ATTRIBUTE | Attribute for user's email in generic auth
+| GENERIC_USER_FIRST_NAME_ATTRIBUTE | Attribute for user's first name in generic auth
+| GENERIC_USER_ID_ATTRIBUTE | Attribute for user ID in generic auth
+| GENERIC_USER_LAST_NAME_ATTRIBUTE | Attribute for user's last name in generic auth
+| GENERIC_USER_PROVIDER_ATTRIBUTE | Attribute specifying the user's provider
+| GENERIC_USER_ROLE_ATTRIBUTE | Attribute specifying the user's role
+| GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
+| GALILEO_BASE_URL | Base URL for Galileo platform
+| GALILEO_PASSWORD | Password for Galileo authentication
+| GALILEO_PROJECT_ID | Project ID for Galileo usage
+| GALILEO_USERNAME | Username for Galileo authentication
+| GREENSCALE_API_KEY | API key for Greenscale service
+| GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
+| GOOGLE_APPLICATION_CREDENTIALS | Path to Google Cloud credentials JSON file
+| GOOGLE_CLIENT_ID | Client ID for Google OAuth
+| GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
+| GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
+| HF_API_BASE | Base URL for Hugging Face API
+| HELICONE_API_KEY | API key for Helicone service
+| HUGGINGFACE_API_BASE | Base URL for Hugging Face API
+| IAM_TOKEN_DB_AUTH | IAM token for database authentication
+| JSON_LOGS | Enable JSON formatted logging
+| JWT_AUDIENCE | Expected audience for JWT tokens
+| JWT_PUBLIC_KEY_URL | URL to fetch public key for JWT verification
+| LAGO_API_BASE | Base URL for Lago API
+| LAGO_API_CHARGE_BY | Parameter to determine charge basis in Lago
+| LAGO_API_EVENT_CODE | Event code for Lago API events
+| LAGO_API_KEY | API key for accessing Lago services
+| LANGFUSE_DEBUG | Toggle debug mode for Langfuse
+| LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
+| LANGFUSE_HOST | Host URL for Langfuse service
+| LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
+| LANGFUSE_RELEASE | Release version of Langfuse integration
+| LANGFUSE_SECRET_KEY | Secret key for Langfuse authentication
+| LANGSMITH_API_KEY | API key for Langsmith platform
+| LANGSMITH_BASE_URL | Base URL for Langsmith service
+| LANGSMITH_BATCH_SIZE | Batch size for operations in Langsmith
+| LANGSMITH_DEFAULT_RUN_NAME | Default name for Langsmith run
+| LANGSMITH_PROJECT | Project name for Langsmith integration
+| LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
+| LANGTRACE_API_KEY | API key for Langtrace service
+| LITERAL_API_KEY | API key for Literal integration
+| LITERAL_API_URL | API URL for Literal service
+| LITERAL_BATCH_SIZE | Batch size for Literal operations
+| LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
+| LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
+| LITELLM_EMAIL | Email associated with LiteLLM account
+| LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
+| LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
+| LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
+| LITELLM_LICENSE | License key for LiteLLM usage
+| LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
+| LITELLM_LOG | Enable detailed logging for LiteLLM
+| LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
+| LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
+| LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
+| LITELLM_TOKEN | Access token for LiteLLM integration
+| LOGFIRE_TOKEN | Token for Logfire logging service
+| MICROSOFT_CLIENT_ID | Client ID for Microsoft services
+| MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
+| MICROSOFT_TENANT | Tenant ID for Microsoft Azure
+| NO_DOCS | Flag to disable documentation generation
+| NO_PROXY | List of addresses to bypass proxy
+| OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
+| OPENAI_API_BASE | Base URL for OpenAI API
+| OPENAI_API_KEY | API key for OpenAI services
+| OPENAI_ORGANIZATION | Organization identifier for OpenAI
+| OPENID_BASE_URL | Base URL for OpenID Connect services
+| OPENID_CLIENT_ID | Client ID for OpenID Connect authentication
+| OPENID_CLIENT_SECRET | Client secret for OpenID Connect authentication
+| OPENMETER_API_ENDPOINT | API endpoint for OpenMeter integration
+| OPENMETER_API_KEY | API key for OpenMeter services
+| OPENMETER_EVENT_TYPE | Type of events sent to OpenMeter
+| OTEL_ENDPOINT | OpenTelemetry endpoint for traces
+| OTEL_ENVIRONMENT_NAME | Environment name for OpenTelemetry
+| OTEL_EXPORTER | Exporter type for OpenTelemetry
+| OTEL_HEADERS | Headers for OpenTelemetry requests
+| OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
+| OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
+| PREDIBASE_API_BASE | Base URL for Predibase API
+| PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
+| PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
+| PROMETHEUS_URL | URL for Prometheus service
+| PROMPTLAYER_API_KEY | API key for PromptLayer integration
+| PROXY_ADMIN_ID | Admin identifier for proxy server
+| PROXY_BASE_URL | Base URL for proxy service
+| PROXY_LOGOUT_URL | URL for logging out of the proxy service
+| PROXY_MASTER_KEY | Master key for proxy authentication
+| QDRANT_API_BASE | Base URL for Qdrant API
+| QDRANT_API_KEY | API key for Qdrant service
+| QDRANT_URL | Connection URL for Qdrant database
+| REDIS_HOST | Hostname for Redis server
+| REDIS_PASSWORD | Password for Redis service
+| REDIS_PORT | Port number for Redis server
+| SERVER_ROOT_PATH | Root path for the server application
+| SET_VERBOSE | Flag to enable verbose logging
+| SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
+| SLACK_WEBHOOK_URL | Webhook URL for Slack integration
+| SMTP_HOST | Hostname for the SMTP server
+| SMTP_PASSWORD | Password for SMTP authentication
+| SMTP_PORT | Port number for SMTP server
+| SMTP_SENDER_EMAIL | Email address used as the sender in SMTP transactions
+| SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
+| SMTP_TLS | Flag to enable or disable TLS for SMTP connections
+| SMTP_USERNAME | Username for SMTP authentication
+| SPEND_LOGS_URL | URL for retrieving spend logs
+| SSL_CERTIFICATE | Path to the SSL certificate file
+| SSL_VERIFY | Flag to enable or disable SSL certificate verification
+| SUPABASE_KEY | API key for Supabase service
+| SUPABASE_URL | Base URL for Supabase instance
+| TEST_EMAIL_ADDRESS | Email address used for testing purposes
+| UI_LOGO_PATH | Path to the logo image used in the UI
+| UI_PASSWORD | Password for accessing the UI
+| UI_USERNAME | Username for accessing the UI
+| UPSTREAM_LANGFUSE_DEBUG | Flag to enable debugging for upstream Langfuse
+| UPSTREAM_LANGFUSE_HOST | Host URL for upstream Langfuse service
+| UPSTREAM_LANGFUSE_PUBLIC_KEY | Public key for upstream Langfuse authentication
+| UPSTREAM_LANGFUSE_RELEASE | Release version identifier for upstream Langfuse
+| UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
+| USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
+| WEBHOOK_URL | URL for receiving webhooks from external services
 ## Extras
 
 
