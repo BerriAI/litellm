@@ -70,9 +70,13 @@ class DataDogLogger(CustomBatchLogger):
 
             ###################################
             # OPTIONAL -only used for testing
-            if os.getenv("_DATADOG_BASE_URL", None) is not None:
-                _dd_base_url = os.getenv("_DATADOG_BASE_URL")
-                self.intake_url = f"{_dd_base_url}/api/v2/logs"
+            dd_base_url: Optional[str] = (
+                os.getenv("_DATADOG_BASE_URL")
+                or os.getenv("DATADOG_BASE_URL")
+                or os.getenv("DD_BASE_URL")
+            )
+            if dd_base_url is not None:
+                self.intake_url = f"{dd_base_url}/api/v2/logs"
             ###################################
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
