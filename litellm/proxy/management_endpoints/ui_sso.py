@@ -216,6 +216,120 @@ async def google_login(request: Request):
         return HTMLResponse(content=html_form, status_code=200)
 
 
+async def _generic_client_helper(
+    redirect_url: str,
+    request: Request,
+    generic_client_id: str,
+):
+    # make generic sso provider
+    from fastapi_sso.sso.base import DiscoveryDocument, OpenID
+    from fastapi_sso.sso.generic import create_provider
+
+    generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
+    generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
+    generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
+    generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
+    generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
+    generic_include_client_id = (
+        os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
+    )
+    if generic_client_secret is None:
+        raise ProxyException(
+            message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
+            type=ProxyErrorTypes.auth_error,
+            param="GENERIC_CLIENT_SECRET",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if generic_authorization_endpoint is None:
+        raise ProxyException(
+            message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
+            type=ProxyErrorTypes.auth_error,
+            param="GENERIC_AUTHORIZATION_ENDPOINT",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if generic_token_endpoint is None:
+        raise ProxyException(
+            message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
+            type=ProxyErrorTypes.auth_error,
+            param="GENERIC_TOKEN_ENDPOINT",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if generic_userinfo_endpoint is None:
+        raise ProxyException(
+            message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
+            type=ProxyErrorTypes.auth_error,
+            param="GENERIC_USERINFO_ENDPOINT",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    verbose_proxy_logger.debug(
+        f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
+    )
+    verbose_proxy_logger.debug(
+        f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
+    )
+
+    generic_user_id_attribute_name = os.getenv(
+        "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
+    )
+    generic_user_display_name_attribute_name = os.getenv(
+        "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
+    )
+    generic_user_email_attribute_name = os.getenv(
+        "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
+    )
+    generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
+    generic_user_first_name_attribute_name = os.getenv(
+        "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
+    )
+    generic_user_last_name_attribute_name = os.getenv(
+        "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
+    )
+
+    generic_provider_attribute_name = os.getenv(
+        "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
+    )
+
+    verbose_proxy_logger.debug(
+        f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
+    )
+
+    discovery = DiscoveryDocument(
+        authorization_endpoint=generic_authorization_endpoint,
+        token_endpoint=generic_token_endpoint,
+        userinfo_endpoint=generic_userinfo_endpoint,
+    )
+
+    def response_convertor(response, client):
+        return OpenID(
+            id=response.get(generic_user_id_attribute_name),
+            display_name=response.get(generic_user_display_name_attribute_name),
+            email=response.get(generic_user_email_attribute_name),
+            first_name=response.get(generic_user_first_name_attribute_name),
+            last_name=response.get(generic_user_last_name_attribute_name),
+            provider=response.get(generic_provider_attribute_name),
+        )
+
+    SSOProvider = create_provider(
+        name="oidc",
+        discovery_document=discovery,
+        response_convertor=response_convertor,
+    )
+    generic_sso = SSOProvider(
+        client_id=generic_client_id,
+        client_secret=generic_client_secret,
+        redirect_uri=redirect_url,
+        allow_insecure_http=True,
+        scope=generic_scope,
+    )
+    verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
+    result = await generic_sso.verify_and_process(
+        request, params={"include_client_id": generic_include_client_id}
+    )
+    verbose_proxy_logger.debug("generic result: %s", result)
+
+    return result
+
+
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):
     """Verify login"""
@@ -294,119 +408,19 @@ async def auth_callback(request: Request):
         )
         result = await microsoft_sso.verify_and_process(request)
     elif generic_client_id is not None:
-        # make generic sso provider
-        from fastapi_sso.sso.base import DiscoveryDocument, OpenID
-        from fastapi_sso.sso.generic import create_provider
-
-        generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-        generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
-        generic_authorization_endpoint = os.getenv(
-            "GENERIC_AUTHORIZATION_ENDPOINT", None
-        )
-        generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
-        generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
-        generic_include_client_id = (
-            os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
-        )
-        if generic_client_secret is None:
-            raise ProxyException(
-                message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_CLIENT_SECRET",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_authorization_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_AUTHORIZATION_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_token_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_TOKEN_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        if generic_userinfo_endpoint is None:
-            raise ProxyException(
-                message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
-                type=ProxyErrorTypes.auth_error,
-                param="GENERIC_USERINFO_ENDPOINT",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        verbose_proxy_logger.debug(
-            f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
-        )
-        verbose_proxy_logger.debug(
-            f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
-        )
-
-        generic_user_id_attribute_name = os.getenv(
-            "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
-        )
-        generic_user_display_name_attribute_name = os.getenv(
-            "GENERIC_USER_DISPLAY_NAME_ATTRIBUTE", "sub"
-        )
-        generic_user_email_attribute_name = os.getenv(
-            "GENERIC_USER_EMAIL_ATTRIBUTE", "email"
-        )
-        generic_user_role_attribute_name = os.getenv(
-            "GENERIC_USER_ROLE_ATTRIBUTE", "role"
-        )
-        generic_user_first_name_attribute_name = os.getenv(
-            "GENERIC_USER_FIRST_NAME_ATTRIBUTE", "first_name"
-        )
-        generic_user_last_name_attribute_name = os.getenv(
-            "GENERIC_USER_LAST_NAME_ATTRIBUTE", "last_name"
-        )
-
-        generic_provider_attribute_name = os.getenv(
-            "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
-        )
-
-        verbose_proxy_logger.debug(
-            f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}\n generic_user_role_attribute_name: {generic_user_role_attribute_name}"
-        )
-
-        discovery = DiscoveryDocument(
-            authorization_endpoint=generic_authorization_endpoint,
-            token_endpoint=generic_token_endpoint,
-            userinfo_endpoint=generic_userinfo_endpoint,
-        )
-
-        def response_convertor(response, client):
-            return OpenID(
-                id=response.get(generic_user_id_attribute_name),
-                display_name=response.get(generic_user_display_name_attribute_name),
-                email=response.get(generic_user_email_attribute_name),
-                first_name=response.get(generic_user_first_name_attribute_name),
-                last_name=response.get(generic_user_last_name_attribute_name),
-                provider=response.get(generic_provider_attribute_name),
-            )
-
-        SSOProvider = create_provider(
-            name="oidc",
-            discovery_document=discovery,
-            response_convertor=response_convertor,
-        )
-        generic_sso = SSOProvider(
-            client_id=generic_client_id,
-            client_secret=generic_client_secret,
-            redirect_uri=redirect_url,
-            allow_insecure_http=True,
-            scope=generic_scope,
-        )
-        verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
-        result = await generic_sso.verify_and_process(
-            request, params={"include_client_id": generic_include_client_id}
-        )
-        verbose_proxy_logger.debug("generic result: %s", result)
+        result = await _generic_client_helper(redirect_url, request, generic_client_id)
 
     # User is Authe'd in - generate key for the UI to access Proxy
-    user_email: Optional[str] = getattr(result, "email", None)
-    user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
+    if result is None:
+        raise ProxyException(
+            message="Unable to verify user identity. Please check your SSO configuration.",
+            type=ProxyErrorTypes.auth_error,
+            code=status.HTTP_401_UNAUTHORIZED,
+            param="result",
+        )
+
+    user_email: Optional[str] = result.email
+    user_id: Optional[str] = result.id
 
     if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
         email_domain = user_email.split("@")[1]
@@ -420,12 +434,6 @@ async def auth_callback(request: Request):
                     )
                 },
             )
-
-    # generic client id
-    if generic_client_id is not None and result is not None:
-        user_id = getattr(result, "id", None)
-        user_email = getattr(result, "email", None)
-        user_role = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
 
     if user_id is None and result is not None:
         _first_name = getattr(result, "first_name", "") or ""
