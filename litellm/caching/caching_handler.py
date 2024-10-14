@@ -99,11 +99,7 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        from litellm.utils import (
-            CustomStreamWrapper,
-            convert_to_model_response_object,
-            convert_to_streaming_response_async,
-        )
+        from litellm.utils import CustomStreamWrapper
 
         args = args or ()
 
@@ -172,69 +168,16 @@ class LLMCachingHandler:
                         stream=kwargs.get("stream", False),
                     )
                     call_type = original_function.__name__
-                    if call_type == CallTypes.acompletion.value and isinstance(
-                        cached_result, dict
-                    ):
-                        if kwargs.get("stream", False) is True:
-                            cached_result = convert_to_streaming_response_async(
-                                response_object=cached_result,
-                            )
-                            cached_result = CustomStreamWrapper(
-                                completion_stream=cached_result,
-                                model=model,
-                                custom_llm_provider="cached_response",
-                                logging_obj=logging_obj,
-                            )
-                        else:
-                            cached_result = convert_to_model_response_object(
-                                response_object=cached_result,
-                                model_response_object=ModelResponse(),
-                            )
-                    if call_type == CallTypes.atext_completion.value and isinstance(
-                        cached_result, dict
-                    ):
-                        if kwargs.get("stream", False) is True:
-                            cached_result = convert_to_streaming_response_async(
-                                response_object=cached_result,
-                            )
-                            cached_result = CustomStreamWrapper(
-                                completion_stream=cached_result,
-                                model=model,
-                                custom_llm_provider="cached_response",
-                                logging_obj=logging_obj,
-                            )
-                        else:
-                            cached_result = TextCompletionResponse(**cached_result)
-                    elif call_type == CallTypes.aembedding.value and isinstance(
-                        cached_result, dict
-                    ):
-                        cached_result = convert_to_model_response_object(
-                            response_object=cached_result,
-                            model_response_object=EmbeddingResponse(),
-                            response_type="embedding",
-                        )
-                    elif call_type == CallTypes.arerank.value and isinstance(
-                        cached_result, dict
-                    ):
-                        cached_result = convert_to_model_response_object(
-                            response_object=cached_result,
-                            model_response_object=None,
-                            response_type="rerank",
-                        )
-                    elif call_type == CallTypes.atranscription.value and isinstance(
-                        cached_result, dict
-                    ):
-                        hidden_params = {
-                            "model": "whisper-1",
-                            "custom_llm_provider": custom_llm_provider,
-                            "cache_hit": True,
-                        }
-                        cached_result = convert_to_model_response_object(
-                            response_object=cached_result,
-                            model_response_object=TranscriptionResponse(),
-                            response_type="audio_transcription",
-                            hidden_params=hidden_params,
-                        )
+
+                    cached_result = self._convert_cached_result_to_model_response(
+                        cached_result=cached_result,
+                        call_type=call_type,
+                        kwargs=kwargs,
+                        logging_obj=logging_obj,
+                        model=model,
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                        args=args,
+                    )
                     if kwargs.get("stream", False) is False:
                         # LOG SUCCESS
                         asyncio.create_task(
@@ -408,6 +351,101 @@ class LLMCachingHandler:
                 cached_result = await litellm.cache.async_get_cache(*args, **kwargs)
             else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
                 cached_result = litellm.cache.get_cache(*args, **kwargs)
+        return cached_result
+
+    def _convert_cached_result_to_model_response(
+        self,
+        cached_result: Any,
+        call_type: str,
+        kwargs: Dict[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+        args: Optional[Tuple[Any, ...]] = None,
+    ) -> Optional[Any]:
+        """
+        Internal method to process the cached result
+
+        Checks the call type and converts the cached result to the appropriate model response object
+        example if call type is text_completion -> returns TextCompletionResponse object
+
+        Args:
+            cached_result: Any:
+            call_type: str:
+            kwargs: Dict[str, Any]:
+            logging_obj: LiteLLMLoggingObj:
+            model: str:
+            custom_llm_provider: Optional[str] = None:
+            args: Optional[Tuple[Any, ...]] = None:
+
+        Returns:
+            Optional[Any]:
+        """
+        from litellm.utils import (
+            CustomStreamWrapper,
+            convert_to_model_response_object,
+            convert_to_streaming_response_async,
+        )
+
+        if call_type == CallTypes.acompletion.value and isinstance(cached_result, dict):
+            if kwargs.get("stream", False) is True:
+                cached_result = convert_to_streaming_response_async(
+                    response_object=cached_result,
+                )
+                cached_result = CustomStreamWrapper(
+                    completion_stream=cached_result,
+                    model=model,
+                    custom_llm_provider="cached_response",
+                    logging_obj=logging_obj,
+                )
+            else:
+                cached_result = convert_to_model_response_object(
+                    response_object=cached_result,
+                    model_response_object=ModelResponse(),
+                )
+        if call_type == CallTypes.atext_completion.value and isinstance(
+            cached_result, dict
+        ):
+            if kwargs.get("stream", False) is True:
+                cached_result = convert_to_streaming_response_async(
+                    response_object=cached_result,
+                )
+                cached_result = CustomStreamWrapper(
+                    completion_stream=cached_result,
+                    model=model,
+                    custom_llm_provider="cached_response",
+                    logging_obj=logging_obj,
+                )
+            else:
+                cached_result = TextCompletionResponse(**cached_result)
+        elif call_type == CallTypes.aembedding.value and isinstance(
+            cached_result, dict
+        ):
+            cached_result = convert_to_model_response_object(
+                response_object=cached_result,
+                model_response_object=EmbeddingResponse(),
+                response_type="embedding",
+            )
+        elif call_type == CallTypes.arerank.value and isinstance(cached_result, dict):
+            cached_result = convert_to_model_response_object(
+                response_object=cached_result,
+                model_response_object=None,
+                response_type="rerank",
+            )
+        elif call_type == CallTypes.atranscription.value and isinstance(
+            cached_result, dict
+        ):
+            hidden_params = {
+                "model": "whisper-1",
+                "custom_llm_provider": custom_llm_provider,
+                "cache_hit": True,
+            }
+            cached_result = convert_to_model_response_object(
+                response_object=cached_result,
+                model_response_object=TranscriptionResponse(),
+                response_type="audio_transcription",
+                hidden_params=hidden_params,
+            )
         return cached_result
 
     async def _async_set_cache(
