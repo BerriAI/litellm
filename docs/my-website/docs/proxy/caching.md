@@ -215,7 +215,7 @@ You can pass in any additional redis.Redis arg, by storing the variable + value 
 REDIS_<redis-kwarg-name> = ""
 ``` 
 
-[**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/_redis.py#L40)
+[**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/main/litellm/_redis.py)
 #### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml

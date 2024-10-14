@@ -213,7 +213,7 @@ class RedisCache(BaseCache):
 
         from litellm._service_logger import ServiceLogging
 
-        from .._redis import get_redis_client, get_redis_connection_pool
+        from ._redis import get_redis_client, get_redis_connection_pool
 
         redis_kwargs = {}
         if host is not None:
@@ -277,7 +277,7 @@ class RedisCache(BaseCache):
             )
 
     def init_async_client(self):
-        from .._redis import get_redis_async_client
+        from ._redis import get_redis_async_client
 
         return get_redis_async_client(
             connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
