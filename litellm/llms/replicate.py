@@ -111,7 +111,7 @@ def start_prediction(
         base_url = f"https://api.replicate.com/v1/deployments/{version_id}"
         print_verbose(f"Deployment base URL: {base_url}\n")
     else:  # assume it's a model
-        base_url = f"https://api.replicate.com/v1/models/{version_id}"
+        base_url = f"https://api.replicate.com/v1"
     headers = {
         "Authorization": f"Token {api_token}",
         "Content-Type": "application/json",
