@@ -13,7 +13,7 @@ import requests
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import StandardLoggingPayload
 
@@ -29,14 +29,30 @@ def create_client():
         clickhouse_host = os.getenv("CLICKHOUSE_HOST")
         if clickhouse_host is not None:
             verbose_logger.debug("setting up clickhouse")
+
+            port = os.getenv("CLICKHOUSE_PORT")
             if port is not None and isinstance(port, str):
                 port = int(port)
 
+            host: Optional[str] = os.getenv("CLICKHOUSE_HOST")
+            if host is None:
+                raise ValueError("CLICKHOUSE_HOST is not set")
+
+            username: Optional[str] = os.getenv("CLICKHOUSE_USERNAME")
+            if username is None:
+                raise ValueError("CLICKHOUSE_USERNAME is not set")
+
+            password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+            if password is None:
+                raise ValueError("CLICKHOUSE_PASSWORD is not set")
+            if port is None:
+                raise ValueError("CLICKHOUSE_PORT is not set")
+
             client = clickhouse_connect.get_client(
-                host=os.getenv("CLICKHOUSE_HOST"),
+                host=host,
                 port=port,
-                username=os.getenv("CLICKHOUSE_USERNAME"),
-                password=os.getenv("CLICKHOUSE_PASSWORD"),
+                username=username,
+                password=password,
             )
             return client
         else:
@@ -176,11 +192,29 @@ def _start_clickhouse():
         if port is not None and isinstance(port, str):
             port = int(port)
 
+        port = os.getenv("CLICKHOUSE_PORT")
+        if port is not None and isinstance(port, str):
+            port = int(port)
+
+        host: Optional[str] = os.getenv("CLICKHOUSE_HOST")
+        if host is None:
+            raise ValueError("CLICKHOUSE_HOST is not set")
+
+        username: Optional[str] = os.getenv("CLICKHOUSE_USERNAME")
+        if username is None:
+            raise ValueError("CLICKHOUSE_USERNAME is not set")
+
+        password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+        if password is None:
+            raise ValueError("CLICKHOUSE_PASSWORD is not set")
+        if port is None:
+            raise ValueError("CLICKHOUSE_PORT is not set")
+
         client = clickhouse_connect.get_client(
-            host=os.getenv("CLICKHOUSE_HOST"),
+            host=host,
             port=port,
-            username=os.getenv("CLICKHOUSE_USERNAME"),
-            password=os.getenv("CLICKHOUSE_PASSWORD"),
+            username=username,
+            password=password,
         )
         # view all tables in DB
         response = client.query("SHOW TABLES")
@@ -241,11 +275,25 @@ class ClickhouseLogger:
         if port is not None and isinstance(port, str):
             port = int(port)
 
+        host: Optional[str] = os.getenv("CLICKHOUSE_HOST")
+        if host is None:
+            raise ValueError("CLICKHOUSE_HOST is not set")
+
+        username: Optional[str] = os.getenv("CLICKHOUSE_USERNAME")
+        if username is None:
+            raise ValueError("CLICKHOUSE_USERNAME is not set")
+
+        password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+        if password is None:
+            raise ValueError("CLICKHOUSE_PASSWORD is not set")
+        if port is None:
+            raise ValueError("CLICKHOUSE_PORT is not set")
+
         client = clickhouse_connect.get_client(
-            host=os.getenv("CLICKHOUSE_HOST"),
+            host=host,
             port=port,
-            username=os.getenv("CLICKHOUSE_USERNAME"),
-            password=os.getenv("CLICKHOUSE_PASSWORD"),
+            username=username,
+            password=password,
         )
         self.client = client
 
