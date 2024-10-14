@@ -16,45 +16,8 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
-
-REQUESTED_MODEL = "requested_model"
-EXCEPTION_STATUS = "exception_status"
-EXCEPTION_CLASS = "exception_class"
-EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
-LATENCY_BUCKETS = (
-    0.1,
-    0.5,
-    1.0,
-    1.5,
-    2.0,
-    2.5,
-    3.0,
-    3.5,
-    4.0,
-    4.5,
-    5.0,
-    5.5,
-    6.0,
-    6.5,
-    7.0,
-    7.5,
-    8.0,
-    8.5,
-    9.0,
-    9.5,
-    10.0,
-    15.0,
-    20.0,
-    25.0,
-    30.0,
-    60.0,
-    120,
-    180,
-    240,
-    300,
-    float("inf"),
-)
 
 
 class PrometheusLogger(CustomLogger):
