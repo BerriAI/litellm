@@ -26,6 +26,7 @@ from litellm.caching.caching import (
     RedisSemanticCache,
     S3Cache,
 )
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
     Embedding,
@@ -59,7 +60,7 @@ class LLMCachingHandler:
     def __init__(self):
         pass
 
-    async def async_get_cache(
+    async def _async_get_cache(
         self,
         model: str,
         original_function: Callable,
@@ -69,6 +70,26 @@ class LLMCachingHandler:
         kwargs: Dict[str, Any],
         args: Optional[Tuple[Any, ...]] = None,
     ) -> CachingHandlerResponse:
+        """
+        Internal method to get from the cache.
+        Handles different call types (embeddings, chat/completions, text_completion, transcription)
+        and accordingly returns the cached response
+
+        Args:
+            model: str:
+            original_function: Callable:
+            logging_obj: LiteLLMLoggingObj:
+            start_time: datetime.datetime:
+            call_type: str:
+            kwargs: Dict[str, Any]:
+            args: Optional[Tuple[Any, ...]] = None:
+
+
+        Returns:
+            CachingHandlerResponse:
+        Raises:
+            None
+        """
         from litellm.utils import (
             CustomStreamWrapper,
             convert_to_model_response_object,
@@ -355,3 +376,64 @@ class LLMCachingHandler:
             cached_result=cached_result,
             final_embedding_cached_response=final_embedding_cached_response,
         )
+
+    async def _async_set_cache(
+        self,
+        result: Any,
+        original_function: Callable,
+        kwargs: Dict[str, Any],
+        args: Optional[Tuple[Any, ...]] = None,
+    ):
+        """
+        Internal method to check the type of the result & cache used and adds the result to the cache accordingly
+
+        Args:
+            result: Any:
+            original_function: Callable:
+            kwargs: Dict[str, Any]:
+            args: Optional[Tuple[Any, ...]] = None:
+
+        Returns:
+            None
+        Raises:
+            None
+        """
+        args = args or ()
+        # [OPTIONAL] ADD TO CACHE
+        if (
+            (litellm.cache is not None)
+            and litellm.cache.supported_call_types is not None
+            and (str(original_function.__name__) in litellm.cache.supported_call_types)
+            and (kwargs.get("cache", {}).get("no-store", False) is not True)
+        ):
+            if (
+                isinstance(result, litellm.ModelResponse)
+                or isinstance(result, litellm.EmbeddingResponse)
+                or isinstance(result, TranscriptionResponse)
+                or isinstance(result, RerankResponse)
+            ):
+                if (
+                    isinstance(result, EmbeddingResponse)
+                    and isinstance(kwargs["input"], list)
+                    and litellm.cache is not None
+                    and not isinstance(
+                        litellm.cache.cache, S3Cache
+                    )  # s3 doesn't support bulk writing. Exclude.
+                ):
+                    asyncio.create_task(
+                        litellm.cache.async_add_cache_pipeline(result, *args, **kwargs)
+                    )
+                elif isinstance(litellm.cache.cache, S3Cache):
+                    threading.Thread(
+                        target=litellm.cache.add_cache,
+                        args=(result,) + args,
+                        kwargs=kwargs,
+                    ).start()
+                else:
+                    asyncio.create_task(
+                        litellm.cache.async_add_cache(result.json(), *args, **kwargs)
+                    )
+            else:
+                asyncio.create_task(
+                    litellm.cache.async_add_cache(result, *args, **kwargs)
+                )

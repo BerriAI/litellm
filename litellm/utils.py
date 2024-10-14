@@ -1131,7 +1131,7 @@ def client(original_function):
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
             _caching_handler_response: CachingHandlerResponse = (
-                await _llm_caching_handler.async_get_cache(
+                await _llm_caching_handler._async_get_cache(
                     model=model,
                     original_function=original_function,
                     logging_obj=logging_obj,
@@ -1203,51 +1203,14 @@ def client(original_function):
                 original_response=result, model=model, optional_params=kwargs
             )
 
-            # [OPTIONAL] ADD TO CACHE
-            if (
-                (litellm.cache is not None)
-                and litellm.cache.supported_call_types is not None
-                and (
-                    str(original_function.__name__)
-                    in litellm.cache.supported_call_types
-                )
-                and (kwargs.get("cache", {}).get("no-store", False) is not True)
-            ):
-                if (
-                    isinstance(result, litellm.ModelResponse)
-                    or isinstance(result, litellm.EmbeddingResponse)
-                    or isinstance(result, TranscriptionResponse)
-                    or isinstance(result, RerankResponse)
-                ):
-                    if (
-                        isinstance(result, EmbeddingResponse)
-                        and isinstance(kwargs["input"], list)
-                        and litellm.cache is not None
-                        and not isinstance(
-                            litellm.cache.cache, S3Cache
-                        )  # s3 doesn't support bulk writing. Exclude.
-                    ):
-                        asyncio.create_task(
-                            litellm.cache.async_add_cache_pipeline(
-                                result, *args, **kwargs
-                            )
-                        )
-                    elif isinstance(litellm.cache.cache, S3Cache):
-                        threading.Thread(
-                            target=litellm.cache.add_cache,
-                            args=(result,) + args,
-                            kwargs=kwargs,
-                        ).start()
-                    else:
-                        asyncio.create_task(
-                            litellm.cache.async_add_cache(
-                                result.json(), *args, **kwargs
-                            )
-                        )
-                else:
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache(result, *args, **kwargs)
-                    )
+            ## Add response to cache
+            await _llm_caching_handler._async_set_cache(
+                result=result,
+                original_function=original_function,
+                kwargs=kwargs,
+                args=args,
+            )
+
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             print_verbose(
                 f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
