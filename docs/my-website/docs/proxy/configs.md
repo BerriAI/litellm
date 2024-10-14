@@ -645,7 +645,7 @@ litellm_settings:
     host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
     port: 6379  # The port number for the Redis cache. Required if type is "redis".
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
-    namespace: "litellm_caching" # namespace for redis cache
+    namespace: "litellm.caching.caching" # namespace for redis cache
   
     # Optional - Redis Cluster Settings
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 

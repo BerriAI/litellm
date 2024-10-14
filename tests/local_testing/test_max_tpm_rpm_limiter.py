@@ -19,7 +19,7 @@
 # from litellm import Router
 # from litellm.proxy.utils import ProxyLogging, hash_token
 # from litellm.proxy._types import UserAPIKeyAuth
-# from litellm.caching import DualCache, RedisCache
+# from litellm.caching.caching import DualCache, RedisCache
 # from litellm.proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
 # from datetime import datetime
 

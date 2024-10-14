@@ -20,7 +20,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 
 @pytest.mark.asyncio

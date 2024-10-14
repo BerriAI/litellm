@@ -8,7 +8,7 @@ from httpx import Response
 
 import litellm
 from litellm import verbose_logger
-from litellm.caching import InMemoryCache
+from litellm.caching.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,

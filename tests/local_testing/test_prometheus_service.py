@@ -67,7 +67,7 @@ async def test_completion_with_caching_bad_call():
     litellm.set_verbose = True
 
     try:
-        from litellm.caching import RedisCache
+        from litellm.caching.caching import RedisCache
 
         litellm.service_callback = ["prometheus_system"]
         sl = ServiceLogging(mock_testing=True)

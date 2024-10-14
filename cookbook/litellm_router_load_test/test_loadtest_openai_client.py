@@ -10,7 +10,7 @@ sys.path.insert(
 import asyncio
 from litellm import Router, Timeout
 import time
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 import litellm
 import openai
 

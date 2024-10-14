@@ -21,7 +21,7 @@ from pydantic import BaseModel
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (

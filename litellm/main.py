@@ -65,7 +65,7 @@ from litellm.utils import (
 )
 
 from ._logging import verbose_logger
-from .caching import disable_cache, enable_cache, update_cache
+from .caching.caching import disable_cache, enable_cache, update_cache
 from .llms import (
     aleph_alpha,
     baseten,

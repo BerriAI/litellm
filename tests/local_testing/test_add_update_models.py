@@ -19,7 +19,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.router import (
     Deployment,
     updateDeployment,

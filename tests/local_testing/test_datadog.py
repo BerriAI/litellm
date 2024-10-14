@@ -151,7 +151,7 @@ async def test_datadog_log_redis_failures():
     Test that poorly configured Redis is logged as Warning on DataDog
     """
     try:
-        from litellm.caching import Cache
+        from litellm.caching.caching import Cache
         from litellm.integrations.datadog.datadog import DataDogLogger
 
         litellm.cache = Cache(

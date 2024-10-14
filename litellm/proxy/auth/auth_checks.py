@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import token_counter
 from litellm._logging import verbose_logger, verbose_router_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import RouterErrors
 from litellm.utils import get_utc_datetime, print_verbose

@@ -14,7 +14,7 @@ from fastapi import HTTPException
 import litellm
 from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.router import ModelGroupInfo

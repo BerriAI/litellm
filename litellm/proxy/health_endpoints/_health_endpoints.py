@@ -465,7 +465,7 @@ async def health_readiness():
         # check Cache
         cache_type = None
         if litellm.cache is not None:
-            from litellm.caching import RedisSemanticCache
+            from litellm.caching.caching import RedisSemanticCache
 
             cache_type = litellm.cache.type
 
