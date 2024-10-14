@@ -10,6 +10,13 @@ component_management:
       paths:
         - "*/caching/*"
         - ".*redis.*"
+    - component_id: "litellm logging & logging callbacks"
+      paths:
+        - "*/integrations/*"
+        - ".*litellm_logging.py"
+    - component_id: "Proxy Authentication"
+      paths:
+        - "*/proxy/auth/*"
 
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
