@@ -22,6 +22,21 @@ REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
 EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
+LATENCY_BUCKETS = (
+    0.1,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
+    120,
+    180,
+    240,
+    300,
+    float("inf"),
+)
 
 
 class PrometheusLogger(CustomLogger):
@@ -85,6 +100,7 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                 ],
+                buckets=LATENCY_BUCKETS,
             )
 
             self.litellm_llm_api_latency_metric = Histogram(
@@ -97,6 +113,7 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                 ],
+                buckets=LATENCY_BUCKETS,
             )
 
             # Counter for spend
