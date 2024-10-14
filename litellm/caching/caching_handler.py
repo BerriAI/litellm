@@ -13,7 +13,7 @@ In each method it will call the appropriate method from caching.py
 import asyncio
 import datetime
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -63,8 +63,8 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         start_time: datetime.datetime,
         call_type: str,
-        *args,
-        **kwargs,
+        kwargs: Dict[str, Any],
+        args: Optional[Tuple[Any, ...]] = None,
     ) -> CachingHandlerResponse:
         from litellm.utils import (
             CustomStreamWrapper,

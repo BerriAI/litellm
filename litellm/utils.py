@@ -1137,8 +1137,8 @@ def client(original_function):
                     logging_obj=logging_obj,
                     start_time=start_time,
                     call_type=call_type,
-                    args=args,
                     kwargs=kwargs,
+                    args=args,
                 )
             )
             if _caching_handler_response.cached_result is not None:
