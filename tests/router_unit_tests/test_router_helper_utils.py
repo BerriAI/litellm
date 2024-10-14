@@ -160,3 +160,64 @@ async def test_router_arealtime(model_list):
         )
 
         mock_arealtime.assert_awaited_once()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_function_with_fallbacks(model_list, sync_mode):
+    """Test if the router 'async_function_with_fallbacks' + 'function_with_fallbacks' are working correctly"""
+    router = Router(model_list=model_list)
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        "mock_response": "I'm fine, thank you!",
+        "num_retries": 0,
+    }
+    if sync_mode:
+        response = router.function_with_fallbacks(
+            original_function=router._completion,
+            **data,
+        )
+    else:
+        response = await router.async_function_with_fallbacks(
+            original_function=router._acompletion,
+            **data,
+        )
+    assert response.choices[0].message.content == "I'm fine, thank you!"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_function_with_retries(model_list, sync_mode):
+    """Test if the router 'async_function_with_retries' + 'function_with_retries' are working correctly"""
+    router = Router(model_list=model_list)
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        "mock_response": "I'm fine, thank you!",
+        "num_retries": 0,
+    }
+    if sync_mode:
+        response = router.function_with_retries(
+            original_function=router._completion,
+            **data,
+        )
+    else:
+        response = await router.async_function_with_retries(
+            original_function=router._acompletion,
+            **data,
+        )
+    assert response.choices[0].message.content == "I'm fine, thank you!"
+
+
+@pytest.mark.asyncio
+async def test_router_make_call(model_list):
+    """Test if the router 'make_call' function is working correctly"""
+    router = Router(model_list=model_list)
+    response = await router.make_call(
+        original_function=router._acompletion,
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+    )
+    assert response.choices[0].message.content == "I'm fine, thank you!"

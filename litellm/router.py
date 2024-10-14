@@ -3231,7 +3231,7 @@ class Router:
 
     async def make_call(self, original_function: Any, *args, **kwargs):
         """
-        Handler for making a call to the .completion()/.embeddings() functions.
+        Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group = kwargs.get("model")
         response = await original_function(*args, **kwargs)
