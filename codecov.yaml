@@ -6,6 +6,10 @@ component_management:
     - component_id: "LLMs"
       paths:
         - "*/llms/*"
+    - component_id: "Caching"
+      paths:
+        - "*/caching/*"
+        - ".*redis.*"
 
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
