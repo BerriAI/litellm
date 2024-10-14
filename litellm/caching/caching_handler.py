@@ -301,10 +301,7 @@ class LLMCachingHandler:
         )
 
     async def _retrieve_from_cache(
-        self,
-        call_type: str,
-        kwargs: Dict[str, Any],
-        args: Optional[Tuple[Any, ...]] = None,
+        self, call_type: str, kwargs: Dict[str, Any], args: Tuple[Any, ...]
     ) -> Optional[Any]:
         """
         Internal method to
@@ -360,8 +357,8 @@ class LLMCachingHandler:
         kwargs: Dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
         model: str,
+        args: Tuple[Any, ...],
         custom_llm_provider: Optional[str] = None,
-        args: Optional[Tuple[Any, ...]] = None,
     ) -> Optional[Any]:
         """
         Internal method to process the cached result
