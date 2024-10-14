@@ -4,7 +4,7 @@ from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.caching import InMemoryCache
+from litellm.caching.caching import InMemoryCache
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem

@@ -20,7 +20,7 @@ from litellm.proxy.enterprise.enterprise_hooks.llm_guard import _ENTERPRISE_LLMG
 from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 ### UNIT TESTS FOR LLM GUARD ###
 

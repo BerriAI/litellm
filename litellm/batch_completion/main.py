@@ -2,7 +2,6 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import List, Optional
 
 import litellm
-from litellm import completion
 from litellm._logging import print_verbose
 from litellm.utils import get_optional_params
 
@@ -108,7 +107,7 @@ def batch_completion(
                     if "kwargs" in kwargs_modified:
                         original_kwargs = kwargs_modified.pop("kwargs")
                     future = executor.submit(
-                        completion, **kwargs_modified, **original_kwargs
+                        litellm.completion, **kwargs_modified, **original_kwargs
                     )
                     completions.append(future)
 
@@ -156,7 +155,7 @@ def batch_completion_models(*args, **kwargs):
         with ThreadPoolExecutor(max_workers=len(models)) as executor:
             for model in models:
                 futures[model] = executor.submit(
-                    completion, *args, model=model, **kwargs
+                    litellm.completion, *args, model=model, **kwargs
                 )
 
             for model, future in sorted(
@@ -178,7 +177,9 @@ def batch_completion_models(*args, **kwargs):
                     ):  # don't override deployment values e.g. model name, api base, etc.
                         deployment[key] = kwargs[key]
                 kwargs = {**deployment, **nested_kwargs}
-                futures[deployment["model"]] = executor.submit(completion, **kwargs)
+                futures[deployment["model"]] = executor.submit(
+                    litellm.completion, **kwargs
+                )
 
             while futures:
                 # wait for the first returned future
@@ -246,7 +247,7 @@ def batch_completion_models_all_responses(*args, **kwargs):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
         for idx, model in enumerate(models):
-            future = executor.submit(completion, *args, model=model, **kwargs)
+            future = executor.submit(litellm.completion, *args, model=model, **kwargs)
             if future.result() is not None:
                 responses.append(future.result())
 

@@ -71,7 +71,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,

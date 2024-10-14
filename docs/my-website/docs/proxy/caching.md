@@ -49,13 +49,13 @@ litellm_settings:
   cache: true 
   cache_params:        # set cache params for redis
     type: redis
-    namespace: "litellm_caching"
+    namespace: "litellm.caching.caching"
 ```
 
 and keys will be stored like:
 
 ```
-litellm_caching:<hash>
+litellm.caching.caching:<hash>
 ```
 
 #### Redis Cluster 

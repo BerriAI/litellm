@@ -23,7 +23,7 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )

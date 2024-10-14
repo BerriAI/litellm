@@ -25,7 +25,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
 from litellm.proxy.proxy_server import embeddings

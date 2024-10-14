@@ -10,7 +10,7 @@
 from typing import Optional, Literal
 import litellm
 from litellm.proxy.utils import PrismaClient
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger

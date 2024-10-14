@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, litellm
 from litellm.proxy.auth.auth_checks import get_end_user_object
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_EndUserTable, LiteLLM_BudgetTable
 from litellm.proxy.utils import PrismaClient
 

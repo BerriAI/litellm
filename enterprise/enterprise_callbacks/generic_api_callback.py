@@ -6,7 +6,7 @@ import dotenv, os
 import requests
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 from typing import Literal, Union, Optional
 

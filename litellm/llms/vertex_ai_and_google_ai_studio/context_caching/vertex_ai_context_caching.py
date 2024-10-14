@@ -4,7 +4,7 @@ from typing import Callable, List, Literal, Optional, Tuple, Union
 import httpx
 
 import litellm
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.OpenAI.openai import AllMessageValues
