@@ -108,6 +108,7 @@ class OpenAIGPTConfig:
             "max_retries",
             "extra_headers",
             "parallel_tool_calls",
+            "metadata",
         ]  # works across all models
 
         model_specific_params = []
