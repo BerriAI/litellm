@@ -373,6 +373,32 @@ async def _db_health_readiness_check():
 
 
 @router.get(
+    "/health/db",
+    tags=["health"],
+)
+async def health_db():
+    """
+    Unprotected endpoint for getting info about database, and in particular
+    metrics from Prisma, like the number of open connections, etc.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    db_health_status = None
+    metrics = None
+
+    try:
+        if prisma_client is not None:
+            db_health_status = _db_health_readiness_check()
+            metrics = await prisma_client.db.get_metrics()
+        return {
+            "metrics": metrics,
+            "db_health_status": db_health_status,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+
+
+@router.get(
     "/active/callbacks",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],

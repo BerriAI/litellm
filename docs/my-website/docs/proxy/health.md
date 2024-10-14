@@ -1,12 +1,15 @@
 # Health Checks
+
 Use this to health check all LLMs defined in your config.yaml
 
-## Summary 
+## Summary
 
-The proxy exposes: 
-* a /health endpoint which returns the health of the LLM APIs  
-* a /health/readiness endpoint for returning if the proxy is ready to accept requests 
-* a /health/liveliness endpoint for returning if the proxy is alive 
+The proxy exposes:
+
+* A `/health` endpoint which returns the health of the LLM APIs  
+* A `/health/readiness` endpoint for returning if the proxy is ready to accept requests
+* A `/health/liveliness` endpoint for returning if the proxy is alive
+* A `/health/db` endpoint for returning info and metrics about the database
 
 ## `/health`
 #### Request
@@ -246,6 +249,126 @@ Example Response:
 
 ```json
 "I'm alive!"
+```
+
+## `/health/db`
+
+Unprotected endpoint for viewing info about the database, including metrics like
+the number of open connections
+
+Example Request:
+
+```shell
+curl -sSL http://0.0.0.0:4000/health/db | jq '.'
+```
+
+Example Response:
+
+```json
+{
+  "metrics": {
+    "counters": [
+      {
+        "key": "prisma_client_queries_total",
+        "value": 8,
+        "labels": {},
+        "description": "The total number of Prisma Client queries executed"
+      },
+      {
+        "key": "prisma_datasource_queries_total",
+        "value": 13,
+        "labels": {},
+        "description": "The total number of datasource queries executed"
+      },
+      {
+        "key": "prisma_pool_connections_closed_total",
+        "value": 0,
+        "labels": {},
+        "description": "The total number of pool connections closed"
+      },
+      {
+        "key": "prisma_pool_connections_opened_total",
+        "value": 2,
+        "labels": {},
+        "description": "The total number of pool connections opened"
+      }
+    ],
+    "gauges": [
+      {
+        "key": "prisma_client_queries_active",
+        "value": 0.0,
+        "labels": {},
+        "description": "The number of currently active Prisma Client queries"
+      },
+      {
+        "key": "prisma_client_queries_wait",
+        "value": 0.0,
+        "labels": {},
+        "description": "The number of datasource queries currently waiting for an free connection"
+      },
+      {
+        "key": "prisma_pool_connections_busy",
+        "value": 0.0,
+        "labels": {},
+        "description": "The number of pool connections currently executing datasource queries"
+      },
+      {
+        "key": "prisma_pool_connections_idle",
+        "value": 100.0,
+        "labels": {},
+        "description": "The number of pool connections that are not busy running a query"
+      },
+      {
+        "key": "prisma_pool_connections_open",
+        "value": 2.0,
+        "labels": {},
+        "description": "The number of pool connections currently open"
+      }
+    ],
+    "histograms": [
+      {
+        "key": "prisma_client_queries_duration_histogram_ms",
+        "value": {
+          "sum": 24731.272958,
+          "count": 8,
+          "buckets": [
+            ...
+          ]
+        },
+        "labels": {},
+        "description": "The distribution of the time Prisma Client queries took to run end to end"
+      },
+      {
+        "key": "prisma_client_queries_wait_histogram_ms",
+        "value": {
+          "sum": 0.024627,
+          "count": 9,
+          "buckets": [
+            ...
+          ]
+        },
+        "labels": {},
+        "description": "The distribution of the time all datasource queries spent waiting for a free connection"
+      },
+      {
+        "key": "prisma_datasource_queries_duration_histogram_ms",
+        "value": {
+          "sum": 24804.927917,
+          "count": 13,
+          "buckets": [
+            ...
+          ]
+        },
+        "labels": {},
+        "description": "The distribution of the time datasource queries took to run"
+      }
+    ]
+  },
+  "db_health_status": {
+    "status": "connected",
+    "last_updated": "2024-07-11T12:46:35.904744"
+  }
+}
 ```
 
 ## Advanced - Call specific models 
