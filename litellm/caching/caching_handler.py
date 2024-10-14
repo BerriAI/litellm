@@ -124,43 +124,13 @@ class LLMCachingHandler:
                 in litellm.cache.supported_call_types
             ):
                 print_verbose("Checking Cache")
-                if call_type == CallTypes.aembedding.value and isinstance(
-                    kwargs["input"], list
-                ):
-                    tasks = []
-                    for idx, i in enumerate(kwargs["input"]):
-                        preset_cache_key = litellm.cache.get_cache_key(
-                            *args, **{**kwargs, "input": i}
-                        )
-                        tasks.append(
-                            litellm.cache.async_get_cache(cache_key=preset_cache_key)
-                        )
-                    cached_result = await asyncio.gather(*tasks)
-                    ## check if cached result is None ##
-                    if cached_result is not None and isinstance(cached_result, list):
-                        # set cached_result to None if all elements are None
-                        if all(result is None for result in cached_result):
-                            cached_result = None
-                elif isinstance(litellm.cache.cache, RedisSemanticCache) or isinstance(
-                    litellm.cache.cache, RedisCache
-                ):
-                    preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
-                    kwargs["preset_cache_key"] = (
-                        preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
-                    )
-                    cached_result = await litellm.cache.async_get_cache(*args, **kwargs)
-                elif isinstance(litellm.cache.cache, QdrantSemanticCache):
-                    preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
-                    kwargs["preset_cache_key"] = (
-                        preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
-                    )
-                    cached_result = await litellm.cache.async_get_cache(*args, **kwargs)
-                else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
-                    preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
-                    kwargs["preset_cache_key"] = (
-                        preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
-                    )
-                    cached_result = litellm.cache.get_cache(*args, **kwargs)
+
+                cached_result = await self._retrieve_from_cache(
+                    call_type=call_type,
+                    kwargs=kwargs,
+                    args=args,
+                )
+
                 if cached_result is not None and not isinstance(cached_result, list):
                     print_verbose("Cache Hit!")
                     cache_hit = True
@@ -386,6 +356,59 @@ class LLMCachingHandler:
             cached_result=cached_result,
             final_embedding_cached_response=final_embedding_cached_response,
         )
+
+    async def _retrieve_from_cache(
+        self,
+        call_type: str,
+        kwargs: Dict[str, Any],
+        args: Optional[Tuple[Any, ...]] = None,
+    ) -> Optional[Any]:
+        """
+        Internal method to
+        - get cache key
+        - check what type of cache is used - Redis, RedisSemantic, Qdrant, S3
+        - async get cache value
+        - return the cached value
+
+        Args:
+            call_type: str:
+            kwargs: Dict[str, Any]:
+            args: Optional[Tuple[Any, ...]] = None:
+
+        Returns:
+            Optional[Any]:
+        Raises:
+            None
+        """
+        if litellm.cache is None:
+            return None
+
+        cached_result: Optional[Any] = None
+        if call_type == CallTypes.aembedding.value and isinstance(
+            kwargs["input"], list
+        ):
+            tasks = []
+            for idx, i in enumerate(kwargs["input"]):
+                preset_cache_key = litellm.cache.get_cache_key(
+                    *args, **{**kwargs, "input": i}
+                )
+                tasks.append(litellm.cache.async_get_cache(cache_key=preset_cache_key))
+            cached_result = await asyncio.gather(*tasks)
+            ## check if cached result is None ##
+            if cached_result is not None and isinstance(cached_result, list):
+                # set cached_result to None if all elements are None
+                if all(result is None for result in cached_result):
+                    cached_result = None
+        else:
+            preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+            kwargs["preset_cache_key"] = (
+                preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+            )
+            if litellm.cache._supports_async() is True:
+                cached_result = await litellm.cache.async_get_cache(*args, **kwargs)
+            else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
+                cached_result = litellm.cache.get_cache(*args, **kwargs)
+        return cached_result
 
     async def _async_set_cache(
         self,
