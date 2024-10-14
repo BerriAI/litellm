@@ -10,7 +10,7 @@ from openai import AsyncAzureOpenAI, AzureOpenAI
 from typing_extensions import overload
 
 import litellm
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import EmbeddingResponse

@@ -24,7 +24,7 @@ import pytest
 from fastapi import Request
 
 import litellm
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.team_endpoints import new_team

@@ -745,7 +745,7 @@ async def test_team_update_redis():
     """
     Tests if team update, updates the redis cache if set
     """
-    from litellm.caching import DualCache, RedisCache
+    from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import _cache_team_object
 
@@ -775,7 +775,7 @@ async def test_get_team_redis(client_no_auth):
     """
     Tests if get_team_object gets value from redis cache, if set
     """
-    from litellm.caching import DualCache, RedisCache
+    from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy.auth.auth_checks import get_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(

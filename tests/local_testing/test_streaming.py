@@ -3128,7 +3128,7 @@ async def test_azure_astreaming_and_function_calling():
             "content": f"What is the weather like in Boston? {uuid.uuid4()}",
         }
     ]
-    from litellm.caching import Cache
+    from litellm.caching.caching import Cache
 
     litellm.cache = Cache(
         type="redis",

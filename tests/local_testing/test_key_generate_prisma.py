@@ -89,7 +89,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -1444,7 +1444,7 @@ def test_call_with_key_over_budget(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.caching import Cache
+            from litellm.caching.caching import Cache
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
@@ -1564,7 +1564,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             setattr(litellm.proxy.proxy_server, "proxy_batch_write_at", 1)
 
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.caching import Cache
+            from litellm.caching.caching import Cache
 
             litellm.cache = Cache()
             import time
@@ -1685,7 +1685,7 @@ def test_call_with_key_over_model_budget(prisma_client):
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.caching import Cache
+            from litellm.caching.caching import Cache
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )

@@ -17,7 +17,7 @@ from litellm.proxy._types import LitellmUserRoles
 import os
 import jwt
 import time
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 

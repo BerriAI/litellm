@@ -212,7 +212,7 @@ class RedisCache(BaseCache):
 
         from litellm._service_logger import ServiceLogging
 
-        from ._redis import get_redis_client, get_redis_connection_pool
+        from .._redis import get_redis_client, get_redis_connection_pool
 
         redis_kwargs = {}
         if host is not None:
@@ -276,7 +276,7 @@ class RedisCache(BaseCache):
             )
 
     def init_async_client(self):
-        from ._redis import get_redis_async_client
+        from .._redis import get_redis_async_client
 
         return get_redis_async_client(
             connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
@@ -302,7 +302,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             print_verbose(
-                f"LiteLLM Caching: set() - Got exception from REDIS : {str(e)}"
+                f"litellm.caching.caching: set() - Got exception from REDIS : {str(e)}"
             )
 
     def increment_cache(
@@ -705,7 +705,7 @@ class RedisCache(BaseCache):
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error(
-                "LiteLLM Caching: get() - Got exception from REDIS: ", e
+                "litellm.caching.caching: get() - Got exception from REDIS: ", e
             )
 
     def batch_get_cache(self, key_list) -> dict:
@@ -781,7 +781,7 @@ class RedisCache(BaseCache):
                 )
                 # NON blocking - notify users Redis is throwing an exception
                 print_verbose(
-                    f"LiteLLM Caching: async get() - Got exception from REDIS: {str(e)}"
+                    f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}"
                 )
 
     async def async_batch_get_cache(self, key_list) -> dict:

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import RedisCache
+from litellm.caching.caching import RedisCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter(

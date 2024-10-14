@@ -157,7 +157,7 @@ async def test_transcription_on_router():
 @pytest.mark.asyncio()
 async def test_transcription_caching():
     import litellm
-    from litellm.caching import Cache
+    from litellm.caching.caching import Cache
 
     litellm.set_verbose = True
     litellm.cache = Cache()

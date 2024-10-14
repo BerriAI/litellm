@@ -28,7 +28,7 @@ import pytest
 from openai import APIError
 
 import litellm
-from litellm.caching import DualCache, RedisCache
+from litellm.caching.caching import DualCache, RedisCache
 from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
