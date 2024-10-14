@@ -73,6 +73,7 @@ class LLMCachingHandler:
         )
 
         final_embedding_cached_response: Optional[EmbeddingResponse] = None
+        cached_result: Optional[Any] = None
         if (
             (kwargs.get("caching", None) is None and litellm.cache is not None)
             or kwargs.get("caching", False) is True
