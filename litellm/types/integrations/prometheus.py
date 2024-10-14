@@ -3,6 +3,11 @@ EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
 EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 LATENCY_BUCKETS = (
+    0.005,
+    0.00625,
+    0.0125,
+    0.025,
+    0.05,
     0.1,
     0.5,
     1.0,
@@ -29,9 +34,9 @@ LATENCY_BUCKETS = (
     25.0,
     30.0,
     60.0,
-    120,
-    180,
-    240,
-    300,
+    120.0,
+    180.0,
+    240.0,
+    300.0,
     float("inf"),
 )
