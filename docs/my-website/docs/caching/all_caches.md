@@ -7,7 +7,10 @@ import TabItem from '@theme/TabItem';
 
 :::info
 
-Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+- For Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+
+- For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
 
 :::
 
