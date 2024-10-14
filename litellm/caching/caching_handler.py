@@ -63,7 +63,7 @@ class LLMCachingHandler:
         request_kwargs: Dict[str, Any],
         start_time: datetime.datetime,
     ):
-        self.async_streaming_chunks = []
+        self.async_streaming_chunks: List[ModelResponse] = []
         self.request_kwargs = request_kwargs
         self.original_function = original_function
         self.start_time = start_time
