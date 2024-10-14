@@ -1,0 +1,11 @@
+component_management:
+  individual_components:
+    - component_id: "Router"
+      paths:
+        - "litellm/router.py"
+    - component_id: "LLMs"
+      paths:
+        - "litellm/llms/*"
+
+comment:
+  layout: "header, diff, flags, components"  # show component info in the PR comment
