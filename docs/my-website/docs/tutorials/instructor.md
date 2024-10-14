@@ -57,7 +57,7 @@ from litellm import Router
 import instructor, asyncio
 from pydantic import BaseModel
 
-aclient = instructor.apatch(
+aclient = instructor.patch(
     Router(
         model_list=[
             {
