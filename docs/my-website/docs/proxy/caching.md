@@ -4,6 +4,12 @@ import TabItem from '@theme/TabItem';
 # Caching 
 Cache LLM Responses
 
+:::note 
+
+For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
+:::
+
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
