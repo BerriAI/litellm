@@ -54,10 +54,10 @@ def prompt_injection_detection_default_pt():
 BAD_MESSAGE_ERROR_STR = "Invalid Message "
 
 # used to interweave user messages, to ensure user/assistant alternating
-DEFAULT_USER_CONTINUE_MESSAGE = {
-    "role": "user",
-    "content": "Please continue.",
-}  # similar to autogen. Only used if `litellm.modify_params=True`.
+DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(
+    role="user",
+    content="Please continue.",
+)  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 # used to interweave assistant messages, to ensure user/assistant alternating
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE = {
@@ -2379,6 +2379,27 @@ def _insert_assistant_continue_message(
     return messages
 
 
+def _insert_user_continue_message(
+    messages: List[AllMessageValues],
+    user_continue_message: Optional[ChatCompletionUserMessage] = None,
+) -> List[AllMessageValues]:
+    # if initial message is assistant message
+    if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
+        if user_continue_message is not None:
+            messages.insert(0, user_continue_message)
+        elif litellm.modify_params:
+            messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
+
+    # if final message is assistant message
+    if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
+        if user_continue_message is not None:
+            messages.append(user_continue_message)
+        elif litellm.modify_params:
+            messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+
+    return messages
+
+
 def _bedrock_converse_messages_pt(
     messages: List,
     model: str,
@@ -2398,27 +2419,17 @@ def _bedrock_converse_messages_pt(
     msg_i = 0
 
     # if initial message is assistant message
-    if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
-        if user_continue_message is not None:
-            messages.insert(0, user_continue_message)
-        elif litellm.modify_params:
-            messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
-
-    # if final message is assistant message
-    if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
-        if user_continue_message is not None:
-            messages.append(user_continue_message)
-        elif litellm.modify_params:
-            messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+    messages = _insert_user_continue_message(messages, user_continue_message)  # type: ignore
 
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "user":
-            if isinstance(messages[msg_i]["content"], list):
+            _message_content = messages[msg_i]["content"]
+            if isinstance(_message_content, list):
                 _parts: List[BedrockContentBlock] = []
-                for element in messages[msg_i]["content"]:
+                for element in _message_content:
                     if isinstance(element, dict):
                         if element["type"] == "text":
                             _part = BedrockContentBlock(text=element["text"])
@@ -2430,8 +2441,8 @@ def _bedrock_converse_messages_pt(
                             )
                             _parts.append(BedrockContentBlock(image=_part))  # type: ignore
                 user_content.extend(_parts)
-            else:
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+            elif isinstance(_message_content, str):
+                _part = BedrockContentBlock(text=_message_content)
                 user_content.append(_part)
 
             msg_i += 1
@@ -2460,7 +2471,9 @@ def _bedrock_converse_messages_pt(
         ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
         tool_content: List[BedrockContentBlock] = []
         while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+            tool_call_result = _convert_to_bedrock_tool_call_result(
+                cast(ChatCompletionToolMessage, messages[msg_i])
+            )
 
             tool_content.append(tool_call_result)
             msg_i += 1
@@ -2489,11 +2502,12 @@ def _bedrock_converse_messages_pt(
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if messages[msg_i].get("content", None) is not None and isinstance(
-                messages[msg_i]["content"], list
-            ):
+            assistant_message = cast(ChatCompletionAssistantMessage, messages[msg_i])
+            _message_content = assistant_message.get("content", None)
+            _tool_calls = assistant_message.get("tool_calls", None)
+            if _message_content is not None and isinstance(_message_content, list):
                 assistants_parts: List[BedrockContentBlock] = []
-                for element in messages[msg_i]["content"]:
+                for element in _message_content:
                     if isinstance(element, dict):
                         if element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
@@ -2507,16 +2521,12 @@ def _bedrock_converse_messages_pt(
                                 BedrockContentBlock(image=assistants_part)  # type: ignore
                             )
                 assistant_content.extend(assistants_parts)
-            elif messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            elif _tool_calls:  # support assistant tool invoke convertion
                 assistant_content.extend(
-                    _convert_to_bedrock_tool_call_invoke(messages[msg_i]["tool_calls"])
+                    _convert_to_bedrock_tool_call_invoke(_tool_calls)
                 )
-            else:
-                assistant_text = (
-                    messages[msg_i].get("content") or ""
-                )  # either string or none
+            elif _message_content is not None and isinstance(_message_content, str):
+                assistant_text = _message_content
                 if assistant_text:
                     assistant_content.append(BedrockContentBlock(text=assistant_text))
 

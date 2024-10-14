@@ -118,6 +118,33 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             headers={"retry-after": str(self.time_to_next_minute())},
         )
 
+    async def _global_max_parallel_requests_check(
+        self, user_api_key_dict, global_max_parallel_requests: int
+    ):
+        # get value from cache
+        _key = "global_max_parallel_requests"
+        current_global_requests = await self.internal_usage_cache.async_get_cache(
+            key=_key,
+            local_only=True,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        # check if below limit
+        if current_global_requests is None:
+            current_global_requests = 1
+        # if above -> raise error
+        if current_global_requests >= global_max_parallel_requests:
+            return self.raise_rate_limit_error(
+                additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}"
+            )
+        # if below -> increment
+        else:
+            await self.internal_usage_cache.async_increment_cache(
+                key=_key,
+                value=1,
+                local_only=True,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -151,29 +178,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         # ------------
         new_val: Optional[dict] = None
         if global_max_parallel_requests is not None:
-            # get value from cache
-            _key = "global_max_parallel_requests"
-            current_global_requests = await self.internal_usage_cache.async_get_cache(
-                key=_key,
-                local_only=True,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            await self._global_max_parallel_requests_check(
+                user_api_key_dict=user_api_key_dict,
+                global_max_parallel_requests=global_max_parallel_requests,
             )
-            # check if below limit
-            if current_global_requests is None:
-                current_global_requests = 1
-            # if above -> raise error
-            if current_global_requests >= global_max_parallel_requests:
-                return self.raise_rate_limit_error(
-                    additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}"
-                )
-            # if below -> increment
-            else:
-                await self.internal_usage_cache.async_increment_cache(
-                    key=_key,
-                    value=1,
-                    local_only=True,
-                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                )
 
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_hour = datetime.now().strftime("%H")
@@ -184,12 +192,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_api_key = f"{api_key}::{precise_minute}::request_count"
 
             # CHECK IF REQUEST ALLOWED for key
-
             current = await self.internal_usage_cache.async_get_cache(
                 key=request_count_api_key,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )  # {"current_requests": 1, "current_tpm": 1, "current_rpm": 10}
-            self.print_verbose(f"current: {current}")
             if (
                 max_parallel_requests == sys.maxsize
                 and tpm_limit == sys.maxsize

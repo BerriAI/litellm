@@ -1882,7 +1882,9 @@ def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
 
-        with patch("requests.post", side_effect=tgi_mock_post) as mock_client:
+        with patch(
+            "litellm.module_level_client.post", side_effect=tgi_mock_post
+        ) as mock_client:
             response = completion(
                 model="huggingface/HuggingFaceH4/zephyr-7b-beta",
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
@@ -2024,7 +2026,7 @@ def mock_post(url, **kwargs):
 
 def test_hf_classifier_task():
     try:
-        with patch("requests.post", side_effect=mock_post):
+        with patch("litellm.module_level_client.post", side_effect=mock_post):
             litellm.set_verbose = True
             user_message = "I like you. I love you"
             messages = [{"content": user_message, "role": "user"}]

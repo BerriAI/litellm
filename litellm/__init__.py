@@ -469,7 +469,7 @@ def add_known_models():
 
 add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
-openai_compatible_endpoints: List = [
+openai_compatible_endpoints: List = [  ## DEPRECATED ##
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -484,6 +484,20 @@ openai_compatible_endpoints: List = [
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
 ]
+
+openai_compatible_endpoints_dict: Dict[str, str] = {
+    "api.perplexity.ai": "perplexity",
+    "api.endpoints.anyscale.com/v1": "anyscale",
+    "api.deepinfra.com/v1/openai": "deepinfra",
+    "api.mistral.ai/v1": "mistral",
+    "api.groq.com/openai/v1": "groq",
+    "https://integrate.api.nvidia.com/v1": "nvidia_nim",
+    "api.deepseek.com/v1": "deepseek",
+    "api.together.xyz/v1": "together_ai",
+    "app.empower.dev/api/v1": "empower",
+    "inference.friendli.ai/v1": "friendliai",
+    "api.sambanova.ai/v1": "sambanova",
+}
 
 # this is maintained for Exception Mapping
 openai_compatible_providers: List = [

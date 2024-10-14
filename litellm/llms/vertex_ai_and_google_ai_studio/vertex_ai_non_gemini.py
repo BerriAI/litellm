@@ -279,7 +279,7 @@ def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
     litellm.in_memory_llm_clients_cache[client_cache_key] = vertex_llm_model
 
 
-def completion(
+def completion(  # ruff: noqa: PLR0915
     model: str,
     messages: list,
     model_response: ModelResponse,
