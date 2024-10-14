@@ -13,7 +13,7 @@ import traceback
 import sys
 import uuid
 import os
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException

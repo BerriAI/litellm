@@ -25,7 +25,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,

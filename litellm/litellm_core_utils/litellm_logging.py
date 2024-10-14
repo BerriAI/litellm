@@ -23,7 +23,7 @@ from litellm import (
     turn_off_message_logging,
     verbose_logger,
 )
-from litellm.caching import DualCache, InMemoryCache, S3Cache
+from litellm.caching.caching import DualCache, InMemoryCache, S3Cache
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import KeyManagementSystem
 

@@ -15,7 +15,7 @@ sys.path.insert(
 import pytest
 from litellm import Router
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 ### UNIT TESTS FOR cost ROUTING ###
 

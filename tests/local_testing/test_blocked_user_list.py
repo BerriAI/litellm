@@ -27,7 +27,7 @@ import pytest
 import litellm
 from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
     _ENTERPRISE_BlockedUserList,
@@ -56,7 +56,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     BlockUsers,
     DynamoDBArgs,

@@ -49,7 +49,7 @@ from litellm import (
 )
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.caching import DualCache, RedisCache
+from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
