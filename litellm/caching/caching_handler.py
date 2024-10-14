@@ -129,7 +129,8 @@ class LLMCachingHandler:
                     cached_result = await asyncio.gather(*tasks)
                     ## check if cached result is None ##
                     if cached_result is not None and isinstance(cached_result, list):
-                        if len(cached_result) == 1 and cached_result[0] is None:
+                        # set cached_result to None if all elements are None
+                        if all(result is None for result in cached_result):
                             cached_result = None
                 elif isinstance(litellm.cache.cache, RedisSemanticCache) or isinstance(
                     litellm.cache.cache, RedisCache

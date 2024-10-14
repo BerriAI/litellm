@@ -520,6 +520,7 @@ async def test_embedding_caching_azure_individual_items_reordered():
     assert embedding_val_1[0]["id"] == embedding_val_2[0]["id"]
     ```
     """
+    litellm.set_verbose = True
     litellm.cache = Cache()
     common_msg = f"{uuid.uuid4()}"
     common_msg_2 = f"hey how's it going {uuid.uuid4()}"
@@ -532,9 +533,11 @@ async def test_embedding_caching_azure_individual_items_reordered():
     embedding_val_1 = await aembedding(
         model="azure/azure-embedding-model", input=embedding_1, caching=True
     )
+    print("embedding val 1", embedding_val_1)
     embedding_val_2 = await aembedding(
         model="azure/azure-embedding-model", input=embedding_2, caching=True
     )
+    print("embedding val 2", embedding_val_2)
     print(f"embedding_val_2._hidden_params: {embedding_val_2._hidden_params}")
     assert embedding_val_2._hidden_params["cache_hit"] == True
 
