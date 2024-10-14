@@ -1876,7 +1876,6 @@ class Router:
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
-            kwargs["original_function"] = self.text_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
@@ -1900,13 +1899,7 @@ class Router:
             # call via litellm.completion()
             return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})  # type: ignore
         except Exception as e:
-            if self.num_retries > 0:
-                kwargs["model"] = model
-                kwargs["messages"] = messages
-                kwargs["original_function"] = self.text_completion
-                return self.function_with_retries(**kwargs)
-            else:
-                raise e
+            raise e
 
     async def atext_completion(
         self,

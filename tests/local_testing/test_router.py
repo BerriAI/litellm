@@ -1843,7 +1843,13 @@ async def test_router_amoderation():
     ]
 
     router = Router(model_list=model_list)
+    ## Test 1: user facing function
     result = await router.amoderation(
+        model="openai-moderations", input="this is valid good text"
+    )
+
+    ## Test 2: underlying function
+    result = await router._amoderation(
         model="openai-moderations", input="this is valid good text"
     )
 

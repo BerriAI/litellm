@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 @pytest.fixture
@@ -26,6 +27,13 @@ def model_list():
             "model_name": "gpt-4o",
             "litellm_params": {
                 "model": "gpt-4o",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+        },
+        {
+            "model_name": "dall-e-3",
+            "litellm_params": {
+                "model": "dall-e-3",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -61,3 +69,94 @@ def test_print_deployment(model_list):
     }
     printed_deployment = router.print_deployment(deployment)
     assert 10 * "*" in printed_deployment["litellm_params"]["api_key"]
+
+
+def test_completion(model_list):
+    """Test if the completion function is working correctly"""
+    router = Router(model_list=model_list)
+    response = router._completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+    )
+    assert response["choices"][0]["message"]["content"] == "I'm fine, thank you!"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=6, delay=1)
+@pytest.mark.asyncio
+async def test_image_generation(model_list, sync_mode):
+    """Test if the underlying '_image_generation' function is working correctly"""
+    from litellm.types.utils import ImageResponse
+
+    router = Router(model_list=model_list)
+    if sync_mode:
+        response = router._image_generation(
+            model="dall-e-3",
+            prompt="A cute baby sea otter",
+        )
+    else:
+        response = await router._aimage_generation(
+            model="dall-e-3",
+            prompt="A cute baby sea otter",
+        )
+
+    ImageResponse.model_validate(response)
+
+
+@pytest.mark.asyncio
+async def test_router_acompletion_util(model_list):
+    """Test if the underlying '_acompletion' function is working correctly"""
+    router = Router(model_list=model_list)
+    response = await router._acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+    )
+    assert response["choices"][0]["message"]["content"] == "I'm fine, thank you!"
+
+
+@pytest.mark.asyncio
+async def test_router_abatch_completion_one_model_multiple_requests_util(model_list):
+    """Test if the 'abatch_completion_one_model_multiple_requests' function is working correctly"""
+    router = Router(model_list=model_list)
+    response = await router.abatch_completion_one_model_multiple_requests(
+        model="gpt-3.5-turbo",
+        messages=[
+            [{"role": "user", "content": "Hello, how are you?"}],
+            [{"role": "user", "content": "Hello, how are you?"}],
+        ],
+        mock_response="I'm fine, thank you!",
+    )
+    print(response)
+    assert response[0]["choices"][0]["message"]["content"] == "I'm fine, thank you!"
+    assert response[1]["choices"][0]["message"]["content"] == "I'm fine, thank you!"
+
+
+@pytest.mark.asyncio
+async def test_router_schedule_acompletion(model_list):
+    """Test if the 'schedule_acompletion' function is working correctly"""
+    router = Router(model_list=model_list)
+    response = await router.schedule_acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+        priority=1,
+    )
+    assert response["choices"][0]["message"]["content"] == "I'm fine, thank you!"
+
+
+@pytest.mark.asyncio
+async def test_router_arealtime(model_list):
+    """Test if the '_arealtime' function is working correctly"""
+    import litellm
+
+    router = Router(model_list=model_list)
+    with patch.object(litellm, "_arealtime", AsyncMock()) as mock_arealtime:
+        mock_arealtime.return_value = "I'm fine, thank you!"
+        await router._arealtime(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
+
+        mock_arealtime.assert_awaited_once()

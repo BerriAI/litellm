@@ -20,6 +20,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     OpenAIChatCompletionChunk,
 )
+from .rerank import RerankResponse
 
 
 def _generate_id():  # private helper function

@@ -9,7 +9,13 @@ def get_function_names_from_file(file_path):
     with open(file_path, "r") as file:
         tree = ast.parse(file.read())
 
-    return [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+    function_names = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            function_names.append(node.name)
+
+    return function_names
 
 
 def get_all_functions_called_in_tests(base_dir):
@@ -73,8 +79,8 @@ def main():
     tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = get_functions_from_router(router_file)
+    print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    print(called_functions_in_tests)
     untested_functions = [
         fn for fn in router_functions if fn not in called_functions_in_tests
     ]
@@ -86,7 +92,9 @@ def main():
             if func not in ignored_function_names:
                 all_untested_functions.append(func)
         if len(all_untested_functions) > 0:
-            raise Exception(f"Functions not tested: {all_untested_functions}")
+            raise Exception(
+                f"{len(all_untested_functions)} Functions not tested: {all_untested_functions}"
+            )
     else:
         print("All functions in router.py are covered by tests.")
 
