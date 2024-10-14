@@ -16,12 +16,8 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
-
-REQUESTED_MODEL = "requested_model"
-EXCEPTION_STATUS = "exception_status"
-EXCEPTION_CLASS = "exception_class"
-EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 
 
 class PrometheusLogger(CustomLogger):
@@ -85,6 +81,7 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                 ],
+                buckets=LATENCY_BUCKETS,
             )
 
             self.litellm_llm_api_latency_metric = Histogram(
@@ -97,6 +94,7 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                 ],
+                buckets=LATENCY_BUCKETS,
             )
 
             # Counter for spend

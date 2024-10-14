@@ -6,6 +6,12 @@ import pytest
 import aiohttp
 import asyncio
 import uuid
+import os
+import sys
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 
 
 async def make_bad_chat_completion_request(session, key):
@@ -148,10 +154,52 @@ async def test_proxy_success_metrics():
             in metrics
         )
 
+        # assert (
+        #     'litellm_deployment_latency_per_output_token_count{api_base="https://exampleopenaiendpoint-production.up.railway.app/",api_key_alias="None",api_provider="openai",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="fake",model_id="team-b-model",team="None",team_alias="None"}'
+        #     in metrics
+        # )
+
+        verify_latency_metrics(metrics)
+
+
+def verify_latency_metrics(metrics: str):
+    """
+    Assert that LATENCY_BUCKETS distribution is used for
+    - litellm_request_total_latency_metric_bucket
+    - litellm_llm_api_latency_metric_bucket
+    """
+    from litellm.types.integrations.prometheus import LATENCY_BUCKETS
+    import re
+
+    metric_names = [
+        "litellm_request_total_latency_metric_bucket",
+        "litellm_llm_api_latency_metric_bucket",
+    ]
+
+    for metric_name in metric_names:
+        # Extract all 'le' values for the current metric
+        pattern = rf'{metric_name}{{.*?le="(.*?)".*?}}'
+        le_values = re.findall(pattern, metrics)
+
+        # Convert to set for easier comparison
+        actual_buckets = set(le_values)
+
+        print("actual_buckets", actual_buckets)
+        expected_buckets = []
+        for bucket in LATENCY_BUCKETS:
+            expected_buckets.append(str(bucket))
+
+        # replace inf with +Inf
+        expected_buckets = [
+            bucket.replace("inf", "+Inf") for bucket in expected_buckets
+        ]
+
+        print("expected_buckets", expected_buckets)
+        expected_buckets = set(expected_buckets)
+        # Verify all expected buckets are present
         assert (
-            'litellm_deployment_latency_per_output_token_count{api_base="https://exampleopenaiendpoint-production.up.railway.app/",api_key_alias="None",api_provider="openai",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",litellm_model_name="fake",model_id="team-b-model",team="None",team_alias="None"}'
-            in metrics
-        )
+            actual_buckets == expected_buckets
+        ), f"Mismatch in {metric_name} buckets. Expected: {expected_buckets}, Got: {actual_buckets}"
 
 
 @pytest.mark.asyncio

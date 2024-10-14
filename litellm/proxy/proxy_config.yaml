@@ -1,12 +1,12 @@
 model_list:
-  - model_name: db-openai-endpoint
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4
+      model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
-  success_callback: ["s3"]
+  callbacks: ["prometheus"]
   turn_off_message_logging: true
   s3_callback_params:
     s3_bucket_name: load-testing-oct   # AWS Bucket Name for S3
