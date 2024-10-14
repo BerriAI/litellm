@@ -7,7 +7,7 @@ import time
 from typing import List, Optional, Tuple, TypedDict
 
 from litellm import verbose_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
 
 class CooldownCacheValue(TypedDict):

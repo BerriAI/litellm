@@ -22,7 +22,7 @@ import pytest
 
 import litellm
 from litellm import Router, mock_completion
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.presidio_pii_masking import _OPTIONAL_PresidioPIIMasking
 from litellm.proxy.utils import ProxyLogging

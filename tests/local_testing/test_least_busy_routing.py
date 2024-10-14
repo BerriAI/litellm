@@ -20,7 +20,7 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
 ### UNIT TESTS FOR LEAST BUSY LOGGING ###

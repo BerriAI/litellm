@@ -112,7 +112,7 @@ from litellm import (
     RetrieveBatchRequest,
 )
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
-from litellm.caching import DualCache, RedisCache
+from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -1554,7 +1554,7 @@ class ProxyConfig:
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
                     print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
-                    from litellm.caching import Cache
+                    from litellm.caching.caching import Cache
 
                     cache_params = {}
                     if "cache_params" in litellm_settings:

@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional, Tuple, Union
 import dotenv
 from pydantic import BaseModel
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.services import ServiceLoggerPayload

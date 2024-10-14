@@ -21,7 +21,7 @@ import pytest
 
 import litellm
 from litellm import aembedding, completion, embedding
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 from unittest.mock import AsyncMock, patch, MagicMock
 import datetime
@@ -52,7 +52,7 @@ async def test_dual_cache_async_batch_get_cache():
     - hit redis for the other -> expect to return None
     - expect result = [in_memory_result, None]
     """
-    from litellm.caching import DualCache, InMemoryCache, RedisCache
+    from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 
     in_memory_cache = InMemoryCache()
     redis_cache = RedisCache()  # get credentials from environment
@@ -74,7 +74,7 @@ def test_dual_cache_batch_get_cache():
     - hit redis for the other -> expect to return None
     - expect result = [in_memory_result, None]
     """
-    from litellm.caching import DualCache, InMemoryCache, RedisCache
+    from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 
     in_memory_cache = InMemoryCache()
     redis_cache = RedisCache()  # get credentials from environment
@@ -520,6 +520,7 @@ async def test_embedding_caching_azure_individual_items_reordered():
     assert embedding_val_1[0]["id"] == embedding_val_2[0]["id"]
     ```
     """
+    litellm.set_verbose = True
     litellm.cache = Cache()
     common_msg = f"{uuid.uuid4()}"
     common_msg_2 = f"hey how's it going {uuid.uuid4()}"
@@ -532,9 +533,11 @@ async def test_embedding_caching_azure_individual_items_reordered():
     embedding_val_1 = await aembedding(
         model="azure/azure-embedding-model", input=embedding_1, caching=True
     )
+    print("embedding val 1", embedding_val_1)
     embedding_val_2 = await aembedding(
         model="azure/azure-embedding-model", input=embedding_2, caching=True
     )
+    print("embedding val 2", embedding_val_2)
     print(f"embedding_val_2._hidden_params: {embedding_val_2._hidden_params}")
     assert embedding_val_2._hidden_params["cache_hit"] == True
 
@@ -866,7 +869,7 @@ async def test_redis_cache_cluster_init_unit_test():
         from redis.asyncio import RedisCluster as AsyncRedisCluster
         from redis.cluster import RedisCluster
 
-        from litellm.caching import RedisCache
+        from litellm.caching.caching import RedisCache
 
         litellm.set_verbose = True
 
@@ -900,7 +903,7 @@ async def test_redis_cache_cluster_init_with_env_vars_unit_test():
         from redis.asyncio import RedisCluster as AsyncRedisCluster
         from redis.cluster import RedisCluster
 
-        from litellm.caching import RedisCache
+        from litellm.caching.caching import RedisCache
 
         litellm.set_verbose = True
 
@@ -1554,7 +1557,7 @@ def test_custom_redis_cache_params():
 
 
 def test_get_cache_key():
-    from litellm.caching import Cache
+    from litellm.caching.caching import Cache
 
     try:
         print("Testing get_cache_key")
@@ -1989,7 +1992,7 @@ async def test_cache_default_off_acompletion():
 
     verbose_logger.setLevel(logging.DEBUG)
 
-    from litellm.caching import CacheMode
+    from litellm.caching.caching import CacheMode
 
     random_number = random.randint(
         1, 100000
@@ -2072,7 +2075,7 @@ async def test_dual_cache_uses_redis():
     - Assert that value from redis is used
     """
     litellm.set_verbose = True
-    from litellm.caching import DualCache, RedisCache
+    from litellm.caching.caching import DualCache, RedisCache
 
     current_usage = uuid.uuid4()
 
@@ -2095,7 +2098,7 @@ async def test_proxy_logging_setup():
     """
     Assert always_read_redis is True when used by internal usage cache
     """
-    from litellm.caching import DualCache
+    from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
     pl_obj = ProxyLogging(user_api_key_cache=DualCache())
@@ -2165,7 +2168,7 @@ async def test_redis_proxy_batch_redis_get_cache():
     - make 2nd call -> expect hit
     """
 
-    from litellm.caching import Cache, DualCache
+    from litellm.caching.caching import Cache, DualCache
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.batch_redis_get import _PROXY_BatchRedisRequests
 

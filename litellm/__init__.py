@@ -7,7 +7,7 @@ import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,

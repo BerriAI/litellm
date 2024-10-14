@@ -15,7 +15,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import embedding, completion, Router
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 messages = [{"role": "user", "content": f"who is ishaan {time.time()}"}]
 

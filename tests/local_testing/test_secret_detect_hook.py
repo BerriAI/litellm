@@ -26,7 +26,7 @@ from starlette.datastructures import URL
 
 import litellm
 from litellm import Router, mock_completion
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.enterprise.enterprise_hooks.secret_detection import (
