@@ -66,7 +66,7 @@ def run_sync_fallback(
     **kwargs,
 ) -> Any:
     """
-    Iterate through the model groups and try calling that deployment.
+    Iterate through the fallback model groups and try calling each fallback deployment.
     """
     error_from_fallbacks = original_exception
     for mg in fallback_model_group:
