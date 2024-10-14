@@ -1141,7 +1141,10 @@ def client(original_function):
                     args=args,
                 )
             )
-            if _caching_handler_response.cached_result is not None:
+            if (
+                _caching_handler_response.cached_result is not None
+                and _caching_handler_response.final_embedding_cached_response is None
+            ):
                 return _caching_handler_response.cached_result
 
             # MODEL CALL

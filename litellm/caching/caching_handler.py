@@ -346,5 +346,6 @@ class LLMCachingHandler:
                             final_embedding_cached_response=final_embedding_cached_response
                         )
         return CachingHandlerResponse(
-            cached_result=None, final_embedding_cached_response=None
+            cached_result=cached_result,
+            final_embedding_cached_response=final_embedding_cached_response,
         )
