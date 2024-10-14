@@ -13,12 +13,12 @@ In each method it will call the appropriate method from caching.py
 import asyncio
 import datetime
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
 import litellm
-from litellm._logging import print_verbose
+from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import (
     Cache,
     QdrantSemanticCache,
@@ -57,7 +57,16 @@ class CachingHandlerResponse(BaseModel):
 
 
 class LLMCachingHandler:
-    def __init__(self):
+    def __init__(
+        self,
+        original_function: Callable,
+        request_kwargs: Dict[str, Any],
+        start_time: datetime.datetime,
+    ):
+        self.async_streaming_chunks: List[ModelResponse] = []
+        self.request_kwargs = request_kwargs
+        self.original_function = original_function
+        self.start_time = start_time
         pass
 
     async def _async_get_cache(
@@ -438,3 +447,45 @@ class LLMCachingHandler:
                 asyncio.create_task(
                     litellm.cache.async_add_cache(result, *args, **kwargs)
                 )
+
+    async def _add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
+        """
+        Internal method to add the streaming response to the cache
+
+
+        - If 'streaming_chunk' has a 'finish_reason' then assemble a litellm.ModelResponse object
+        - Else append the chunk to self.async_streaming_chunks
+
+        """
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None
+        if (
+            processed_chunk.choices[0].finish_reason is not None
+        ):  # if it's the last chunk
+            self.async_streaming_chunks.append(processed_chunk)
+            try:
+                end_time: datetime.datetime = datetime.datetime.now()
+                complete_streaming_response = litellm.stream_chunk_builder(
+                    self.async_streaming_chunks,
+                    messages=self.request_kwargs.get("messages", None),
+                    start_time=self.start_time,
+                    end_time=end_time,
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Error occurred building stream chunk in success logging: {}".format(
+                        str(e)
+                    )
+                )
+                complete_streaming_response = None
+        else:
+            self.async_streaming_chunks.append(processed_chunk)
+
+        # if a complete_streaming_response is assembled, add it to the cache
+        if complete_streaming_response is not None:
+            await self._async_set_cache(
+                result=complete_streaming_response,
+                original_function=self.original_function,
+                kwargs=self.request_kwargs,
+            )
