@@ -1147,6 +1147,9 @@ def client(original_function):
             ):
                 return _caching_handler_response.cached_result
 
+            elif _caching_handler_response.embedding_all_elements_cache_hit is True:
+                return _caching_handler_response.final_embedding_cached_response
+
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()

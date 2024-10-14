@@ -50,6 +50,9 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
+    embedding_all_elements_cache_hit: bool = (
+        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    )
 
 
 class LLMCachingHandler:
@@ -345,7 +348,8 @@ class LLMCachingHandler:
                             ),
                         ).start()
                         return CachingHandlerResponse(
-                            final_embedding_cached_response=final_embedding_cached_response
+                            final_embedding_cached_response=final_embedding_cached_response,
+                            embedding_all_elements_cache_hit=True,
                         )
         return CachingHandlerResponse(
             cached_result=cached_result,
