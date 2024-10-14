@@ -72,6 +72,8 @@ class LLMCachingHandler:
             convert_to_streaming_response_async,
         )
 
+        args = args or ()
+
         final_embedding_cached_response: Optional[EmbeddingResponse] = None
         cached_result: Optional[Any] = None
         if (
