@@ -2291,3 +2291,10 @@ async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hi
     assert response.results is not None
 
     assert_response_shape(response, custom_llm_provider="cohere")
+
+
+def test_basic_caching_import():
+    from litellm.caching import Cache
+
+    assert Cache is not None
+    print("Cache imported successfully")
