@@ -86,6 +86,7 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
+from .logging_utils import _assemble_complete_response_from_streaming_chunks
 
 try:
     from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -878,32 +879,24 @@ class Logging:
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
+
             ## BUILD COMPLETE STREAMED RESPONSE
-            complete_streaming_response = None
+            complete_streaming_response: Optional[
+                Union[ModelResponse, TextCompletionResponse]
+            ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
-            if self.stream and isinstance(result, ModelResponse):
-                if (
-                    result.choices[0].finish_reason is not None
-                ):  # if it's the last chunk
-                    self.sync_streaming_chunks.append(result)
-                    # print_verbose(f"final set of received chunks: {self.sync_streaming_chunks}")
-                    try:
-                        complete_streaming_response = litellm.stream_chunk_builder(
-                            self.sync_streaming_chunks,
-                            messages=self.model_call_details.get("messages", None),
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    except Exception as e:
-                        verbose_logger.exception(
-                            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while building complete streaming response in success logging {}".format(
-                                str(e)
-                            )
-                        )
-                        complete_streaming_response = None
-                else:
-                    self.sync_streaming_chunks.append(result)
+            if self.stream:
+                complete_streaming_response: Optional[
+                    Union[ModelResponse, TextCompletionResponse]
+                ] = _assemble_complete_response_from_streaming_chunks(
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    request_kwargs=self.model_call_details,
+                    streaming_chunks=self.sync_streaming_chunks,
+                    is_async=False,
+                )
             _caching_complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = None
@@ -1495,29 +1488,23 @@ class Logging:
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
         ## BUILD COMPLETE STREAMED RESPONSE
-        complete_streaming_response = None
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
-        if self.stream:
-            if result.choices[0].finish_reason is not None:  # if it's the last chunk
-                self.streaming_chunks.append(result)
-                # verbose_logger.debug(f"final set of received chunks: {self.streaming_chunks}")
-                try:
-                    complete_streaming_response = litellm.stream_chunk_builder(
-                        self.streaming_chunks,
-                        messages=self.model_call_details.get("messages", None),
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(
-                        "Error occurred building stream chunk in success logging: {}".format(
-                            str(e)
-                        )
-                    )
-                    complete_streaming_response = None
-            else:
-                self.streaming_chunks.append(result)
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None
+        if self.stream is True:
+            complete_streaming_response: Optional[
+                Union[ModelResponse, TextCompletionResponse]
+            ] = _assemble_complete_response_from_streaming_chunks(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                request_kwargs=self.model_call_details,
+                streaming_chunks=self.streaming_chunks,
+                is_async=True,
+            )
+
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
 

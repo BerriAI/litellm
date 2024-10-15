@@ -26,6 +26,9 @@ from litellm.caching.caching import (
     RedisSemanticCache,
     S3Cache,
 )
+from litellm.litellm_core_utils.logging_utils import (
+    _assemble_complete_response_from_streaming_chunks,
+)
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
@@ -517,28 +520,14 @@ class LLMCachingHandler:
         """
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = None
-        if (
-            processed_chunk.choices[0].finish_reason is not None
-        ):  # if it's the last chunk
-            self.async_streaming_chunks.append(processed_chunk)
-            try:
-                end_time: datetime.datetime = datetime.datetime.now()
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    self.async_streaming_chunks,
-                    messages=self.request_kwargs.get("messages", None),
-                    start_time=self.start_time,
-                    end_time=end_time,
-                )
-            except Exception as e:
-                verbose_logger.exception(
-                    "Error occurred building stream chunk in success logging: {}".format(
-                        str(e)
-                    )
-                )
-                complete_streaming_response = None
-        else:
-            self.async_streaming_chunks.append(processed_chunk)
+        ] = _assemble_complete_response_from_streaming_chunks(
+            result=processed_chunk,
+            start_time=self.start_time,
+            end_time=datetime.datetime.now(),
+            request_kwargs=self.request_kwargs,
+            streaming_chunks=self.async_streaming_chunks,
+            is_async=True,
+        )
 
         # if a complete_streaming_response is assembled, add it to the cache
         if complete_streaming_response is not None:
