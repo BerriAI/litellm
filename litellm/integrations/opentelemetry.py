@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.types.services import ServiceLoggerPayload
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -340,10 +340,22 @@ class OpenTelemetry(CustomLogger):
             )
             pass
 
-    def is_primitive(self, value):
+    def cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
+        """
+        Casts the value to a primitive OTEL type if it is not already a primitive type.
+
+        OTEL supports - str, bool, int, float
+
+        If it's not a primitive type, then it's converted to a string
+        """
         if value is None:
-            return False
-        return isinstance(value, (str, bool, int, float))
+            return ""
+        if isinstance(value, (str, bool, int, float)):
+            return value
+        try:
+            return str(value)
+        except Exception:
+            return ""
 
     def set_attributes(self, span: Span, kwargs, response_obj):
         try:
@@ -363,19 +375,22 @@ class OpenTelemetry(CustomLogger):
 
             optional_params = kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}
+            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
+            if standard_logging_payload is None:
+                raise ValueError("standard_logging_object not found in kwargs")
 
             # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
             # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata = litellm_params.get("metadata", {}) or {}
-
-            clean_metadata = redact_user_api_key_info(metadata=metadata)
-
-            for key, value in clean_metadata.items():
-                if self.is_primitive(value):
-                    span.set_attribute("metadata.{}".format(key), value)
+            metadata = standard_logging_payload["metadata"]
+            for key, value in metadata.items():
+                self.safe_set_attribute(
+                    span=span, key="metadata.{}".format(key), value=value
+                )
 
             #############################################
             ########## LLM Request Attributes ###########
@@ -383,71 +398,90 @@ class OpenTelemetry(CustomLogger):
 
             # The name of the LLM a request is being made to
             if kwargs.get("model"):
-                span.set_attribute(
-                    SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model")
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_REQUEST_MODEL,
+                    value=kwargs.get("model"),
                 )
 
             # The Generative AI Provider: Azure, OpenAI, etc.
-            span.set_attribute(
-                SpanAttributes.LLM_SYSTEM,
-                litellm_params.get("custom_llm_provider", "Unknown"),
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.LLM_SYSTEM,
+                value=litellm_params.get("custom_llm_provider", "Unknown"),
             )
 
             # The maximum number of tokens the LLM generates for a request.
             if optional_params.get("max_tokens"):
-                span.set_attribute(
-                    SpanAttributes.LLM_REQUEST_MAX_TOKENS,
-                    optional_params.get("max_tokens"),
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+                    value=optional_params.get("max_tokens"),
                 )
 
             # The temperature setting for the LLM request.
             if optional_params.get("temperature"):
-                span.set_attribute(
-                    SpanAttributes.LLM_REQUEST_TEMPERATURE,
-                    optional_params.get("temperature"),
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_REQUEST_TEMPERATURE,
+                    value=optional_params.get("temperature"),
                 )
 
             # The top_p sampling setting for the LLM request.
             if optional_params.get("top_p"):
-                span.set_attribute(
-                    SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_REQUEST_TOP_P,
+                    value=optional_params.get("top_p"),
                 )
 
-            span.set_attribute(
-                SpanAttributes.LLM_IS_STREAMING,
-                str(optional_params.get("stream", False)),
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.LLM_IS_STREAMING,
+                value=str(optional_params.get("stream", False)),
             )
 
             if optional_params.get("user"):
-                span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_USER,
+                    value=optional_params.get("user"),
+                )
 
             # The unique identifier for the completion.
             if response_obj.get("id"):
-                span.set_attribute("gen_ai.response.id", response_obj.get("id"))
+                self.safe_set_attribute(
+                    span=span, key="gen_ai.response.id", value=response_obj.get("id")
+                )
 
             # The model used to generate the response.
             if response_obj.get("model"):
-                span.set_attribute(
-                    SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_RESPONSE_MODEL,
+                    value=response_obj.get("model"),
                 )
 
             usage = response_obj.get("usage")
             if usage:
-                span.set_attribute(
-                    SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-                    usage.get("total_tokens"),
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                    value=usage.get("total_tokens"),
                 )
 
                 # The number of tokens used in the LLM response (completion).
-                span.set_attribute(
-                    SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
-                    usage.get("completion_tokens"),
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                    value=usage.get("completion_tokens"),
                 )
 
                 # The number of tokens used in the LLM prompt.
-                span.set_attribute(
-                    SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
-                    usage.get("prompt_tokens"),
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                    value=usage.get("prompt_tokens"),
                 )
 
             ########################################################################
@@ -466,17 +500,19 @@ class OpenTelemetry(CustomLogger):
             if kwargs.get("messages"):
                 for idx, prompt in enumerate(kwargs.get("messages")):
                     if prompt.get("role"):
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
-                            prompt.get("role"),
+                        self.safe_set_attribute(
+                            span=span,
+                            key=f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                            value=prompt.get("role"),
                         )
 
                     if prompt.get("content"):
                         if not isinstance(prompt.get("content"), str):
                             prompt["content"] = str(prompt.get("content"))
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
-                            prompt.get("content"),
+                        self.safe_set_attribute(
+                            span=span,
+                            key=f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                            value=prompt.get("content"),
                         )
             #############################################
             ########## LLM Response Attributes ##########
@@ -485,15 +521,17 @@ class OpenTelemetry(CustomLogger):
                 if response_obj.get("choices"):
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
-                            span.set_attribute(
-                                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
-                                choice.get("finish_reason"),
+                            self.safe_set_attribute(
+                                span=span,
+                                key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
+                                value=choice.get("finish_reason"),
                             )
                         if choice.get("message"):
                             if choice.get("message").get("role"):
-                                span.set_attribute(
-                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
-                                    choice.get("message").get("role"),
+                                self.safe_set_attribute(
+                                    span=span,
+                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
+                                    value=choice.get("message").get("role"),
                                 )
                             if choice.get("message").get("content"):
                                 if not isinstance(
@@ -502,27 +540,56 @@ class OpenTelemetry(CustomLogger):
                                     choice["message"]["content"] = str(
                                         choice.get("message").get("content")
                                     )
-                                span.set_attribute(
-                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
-                                    choice.get("message").get("content"),
+                                self.safe_set_attribute(
+                                    span=span,
+                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                                    value=choice.get("message").get("content"),
                                 )
 
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
-                                span.set_attribute(
-                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
-                                    tool_calls[0].get("function").get("name"),
+                                self.safe_set_attribute(
+                                    span=span,
+                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
+                                    value=tool_calls[0].get("function").get("name"),
                                 )
-                                span.set_attribute(
-                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
-                                    tool_calls[0].get("function").get("arguments"),
+                                self.safe_set_attribute(
+                                    span=span,
+                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
+                                    value=tool_calls[0]
+                                    .get("function")
+                                    .get("arguments"),
                                 )
 
         except Exception as e:
             verbose_logger.error(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
+
+    def _cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
+        """
+        Casts the value to a primitive OTEL type if it is not already a primitive type.
+
+        OTEL supports - str, bool, int, float
+
+        If it's not a primitive type, then it's converted to a string
+        """
+        if value is None:
+            return ""
+        if isinstance(value, (str, bool, int, float)):
+            return value
+        try:
+            return str(value)
+        except Exception:
+            return ""
+
+    def safe_set_attribute(self, span: Span, key: str, value: Any):
+        """
+        Safely sets an attribute on the span, ensuring the value is a primitive type.
+        """
+        primitive_value = self._cast_as_primitive_value_type(value)
+        span.set_attribute(key, primitive_value)
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
         from litellm.proxy._types import SpanAttributes
