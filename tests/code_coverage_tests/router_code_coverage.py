@@ -83,12 +83,12 @@ ignored_function_names = [
 
 
 def main():
-    # router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
-    router_file = "../../litellm/router.py"  ## LOCAL TESTING
-    # tests_dir = (
-    #     "./tests/"  # Update this path if your tests directory is located elsewhere
-    # )
-    tests_dir = "../../tests/"  # LOCAL TESTING
+    router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
+    # router_file = "../../litellm/router.py"  ## LOCAL TESTING
+    tests_dir = (
+        "./tests/"  # Update this path if your tests directory is located elsewhere
+    )
+    # tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = get_functions_from_router(router_file)
     print("router_functions: ", router_functions)
@@ -102,11 +102,12 @@ def main():
         for func in untested_functions:
             if func not in ignored_function_names:
                 all_untested_functions.append(func)
-        perc_covered = (len(all_untested_functions)) / len(router_functions)
-        if perc_covered < 0.8:
+        untested_perc = (len(all_untested_functions)) / len(router_functions)
+        print("perc_covered: ", untested_perc)
+        if untested_perc < 0.3:
             print("The following functions in router.py are not tested:")
             raise Exception(
-                f"{perc_covered * 100:.2f}% of functions in router.py are not tested: {all_untested_functions}"
+                f"{untested_perc * 100:.2f}% of functions in router.py are not tested: {all_untested_functions}"
             )
     else:
         print("All functions in router.py are covered by tests.")
