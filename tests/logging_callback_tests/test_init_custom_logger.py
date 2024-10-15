@@ -71,7 +71,7 @@ all_tested_callbacks = []
                 "AWS_SECRET_ACCESS_KEY": "mock_aws_secret",
             },
         ),
-        ("datadog", DataDogLogger, {"DATADOG_API_KEY": "mock_datadog_api_key"}),
+        ("datadog", DataDogLogger, {"DD_API_KEY": "mock_datadog_api_key"}),
         (
             "gcs_bucket",
             GCSBucketLogger,
@@ -94,8 +94,12 @@ def test_get_custom_logger_compatible_class(
     """
     all_tested_callbacks.append(logger_class)
     # Set environment variables
+
+    _set_env_vars = []
     for key, value in env_vars.items():
-        os.environ[key] = value
+        if key not in os.environ:
+            os.environ[key] = value
+            _set_env_vars.append(key)
     # Initialize the logger
     logger = logger_class()
     _in_memory_loggers.append(logger)
@@ -107,7 +111,7 @@ def test_get_custom_logger_compatible_class(
     assert isinstance(result, logger_class)
 
     # Clean up environment variables
-    for key in env_vars:
+    for key in _set_env_vars:
         del os.environ[key]
 
     all_tested_callbacks.append(logger_class)
