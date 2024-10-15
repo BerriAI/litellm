@@ -2879,21 +2879,7 @@ async def startup_event():
                 query_type="update_data",
                 update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
             )
-            task_2 = generate_key_helper_fn(
-                request_type="user",
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                token=None,
-                user_id="admin",  # add 'admin' user to db. Fixes https://github.com/BerriAI/litellm/issues/6206
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                query_type="update_data",
-                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
-            )
             asyncio.create_task(task_1)
-            asyncio.create_task(task_2)
 
     if prisma_client is not None and litellm.max_budget > 0:
         if litellm.budget_duration is None:
@@ -8029,16 +8015,16 @@ async def login(request: Request):
     ):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
-        user_id = username
+        user_id = litellm_proxy_admin_name
 
         # we want the key created to have PROXY_ADMIN_PERMISSIONS
         key_user_id = litellm_proxy_admin_name
         if (
             os.getenv("PROXY_ADMIN_ID", None) is not None
             and os.environ["PROXY_ADMIN_ID"] == user_id
-        ) or user_id == "admin":
+        ) or user_id == litellm_proxy_admin_name:
             # checks if user is admin
-            key_user_id = os.getenv("PROXY_ADMIN_ID", "default_user_id")
+            key_user_id = os.getenv("PROXY_ADMIN_ID", litellm_proxy_admin_name)
 
         # Admin is Authe'd in - generate key for the UI to access Proxy
 
@@ -8083,7 +8069,7 @@ async def login(request: Request):
             {
                 "user_id": user_id,
                 "key": key,
-                "user_email": user_id,
+                "user_email": None,
                 "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
                 "login_method": "username_password",
                 "premium_user": premium_user,
