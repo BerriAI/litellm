@@ -79,7 +79,9 @@ class DataDogLogger(CustomBatchLogger):
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
             ###################################
             self.sync_client = _get_httpx_client()
-            asyncio.create_task(self.periodic_flush())
+
+            # start the periodic flush task
+            self.start_periodic_flush()
             self.flush_lock = asyncio.Lock()
             super().__init__(
                 **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE

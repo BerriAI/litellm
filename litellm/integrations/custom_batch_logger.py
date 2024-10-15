@@ -60,3 +60,17 @@ class CustomBatchLogger(CustomLogger):
 
     async def async_send_batch(self, *args, **kwargs):
         pass
+
+    def start_periodic_flush(self):
+        """
+        Attempts to start the periodic flush task. This task is used to flush the queue periodically.
+
+        Raises:
+            [Non-Blocking]: Does not raise an exception if this fails - will log.exception the error
+        """
+        try:
+            asyncio.create_task(self.periodic_flush())
+        except Exception as e:
+            verbose_logger.exception(
+                f"CustomBatchLogger: periodic_flush not started because event loop is not running - {str(e)}"
+            )

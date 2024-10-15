@@ -109,7 +109,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             self.s3_config = s3_config
             self.init_kwargs = kwargs
 
-            asyncio.create_task(self.periodic_flush())
+            # start the periodic flush task
+            self.start_periodic_flush()
             self.flush_lock = asyncio.Lock()
 
             verbose_logger.debug(
