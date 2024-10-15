@@ -2019,3 +2019,11 @@ class LoggingCallbackStatus(TypedDict, total=False):
 class KeyHealthResponse(TypedDict, total=False):
     key: Literal["healthy", "unhealthy"]
     logging_callbacks: Optional[LoggingCallbackStatus]
+
+
+class SpecialHeaders(enum.Enum):
+    """Used by user_api_key_auth.py to get litellm key"""
+
+    openai_authorization = "Authorization"
+    azure_authorization = "API-Key"
+    anthropic_authorization = "x-api-key"

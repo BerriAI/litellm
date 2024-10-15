@@ -2,15 +2,19 @@ import copy
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import Request
+from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
+    LiteLLMRoutes,
+    SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -137,6 +141,24 @@ def _get_dynamic_logging_metadata(
     return callback_settings_obj
 
 
+def clean_headers(headers: Headers) -> dict:
+    """
+    Get the headers that should be forwarded to the LLM Provider
+    """
+    special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
+    forwarded_headers = {}
+    for header, value in headers.items():
+        if header.lower() not in special_headers:
+            forwarded_headers[header] = value
+    return forwarded_headers
+
+
+def is_openai_route(route: str):
+    if route in LiteLLMRoutes.openai_routes.value:
+        return True
+    return False
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -163,8 +185,9 @@ async def add_litellm_data_to_request(
 
     safe_add_api_version_from_query_params(data, request)
 
-    _headers = dict(request.headers)
+    _headers = clean_headers(request.headers)
 
+    data["headers"] = _headers
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
