@@ -213,6 +213,8 @@ async def test_router_function_with_retries(model_list, sync_mode):
 @pytest.mark.asyncio
 async def test_router_make_call(model_list):
     """Test if the router 'make_call' function is working correctly"""
+
+    ## ACOMPLETION
     router = Router(model_list=model_list)
     response = await router.make_call(
         original_function=router._acompletion,
@@ -221,3 +223,30 @@ async def test_router_make_call(model_list):
         mock_response="I'm fine, thank you!",
     )
     assert response.choices[0].message.content == "I'm fine, thank you!"
+
+    ## ATEXT_COMPLETION
+    response = await router.make_call(
+        original_function=router._atext_completion,
+        model="gpt-3.5-turbo",
+        prompt="Hello, how are you?",
+        mock_response="I'm fine, thank you!",
+    )
+    assert response.choices[0].text == "I'm fine, thank you!"
+
+    ## AEMBEDDING
+    response = await router.make_call(
+        original_function=router._aembedding,
+        model="gpt-3.5-turbo",
+        input="Hello, how are you?",
+        mock_response=[0.1, 0.2, 0.3],
+    )
+    assert response.data[0].embedding == [0.1, 0.2, 0.3]
+
+    ## AIMAGE_GENERATION
+    response = await router.make_call(
+        original_function=router._aimage_generation,
+        model="dall-e-3",
+        prompt="A cute baby sea otter",
+        mock_response="https://example.com/image.png",
+    )
+    assert response.data[0].url == "https://example.com/image.png"
