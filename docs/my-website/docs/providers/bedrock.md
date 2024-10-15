@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # AWS Bedrock
-Anthropic, Amazon Titan, A121 LLMs are Supported on Bedrock
+ALL Bedrock models (Anthropic, Meta, Mistral, Amazon, etc.) are Supported
 
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
