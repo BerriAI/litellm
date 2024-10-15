@@ -136,76 +136,119 @@ def validate_raw_gen_ai_request_openai_streaming(span):
         assert span.attributes[attr] is not None, f"Attribute {attr} has None"
 
 
-# @pytest.mark.parametrize(
-#     "model",
-#     ["anthropic/claude-3-opus-20240229"],
-# )
-# def test_completion_claude_3_function_call_with_otel(model):
-#     litellm.set_verbose = True
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-opus-20240229"],
+)
+def test_completion_claude_3_function_call_with_otel(model):
+    litellm.set_verbose = True
 
-#     litellm.callbacks = [OpenTelemetry(OpenTelemetryConfig())]
-#     tools = [
-#         {
-#             "type": "function",
-#             "function": {
-#                 "name": "get_current_weather",
-#                 "description": "Get the current weather in a given location",
-#                 "parameters": {
-#                     "type": "object",
-#                     "properties": {
-#                         "location": {
-#                             "type": "string",
-#                             "description": "The city and state, e.g. San Francisco, CA",
-#                         },
-#                         "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-#                     },
-#                     "required": ["location"],
-#                 },
-#             },
-#         }
-#     ]
-#     messages = [
-#         {
-#             "role": "user",
-#             "content": "What's the weather like in Boston today in Fahrenheit?",
-#         }
-#     ]
-#     try:
-#         # test without max tokens
-#         response = litellm.completion(
-#             model=model,
-#             messages=messages,
-#             tools=tools,
-#             tool_choice={
-#                 "type": "function",
-#                 "function": {"name": "get_current_weather"},
-#             },
-#             drop_params=True,
-#         )
+    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    try:
+        # test without max tokens
+        response = litellm.completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice={
+                "type": "function",
+                "function": {"name": "get_current_weather"},
+            },
+            drop_params=True,
+        )
 
-#         print("response from LiteLLM", response)
+        print("response from LiteLLM", response)
 
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+    finally:
+        # clear in memory exporter
+        exporter.clear()
 
 
-# @pytest.mark.asyncio
-# async def test_awesome_otel_with_message_logging_off():
-#     litellm.set_verbose = True
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("global_redact", [True, False])
+async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
+    litellm.set_verbose = True
+    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
+    if global_redact is False:
+        otel_logger = OpenTelemetry(
+            message_logging=False, config=OpenTelemetryConfig(exporter="console")
+        )
+    else:
+        # use global redaction
+        litellm.turn_off_message_logging = True
+        otel_logger = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
 
-#     otel_logger = OpenTelemetry(
-#         message_logging=False, config=OpenTelemetryConfig(exporter="console")
-#     )
+    litellm.callbacks = [otel_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
 
-#     litellm.callbacks = [otel_logger]
-#     litellm.success_callback = []
-#     litellm.failure_callback = []
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+        stream=streaming,
+    )
+    print("response", response)
 
-#     response = await litellm.acompletion(
-#         model="gpt-3.5-turbo",
-#         messages=[{"role": "user", "content": "hi"}],
-#         mock_response="hi",
-#     )
-#     print("response", response)
+    if streaming is True:
+        async for chunk in response:
+            print("chunk", chunk)
 
-#     await asyncio.sleep(5)
+    await asyncio.sleep(1)
+    spans = exporter.get_finished_spans()
+    print("spans", spans)
+    assert len(spans) == 1
+
+    _span = spans[0]
+    print("span attributes", _span.attributes)
+
+    validate_redacted_message_span_attributes(_span)
+
+    # clear in memory exporter
+    exporter.clear()
+
+
+def validate_redacted_message_span_attributes(span):
+    expected_attributes = [
+        "gen_ai.request.model",
+        "gen_ai.system",
+        "llm.is_streaming",
+        "gen_ai.response.id",
+        "gen_ai.response.model",
+        "llm.usage.total_tokens",
+        "gen_ai.usage.completion_tokens",
+        "gen_ai.usage.prompt_tokens",
+    ]
+
+    for attr in span.attributes:
+        assert attr in expected_attributes, f"Attribute {attr} is missing"
+        assert span.attributes[attr] is not None, f"Attribute {attr} has None value"
