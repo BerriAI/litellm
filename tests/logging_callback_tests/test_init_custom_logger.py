@@ -71,7 +71,14 @@ all_tested_callbacks = []
                 "AWS_SECRET_ACCESS_KEY": "mock_aws_secret",
             },
         ),
-        ("datadog", DataDogLogger, {"DD_API_KEY": "mock_datadog_api_key"}),
+        (
+            "datadog",
+            DataDogLogger,
+            {
+                "DD_API_KEY": "mock_datadog_api_key",
+                "DD_SITE": "https://us5.datadoghq.com",
+            },
+        ),
         (
             "gcs_bucket",
             GCSBucketLogger,
