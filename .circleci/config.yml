@@ -810,7 +810,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage ui_endpoint_testing_coverage
+            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage ui_endpoint_testing_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
