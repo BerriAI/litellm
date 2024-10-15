@@ -467,12 +467,11 @@ class LLMCachingHandler:
             None
         """
         args = args or ()
+        if litellm.cache is None:
+            return
         # [OPTIONAL] ADD TO CACHE
-        if (
-            (litellm.cache is not None)
-            and litellm.cache.supported_call_types is not None
-            and (str(original_function.__name__) in litellm.cache.supported_call_types)
-            and (kwargs.get("cache", {}).get("no-store", False) is not True)
+        if self._should_store_result_in_cache(
+            original_function=original_function, kwargs=kwargs
         ):
             if (
                 isinstance(result, litellm.ModelResponse)
@@ -505,6 +504,43 @@ class LLMCachingHandler:
                 asyncio.create_task(
                     litellm.cache.async_add_cache(result, *args, **kwargs)
                 )
+
+    def _sync_set_cache(
+        self,
+        call_type: str,
+        result: Any,
+        kwargs: Dict[str, Any],
+        args: Optional[Tuple[Any, ...]] = None,
+    ):
+        """
+        Sync internal method to add the result to the cache
+        """
+        if litellm.cache is None:
+            return
+
+        args = args or ()
+        if self._should_store_result_in_cache(
+            original_function=self.original_function, kwargs=kwargs
+        ):
+            litellm.cache.add_cache(result, *args, **kwargs)
+
+        return
+
+    def _should_store_result_in_cache(
+        self, original_function: Callable, kwargs: Dict[str, Any]
+    ) -> bool:
+        """
+        Helper function to determine if the result should be stored in the cache.
+
+        Returns:
+            bool: True if the result should be stored in the cache, False otherwise.
+        """
+        return (
+            (litellm.cache is not None)
+            and litellm.cache.supported_call_types is not None
+            and (str(original_function.__name__) in litellm.cache.supported_call_types)
+            and (kwargs.get("cache", {}).get("no-store", False) is not True)
+        )
 
     async def _add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
         """
