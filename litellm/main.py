@@ -42,6 +42,10 @@ from litellm import (  # type: ignore
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.mock_functions import (
+    mock_embedding,
+    mock_image_generation,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
@@ -3163,6 +3167,7 @@ def embedding(
     tpm = kwargs.pop("tpm", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     cooldown_time = kwargs.get("cooldown_time", None)
+    mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
     max_parallel_requests = kwargs.pop("max_parallel_requests", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
@@ -3268,6 +3273,9 @@ def embedding(
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
+
+    if mock_response is not None:
+        return mock_embedding(model=model, mock_response=mock_response)
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if input_cost_per_token is not None and output_cost_per_token is not None:
         litellm.register_model(
@@ -4377,6 +4385,7 @@ def image_generation(
         aimg_generation = kwargs.get("aimg_generation", False)
         litellm_call_id = kwargs.get("litellm_call_id", None)
         logger_fn = kwargs.get("logger_fn", None)
+        mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
         proxy_server_request = kwargs.get("proxy_server_request", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
@@ -4486,6 +4495,8 @@ def image_generation(
             },
             custom_llm_provider=custom_llm_provider,
         )
+        if mock_response is not None:
+            return mock_image_generation(model=model, mock_response=mock_response)
 
         if custom_llm_provider == "azure":
             # azure configs
