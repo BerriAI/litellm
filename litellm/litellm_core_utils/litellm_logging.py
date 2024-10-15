@@ -884,10 +884,9 @@ class Logging:
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = None
-            if (
-                self.stream
-                and "complete_streaming_response" not in self.model_call_details
-            ):
+            if "complete_streaming_response" in self.model_call_details:
+                return  # break out of this.
+            if self.stream:
                 complete_streaming_response: Optional[
                     Union[ModelResponse, TextCompletionResponse]
                 ] = _assemble_complete_response_from_streaming_chunks(
@@ -1489,13 +1488,12 @@ class Logging:
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
         ## BUILD COMPLETE STREAMED RESPONSE
+        if "async_complete_streaming_response" in self.model_call_details:
+            return  # break out of this.
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = None
-        if (
-            self.stream is True
-            and "async_complete_streaming_response" not in self.model_call_details
-        ):
+        if self.stream is True:
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = _assemble_complete_response_from_streaming_chunks(
