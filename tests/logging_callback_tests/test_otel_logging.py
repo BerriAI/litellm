@@ -236,6 +236,9 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
     # clear in memory exporter
     exporter.clear()
 
+    if global_redact is True:
+        litellm.turn_off_message_logging = False
+
 
 def validate_redacted_message_span_attributes(span):
     expected_attributes = [
