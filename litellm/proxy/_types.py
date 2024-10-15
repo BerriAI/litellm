@@ -777,7 +777,7 @@ class NewCustomerRequest(LiteLLMBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[Literal["eu"]] = (
+    allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] = (
         None  # require all user requests to use models in this specific region
     )
     default_model: Optional[str] = (
@@ -804,7 +804,7 @@ class UpdateCustomerRequest(LiteLLMBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[Literal["eu"]] = (
+    allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] = (
         None  # require all user requests to use models in this specific region
     )
     default_model: Optional[str] = (
@@ -1384,7 +1384,7 @@ class UserAPIKeyAuth(
 
     api_key: Optional[str] = None
     user_role: Optional[LitellmUserRoles] = None
-    allowed_model_region: Optional[Literal["eu"]] = None
+    allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] = None
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
     tpm_limit_per_model: Optional[Dict[str, int]] = None
@@ -1466,7 +1466,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
-    allowed_model_region: Optional[Literal["eu"]] = None
+    allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] = None
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
