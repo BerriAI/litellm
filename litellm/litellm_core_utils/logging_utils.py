@@ -53,7 +53,7 @@ def convert_litellm_response_object_to_str(
 
 
 def _assemble_complete_response_from_streaming_chunks(
-    result: ModelResponse,
+    result: Union[ModelResponse, TextCompletionResponse],
     start_time: datetime,
     end_time: datetime,
     request_kwargs: dict,
