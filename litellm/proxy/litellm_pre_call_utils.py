@@ -141,11 +141,15 @@ def _get_dynamic_logging_metadata(
     return callback_settings_obj
 
 
-def clean_headers(headers: Headers) -> dict:
+def clean_headers(
+    headers: Headers, litellm_key_header_name: Optional[str] = None
+) -> dict:
     """
     Get the headers that should be forwarded to the LLM Provider
     """
     special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
+    if litellm_key_header_name is not None:
+        special_headers.append(litellm_key_header_name.lower())
     forwarded_headers = {}
     for header, value in headers.items():
         if header.lower() not in special_headers:
@@ -185,7 +189,14 @@ async def add_litellm_data_to_request(
 
     safe_add_api_version_from_query_params(data, request)
 
-    _headers = clean_headers(request.headers)
+    _headers = clean_headers(
+        request.headers,
+        litellm_key_header_name=(
+            general_settings.get("litellm_key_header_name")
+            if general_settings is not None
+            else None
+        ),
+    )
 
     data["headers"] = _headers
     # Include original request and headers in the data
