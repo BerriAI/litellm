@@ -152,9 +152,15 @@ class OpenTelemetry(CustomLogger):
                 context=trace.set_span_in_context(parent_otel_span),
                 start_time=_start_time_ns,
             )
-            service_logging_span.set_attribute(key="call_type", value=payload.call_type)
-            service_logging_span.set_attribute(
-                key="service", value=payload.service.value
+            self.safe_set_attribute(
+                span=service_logging_span,
+                key="call_type",
+                value=payload.call_type,
+            )
+            self.safe_set_attribute(
+                span=service_logging_span,
+                key="service",
+                value=payload.service.value,
             )
 
             if event_metadata:
@@ -166,7 +172,11 @@ class OpenTelemetry(CustomLogger):
                             value = str(value)
                         except Exception:
                             value = "litllm logging error - could_not_json_serialize"
-                    service_logging_span.set_attribute(key, value)
+                    self.safe_set_attribute(
+                        span=service_logging_span,
+                        key=key,
+                        value=value,
+                    )
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -204,12 +214,22 @@ class OpenTelemetry(CustomLogger):
                 context=trace.set_span_in_context(parent_otel_span),
                 start_time=_start_time_ns,
             )
-            service_logging_span.set_attribute(key="call_type", value=payload.call_type)
-            service_logging_span.set_attribute(
-                key="service", value=payload.service.value
+            self.safe_set_attribute(
+                span=service_logging_span,
+                key="call_type",
+                value=payload.call_type,
+            )
+            self.safe_set_attribute(
+                span=service_logging_span,
+                key="service",
+                value=payload.service.value,
             )
             if error:
-                service_logging_span.set_attribute(key="error", value=error)
+                self.safe_set_attribute(
+                    span=service_logging_span,
+                    key="error",
+                    value=error,
+                )
             if event_metadata:
                 for key, value in event_metadata.items():
                     if isinstance(value, dict):
@@ -217,7 +237,11 @@ class OpenTelemetry(CustomLogger):
                             value = str(value)
                         except Exception:
                             value = "litllm logging error - could_not_json_serialize"
-                    service_logging_span.set_attribute(key, value)
+                    self.safe_set_attribute(
+                        span=service_logging_span,
+                        key=key,
+                        value=value,
+                    )
 
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
@@ -241,8 +265,10 @@ class OpenTelemetry(CustomLogger):
                 name=_span_name,
                 context=trace.set_span_in_context(parent_otel_span),
             )
-            exception_logging_span.set_attribute(
-                key="exception", value=str(original_exception)
+            self.safe_set_attribute(
+                span=exception_logging_span,
+                key="exception",
+                value=str(original_exception),
             )
             exception_logging_span.set_status(Status(StatusCode.ERROR))
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
@@ -329,10 +355,20 @@ class OpenTelemetry(CustomLogger):
                     continue
 
                 prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
-                span.set_attribute(f"{prefix}.name", function.get("name"))
-                span.set_attribute(f"{prefix}.description", function.get("description"))
-                span.set_attribute(
-                    f"{prefix}.parameters", json.dumps(function.get("parameters"))
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"{prefix}.name",
+                    value=function.get("name"),
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"{prefix}.description",
+                    value=function.get("description"),
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"{prefix}.parameters",
+                    value=json.dumps(function.get("parameters")),
                 )
         except Exception as e:
             verbose_logger.error(
@@ -608,11 +644,8 @@ class OpenTelemetry(CustomLogger):
         # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
         if complete_input_dict and isinstance(complete_input_dict, dict):
             for param, val in complete_input_dict.items():
-                if not isinstance(val, str):
-                    val = str(val)
-                span.set_attribute(
-                    f"llm.{custom_llm_provider}.{param}",
-                    val,
+                self.safe_set_attribute(
+                    span=span, key=f"llm.{custom_llm_provider}.{param}", value=val
                 )
 
         #############################################
@@ -625,11 +658,10 @@ class OpenTelemetry(CustomLogger):
             try:
                 _raw_response = json.loads(_raw_response)
                 for param, val in _raw_response.items():
-                    if not isinstance(val, str):
-                        val = str(val)
-                    span.set_attribute(
-                        f"llm.{custom_llm_provider}.{param}",
-                        val,
+                    self.safe_set_attribute(
+                        span=span,
+                        key=f"llm.{custom_llm_provider}.{param}",
+                        value=val,
                     )
             except json.JSONDecodeError:
                 verbose_logger.debug(
@@ -637,9 +669,11 @@ class OpenTelemetry(CustomLogger):
                         _raw_response
                     )
                 )
-                span.set_attribute(
-                    f"llm.{custom_llm_provider}.stringified_raw_response",
-                    _raw_response,
+
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"llm.{custom_llm_provider}.stringified_raw_response",
+                    value=_raw_response,
                 )
 
     def _to_ns(self, dt):
@@ -794,12 +828,21 @@ class OpenTelemetry(CustomLogger):
             _request_data = logging_payload.request_data
             if _request_data is not None:
                 for key, value in _request_data.items():
-                    management_endpoint_span.set_attribute(f"request.{key}", value)
+                    self.safe_set_attribute(
+                        span=management_endpoint_span,
+                        key=f"request.{key}",
+                        value=value,
+                    )
 
             _response = logging_payload.response
             if _response is not None:
                 for key, value in _response.items():
-                    management_endpoint_span.set_attribute(f"response.{key}", value)
+                    self.safe_set_attribute(
+                        span=management_endpoint_span,
+                        key=f"response.{key}",
+                        value=value,
+                    )
+
             management_endpoint_span.set_status(Status(StatusCode.OK))
             management_endpoint_span.end(end_time=_end_time_ns)
 
@@ -840,9 +883,17 @@ class OpenTelemetry(CustomLogger):
             _request_data = logging_payload.request_data
             if _request_data is not None:
                 for key, value in _request_data.items():
-                    management_endpoint_span.set_attribute(f"request.{key}", value)
+                    self.safe_set_attribute(
+                        span=management_endpoint_span,
+                        key=f"request.{key}",
+                        value=value,
+                    )
 
             _exception = logging_payload.exception
-            management_endpoint_span.set_attribute("exception", str(_exception))
+            self.safe_set_attribute(
+                span=management_endpoint_span,
+                key="exception",
+                value=str(_exception),
+            )
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)
