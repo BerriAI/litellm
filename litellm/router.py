@@ -126,6 +126,7 @@ from litellm.utils import (
     get_llm_provider,
     get_secret,
     get_utc_datetime,
+    is_region_allowed,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -4888,27 +4889,16 @@ class Router:
             if (
                 request_kwargs is not None
                 and request_kwargs.get("allowed_model_region") is not None
-                and request_kwargs["allowed_model_region"] == "eu"
             ):
-                if _litellm_params.get("region_name") is not None and isinstance(
-                    _litellm_params["region_name"], str
-                ):
-                    # check if in allowed_model_region
-                    if (
-                        _is_region_eu(litellm_params=LiteLLM_Params(**_litellm_params))
-                        is False
+                allowed_model_region = request_kwargs.get("allowed_model_region")
+
+                if allowed_model_region is not None:
+                    if not is_region_allowed(
+                        litellm_params=LiteLLM_Params(**_litellm_params),
+                        allowed_model_region=allowed_model_region,
                     ):
                         invalid_model_indices.append(idx)
                         continue
-                else:
-                    verbose_router_logger.debug(
-                        "Filtering out model - {}, as model_region=None, and allowed_model_region={}".format(
-                            model_id, request_kwargs.get("allowed_model_region")
-                        )
-                    )
-                    # filter out since region unknown, and user wants to filter for specific region
-                    invalid_model_indices.append(idx)
-                    continue
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params is False:

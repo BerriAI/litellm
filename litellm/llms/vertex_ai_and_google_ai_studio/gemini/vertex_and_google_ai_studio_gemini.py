@@ -254,6 +254,21 @@ class VertexAIConfig:
             "europe-west9",
         ]
 
+    def get_us_regions(self) -> List[str]:
+        """
+        Source: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#available-regions
+        """
+        return [
+            "us-central1",
+            "us-east1",
+            "us-east4",
+            "us-east5",
+            "us-south1",
+            "us-west1",
+            "us-west4",
+            "us-west5",
+        ]
+
 
 class VertexGeminiConfig:
     """

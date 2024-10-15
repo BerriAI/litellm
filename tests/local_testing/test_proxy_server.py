@@ -243,15 +243,8 @@ def test_chat_completion_forward_headers(
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             headers={
-                "host": "testserver",
-                "accept": "*/*",
-                "accept-encoding": "gzip, deflate",
-                "connection": "keep-alive",
-                "user-agent": "testclient",
                 "x-custom-header": "Custom-Value",
                 "x-another-header": "Another-Value",
-                "content-length": "93",
-                "content-type": "application/json",
             },
         )
         print(f"response - {response.text}")

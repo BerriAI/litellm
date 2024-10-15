@@ -274,6 +274,23 @@ class AzureOpenAIConfig:
         """
         return ["europe", "sweden", "switzerland", "france", "uk"]
 
+    def get_us_regions(self) -> List[str]:
+        """
+        Source: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#gpt-4-and-gpt-4-turbo-model-availability
+        """
+        return [
+            "us",
+            "eastus",
+            "eastus2",
+            "eastus2euap",
+            "eastus3",
+            "southcentralus",
+            "westus",
+            "westus2",
+            "westus3",
+            "westus4",
+        ]
+
 
 class AzureOpenAIAssistantsAPIConfig:
     """

@@ -145,14 +145,17 @@ def clean_headers(
     headers: Headers, litellm_key_header_name: Optional[str] = None
 ) -> dict:
     """
-    Get the headers that should be forwarded to the LLM Provider
+    Get the headers that should be forwarded to the LLM Provider.
+
+    Looks for any `x-` headers and sends them to the LLM Provider.
     """
     special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
+    special_headers = special_headers
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
     forwarded_headers = {}
     for header, value in headers.items():
-        if header.lower() not in special_headers:
+        if header.lower() not in special_headers and header.startswith("x-"):
             forwarded_headers[header] = value
     return forwarded_headers
 
