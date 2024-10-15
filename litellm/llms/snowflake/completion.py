@@ -1,13 +1,17 @@
 """
 Handler for Snowflake's Cortex Complete endpoint
 """
-
+import litellm
 from typing import Callable
 import httpx
 from litellm.utils import ModelResponse
 from litellm.llms.databricks.chat import DatabricksChatCompletion
 from litellm.types.utils import Choices, Message
+import asyncio
 from ..base import BaseLLM
+
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.litellm_core_utils.asyncify import asyncify
 
 
 class SnowflakeError(Exception):
@@ -88,14 +92,20 @@ class SnowflakeTextCompletion(BaseLLM):
             custom_llm_provider="snowflake",
             custom_endpoint=True,
         )
+        
+        if not streaming:
+        
+            if acompletion:
 
-        if streaming:
-            return response
-        else:
-
+                response  = asyncio.run(response)
+                            
             completion = ""
             for part in response:
                 completion += part.choices[0]["delta"]["content"] or ""
             choices = Choices(message=Message(content=completion))
 
-            return ModelResponse(choices=[choices])
+            return ModelResponse(model=model,choices=[choices])
+        else:
+            return response
+            
+

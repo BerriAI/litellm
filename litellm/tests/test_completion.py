@@ -2204,6 +2204,56 @@ def test_ollama_image():
 # test_completion_cohere()
 
 
+def snowflake_mock_post(url, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Accept": "text/stream","Content-Type": "application/json"}
+    mock_response.content = 'data: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" Hello"}}],"usage":{"prompt_tokens":8,"completion_tokens":1,"total_tokens":9}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":"!"}}],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" How"}}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" can"}}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" I"}}],"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" assist"}}],"usage":{"prompt_tokens":8,"completion_tokens":6,"total_tokens":14}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" you"}}],"usage":{"prompt_tokens":8,"completion_tokens":7,"total_tokens":15}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" today"}}],"usage":{"prompt_tokens":8,"completion_tokens":8,"total_tokens":16}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":"?"}}],"usage":{"prompt_tokens":8,"completion_tokens":9,"total_tokens":17}}\n\ndata: {"id":"accfd4d8-041f-4c7b-ae96-ee00f3af302c","created":1728427410,"model":"mistral-large2","choices":[{"delta":{"content":" If"},"finish_reason":"length"}],"usage":{"prompt_tokens":8,"completion_tokens":10,"total_tokens":18}}\n\n'
+
+    return mock_response
+
+
+def test_snowflake_completion():
+    litellm.set_verbose = True
+    try:
+
+        with patch("requests.post", side_effect=snowflake_mock_post) as mock_client:
+            response = completion(
+                model="snowflake/mistral-large2",
+                messages=[{"content": "Hello, how are you?", "role": "user"}],
+                max_tokens=10,
+                stream=False
+            )
+            # Add any assertions-here to check the response
+            print(f"SNOWFLAKE TEST RESPONSE: {response}")
+            response_format_tests(response=response)
+
+    except litellm.ServiceUnavailableError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_snowflake_streaming_completion():
+    litellm.set_verbose = True
+    try:
+
+        with patch("requests.post", side_effect=snowflake_mock_post) as mock_client:
+            response = completion(
+                model="snowflake/mistral-large2",
+                messages=[{"content": "Hello, how are you?", "role": "user"}],
+                max_tokens=10,
+                stream=True
+            )
+            
+            for chunk in response:
+                print(chunk)
+
+    except litellm.ServiceUnavailableError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_openai():
     try:
         litellm.set_verbose = True

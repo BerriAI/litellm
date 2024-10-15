@@ -6166,5 +6166,131 @@
         "mode": "embedding",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."}
+    },
+    "snowflake/llama3.1-8b": {
+        "max_tokens":128000, 
+        "max_input_tokens":128000, 
+        "max_output_tokens":128000, 
+        "input_cost_per_token": 0.00000019,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.1-70b": {
+        "max_tokens":128000, 
+        "max_input_tokens":128000, 
+        "max_output_tokens":128000, 
+        "input_cost_per_token": 0.00000121,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.1-405b": {
+        "max_tokens": 128000, 
+        "max_input_tokens":128000, 
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.2-3b": {
+        "max_tokens": 128000, 
+        "max_input_tokens":128000, 
+        "max_output_tokens":128000, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/llama3.2-1b": {
+        "max_tokens":128000, 
+        "max_input_tokens":128000, 
+        "max_output_tokens":128000, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mistral-large2": {
+        "max_tokens":128000 , 
+        "max_input_tokens":128000 , 
+        "max_output_tokens":128000 , 
+        "input_cost_per_token": 0.00000195,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mixtral-8x7b": {
+        "max_tokens": 32000, 
+        "max_input_tokens": 32000, 
+        "max_output_tokens": 32000, 
+        "input_cost_per_token": 0.00000022,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/mistral-7b": {
+        "max_tokens": 32000, 
+        "max_input_tokens": 32000, 
+        "max_output_tokens": 32000, 
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/reka-flash": {
+        "max_tokens":100000, 
+        "max_input_tokens":100000, 
+        "max_output_tokens":100000, 
+        "input_cost_per_token": 0.00000045,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/reka-core": {
+        "max_tokens":32000, 
+        "max_input_tokens":32000, 
+        "max_output_tokens":32000, 
+        "input_cost_per_token":0.0000055,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+   "snowflake/snowflake-arctic": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 4096, 
+        "max_output_tokens": 4096, 
+        "input_cost_per_token": 0.00000084,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/jamba-1.5-mini": {
+        "max_tokens":256000, 
+        "max_input_tokens":256000, 
+        "max_output_tokens":256000, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/jamba-instruct": {
+        "max_tokens": 256000, 
+        "max_input_tokens": 256000, 
+        "max_output_tokens": 256000, 
+        "input_cost_per_token": 0.00000083,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
+    },
+    "snowflake/jamba-1.5-large": {
+        "max_tokens": 256000, 
+        "max_input_tokens": 256000, 
+        "max_output_tokens": 256000, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "snowflake",
+        "mode": "completion"
     }
 }
