@@ -71,7 +71,7 @@ def _assemble_complete_response_from_streaming_chunks(
         streaming_chunks.append(result)
         try:
             complete_streaming_response = litellm.stream_chunk_builder(
-                streaming_chunks,
+                chunks=streaming_chunks,
                 messages=request_kwargs.get("messages", None),
                 start_time=start_time,
                 end_time=end_time,
