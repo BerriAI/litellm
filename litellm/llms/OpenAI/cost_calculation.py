@@ -27,7 +27,8 @@ def cost_per_token(
     model_info = get_model_info(model=model, custom_llm_provider="openai")
 
     ## CALCULATE INPUT COST
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
+    total_prompt_tokens: float = usage["prompt_tokens"] - usage._cache_read_input_tokens
+    prompt_cost: float = total_prompt_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATE OUTPUT COST
     completion_cost: float = (

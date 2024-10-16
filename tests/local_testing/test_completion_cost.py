@@ -1393,10 +1393,13 @@ def test_cost_azure_openai_prompt_caching():
     usage = response_2.usage
 
     _expected_cost2 = (
-        usage.prompt_tokens * model_info["input_cost_per_token"]
-        + usage.completion_tokens * model_info["output_cost_per_token"]
-        + usage.prompt_tokens_details.cached_tokens
-        * model_info["cache_read_input_token_cost"]
+        (usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens)
+        * model_info["input_cost_per_token"]
+        + (usage.completion_tokens * model_info["output_cost_per_token"])
+        + (
+            usage.prompt_tokens_details.cached_tokens
+            * model_info["cache_read_input_token_cost"]
+        )
     )
 
     print("_expected_cost2", _expected_cost2)
@@ -1515,7 +1518,8 @@ def test_cost_openai_prompt_caching():
     usage = response_2.usage
 
     _expected_cost2 = (
-        usage.prompt_tokens * model_info["input_cost_per_token"]
+        (usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens)
+        * model_info["input_cost_per_token"]
         + usage.completion_tokens * model_info["output_cost_per_token"]
         + usage.prompt_tokens_details.cached_tokens
         * model_info["cache_read_input_token_cost"]
