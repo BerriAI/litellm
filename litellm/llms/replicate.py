@@ -127,6 +127,7 @@ def start_prediction(
             len(model_parts) > 1 and len(model_parts[1]) == 64
         ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
             initial_prediction_data["version"] = model_parts[1]
+            base_url = f"https://api.replicate.com/v1"
 
     ## LOGGING
     logging_obj.pre_call(
@@ -426,7 +427,8 @@ def completion(
     acompletion=None,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     # Start a prediction and get the prediction URL
-    version_id = model_to_version_id(model)
+    #version_id = model_to_version_id(model)
+    version_id = model
     ## Load Config
     config = litellm.ReplicateConfig.get_config()
     for k, v in config.items():
