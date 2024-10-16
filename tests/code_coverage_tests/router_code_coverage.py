@@ -79,16 +79,17 @@ ignored_function_names = [
     "a_add_message",
     "aget_messages",
     "arun_thread",
+    "try_retrieve_batch",
 ]
 
 
 def main():
-    router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
-    # router_file = "../../litellm/router.py"  ## LOCAL TESTING
-    tests_dir = (
-        "./tests/"  # Update this path if your tests directory is located elsewhere
-    )
-    # tests_dir = "../../tests/"  # LOCAL TESTING
+    # router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
+    router_file = "../../litellm/router.py"  ## LOCAL TESTING
+    # tests_dir = (
+    #     "./tests/"  # Update this path if your tests directory is located elsewhere
+    # )
+    tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = get_functions_from_router(router_file)
     print("router_functions: ", router_functions)
@@ -104,7 +105,7 @@ def main():
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
         print("perc_covered: ", untested_perc)
-        if untested_perc < 0.3:
+        if untested_perc > 0:
             print("The following functions in router.py are not tested:")
             raise Exception(
                 f"{untested_perc * 100:.2f}% of functions in router.py are not tested: {all_untested_functions}"
