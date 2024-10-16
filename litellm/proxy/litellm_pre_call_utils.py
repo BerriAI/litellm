@@ -1,5 +1,5 @@
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import Request
 from starlette.datastructures import Headers
@@ -145,25 +145,32 @@ def clean_headers(
     headers: Headers, litellm_key_header_name: Optional[str] = None
 ) -> dict:
     """
-    Get the headers that should be forwarded to the LLM Provider.
-
-    Looks for any `x-` headers and sends them to the LLM Provider.
+    Removes litellm api key from headers
     """
     special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
     special_headers = special_headers
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
+    clean_headers = {}
+    for header, value in headers.items():
+        if header.lower() not in special_headers:
+            clean_headers[header] = value
+    return clean_headers
+
+
+def get_forwardable_headers(
+    headers: Union[Headers, dict],
+):
+    """
+    Get the headers that should be forwarded to the LLM Provider.
+
+    Looks for any `x-` headers and sends them to the LLM Provider.
+    """
     forwarded_headers = {}
     for header, value in headers.items():
-        if header.lower() not in special_headers and header.startswith("x-"):
+        if header.startswith("x-"):
             forwarded_headers[header] = value
     return forwarded_headers
-
-
-def is_openai_route(route: str):
-    if route in LiteLLMRoutes.openai_routes.value:
-        return True
-    return False
 
 
 async def add_litellm_data_to_request(
@@ -201,7 +208,8 @@ async def add_litellm_data_to_request(
         ),
     )
 
-    data["headers"] = _headers
+    if get_forwardable_headers(_headers) != {}:
+        data["headers"] = get_forwardable_headers(_headers)
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
