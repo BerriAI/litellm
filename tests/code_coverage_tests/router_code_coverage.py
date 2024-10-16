@@ -90,12 +90,12 @@ ignored_function_names = [
 
 
 def main():
-    # router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
-    router_file = "../../litellm/router.py"  ## LOCAL TESTING
-    # tests_dir = (
-    #     "./tests/"  # Update this path if your tests directory is located elsewhere
-    # )
-    tests_dir = "../../tests/"  # LOCAL TESTING
+    router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
+    # router_file = "../../litellm/router.py"  ## LOCAL TESTING
+    tests_dir = (
+        "./tests/"  # Update this path if your tests directory is located elsewhere
+    )
+    # tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = get_functions_from_router(router_file)
     print("router_functions: ", router_functions)

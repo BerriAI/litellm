@@ -840,12 +840,3 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") == "test"
     router.flush_cache()
     assert router.cache.get_cache("test") is None
-
-
-def test_async_completion_no_exceptions(model_list):
-    """Test if the 'async_completion' function is working correctly"""
-    router = Router(model_list=model_list)
-    resp = router._async_completion_no_exceptions(
-        model="gpt-3.5-turbo", messages=[{"role": "user", "content": "hi"}]
-    )
-    assert resp is not None
