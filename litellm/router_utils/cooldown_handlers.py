@@ -148,13 +148,17 @@ def _set_cooldown_deployments(
     exception_status: Union[str, int],
     deployment: Optional[str] = None,
     time_to_cooldown: Optional[float] = None,
-):
+) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
 
     or
 
     the exception is not one that should be immediately retried (e.g. 401)
+
+    Returns:
+    - True if the deployment should be put in cooldown
+    - False if the deployment should not be put in cooldown
     """
     if (
         _should_run_cooldown_logic(
@@ -163,7 +167,7 @@ def _set_cooldown_deployments(
         is False
         or deployment is None
     ):
-        return
+        return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
 
@@ -191,6 +195,8 @@ def _set_cooldown_deployments(
                 cooldown_time=cooldown_time,
             )
         )
+        return True
+    return False
 
 
 async def _async_get_cooldown_deployments(

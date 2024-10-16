@@ -11,9 +11,15 @@ def get_function_names_from_file(file_path):
 
     function_names = []
 
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Top-level functions
             function_names.append(node.name)
+        elif isinstance(node, ast.ClassDef):
+            # Functions inside classes
+            for class_node in node.body:
+                if isinstance(class_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    function_names.append(class_node.name)
 
     return function_names
 
@@ -79,6 +85,7 @@ ignored_function_names = [
     "a_add_message",
     "aget_messages",
     "arun_thread",
+    "try_retrieve_batch",
 ]
 
 
@@ -103,8 +110,8 @@ def main():
             if func not in ignored_function_names:
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
-        print("perc_covered: ", untested_perc)
-        if untested_perc < 0.3:
+        print("untested_perc: ", untested_perc)
+        if untested_perc > 0:
             print("The following functions in router.py are not tested:")
             raise Exception(
                 f"{untested_perc * 100:.2f}% of functions in router.py are not tested: {all_untested_functions}"

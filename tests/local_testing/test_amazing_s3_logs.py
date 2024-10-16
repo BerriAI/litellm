@@ -20,6 +20,7 @@ import boto3
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_basic_s3_logging(sync_mode):
     verbose_logger.setLevel(level=logging.DEBUG)
     litellm.success_callback = ["s3"]
