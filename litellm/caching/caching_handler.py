@@ -13,7 +13,18 @@ In each method it will call the appropriate method from caching.py
 import asyncio
 import datetime
 import threading
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from pydantic import BaseModel
 
@@ -38,6 +49,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
 )
+from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -304,6 +316,101 @@ class LLMCachingHandler:
             final_embedding_cached_response=final_embedding_cached_response,
         )
 
+    def _sync_get_cache(
+        self,
+        model: str,
+        original_function: Callable,
+        logging_obj: LiteLLMLoggingObj,
+        start_time: datetime.datetime,
+        call_type: str,
+        kwargs: Dict[str, Any],
+        args: Optional[Tuple[Any, ...]] = None,
+    ) -> CachingHandlerResponse:
+        args = args or ()
+        cached_result: Optional[Any] = None
+        if (
+            litellm.cache is not None
+            and litellm.cache.supported_call_types is not None
+            and str(original_function.__name__) in litellm.cache.supported_call_types
+        ):
+            print_verbose("Checking Cache")
+            preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+            kwargs["preset_cache_key"] = (
+                preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+            )
+            cached_result = litellm.cache.get_cache(*args, **kwargs)
+
+            if cached_result is not None:
+                if "detail" in cached_result:
+                    # implies an error occurred
+                    pass
+                else:
+                    call_type = original_function.__name__
+                    print_verbose(
+                        f"Cache Response Object routing: call_type - {call_type}; cached_result instace: {type(cached_result)}"
+                    )
+
+                    cached_result = self._convert_cached_result_to_model_response(
+                        cached_result=cached_result,
+                        call_type=call_type,
+                        kwargs=kwargs,
+                        logging_obj=logging_obj,
+                        model=model,
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                        args=args,
+                    )
+
+                    # LOG SUCCESS
+                    cache_hit = True
+                    end_time = datetime.datetime.now()
+                    (
+                        model,
+                        custom_llm_provider,
+                        dynamic_api_key,
+                        api_base,
+                    ) = litellm.get_llm_provider(
+                        model=model or "",
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                        api_base=kwargs.get("api_base", None),
+                        api_key=kwargs.get("api_key", None),
+                    )
+                    print_verbose(
+                        f"Sync Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+                    )
+                    logging_obj.update_environment_variables(
+                        model=model,
+                        user=kwargs.get("user", None),
+                        optional_params={},
+                        litellm_params={
+                            "logger_fn": kwargs.get("logger_fn", None),
+                            "acompletion": False,
+                            "metadata": kwargs.get("metadata", {}),
+                            "model_info": kwargs.get("model_info", {}),
+                            "proxy_server_request": kwargs.get(
+                                "proxy_server_request", None
+                            ),
+                            "preset_cache_key": kwargs.get("preset_cache_key", None),
+                            "stream_response": kwargs.get("stream_response", {}),
+                        },
+                        input=kwargs.get("messages", ""),
+                        api_key=kwargs.get("api_key", None),
+                        original_response=str(cached_result),
+                        additional_args=None,
+                        stream=kwargs.get("stream", False),
+                    )
+                    threading.Thread(
+                        target=logging_obj.success_handler,
+                        args=(cached_result, start_time, end_time, cache_hit),
+                    ).start()
+                    cache_key = kwargs.get("preset_cache_key", None)
+                    if (
+                        isinstance(cached_result, BaseModel)
+                        or isinstance(cached_result, CustomStreamWrapper)
+                    ) and hasattr(cached_result, "_hidden_params"):
+                        cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
+                    return CachingHandlerResponse(cached_result=cached_result)
+        return CachingHandlerResponse(cached_result=cached_result)
+
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: Dict[str, Any], args: Tuple[Any, ...]
     ) -> Optional[Any]:
@@ -385,57 +492,60 @@ class LLMCachingHandler:
         from litellm.utils import (
             CustomStreamWrapper,
             convert_to_model_response_object,
+            convert_to_streaming_response,
             convert_to_streaming_response_async,
         )
 
-        if call_type == CallTypes.acompletion.value and isinstance(cached_result, dict):
+        if (
+            call_type == CallTypes.acompletion.value
+            or call_type == CallTypes.completion.value
+        ) and isinstance(cached_result, dict):
             if kwargs.get("stream", False) is True:
-                cached_result = convert_to_streaming_response_async(
-                    response_object=cached_result,
-                )
-                cached_result = CustomStreamWrapper(
-                    completion_stream=cached_result,
-                    model=model,
-                    custom_llm_provider="cached_response",
+                cached_result = self._convert_cached_stream_response(
+                    cached_result=cached_result,
+                    call_type=call_type,
                     logging_obj=logging_obj,
+                    model=model,
                 )
             else:
                 cached_result = convert_to_model_response_object(
                     response_object=cached_result,
                     model_response_object=ModelResponse(),
                 )
-        if call_type == CallTypes.atext_completion.value and isinstance(
-            cached_result, dict
-        ):
+        if (
+            call_type == CallTypes.atext_completion.value
+            or call_type == CallTypes.text_completion.value
+        ) and isinstance(cached_result, dict):
             if kwargs.get("stream", False) is True:
-                cached_result = convert_to_streaming_response_async(
-                    response_object=cached_result,
-                )
-                cached_result = CustomStreamWrapper(
-                    completion_stream=cached_result,
-                    model=model,
-                    custom_llm_provider="cached_response",
+                cached_result = self._convert_cached_stream_response(
+                    cached_result=cached_result,
+                    call_type=call_type,
                     logging_obj=logging_obj,
+                    model=model,
                 )
             else:
                 cached_result = TextCompletionResponse(**cached_result)
-        elif call_type == CallTypes.aembedding.value and isinstance(
-            cached_result, dict
-        ):
+        elif (
+            call_type == CallTypes.aembedding.value
+            or call_type == CallTypes.embedding.value
+        ) and isinstance(cached_result, dict):
             cached_result = convert_to_model_response_object(
                 response_object=cached_result,
                 model_response_object=EmbeddingResponse(),
                 response_type="embedding",
             )
-        elif call_type == CallTypes.arerank.value and isinstance(cached_result, dict):
+        elif (
+            call_type == CallTypes.arerank.value or call_type == CallTypes.rerank.value
+        ) and isinstance(cached_result, dict):
             cached_result = convert_to_model_response_object(
                 response_object=cached_result,
                 model_response_object=None,
                 response_type="rerank",
             )
-        elif call_type == CallTypes.atranscription.value and isinstance(
-            cached_result, dict
-        ):
+        elif (
+            call_type == CallTypes.atranscription.value
+            or call_type == CallTypes.transcription.value
+        ) and isinstance(cached_result, dict):
             hidden_params = {
                 "model": "whisper-1",
                 "custom_llm_provider": custom_llm_provider,
@@ -448,6 +558,38 @@ class LLMCachingHandler:
                 hidden_params=hidden_params,
             )
         return cached_result
+
+    def _convert_cached_stream_response(
+        self,
+        cached_result: Any,
+        call_type: str,
+        logging_obj: LiteLLMLoggingObj,
+        model: str,
+    ) -> CustomStreamWrapper:
+        from litellm.utils import (
+            CustomStreamWrapper,
+            convert_to_streaming_response,
+            convert_to_streaming_response_async,
+        )
+
+        _stream_cached_result: Union[AsyncGenerator, Generator]
+        if (
+            call_type == CallTypes.acompletion.value
+            or call_type == CallTypes.atext_completion.value
+        ):
+            _stream_cached_result = convert_to_streaming_response_async(
+                response_object=cached_result,
+            )
+        else:
+            _stream_cached_result = convert_to_streaming_response(
+                response_object=cached_result,
+            )
+        return CustomStreamWrapper(
+            completion_stream=_stream_cached_result,
+            model=model,
+            custom_llm_provider="cached_response",
+            logging_obj=logging_obj,
+        )
 
     async def _async_set_cache(
         self,
