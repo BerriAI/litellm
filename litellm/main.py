@@ -4059,12 +4059,12 @@ def text_completion(
                     return response["choices"][0]
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = [
+                    completed_futures = [
                         executor.submit(process_prompt, i, individual_prompt)
                         for i, individual_prompt in enumerate(prompt)
                     ]
                     for i, future in enumerate(
-                        concurrent.futures.as_completed(futures)
+                        concurrent.futures.as_completed(completed_futures)
                     ):
                         responses[i] = future.result()
                     text_completion_response.choices = responses  # type: ignore

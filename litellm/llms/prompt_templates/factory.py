@@ -920,6 +920,31 @@ def anthropic_messages_pt_xml(messages: list):
 # ------------------------------------------------------------------------------
 
 
+def _azure_tool_call_invoke_helper(
+    function_call_params: ChatCompletionToolCallFunctionChunk,
+) -> Optional[ChatCompletionToolCallFunctionChunk]:
+    """
+    Azure requires 'arguments' to be a string.
+    """
+    if function_call_params.get("arguments") is None:
+        function_call_params["arguments"] = ""
+    return function_call_params
+
+
+def convert_to_azure_openai_messages(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    for m in messages:
+        if m["role"] == "assistant":
+            function_call = m.get("function_call", None)
+            if function_call is not None:
+                m["function_call"] = _azure_tool_call_invoke_helper(function_call)
+    return messages
+
+
+# ------------------------------------------------------------------------------
+
+
 def infer_protocol_value(
     value: Any,
 ) -> Literal[

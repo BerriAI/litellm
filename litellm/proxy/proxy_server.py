@@ -1992,7 +1992,7 @@ class ProxyConfig:
         )  # type:ignore
 
         # Guardrail settings
-        guardrails_v2: Optional[dict] = None
+        guardrails_v2: Optional[List[Dict]] = None
 
         if config is not None:
             guardrails_v2 = config.get("guardrails", None)
@@ -5894,7 +5894,7 @@ async def new_end_user(
     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
-    - allowed_model_region: Optional[Literal["eu"]] - Require all user requests to use models in this specific region.
+    - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     
