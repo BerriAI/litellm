@@ -275,47 +275,77 @@ async def test_failed_fallbacks_raise_most_recent_exception(original_function):
         )
 
 
-@pytest.mark.asyncio
-async def test_multiple_fallbacks():
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
+router_2 = Router(
+    model_list=[
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": os.getenv("OPENAI_API_KEY"),
             },
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {
-                    "model": "gpt-4",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
+        },
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "gpt-4",
+                "api_key": "very-fake-key",
             },
-            {
-                "model_name": "claude-2",
-                "litellm_params": {
-                    "model": "claude-2",
-                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                },
+        },
+        {
+            "model_name": "fake-openai-endpoint-2",
+            "litellm_params": {
+                "model": "openai/fake-openai-endpoint-2",
+                "api_key": "working-key-since-this-is-fake-endpoint",
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
             },
-        ],
-        fallbacks=[{"gpt-3.5-turbo": ["gpt-4", "claude-2"]}],
-    )
+        },
+    ],
+)
 
-    fallback_model_group = ["gpt-4", "claude-2"]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "original_function", [router_2._acompletion, router_2._atext_completion]
+)
+async def test_multiple_fallbacks(original_function):
+    """
+    Tests that if multiple fallbacks passed:
+    - fallback 1 = bad configured deployment / failing endpoint
+    - fallback 2 = working deployment / working endpoint
+
+    Assert that:
+    - a success response is received from the working endpoint (fallback 2)
+    """
+    fallback_model_group = ["gpt-4", "fake-openai-endpoint-2"]
     original_model_group = "gpt-3.5-turbo"
     original_exception = Exception("Simulated error")
 
+    request_kwargs: Dict[str, Any] = {
+        "metadata": {"previous_models": ["gpt-3.5-turbo"]}
+    }
+
+    if original_function == router_2._aembedding:
+        request_kwargs["input"] = "hello this is a test for run_async_fallback"
+    elif original_function == router_2._atext_completion:
+        request_kwargs["prompt"] = "hello this is a test for run_async_fallback"
+    elif original_function == router_2._acompletion:
+        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
+
     result = await run_async_fallback(
-        router,
+        router_2,
+        original_function=original_function,
+        num_retries=1,
         fallback_model_group=fallback_model_group,
         original_model_group=original_model_group,
         original_exception=original_exception,
-        messages=[{"role": "user", "content": "Hello, world!"}],
+        **request_kwargs
     )
 
-    assert result is not None
-    assert isinstance(result, dict)
-    assert "choices" in result
+    print(result)
+
+    print(result._hidden_params)
+
+    assert (
+        result._hidden_params["api_base"]
+        == "https://exampleopenaiendpoint-production.up.railway.app/"
+    )
