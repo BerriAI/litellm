@@ -134,3 +134,26 @@ async def test_router_cooldown_event_callback_no_prometheus():
 
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+
+
+async def test_router_cooldown_event_callback_no_deployment():
+    """
+    Test the router_cooldown_event_callback function
+
+    Ensures that the router_cooldown_event_callback function does not raise an error when no deployment is found
+
+    In this scenario it should do nothing
+    """
+    # Mock Router instance
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+
+    await router_cooldown_event_callback(
+        litellm_router_instance=mock_router,
+        deployment_id="test-deployment",
+        exception_status="429",
+        cooldown_time=60.0,
+    )
+
+    # Assert that the router's get_deployment method was called
+    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
