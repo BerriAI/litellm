@@ -162,28 +162,15 @@ class LLMCachingHandler:
                     print_verbose(
                         f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
                     )
-                    logging_obj.update_environment_variables(
+
+                    self._update_litellm_logging_obj_environment(
+                        logging_obj=logging_obj,
                         model=model,
-                        user=kwargs.get("user", None),
-                        optional_params={},
-                        litellm_params={
-                            "logger_fn": kwargs.get("logger_fn", None),
-                            "acompletion": True,
-                            "metadata": kwargs.get("metadata", {}),
-                            "model_info": kwargs.get("model_info", {}),
-                            "proxy_server_request": kwargs.get(
-                                "proxy_server_request", None
-                            ),
-                            "preset_cache_key": kwargs.get("preset_cache_key", None),
-                            "stream_response": kwargs.get("stream_response", {}),
-                            "api_base": kwargs.get("api_base", ""),
-                        },
-                        input=kwargs.get("messages", ""),
-                        api_key=kwargs.get("api_key", None),
-                        original_response=str(cached_result),
-                        additional_args=None,
-                        stream=kwargs.get("stream", False),
+                        kwargs=kwargs,
+                        cached_result=cached_result,
+                        is_async=True,
                     )
+
                     call_type = original_function.__name__
 
                     cached_result = self._convert_cached_result_to_model_response(
@@ -267,30 +254,16 @@ class LLMCachingHandler:
                         print_verbose(
                             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
                         )
-                        logging_obj.update_environment_variables(
+
+                        self._update_litellm_logging_obj_environment(
+                            logging_obj=logging_obj,
                             model=model,
-                            user=kwargs.get("user", None),
-                            optional_params={},
-                            litellm_params={
-                                "logger_fn": kwargs.get("logger_fn", None),
-                                "acompletion": True,
-                                "metadata": kwargs.get("metadata", {}),
-                                "model_info": kwargs.get("model_info", {}),
-                                "proxy_server_request": kwargs.get(
-                                    "proxy_server_request", None
-                                ),
-                                "preset_cache_key": kwargs.get(
-                                    "preset_cache_key", None
-                                ),
-                                "stream_response": kwargs.get("stream_response", {}),
-                                "api_base": "",
-                            },
-                            input=kwargs.get("messages", ""),
-                            api_key=kwargs.get("api_key", None),
-                            original_response=str(final_embedding_cached_response),
-                            additional_args=None,
-                            stream=kwargs.get("stream", False),
+                            kwargs=kwargs,
+                            cached_result=final_embedding_cached_response,
+                            is_async=True,
+                            is_embedding=True,
                         )
+
                         asyncio.create_task(
                             logging_obj.async_success_handler(
                                 final_embedding_cached_response,
@@ -378,27 +351,14 @@ class LLMCachingHandler:
                     print_verbose(
                         f"Sync Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
                     )
-                    logging_obj.update_environment_variables(
+                    self._update_litellm_logging_obj_environment(
+                        logging_obj=logging_obj,
                         model=model,
-                        user=kwargs.get("user", None),
-                        optional_params={},
-                        litellm_params={
-                            "logger_fn": kwargs.get("logger_fn", None),
-                            "acompletion": False,
-                            "metadata": kwargs.get("metadata", {}),
-                            "model_info": kwargs.get("model_info", {}),
-                            "proxy_server_request": kwargs.get(
-                                "proxy_server_request", None
-                            ),
-                            "preset_cache_key": kwargs.get("preset_cache_key", None),
-                            "stream_response": kwargs.get("stream_response", {}),
-                        },
-                        input=kwargs.get("messages", ""),
-                        api_key=kwargs.get("api_key", None),
-                        original_response=str(cached_result),
-                        additional_args=None,
-                        stream=kwargs.get("stream", False),
+                        kwargs=kwargs,
+                        cached_result=cached_result,
+                        is_async=False,
                     )
+
                     threading.Thread(
                         target=logging_obj.success_handler,
                         args=(cached_result, start_time, end_time, cache_hit),
@@ -737,3 +697,55 @@ class LLMCachingHandler:
                 result=complete_streaming_response,
                 kwargs=self.request_kwargs,
             )
+
+    def _update_litellm_logging_obj_environment(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        model: str,
+        kwargs: Dict[str, Any],
+        cached_result: Any,
+        is_async: bool,
+        is_embedding: bool = False,
+    ):
+        """
+        Helper function to update the LiteLLMLoggingObj environment variables.
+
+        Args:
+            logging_obj (LiteLLMLoggingObj): The logging object to update.
+            model (str): The model being used.
+            kwargs (Dict[str, Any]): The keyword arguments from the original function call.
+            cached_result (Any): The cached result to log.
+            is_async (bool): Whether the call is asynchronous or not.
+            is_embedding (bool): Whether the call is for embeddings or not.
+
+        Returns:
+            None
+        """
+        litellm_params = {
+            "logger_fn": kwargs.get("logger_fn", None),
+            "acompletion": is_async,
+            "metadata": kwargs.get("metadata", {}),
+            "model_info": kwargs.get("model_info", {}),
+            "proxy_server_request": kwargs.get("proxy_server_request", None),
+            "preset_cache_key": kwargs.get("preset_cache_key", None),
+            "stream_response": kwargs.get("stream_response", {}),
+        }
+
+        if not is_embedding:
+            litellm_params["api_base"] = kwargs.get("api_base", "")
+
+        logging_obj.update_environment_variables(
+            model=model,
+            user=kwargs.get("user", None),
+            optional_params={},
+            litellm_params=litellm_params,
+            input=(
+                kwargs.get("messages", "")
+                if not is_embedding
+                else kwargs.get("input", "")
+            ),
+            api_key=kwargs.get("api_key", None),
+            original_response=str(cached_result),
+            additional_args=None,
+            stream=kwargs.get("stream", False),
+        )
