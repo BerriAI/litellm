@@ -18,7 +18,7 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
-
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 import httpx
 from dotenv import load_dotenv
 
@@ -217,3 +217,46 @@ async def test_error_from_tag_routing():
         assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
         print("got expected exception = ", e)
         pass
+
+
+# unit testing
+@pytest.mark.asyncio()
+async def test_get_deployments_when_no_kwargs():
+    """
+    should return None if kwargs is None
+    """
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["free"],
+                },
+                "model_info": {"id": "very-cheap-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
+                },
+                "model_info": {"id": "very-expensive-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    _all_healthy_deployments = router._get_healthy_deployments(model="gpt-4")
+
+    tagged_deployments = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-4",
+        healthy_deployments=_all_healthy_deployments,
+        request_kwargs=None,
+    )
+
+    assert tagged_deployments == _all_healthy_deployments
