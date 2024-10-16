@@ -250,7 +250,9 @@ async def test_get_deployments_when_no_kwargs():
         enable_tag_filtering=True,
     )
 
-    _all_healthy_deployments = router._get_healthy_deployments(model="gpt-4")
+    _all_healthy_deployments, _all_deployments = (
+        await router._async_get_healthy_deployments(model="gpt-4")
+    )
 
     tagged_deployments = await get_deployments_for_tag(
         llm_router_instance=router,
@@ -260,3 +262,60 @@ async def test_get_deployments_when_no_kwargs():
     )
 
     assert tagged_deployments == _all_healthy_deployments
+
+
+# unit testing
+@pytest.mark.asyncio()
+async def test_get_deployments_when_deployment_is_default():
+    """
+    should return None if kwargs is None
+    """
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default"],
+                },
+                "model_info": {"id": "very-cheap-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["team-a"],
+                },
+                "model_info": {"id": "very-expensive-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    _all_healthy_deployments, _all_deployments = (
+        await router._async_get_healthy_deployments(model="gpt-4")
+    )
+
+    tagged_deployments = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-4",
+        healthy_deployments=_all_healthy_deployments,
+        request_kwargs={"metadata": {"tags": ["team-a"]}},
+    )
+
+    assert len(tagged_deployments) == 1
+    assert tagged_deployments[0]["litellm_params"]["tags"] == ["team-a"]
+
+    # test with no tags passed -> should use "default"
+    tagged_deployments = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-4",
+        healthy_deployments=_all_healthy_deployments,
+        request_kwargs={"metadata": {}},
+    )
+
+    assert len(tagged_deployments) == 1
+    assert tagged_deployments[0]["litellm_params"]["tags"] == ["default"]
