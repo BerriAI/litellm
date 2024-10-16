@@ -436,3 +436,24 @@ def test_vertex_only_image_user_message():
 
 def test_convert_url():
     convert_url_to_base64("https://picsum.photos/id/237/200/300")
+
+
+def test_azure_tool_call_invoke_helper():
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+        {"role": "assistant", "function_call": {"name": "get_weather"}},
+    ]
+
+    transformed_messages = litellm.AzureOpenAIConfig.transform_request(
+        model="gpt-4o", messages=messages, optional_params={}
+    )
+
+    assert transformed_messages["messages"] == [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Copenhagen?"},
+        {
+            "role": "assistant",
+            "function_call": {"name": "get_weather", "arguments": ""},
+        },
+    ]

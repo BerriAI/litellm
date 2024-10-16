@@ -173,6 +173,96 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+@pytest.mark.parametrize(
+    "litellm_key_header_name",
+    ["x-litellm-key", None],
+)
+def test_add_headers_to_request(litellm_key_header_name):
+    from fastapi import Request
+    from starlette.datastructures import URL
+    import json
+    from litellm.proxy.litellm_pre_call_utils import (
+        clean_headers,
+        get_forwardable_headers,
+    )
+
+    headers = {
+        "Authorization": "Bearer 1234",
+        "X-Custom-Header": "Custom-Value",
+        "X-Stainless-Header": "Stainless-Value",
+    }
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-3.5-turbo"}).encode("utf-8")
+    request_headers = clean_headers(headers, litellm_key_header_name)
+    forwarded_headers = get_forwardable_headers(request_headers)
+    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
+
+
+@pytest.mark.parametrize(
+    "litellm_key_header_name",
+    ["x-litellm-key", None],
+)
+@mock_patch_acompletion()
+def test_chat_completion_forward_headers(
+    mock_acompletion, client_no_auth, litellm_key_header_name
+):
+    global headers
+    try:
+        if litellm_key_header_name is not None:
+            gs = getattr(litellm.proxy.proxy_server, "general_settings")
+            gs["litellm_key_header_name"] = litellm_key_header_name
+            setattr(litellm.proxy.proxy_server, "general_settings", gs)
+        # Your test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+
+        headers_to_forward = {
+            "X-Custom-Header": "Custom-Value",
+            "X-Another-Header": "Another-Value",
+        }
+
+        if litellm_key_header_name is not None:
+            headers_to_not_forward = {litellm_key_header_name: "Bearer 1234"}
+        else:
+            headers_to_not_forward = {"Authorization": "Bearer 1234"}
+
+        received_headers = {**headers_to_forward, **headers_to_not_forward}
+
+        print("testing proxy server with chat completions")
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=received_headers
+        )
+        mock_acompletion.assert_called_once_with(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "hi"},
+            ],
+            max_tokens=10,
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
+            specific_deployment=True,
+            metadata=mock.ANY,
+            proxy_server_request=mock.ANY,
+            headers={
+                "x-custom-header": "Custom-Value",
+                "x-another-header": "Another-Value",
+            },
+        )
+        print(f"response - {response.text}")
+        assert response.status_code == 200
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
 @mock_patch_acompletion()
 @pytest.mark.asyncio
 async def test_team_disable_guardrails(mock_acompletion, client_no_auth):

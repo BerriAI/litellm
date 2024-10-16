@@ -95,6 +95,7 @@ const sidebars = {
           items: [
             "proxy/guardrails/quick_start", 
             "proxy/guardrails/aporia_api", 
+            "proxy/guardrails/guardrails_ai",
             "proxy/guardrails/lakera_ai", 
             "proxy/guardrails/bedrock",  
             "proxy/guardrails/pii_masking_v2", 

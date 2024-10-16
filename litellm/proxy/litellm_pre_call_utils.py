@@ -1,16 +1,20 @@
 import copy
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import Request
+from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
+    LiteLLMRoutes,
+    SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -137,6 +141,40 @@ def _get_dynamic_logging_metadata(
     return callback_settings_obj
 
 
+def clean_headers(
+    headers: Headers, litellm_key_header_name: Optional[str] = None
+) -> dict:
+    """
+    Removes litellm api key from headers
+    """
+    special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
+    special_headers = special_headers
+    if litellm_key_header_name is not None:
+        special_headers.append(litellm_key_header_name.lower())
+    clean_headers = {}
+    for header, value in headers.items():
+        if header.lower() not in special_headers:
+            clean_headers[header] = value
+    return clean_headers
+
+
+def get_forwardable_headers(
+    headers: Union[Headers, dict],
+):
+    """
+    Get the headers that should be forwarded to the LLM Provider.
+
+    Looks for any `x-` headers and sends them to the LLM Provider.
+    """
+    forwarded_headers = {}
+    for header, value in headers.items():
+        if header.lower().startswith("x-") and not header.lower().startswith(
+            "x-stainless"
+        ):  # causes openai sdk to fail
+            forwarded_headers[header] = value
+    return forwarded_headers
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -163,8 +201,17 @@ async def add_litellm_data_to_request(
 
     safe_add_api_version_from_query_params(data, request)
 
-    _headers = dict(request.headers)
+    _headers = clean_headers(
+        request.headers,
+        litellm_key_header_name=(
+            general_settings.get("litellm_key_header_name")
+            if general_settings is not None
+            else None
+        ),
+    )
 
+    if get_forwardable_headers(_headers) != {}:
+        data["headers"] = get_forwardable_headers(_headers)
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),

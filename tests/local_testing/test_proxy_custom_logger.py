@@ -72,7 +72,7 @@ def test_embedding(client):
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
         print("my_custom_logger", my_custom_logger)
-        assert my_custom_logger.async_success_embedding == False
+        assert my_custom_logger.async_success_embedding is False
 
         test_data = {"model": "azure-embedding-model", "input": ["hello"]}
         response = client.post("/embeddings", json=test_data, headers=headers)
@@ -84,7 +84,7 @@ def test_embedding(client):
             id(my_custom_logger),
         )
         assert (
-            my_custom_logger.async_success_embedding == True
+            my_custom_logger.async_success_embedding is True
         )  # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert (
             my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"
@@ -107,7 +107,6 @@ def test_embedding(client):
                 "accept-encoding": "gzip, deflate",
                 "connection": "keep-alive",
                 "user-agent": "testclient",
-                "authorization": "Bearer sk-1234",
                 "content-length": "54",
                 "content-type": "application/json",
             },
@@ -194,6 +193,8 @@ def test_chat_completion(client):
             "mode": "chat",
             "db_model": False,
         }
+
+        assert "authorization" not in proxy_server_request_object["headers"]
         assert proxy_server_request_object == {
             "url": "http://testserver/chat/completions",
             "method": "POST",
@@ -203,7 +204,6 @@ def test_chat_completion(client):
                 "accept-encoding": "gzip, deflate",
                 "connection": "keep-alive",
                 "user-agent": "testclient",
-                "authorization": "Bearer sk-1234",
                 "content-length": "123",
                 "content-type": "application/json",
             },
