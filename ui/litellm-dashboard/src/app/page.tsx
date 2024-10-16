@@ -149,8 +149,6 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
-              setProxySettings={setProxySettings}
-              proxySettings={proxySettings}
             />
         ) : (
         <div className="flex flex-col min-h-screen">
@@ -183,8 +181,6 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
-              setProxySettings={setProxySettings}
-              proxySettings={proxySettings}
             />
           ) : page == "models" ? (
             <ModelDashboard

@@ -12,9 +12,11 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Literal, Optional
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
@@ -29,6 +31,8 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.route_checks import is_llm_api_route
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+
+from .auth_checks_organization import organization_role_based_access_check
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -61,6 +65,7 @@ def common_checks(
     7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     8. [OPTIONAL] If guardrails modified - is request allowed to change this
     9. Check if request body is safe
+    10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
@@ -71,6 +76,7 @@ def common_checks(
     if (
         _model is not None
         and team_object is not None
+        and team_object.models is not None
         and len(team_object.models) > 0
         and _model not in team_object.models
     ):
@@ -130,7 +136,7 @@ def common_checks(
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
         general_settings.get("enforce_user_param", None) is not None
-        and general_settings["enforce_user_param"] == True
+        and general_settings["enforce_user_param"] is True
     ):
         if is_llm_api_route(route=route) and "user" not in request_body:
             raise Exception(
@@ -200,6 +206,12 @@ def common_checks(
                     "error": "Your team does not have permission to modify guardrails."
                 },
             )
+
+    # 10 [OPTIONAL] Organization RBAC checks
+    organization_role_based_access_check(
+        user_object=user_object, route=route, request_body=request_body
+    )
+
     return True
 
 
@@ -384,8 +396,6 @@ async def get_user_object(
     - if valid, return LiteLLM_UserTable object with defined limits
     - if not, then raise an error
     """
-    if prisma_client is None:
-        raise Exception("No db connected")
 
     if user_id is None:
         return None
@@ -398,30 +408,55 @@ async def get_user_object(
         elif isinstance(cached_user_obj, LiteLLM_UserTable):
             return cached_user_obj
     # else, check db
+    if prisma_client is None:
+        raise Exception("No db connected")
     try:
 
         response = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_id}
+            where={"user_id": user_id}, include={"organization_memberships": True}
         )
 
         if response is None:
             if user_id_upsert:
                 response = await prisma_client.db.litellm_usertable.create(
-                    data={"user_id": user_id}
+                    data={"user_id": user_id},
+                    include={"organization_memberships": True},
                 )
             else:
                 raise Exception
 
+        if (
+            response.organization_memberships is not None
+            and len(response.organization_memberships) > 0
+        ):
+            # dump each organization membership to type LiteLLM_OrganizationMembershipTable
+            _dumped_memberships = [
+                membership.model_dump()
+                for membership in response.organization_memberships
+                if membership is not None
+            ]
+            response.organization_memberships = _dumped_memberships
+
         _response = LiteLLM_UserTable(**dict(response))
+        response_dict = _response.model_dump()
 
         # save the user object to cache
-        await user_api_key_cache.async_set_cache(key=user_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
 
         return _response
-    except Exception:  # if user not in db
+    except Exception as e:  # if user not in db
         raise ValueError(
-            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call."
+            f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
         )
+
+
+async def _cache_management_object(
+    key: str,
+    value: BaseModel,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    await user_api_key_cache.async_set_cache(key=key, value=value)
 
 
 async def _cache_team_object(
@@ -435,19 +470,46 @@ async def _cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
-    value = team_table.model_dump_json(exclude_unset=True)
-    await user_api_key_cache.async_set_cache(key=key, value=value)
+    await _cache_management_object(
+        key=key,
+        value=team_table,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _cache_key_object(
+    hashed_token: str,
+    user_api_key_obj: UserAPIKeyAuth,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    key = hashed_token
+
+    ## CACHE REFRESH TIME
+    user_api_key_obj.last_refreshed_at = time.time()
+
+    await _cache_management_object(
+        key=key,
+        value=user_api_key_obj,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _delete_cache_key_object(
+    hashed_token: str,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
+):
+    key = hashed_token
+
+    user_api_key_cache.delete_cache(key=key)
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=value
-        )
-
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=team_table
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+            key=key
         )
 
 
@@ -477,10 +539,10 @@ async def get_team_object(
     ## CHECK REDIS CACHE ##
     if (
         proxy_logging_obj is not None
-        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
+        and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
         cached_team_obj = (
-            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
                 key=key
             )
         )
@@ -518,9 +580,75 @@ async def get_team_object(
         )
 
         return _response
-    except Exception as e:
+    except Exception:
         raise Exception(
             f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        )
+
+
+@log_to_opentelemetry
+async def get_key_object(
+    hashed_token: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    check_cache_only: Optional[bool] = None,
+) -> UserAPIKeyAuth:
+    """
+    - Check if team id in proxy Team Table
+    - if valid, return LiteLLM_TeamTable object with defined limits
+    - if not, then raise an error
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    key = hashed_token
+    cached_team_obj: Optional[UserAPIKeyAuth] = None
+
+    if cached_team_obj is None:
+        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    if cached_team_obj is not None:
+        if isinstance(cached_team_obj, dict):
+            return UserAPIKeyAuth(**cached_team_obj)
+        elif isinstance(cached_team_obj, UserAPIKeyAuth):
+            return cached_team_obj
+
+    if check_cache_only:
+        raise Exception(
+            f"Key doesn't exist in cache + check_cache_only=True. key={key}."
+        )
+
+    # else, check db
+    try:
+        _valid_token: Optional[BaseModel] = await prisma_client.get_data(
+            token=hashed_token,
+            table_name="combined_view",
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        if _valid_token is None:
+            raise Exception
+
+        _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+
+        # save the key object to cache
+        await _cache_key_object(
+            hashed_token=hashed_token,
+            user_api_key_obj=_response,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        return _response
+    except Exception:
+        raise Exception(
+            f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
 
 
@@ -559,7 +687,7 @@ async def get_org_object(
             raise Exception
 
         return response
-    except Exception as e:
+    except Exception:
         raise Exception(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )

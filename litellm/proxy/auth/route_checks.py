@@ -13,10 +13,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import hash_token
 
+from .auth_checks_organization import _user_is_org_admin
 from .auth_utils import _has_user_setup_sso
 
 
-def non_admin_allowed_routes_check(
+def non_proxy_admin_allowed_routes_check(
     user_obj: Optional[LiteLLM_UserTable],
     _user_role: Optional[LitellmUserRoles],
     route: str,
@@ -26,7 +27,7 @@ def non_admin_allowed_routes_check(
     request_data: dict,
 ):
     """
-    Checks if Non-Admin User is allowed to access the route
+    Checks if Non Proxy Admin User is allowed to access the route
     """
 
     # Check user has defined custom admin routes
@@ -55,7 +56,7 @@ def non_admin_allowed_routes_check(
             verbose_proxy_logger.debug(
                 f"user_id: {user_id} & valid_token.user_id: {valid_token.user_id}"
             )
-            if user_id != valid_token.user_id:
+            if user_id and user_id != valid_token.user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="key not allowed to access this user's info. user_id={}, key's user_id={}".format(
@@ -104,6 +105,16 @@ def non_admin_allowed_routes_check(
     elif (
         _user_role == LitellmUserRoles.INTERNAL_USER.value
         and route in LiteLLMRoutes.internal_user_routes.value
+    ):
+        pass
+    elif (
+        _user_is_org_admin(request_data=request_data, user_object=user_obj)
+        and route in LiteLLMRoutes.org_admin_allowed_routes.value
+    ):
+        pass
+    elif (
+        _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        and route in LiteLLMRoutes.internal_user_view_only_routes.value
     ):
         pass
     elif (

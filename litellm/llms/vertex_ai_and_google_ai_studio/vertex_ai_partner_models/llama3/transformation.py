@@ -50,7 +50,11 @@ class VertexAILlama3Config:
         return litellm.OpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ):
         if "max_completion_tokens" in non_default_params:
             non_default_params["max_tokens"] = non_default_params.pop(
@@ -60,4 +64,5 @@ class VertexAILlama3Config:
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )

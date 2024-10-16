@@ -39,7 +39,7 @@ class BedrockEmbedding(BaseAWSLLM):
     ) -> Tuple[Any, str]:
         try:
             from botocore.credentials import Credentials
-        except ImportError as e:
+        except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them

@@ -6,7 +6,9 @@ import collections
 from datetime import datetime
 
 
-async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
+async def get_spend_by_tags(
+    prisma_client: PrismaClient, start_date=None, end_date=None
+):
     response = await prisma_client.db.query_raw(
         """
         SELECT

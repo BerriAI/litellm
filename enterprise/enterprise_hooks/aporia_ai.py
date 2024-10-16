@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from typing import Optional, Literal, Union, Any
 import litellm, traceback, sys, uuid
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from fastapi import HTTPException
@@ -48,8 +48,6 @@ class AporiaGuardrail(CustomGuardrail):
         )
         self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
         self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]
-        self.event_hook: GuardrailEventHooks
-
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####

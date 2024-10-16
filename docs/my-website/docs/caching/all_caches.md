@@ -3,11 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
 
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm.caching.caching.py)
 
 :::info
 
-Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+- For Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+
+- For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
 
 :::
 
@@ -28,7 +31,7 @@ For the hosted version you can setup your own Redis DB here: https://app.redisla
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password>)
 
@@ -65,7 +68,7 @@ AWS_SECRET_ACCESS_KEY = "WOl*****"
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 # pass s3-bucket name
 litellm.cache = Cache(type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2")
@@ -98,7 +101,7 @@ For the hosted version you can setup your own Redis DB here: https://app.redisla
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 random_number = random.randint(
     1, 100000
@@ -152,7 +155,7 @@ To set up a Qdrant cluster locally follow: https://qdrant.tech/documentation/qui
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 random_number = random.randint(
     1, 100000
@@ -207,7 +210,7 @@ assert response1.id == response2.id
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache()
 
 # Make completion calls
@@ -243,7 +246,7 @@ Then you can use the disk cache as follows.
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache(type="disk")
 
 # Make completion calls
@@ -419,7 +422,7 @@ def custom_get_cache_key(*args, **kwargs):
 
 Set your function as litellm.cache.get_cache_key
 ```python
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
 
@@ -431,7 +434,7 @@ litellm.cache = cache # set litellm.cache to your cache
 ## How to write custom add/get cache functions 
 ### 1. Init Cache 
 ```python
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 cache = Cache()
 ``` 
 

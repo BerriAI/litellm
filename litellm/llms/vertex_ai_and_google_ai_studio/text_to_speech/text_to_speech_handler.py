@@ -62,7 +62,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         _is_async: Optional[bool] = False,
         optional_params: Optional[dict] = None,
         kwargs: Optional[dict] = None,
-    ):
+    ) -> HttpxBinaryResponseContent:
         import base64
 
         ####### Authenticate with Vertex AI ########
@@ -145,7 +145,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         ########## End of logging ############
         ####### Send the request ###################
         if _is_async is True:
-            return self.async_audio_speech(
+            return self.async_audio_speech(  # type:ignore
                 logging_obj=logging_obj, url=url, headers=headers, request=request
             )
         sync_handler = _get_httpx_client()

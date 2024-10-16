@@ -141,15 +141,17 @@ def test_all_model_configs():
         "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
     )
     assert VertexAILlama3Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3"
+        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
     assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params()
     assert VertexAIAi21Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3"
+        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
-    from litellm.llms.fireworks_ai import FireworksAIConfig
+    from litellm.llms.fireworks_ai.chat.fireworks_ai_transformation import (
+        FireworksAIConfig,
+    )
 
     assert "max_completion_tokens" in FireworksAIConfig().get_supported_openai_params()
     assert FireworksAIConfig().map_openai_params(
@@ -163,7 +165,7 @@ def test_all_model_configs():
         "max_new_tokens": 10
     }
 
-    from litellm.llms.nvidia_nim import NvidiaNimConfig
+    from litellm.llms.nvidia_nim.chat import NvidiaNimConfig
 
     assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(
         model="llama3"
@@ -294,7 +296,7 @@ def test_all_model_configs():
         optional_params={},
     ) == {"max_tokens": 10}
 
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.anthropic.transformation import (
         VertexAIAnthropicConfig,
     )
 
@@ -330,6 +332,7 @@ def test_all_model_configs():
         model="gemini-1.0-pro",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_output_tokens": 10}
 
     assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()

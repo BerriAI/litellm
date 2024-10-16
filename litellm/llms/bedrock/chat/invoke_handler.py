@@ -29,7 +29,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.caching import InMemoryCache
+from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
@@ -66,32 +66,6 @@ from ...prompt_templates.factory import (
 )
 from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
 from .converse_transformation import AmazonConverseConfig
-
-BEDROCK_CONVERSE_MODELS = [
-    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "anthropic.claude-3-opus-20240229-v1:0",
-    "us.anthropic.claude-3-opus-20240229-v1:0",
-    "eu.anthropic.claude-3-opus-20240229-v1:0",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
-    "us.anthropic.claude-3-sonnet-20240229-v1:0",
-    "eu.anthropic.claude-3-sonnet-20240229-v1:0",
-    "anthropic.claude-3-haiku-20240307-v1:0",
-    "us.anthropic.claude-3-haiku-20240307-v1:0",
-    "eu.anthropic.claude-3-haiku-20240307-v1:0",
-    "anthropic.claude-v2",
-    "anthropic.claude-v2:1",
-    "anthropic.claude-v1",
-    "anthropic.claude-instant-v1",
-    "ai21.jamba-instruct-v1:0",
-    "meta.llama3-1-8b-instruct-v1:0",
-    "meta.llama3-1-70b-instruct-v1:0",
-    "meta.llama3-1-405b-instruct-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-]
-
 
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
@@ -260,7 +234,7 @@ async def make_call(
     except httpx.HTTPStatusError as err:
         error_code = err.response.status_code
         raise BedrockError(status_code=error_code, message=err.response.text)
-    except httpx.TimeoutException as e:
+    except httpx.TimeoutException:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
     except Exception as e:
         raise BedrockError(status_code=500, message=str(e))
@@ -361,7 +335,7 @@ class BedrockLLM(BaseAWSLLM):
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise BedrockError(message=response.text, status_code=422)
 
         outputText: Optional[str] = None
@@ -420,12 +394,12 @@ class BedrockLLM(BaseAWSLLM):
                             outputText  # allow user to access raw anthropic tool calling response
                         )
                     if (
-                        _is_function_call == True
+                        _is_function_call is True
                         and stream is not None
-                        and stream == True
+                        and stream is True
                     ):
                         print_verbose(
-                            f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
+                            "INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                         )
                         # return an iterator
                         streaming_model_response = ModelResponse(stream=True)
@@ -466,7 +440,7 @@ class BedrockLLM(BaseAWSLLM):
                                 model_response=streaming_model_response
                             )
                             print_verbose(
-                                f"Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
+                                "Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
                             )
                             return litellm.CustomStreamWrapper(
                                 completion_stream=completion_stream,
@@ -623,7 +597,7 @@ class BedrockLLM(BaseAWSLLM):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
-        except ImportError as e:
+        except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         ## SETUP ##
@@ -726,7 +700,7 @@ class BedrockLLM(BaseAWSLLM):
                         k not in inference_params
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
-                if stream == True:
+                if stream is True:
                     inference_params["stream"] = (
                         True  # cohere requires stream = True in inference params
                     )
@@ -871,7 +845,7 @@ class BedrockLLM(BaseAWSLLM):
         if acompletion:
             if isinstance(client, HTTPHandler):
                 client = None
-            if stream == True and provider != "ai21":
+            if stream is True and provider != "ai21":
                 return self.async_streaming(
                     model=model,
                     messages=messages,
@@ -917,7 +891,7 @@ class BedrockLLM(BaseAWSLLM):
             self.client = _get_httpx_client(_params)  # type: ignore
         else:
             self.client = client
-        if (stream is not None and stream == True) and provider != "ai21":
+        if (stream is not None and stream is True) and provider != "ai21":
             response = self.client.post(
                 url=proxy_endpoint_url,
                 headers=prepped.headers,  # type: ignore
@@ -955,7 +929,7 @@ class BedrockLLM(BaseAWSLLM):
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return self.process_response(
@@ -1006,7 +980,7 @@ class BedrockLLM(BaseAWSLLM):
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return self.process_response(

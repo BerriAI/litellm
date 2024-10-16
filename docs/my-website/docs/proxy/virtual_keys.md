@@ -598,6 +598,44 @@ client = openai.OpenAI(
 </TabItem>
 </Tabs>
 
+### Enable/Disable Virtual Keys
+
+**Disable Keys**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/block' \
+-H 'Authorization: Bearer LITELLM_MASTER_KEY' \
+-H 'Content-Type: application/json' \
+-d '{"key": "KEY-TO-BLOCK"}'
+```
+
+Expected Response: 
+
+```bash
+{
+  ...
+  "blocked": true
+}
+```
+
+**Enable Keys**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/unblock' \
+-H 'Authorization: Bearer LITELLM_MASTER_KEY' \
+-H 'Content-Type: application/json' \
+-d '{"key": "KEY-TO-UNBLOCK"}'
+```
+
+
+```bash
+{
+  ...
+  "blocked": false
+}
+```
+
+
 ### Custom Auth 
 
 You can now override the default api key auth.

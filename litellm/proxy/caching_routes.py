@@ -1,11 +1,12 @@
-from typing import Optional
-from fastapi import Depends, Request, APIRouter
-from fastapi import HTTPException
 import copy
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import RedisCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
 
 router = APIRouter(
     prefix="/cache",
@@ -21,9 +22,9 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
+    litellm_cache_params = {}
+    specific_cache_params = {}
     try:
-        litellm_cache_params = {}
-        specific_cache_params = {}
 
         if litellm.cache is None:
             raise HTTPException(
@@ -135,7 +136,9 @@ async def cache_redis_info():
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-        if litellm.cache.type == "redis":
+        if litellm.cache.type == "redis" and isinstance(
+            litellm.cache.cache, RedisCache
+        ):
             client_list = litellm.cache.cache.client_list()
             redis_info = litellm.cache.cache.info()
             num_clients = len(client_list)
@@ -177,7 +180,9 @@ async def cache_flushall():
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-        if litellm.cache.type == "redis":
+        if litellm.cache.type == "redis" and isinstance(
+            litellm.cache.cache, RedisCache
+        ):
             litellm.cache.cache.flushall()
             return {
                 "status": "success",

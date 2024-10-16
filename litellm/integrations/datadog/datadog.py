@@ -54,7 +54,7 @@ class DataDogLogger(CustomBatchLogger):
         `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
         """
         try:
-            verbose_logger.debug(f"Datadog: in init datadog logger")
+            verbose_logger.debug("Datadog: in init datadog logger")
             # check if the correct env variables are set
             if os.getenv("DD_API_KEY", None) is None:
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
@@ -70,9 +70,13 @@ class DataDogLogger(CustomBatchLogger):
 
             ###################################
             # OPTIONAL -only used for testing
-            if os.getenv("_DATADOG_BASE_URL", None) is not None:
-                _dd_base_url = os.getenv("_DATADOG_BASE_URL")
-                self.intake_url = f"{_dd_base_url}/api/v2/logs"
+            dd_base_url: Optional[str] = (
+                os.getenv("_DATADOG_BASE_URL")
+                or os.getenv("DATADOG_BASE_URL")
+                or os.getenv("DD_BASE_URL")
+            )
+            if dd_base_url is not None:
+                self.intake_url = f"{dd_base_url}/api/v2/logs"
             ###################################
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
@@ -245,12 +249,12 @@ class DataDogLogger(CustomBatchLogger):
         usage = dict(usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
-        except:
+        except Exception:
             response_time = None
 
         try:
             response_obj = dict(response_obj)
-        except:
+        except Exception:
             response_obj = response_obj
 
         # Clean Metadata before logging - never log raw metadata

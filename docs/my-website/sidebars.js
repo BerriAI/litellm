@@ -31,6 +31,7 @@ const sidebars = {
         "proxy/quick_start",
         "proxy/docker_quick_start",
         "proxy/deploy", 
+        "proxy/demo",
         "proxy/prod",
         {
           type: "category",
@@ -44,9 +45,24 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/user_keys",
-        "proxy/demo",
         "proxy/configs",
+        "proxy/response_headers", 
         "proxy/reliability",
+        {
+          type: "category",
+          label: "🔑 Authentication",
+          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/service_accounts", "proxy/access_control","proxy/ip_address"],
+        },
+        {
+          type: "category",
+          label: "💸 Spend Tracking + Budgets",
+          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+        },
+        {
+          type: "category",
+          label: "Routing",
+          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
+        },
         {
           type: "category",
           label: "Use with Provider SDKs",
@@ -59,13 +75,14 @@ const sidebars = {
             "pass_through/langfuse"
           ],
         },
-        "proxy/cost_tracking",
-        "proxy/custom_pricing",
-        "proxy/virtual_keys",
         {
           type: "category",
           label: "Admin UI",
-          items: ["proxy/ui", "proxy/self_serve"],
+          items: [
+            "proxy/ui", 
+            "proxy/self_serve", 
+            "proxy/custom_sso"
+          ],
         },
         {
           type: "category",
@@ -94,24 +111,10 @@ const sidebars = {
             "oidc"
           ]
         },
-        "proxy/tag_routing",
-        "proxy/users",
-        "proxy/team_budgets",
-        "proxy/customers",
-        "proxy/billing",
-        "proxy/token_auth",
-        "proxy/oauth2",
         "proxy/caching",
         "proxy/pass_through",
         "proxy/email",
         "proxy/multiple_admins",
-        "proxy/team_based_routing",
-        "proxy/customer_routing",
-        {
-          type: "category",
-          label: "Extra Load Balancing",
-          items: ["proxy/load_balancing"],
-        },
         "proxy/model_management",
         "proxy/health",
         "proxy/debugging",
@@ -199,6 +202,7 @@ const sidebars = {
         "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",
+        "completion/prompt_caching",
         "completion/usage",
         "exception_mapping",
         "completion/stream",
@@ -222,6 +226,7 @@ const sidebars = {
         "rerank",
         "assistants",
         "batches",
+        "realtime",
         "fine_tuning",
         {
           type: "link",
@@ -230,12 +235,12 @@ const sidebars = {
         },
       ],
     },
+    "routing",
     "scheduler",
     {
       type: "category",
       label: "🚅 LiteLLM Python SDK",
       items: [
-        "routing",
         "set_keys",
         "completion/token_usage",
         "sdk_custom_pricing",
@@ -251,16 +256,26 @@ const sidebars = {
         },
       ],
     },
-    "load_test",
+    {
+      type: "category",
+      label: "Load Testing",
+      items: [
+        "load_test",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
+      ]
+    },
     {
       type: "category",
       label: "Logging & Observability",
       items: [
-        "observability/opentelemetry_integration",
         "observability/langfuse_integration",
-        "observability/logfire_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
+        "observability/literalai_integration",
+        "observability/opentelemetry_integration",
+        "observability/logfire_integration",
         "observability/arize_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
@@ -279,6 +294,7 @@ const sidebars = {
         "observability/greenscale_integration",
         "observability/supabase_integration",
         `observability/telemetry`,
+        "observability/opik_integration",
       ],
     },
     {
@@ -307,6 +323,7 @@ const sidebars = {
         "migration_policy",
         "contributing",
         "proxy/pii_masking",
+        "extras/code_quality",
         "rules",
         "proxy_server",
         {

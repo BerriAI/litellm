@@ -21,7 +21,7 @@ from pydantic import BaseModel
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (
@@ -182,7 +182,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         start = item["start"]
                         end = item["end"]
                         replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii == True:
+                        if item["operator"] == "replace" and output_parse_pii is True:
                             # check if token in dict
                             # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
                             if replacement in self.pii_tokens:
@@ -337,5 +337,5 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass

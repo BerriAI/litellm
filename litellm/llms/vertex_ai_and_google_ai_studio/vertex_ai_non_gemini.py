@@ -5,7 +5,7 @@ import time
 import types
 import uuid
 from enum import Enum
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union, cast
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -25,7 +25,12 @@ from litellm.types.files import (
     is_gemini_1_5_accepted_file_type,
     is_video_file_type,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -150,30 +155,34 @@ def _gemini_convert_messages_with_history(
             while (
                 msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
             ):
-                if messages[msg_i]["content"] is not None and isinstance(
-                    messages[msg_i]["content"], list
-                ):
+                _message_content = messages[msg_i].get("content")
+                if _message_content is not None and isinstance(_message_content, list):
                     _parts: List[PartType] = []
-                    for element in messages[msg_i]["content"]:  # type: ignore
-                        if isinstance(element, dict):
-                            if element["type"] == "text" and len(element["text"]) > 0:  # type: ignore
-                                _part = PartType(text=element["text"])  # type: ignore
-                                _parts.append(_part)
-                            elif element["type"] == "image_url":
-                                img_element: ChatCompletionImageObject = element  # type: ignore
-                                if isinstance(img_element["image_url"], dict):
-                                    image_url = img_element["image_url"]["url"]
-                                else:
-                                    image_url = img_element["image_url"]
-                                _part = _process_gemini_image(image_url=image_url)
-                                _parts.append(_part)  # type: ignore
+                    for element in _message_content:
+                        if (
+                            element["type"] == "text"
+                            and "text" in element
+                            and len(element["text"]) > 0
+                        ):
+                            element = cast(ChatCompletionTextObject, element)
+                            _part = PartType(text=element["text"])
+                            _parts.append(_part)
+                        elif element["type"] == "image_url":
+                            element = cast(ChatCompletionImageObject, element)
+                            img_element = element
+                            if isinstance(img_element["image_url"], dict):
+                                image_url = img_element["image_url"]["url"]
+                            else:
+                                image_url = img_element["image_url"]
+                            _part = _process_gemini_image(image_url=image_url)
+                            _parts.append(_part)
                     user_content.extend(_parts)
                 elif (
-                    messages[msg_i]["content"] is not None
-                    and isinstance(messages[msg_i]["content"], str)
-                    and len(messages[msg_i]["content"]) > 0  # type: ignore
+                    _message_content is not None
+                    and isinstance(_message_content, str)
+                    and len(_message_content) > 0
                 ):
-                    _part = PartType(text=messages[msg_i]["content"])  # type: ignore
+                    _part = PartType(text=_message_content)
                     user_content.append(_part)
 
                 msg_i += 1
@@ -201,22 +210,21 @@ def _gemini_convert_messages_with_history(
                 else:
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
-                if assistant_msg.get("content", None) is not None and isinstance(
-                    assistant_msg["content"], list
-                ):
+                _message_content = assistant_msg.get("content", None)
+                if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
-                    for element in assistant_msg["content"]:
+                    for element in _message_content:
                         if isinstance(element, dict):
                             if element["type"] == "text":
-                                _part = PartType(text=element["text"])  # type: ignore
+                                _part = PartType(text=element["text"])
                                 _parts.append(_part)
                     assistant_content.extend(_parts)
                 elif (
-                    assistant_msg.get("content", None) is not None
-                    and isinstance(assistant_msg["content"], str)
-                    and assistant_msg["content"]
+                    _message_content is not None
+                    and isinstance(_message_content, str)
+                    and _message_content
                 ):
-                    assistant_text = assistant_msg["content"]  # either string or none
+                    assistant_text = _message_content  # either string or none
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
@@ -256,7 +264,9 @@ def _gemini_convert_messages_with_history(
         raise e
 
 
-def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
+def _get_client_cache_key(
+    model: str, vertex_project: Optional[str], vertex_location: Optional[str]
+):
     _cache_key = f"{model}-{vertex_project}-{vertex_location}"
     return _cache_key
 
@@ -294,7 +304,7 @@ def completion(
     """
     try:
         import vertexai
-    except:
+    except Exception:
         raise VertexAIError(
             status_code=400,
             message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
@@ -339,6 +349,8 @@ def completion(
         _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
 
         if _vertex_llm_model_object is None:
+            from google.auth.credentials import Credentials
+
             if vertex_credentials is not None and isinstance(vertex_credentials, str):
                 import google.oauth2.service_account
 
@@ -356,7 +368,9 @@ def completion(
                 f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
             )
             vertexai.init(
-                project=vertex_project, location=vertex_location, credentials=creds
+                project=vertex_project,
+                location=vertex_location,
+                credentials=cast(Credentials, creds),
             )
 
         ## Load Config
@@ -391,7 +405,6 @@ def completion(
 
         request_str = ""
         response_obj = None
-        async_client = None
         instances = None
         client_options = {
             "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
@@ -400,7 +413,7 @@ def completion(
             model in litellm.vertex_language_models
             or model in litellm.vertex_vision_models
         ):
-            llm_model = _vertex_llm_model_object or GenerativeModel(model)
+            llm_model: Any = _vertex_llm_model_object or GenerativeModel(model)
             mode = "vision"
             request_str += f"llm_model = GenerativeModel({model})\n"
         elif model in litellm.vertex_chat_models:
@@ -459,7 +472,6 @@ def completion(
                 "model_response": model_response,
                 "encoding": encoding,
                 "messages": messages,
-                "request_str": request_str,
                 "print_verbose": print_verbose,
                 "client_options": client_options,
                 "instances": instances,
@@ -474,6 +486,7 @@ def completion(
 
             return async_completion(**data)
 
+        completion_response = None
         if mode == "vision":
             print_verbose("\nMaking VertexAI Gemini Pro / Pro Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
@@ -529,7 +542,7 @@ def completion(
                 # Check if it's a RepeatedComposite instance
                 for key, val in function_call.args.items():
                     if isinstance(
-                        val, proto.marshal.collections.repeated.RepeatedComposite
+                        val, proto.marshal.collections.repeated.RepeatedComposite  # type: ignore
                     ):
                         # If so, convert to list
                         args_dict[key] = [v for v in val]
@@ -560,9 +573,9 @@ def completion(
             optional_params["tools"] = tools
         elif mode == "chat":
             chat = llm_model.start_chat()
-            request_str += f"chat = llm_model.start_chat()\n"
+            request_str += "chat = llm_model.start_chat()\n"
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # NOTE: VertexAI does not accept stream=True as a param and raises an error,
                 # we handle this by removing 'stream' from optional params and sending the request
                 # after we get the response we add optional_params["stream"] = True, since main.py needs to know it's a streaming response to then transform it for the OpenAI format
@@ -597,7 +610,7 @@ def completion(
             )
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 optional_params.pop(
                     "stream", None
                 )  # See note above on handling streaming for vertex ai
@@ -632,6 +645,12 @@ def completion(
             """
             Vertex AI Model Garden
             """
+
+            if vertex_project is None or vertex_location is None:
+                raise ValueError(
+                    "Vertex project and location are required for custom endpoint"
+                )
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -661,13 +680,17 @@ def completion(
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 response = TextStreamer(completion_response)
                 return response
         elif mode == "private":
             """
             Vertex AI Model Garden deployed on private endpoint
             """
+            if instances is None:
+                raise ValueError("instances are required for private endpoint")
+            if llm_model is None:
+                raise ValueError("Unable to pick client for private endpoint")
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -686,7 +709,7 @@ def completion(
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 response = TextStreamer(completion_response)
                 return response
 
@@ -715,7 +738,7 @@ def completion(
         else:
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None:
                 if hasattr(response_obj, "usage_metadata") and hasattr(
                     response_obj.usage_metadata, "prompt_token_count"
@@ -771,11 +794,13 @@ async def async_completion(
     try:
         import proto  # type: ignore
 
+        response_obj = None
+        completion_response = None
         if mode == "vision":
             print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
             tools = optional_params.pop("tools", None)
-            stream = optional_params.pop("stream", False)
+            optional_params.pop("stream", False)
 
             content = _gemini_convert_messages_with_history(messages=messages)
 
@@ -817,7 +842,7 @@ async def async_completion(
                 # Check if it's a RepeatedComposite instance
                 for key, val in function_call.args.items():
                     if isinstance(
-                        val, proto.marshal.collections.repeated.RepeatedComposite
+                        val, proto.marshal.collections.repeated.RepeatedComposite  # type: ignore
                     ):
                         # If so, convert to list
                         args_dict[key] = [v for v in val]
@@ -879,6 +904,11 @@ async def async_completion(
             Vertex AI Model Garden
             """
             from google.cloud import aiplatform  # type: ignore
+
+            if vertex_project is None or vertex_location is None:
+                raise ValueError(
+                    "Vertex project and location are required for custom endpoint"
+                )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -953,7 +983,7 @@ async def async_completion(
         else:
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None and (
                 hasattr(response_obj, "usage_metadata")
                 and hasattr(response_obj.usage_metadata, "prompt_token_count")
@@ -1001,6 +1031,7 @@ async def async_streaming(
     """
     Add support for async streaming calls for gemini-pro
     """
+    response: Any = None
     if mode == "vision":
         stream = optional_params.pop("stream")
         tools = optional_params.pop("tools", None)
@@ -1065,6 +1096,11 @@ async def async_streaming(
     elif mode == "custom":
         from google.cloud import aiplatform  # type: ignore
 
+        if vertex_project is None or vertex_location is None:
+            raise ValueError(
+                "Vertex project and location are required for custom endpoint"
+            )
+
         stream = optional_params.pop("stream", None)
 
         ## LOGGING
@@ -1102,6 +1138,8 @@ async def async_streaming(
             response = TextStreamer(completion_response)
 
     elif mode == "private":
+        if instances is None:
+            raise ValueError("Instances are required for private endpoint")
         stream = optional_params.pop("stream", None)
         _ = instances[0].pop("stream", None)
         request_str += f"llm_model.predict_async(instances={instances})\n"
@@ -1117,6 +1155,9 @@ async def async_streaming(
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
         if stream:
             response = TextStreamer(completion_response)
+
+    if response is None:
+        raise ValueError("Unable to generate response")
 
     logging_obj.post_call(input=prompt, api_key=None, original_response=response)
 

@@ -6,9 +6,9 @@ import dotenv, os
 import requests
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 
-from typing import Literal, Union
+from typing import Literal, Union, Optional
 
 import traceback
 
@@ -26,9 +26,9 @@ from litellm._logging import print_verbose, verbose_logger
 
 class GenericAPILogger:
     # Class variables or attributes
-    def __init__(self, endpoint=None, headers=None):
+    def __init__(self, endpoint: Optional[str] = None, headers: Optional[dict] = None):
         try:
-            if endpoint == None:
+            if endpoint is None:
                 # check env for "GENERIC_LOGGER_ENDPOINT"
                 if os.getenv("GENERIC_LOGGER_ENDPOINT"):
                     # Do something with the endpoint
@@ -36,9 +36,15 @@ class GenericAPILogger:
                 else:
                     # Handle the case when the endpoint is not found in the environment variables
                     raise ValueError(
-                        f"endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
+                        "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
                     )
             headers = headers or litellm.generic_logger_headers
+
+            if endpoint is None:
+                raise ValueError("endpoint not set for GenericAPILogger")
+            if headers is None:
+                raise ValueError("headers not set for GenericAPILogger")
+
             self.endpoint = endpoint
             self.headers = headers
 
@@ -97,7 +103,7 @@ class GenericAPILogger:
             for key, value in payload.items():
                 try:
                     payload[key] = str(value)
-                except:
+                except Exception:
                     # non blocking if it can't cast to a str
                     pass
 

@@ -25,13 +25,8 @@ import requests  # type: ignore
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.utils import (
-    EmbeddingResponse,
-    ModelResponse,
-    Usage,
-    get_secret,
-    map_finish_reason,
-)
+from litellm.secret_managers.main import get_secret_str
+from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
 from .base import BaseLLM
 from .prompt_templates import factory as ptf
@@ -184,7 +179,7 @@ class IBMWatsonXAIConfig:
         ]
 
 
-def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
+def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict) -> str:
     # handle anthropic prompts and amazon titan prompts
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
@@ -200,14 +195,10 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
             eos_token=model_prompt_dict.get("eos_token", ""),
         )
         return prompt
-    elif provider == "ibm":
-        prompt = ptf.prompt_factory(
-            model=model, messages=messages, custom_llm_provider="watsonx"
-        )
     elif provider == "ibm-mistralai":
         prompt = ptf.mistral_instruct_pt(messages=messages)
     else:
-        prompt = ptf.prompt_factory(
+        prompt: str = ptf.prompt_factory(  # type: ignore
             model=model, messages=messages, custom_llm_provider="watsonx"
         )
     return prompt
@@ -327,37 +318,37 @@ class IBMWatsonXAI(BaseLLM):
         # Load auth variables from environment variables
         if url is None:
             url = (
-                get_secret("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
-                or get_secret("WATSONX_URL")
-                or get_secret("WX_URL")
-                or get_secret("WML_URL")
+                get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
+                or get_secret_str("WATSONX_URL")
+                or get_secret_str("WX_URL")
+                or get_secret_str("WML_URL")
             )
         if api_key is None:
             api_key = (
-                get_secret("WATSONX_APIKEY")
-                or get_secret("WATSONX_API_KEY")
-                or get_secret("WX_API_KEY")
+                get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_API_KEY")
+                or get_secret_str("WX_API_KEY")
             )
         if token is None:
-            token = get_secret("WATSONX_TOKEN") or get_secret("WX_TOKEN")
+            token = get_secret_str("WATSONX_TOKEN") or get_secret_str("WX_TOKEN")
         if project_id is None:
             project_id = (
-                get_secret("WATSONX_PROJECT_ID")
-                or get_secret("WX_PROJECT_ID")
-                or get_secret("PROJECT_ID")
+                get_secret_str("WATSONX_PROJECT_ID")
+                or get_secret_str("WX_PROJECT_ID")
+                or get_secret_str("PROJECT_ID")
             )
         if region_name is None:
             region_name = (
-                get_secret("WATSONX_REGION")
-                or get_secret("WX_REGION")
-                or get_secret("REGION")
+                get_secret_str("WATSONX_REGION")
+                or get_secret_str("WX_REGION")
+                or get_secret_str("REGION")
             )
         if space_id is None:
             space_id = (
-                get_secret("WATSONX_DEPLOYMENT_SPACE_ID")
-                or get_secret("WATSONX_SPACE_ID")
-                or get_secret("WX_SPACE_ID")
-                or get_secret("SPACE_ID")
+                get_secret_str("WATSONX_DEPLOYMENT_SPACE_ID")
+                or get_secret_str("WATSONX_SPACE_ID")
+                or get_secret_str("WX_SPACE_ID")
+                or get_secret_str("SPACE_ID")
             )
 
         # credentials parsing
@@ -446,8 +437,8 @@ class IBMWatsonXAI(BaseLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
-        optional_params=None,
+        logging_obj: Any,
+        optional_params: dict,
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
@@ -592,13 +583,13 @@ class IBMWatsonXAI(BaseLLM):
         model: str,
         input: Union[list, str],
         model_response: litellm.EmbeddingResponse,
-        api_key: Optional[str] = None,
-        logging_obj=None,
-        optional_params=None,
+        api_key: Optional[str],
+        logging_obj: Any,
+        optional_params: dict,
         encoding=None,
         print_verbose=None,
         aembedding=None,
-    ):
+    ) -> litellm.EmbeddingResponse:
         """
         Send a text embedding request to the IBM Watsonx.ai API.
         """
@@ -657,7 +648,7 @@ class IBMWatsonXAI(BaseLLM):
 
         try:
             if aembedding is True:
-                return handle_aembedding(req_params)
+                return handle_aembedding(req_params)  # type: ignore
             else:
                 return handle_embedding(req_params)
         except WatsonXAIError as e:
@@ -669,7 +660,7 @@ class IBMWatsonXAI(BaseLLM):
         headers = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
-            api_key = get_secret("WX_API_KEY") or get_secret("WATSONX_API_KEY")
+            api_key = get_secret_str("WX_API_KEY") or get_secret_str("WATSONX_API_KEY")
         if api_key is None:
             raise ValueError("API key is required")
         headers["Accept"] = "application/json"
@@ -812,22 +803,29 @@ class RequestManager:
                 request_params["data"] = json.dumps(request_params.pop("json", {}))
             method = request_params.pop("method")
             retries = 0
+            resp: Optional[httpx.Response] = None
             while retries < 3:
                 if method.upper() == "POST":
                     resp = await self.async_handler.post(**request_params)
                 else:
                     resp = await self.async_handler.get(**request_params)
-                if resp.status_code in [429, 503, 504, 520]:
+                if resp is not None and resp.status_code in [429, 503, 504, 520]:
                     # to handle rate limiting and service unavailable errors
                     # see: ibm_watsonx_ai.foundation_models.inference.base_model_inference.BaseModelInference._send_inference_payload
                     await asyncio.sleep(2**retries)
                     retries += 1
                 else:
                     break
+            if resp is None:
+                raise WatsonXAIError(
+                    status_code=500,
+                    message="No response from the server",
+                )
             if resp.is_error:
+                error_reason = getattr(resp, "reason", "")
                 raise WatsonXAIError(
                     status_code=resp.status_code,
-                    message=f"Error {resp.status_code} ({resp.reason}): {resp.text}",
+                    message=f"Error {resp.status_code} ({error_reason}): {resp.text}",
                 )
             yield resp
             # await async_handler.close()

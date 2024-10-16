@@ -8,11 +8,16 @@ from typing import Any, Literal, Optional, Tuple, Union
 import dotenv
 from pydantic import BaseModel
 
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.services import ServiceLoggerPayload
-from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
+from litellm.types.utils import (
+    AdapterCompletionStreamWrapper,
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+)
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -67,10 +72,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_success_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
         pass
 
-    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict):
+    async def log_failure_fallback_event(
+        self, original_model_group: str, kwargs: dict, original_exception: Exception
+    ):
         pass
 
     #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
@@ -125,7 +134,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_post_call_failure_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
     ):
         pass
 
@@ -133,8 +145,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
+        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+    ) -> Any:
         pass
 
     async def async_logging_hook(
@@ -160,14 +172,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "moderation",
             "audio_transcription",
         ],
-    ):
+    ) -> Any:
         pass
 
     async def async_post_call_streaming_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: str,
-    ):
+    ) -> Any:
         pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
@@ -181,7 +193,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 kwargs,
             )
             print_verbose(f"Custom Logger - model call details: {kwargs}")
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     async def async_log_input_event(
@@ -195,7 +207,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 kwargs,
             )
             print_verbose(f"Custom Logger - model call details: {kwargs}")
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     def log_event(
@@ -210,7 +222,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
 
@@ -226,6 +238,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 start_time,
                 end_time,
             )
-        except:
+        except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass

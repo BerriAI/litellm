@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
 
 from ...prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
 from ..common_utils import BedrockError, get_bedrock_tool_name
@@ -136,6 +136,7 @@ class AmazonConverseConfig:
         non_default_params: dict,
         optional_params: dict,
         drop_params: bool,
+        messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "response_format":
@@ -202,6 +203,26 @@ class AmazonConverseConfig:
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+
+        ## VALIDATE REQUEST
+        """
+        Bedrock doesn't support tool calling without `tools=` param specified.
+        """
+        if (
+            "tools" not in non_default_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="bedrock",
+                )
         return optional_params
 
     def _transform_request(
@@ -235,9 +256,7 @@ class AmazonConverseConfig:
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
-        json_mode: Optional[bool] = inference_params.pop(
-            "json_mode", None
-        )  # used for handling json_schema
+        inference_params.pop("json_mode", None)  # used for handling json_schema
         ## TRANSFORMATION ##
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
@@ -430,3 +449,22 @@ class AmazonConverseConfig:
             setattr(model_response, "trace", completion_response["trace"])
 
         return model_response
+
+    def _supported_cross_region_inference_region(self) -> List[str]:
+        """
+        Abbreviations of regions AWS Bedrock supports for cross region inference
+        """
+        return ["us", "eu"]
+
+    def _get_base_model(self, model: str) -> str:
+        """
+        Get the base model from the given model name.
+
+        Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+        AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+        """
+
+        potential_region = model.split(".", 1)[0]
+        if potential_region in self._supported_cross_region_inference_region():
+            return model.split(".", 1)[1]
+        return model

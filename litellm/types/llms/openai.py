@@ -9,7 +9,7 @@ from openai.lib.streaming._assistants import (
     AsyncAssistantStreamManager,
 )
 from openai.pagination import AsyncCursorPage, SyncCursorPage
-from openai.types import Batch, FileObject
+from openai.types import Batch, EmbeddingCreateParams, FileObject
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.thread_create_params import (
@@ -343,11 +343,22 @@ class ChatCompletionImageObject(TypedDict):
     image_url: Union[str, ChatCompletionImageUrlObject]
 
 
+OpenAIMessageContent = Union[
+    str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
+]
+
+# The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
+AllPromptValues = Union[str, List[str], Iterable[int], Iterable[Iterable[int]], None]
+
+
 class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
-    content: Union[
-        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
-    ]
+    content: OpenAIMessageContent
+
+
+class OpenAITextCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: AllPromptValues
 
 
 class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):

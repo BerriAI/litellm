@@ -6,8 +6,18 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
-from pydantic import ConfigDict, Field, PrivateAttr
+from openai.types.completion_usage import (
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
+from openai.types.moderation import (
+    Categories,
+    CategoryAppliedInputTypes,
+    CategoryScores,
+)
+from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -16,6 +26,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     OpenAIChatCompletionChunk,
 )
+from .rerank import RerankResponse
 
 
 def _generate_id():  # private helper function
@@ -59,9 +70,11 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_character_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
+    input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
+    input_cost_per_second: Optional[float]  # for OpenAI Speech models
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_token_above_128k_tokens: Optional[
@@ -74,6 +87,8 @@ class ModelInfo(TypedDict, total=False):
     output_vector_size: Optional[int]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_second: Optional[float]  # for OpenAI Speech models
+
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -86,6 +101,7 @@ class ModelInfo(TypedDict, total=False):
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
     supports_assistant_prefill: Optional[bool]
+    supports_prompt_caching: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -118,6 +134,9 @@ class CallTypes(Enum):
     transcription = "transcription"
     aspeech = "aspeech"
     speech = "speech"
+    rerank = "rerank"
+    arerank = "arerank"
+    arealtime = "_arealtime"
 
 
 class PassthroughCallTypes(Enum):
@@ -256,7 +275,7 @@ class HiddenParams(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -311,7 +330,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 class Message(OpenAIObject):
 
     content: Optional[str]
-    role: Literal["assistant"]
+    role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
 
@@ -343,7 +362,7 @@ class Message(OpenAIObject):
             ),
         }
         super(Message, self).__init__(
-            **init_values,
+            **init_values,  # type: ignore
             **params,
         )
 
@@ -362,7 +381,7 @@ class Message(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -474,40 +493,60 @@ class Usage(CompletionUsage):
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
+        prompt_tokens_details: Optional[Union[PromptTokensDetails, dict]] = None,
+        completion_tokens_details: Optional[
+            Union[CompletionTokensDetails, dict]
+        ] = None,
         **params,
     ):
-        ## DEEPSEEK PROMPT TOKEN HANDLING ## - follow the anthropic format, of having prompt tokens be just the non-cached token input. Enables accurate cost-tracking - Relevant issue: https://github.com/BerriAI/litellm/issues/5285
-        if (
-            "prompt_cache_miss_tokens" in params
-            and isinstance(params["prompt_cache_miss_tokens"], int)
-            and prompt_tokens is not None
-        ):
-            prompt_tokens = params["prompt_cache_miss_tokens"]
-
         # handle reasoning_tokens
-        completion_tokens_details = None
+        _completion_tokens_details: Optional[CompletionTokensDetails] = None
         if reasoning_tokens:
             completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=reasoning_tokens
             )
 
         # Ensure completion_tokens_details is properly handled
-        if "completion_tokens_details" in params:
-            if isinstance(params["completion_tokens_details"], dict):
-                completion_tokens_details = CompletionTokensDetails(
-                    **params["completion_tokens_details"]
+        if completion_tokens_details:
+            if isinstance(completion_tokens_details, dict):
+                _completion_tokens_details = CompletionTokensDetails(
+                    **completion_tokens_details
                 )
-            elif isinstance(
-                params["completion_tokens_details"], CompletionTokensDetails
-            ):
-                completion_tokens_details = params["completion_tokens_details"]
-            del params["completion_tokens_details"]
+            elif isinstance(completion_tokens_details, CompletionTokensDetails):
+                _completion_tokens_details = completion_tokens_details
+
+        ## DEEPSEEK MAPPING ##
+        if "prompt_cache_hit_tokens" in params and isinstance(
+            params["prompt_cache_hit_tokens"], int
+        ):
+            if prompt_tokens_details is None:
+                prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=params["prompt_cache_hit_tokens"]
+                )
+
+        ## ANTHROPIC MAPPING ##
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            if prompt_tokens_details is None:
+                prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=params["cache_read_input_tokens"]
+                )
+
+        # handle prompt_tokens_details
+        _prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if prompt_tokens_details:
+            if isinstance(prompt_tokens_details, dict):
+                _prompt_tokens_details = PromptTokensDetails(**prompt_tokens_details)
+            elif isinstance(prompt_tokens_details, PromptTokensDetails):
+                _prompt_tokens_details = prompt_tokens_details
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
             total_tokens=total_tokens or 0,
-            completion_tokens_details=completion_tokens_details or None,
+            completion_tokens_details=_completion_tokens_details or None,
+            prompt_tokens_details=_prompt_tokens_details or None,
         )
 
         ## ANTHROPIC MAPPING ##
@@ -659,6 +698,8 @@ class ModelResponse(OpenAIObject):
                         _new_choice = choice
                     elif isinstance(choice, dict):
                         _new_choice = StreamingChoices(**choice)
+                    elif isinstance(choice, BaseModel):
+                        _new_choice = StreamingChoices(**choice.model_dump())
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
@@ -732,7 +773,7 @@ class ModelResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -759,24 +800,25 @@ class EmbeddingResponse(OpenAIObject):
     model: Optional[str] = None
     """The model used for embedding."""
 
-    data: Optional[List] = None
+    data: List
     """The actual embedding value"""
 
     object: Literal["list"]
-    """The object type, which is always "embedding" """
+    """The object type, which is always "list" """
 
     usage: Optional[Usage] = None
     """Usage statistics for the embedding request."""
 
     _hidden_params: dict = {}
     _response_headers: Optional[Dict] = None
+    _response_ms: Optional[float] = None
 
     def __init__(
         self,
         model: Optional[str] = None,
         usage: Optional[Usage] = None,
         response_ms=None,
-        data: Optional[List] = None,
+        data: Optional[Union[List, List[Embedding]]] = None,
         hidden_params=None,
         _response_headers=None,
         **params,
@@ -789,7 +831,7 @@ class EmbeddingResponse(OpenAIObject):
         if data:
             data = data
         else:
-            data = None
+            data = []
 
         if usage:
             usage = usage
@@ -821,7 +863,7 @@ class EmbeddingResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -872,7 +914,7 @@ class TextChoices(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -984,7 +1026,10 @@ class TextCompletionResponse(OpenAIObject):
         setattr(self, key, value)
 
 
-class ImageObject(OpenAIObject):
+from openai.types.images_response import Image as OpenAIImage
+
+
+class ImageObject(OpenAIImage):
     """
     Represents the url or the content of an image generated by the OpenAI API.
 
@@ -1022,7 +1067,7 @@ class ImageObject(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1036,7 +1081,7 @@ class ImageResponse(OpenAIImageResponse):
     def __init__(
         self,
         created: Optional[int] = None,
-        data: Optional[list] = None,
+        data: Optional[List[ImageObject]] = None,
         response_ms=None,
     ):
         if response_ms:
@@ -1053,7 +1098,13 @@ class ImageResponse(OpenAIImageResponse):
         else:
             created = int(time.time())
 
-        super().__init__(created=created, data=data)
+        _data: List[OpenAIImage] = []
+        for d in data:
+            if isinstance(d, dict):
+                _data.append(ImageObject(**d))
+            elif isinstance(d, BaseModel):
+                _data.append(ImageObject(**d.model_dump()))
+        super().__init__(created=created, data=_data)
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def __contains__(self, key):
@@ -1075,7 +1126,7 @@ class ImageResponse(OpenAIImageResponse):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1108,7 +1159,7 @@ class TranscriptionResponse(OpenAIObject):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -1193,6 +1244,8 @@ all_litellm_params = [
     "client_id",
     "client_secret",
     "user_continue_message",
+    "configurable_clientside_auth_params",
+    "weight",
 ]
 
 
@@ -1278,6 +1331,23 @@ class StandardLoggingModelInformation(TypedDict):
     model_map_value: Optional[ModelInfo]
 
 
+class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
+    """
+    Debug information, if cost tracking fails.
+
+    Avoid logging sensitive information like response or optional params
+    """
+
+    error_str: Required[str]
+    traceback_str: Required[str]
+    model: str
+    cache_hit: Optional[bool]
+    custom_llm_provider: Optional[str]
+    base_model: Optional[str]
+    call_type: str
+    custom_pricing: Optional[bool]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
@@ -1285,6 +1355,9 @@ class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
     response_cost: float
+    response_cost_failure_debug_info: Optional[
+        StandardLoggingModelCostFailureDebugInformation
+    ]
     status: StandardLoggingPayloadStatus
     total_tokens: int
     prompt_tokens: int
@@ -1300,7 +1373,7 @@ class StandardLoggingPayload(TypedDict):
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
-    saved_cache_cost: Optional[float]
+    saved_cache_cost: float
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]
@@ -1330,3 +1403,25 @@ class CustomStreamingDecoder:
 
 class StandardPassThroughResponseObject(TypedDict):
     response: str
+
+
+OPENAI_RESPONSE_HEADERS = [
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+]
+
+
+class StandardCallbackDynamicParams(TypedDict, total=False):
+    # Langfuse dynamic params
+    langfuse_public_key: Optional[str]
+    langfuse_secret: Optional[str]
+    langfuse_secret_key: Optional[str]
+    langfuse_host: Optional[str]
+
+    # GCS dynamic params
+    gcs_bucket_name: Optional[str]
+    gcs_path_service_account: Optional[str]

@@ -24,7 +24,7 @@ def validate_environment():
 
 
 def load_aws_secret_manager(use_aws_secret_manager: Optional[bool]):
-    if use_aws_secret_manager is None or use_aws_secret_manager == False:
+    if use_aws_secret_manager is None or use_aws_secret_manager is False:
         return
     try:
         import boto3
@@ -33,7 +33,7 @@ def load_aws_secret_manager(use_aws_secret_manager: Optional[bool]):
         validate_environment()
 
         # Create a Secrets Manager client
-        session = boto3.session.Session()
+        session = boto3.session.Session()  # type: ignore
         client = session.client(
             service_name="secretsmanager", region_name=os.getenv("AWS_REGION_NAME")
         )

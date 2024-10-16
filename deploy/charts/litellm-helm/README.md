@@ -24,6 +24,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `replicaCount`                                             | The number of LiteLLM Proxy pods to be deployed                                                                                                                                       | `1`  |
 | `masterkey`                                                | The Master API Key for LiteLLM.  If not specified, a random key is generated.                                                                                                         | N/A  |
 | `environmentSecrets`                                       | An optional array of Secret object names.  The keys and values in these secrets will be presented to the LiteLLM proxy pod as environment variables.  See below for an example Secret object.  | `[]`  |
+| `environmentConfigMaps`                                       | An optional array of ConfigMap object names.  The keys and values in these configmaps will be presented to the LiteLLM proxy pod as environment variables.  See below for an example Secret object.  | `[]`  |
 | `image.repository`                                         | LiteLLM Proxy image repository                                                                                                                                                        | `ghcr.io/berriai/litellm`  |
 | `image.pullPolicy`                                         | LiteLLM Proxy image pull policy                                                                                                                                                       | `IfNotPresent`  |
 | `image.tag`                                                | Overrides the image tag whose default the latest version of LiteLLM at the time this chart was published.                                                                             | `""`  |
@@ -76,6 +77,36 @@ data:
   password: <some secure password, base64 encoded>
 type: Opaque
 ```
+
+#### Examples for `environmentSecrets` and `environemntConfigMaps`
+
+```yaml
+# Use config map for not-secret configuration data
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-env-configmap
+data:
+  SOME_KEY: someValue
+  ANOTHER_KEY: anotherValue
+```
+
+```yaml
+# Use secrets for things which are actually secret like API keys, credentials, etc
+# Base64 encode the values stored in a Kubernetes Secret: $ pbpaste | base64 | pbcopy
+# The --decode flag is convenient: $ pbpaste | base64 --decode
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-env-secret
+type: Opaque
+data:
+  SOME_PASSWORD: cDZbUGVXeU5e0ZW    # base64 encoded
+  ANOTHER_PASSWORD: AAZbUGVXeU5e0ZB # base64 encoded
+```
+
+Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
 
 ## Accessing the Admin UI
 When browsing to the URL published per the settings in `ingress.*`, you will

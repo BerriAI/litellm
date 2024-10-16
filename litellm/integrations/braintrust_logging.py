@@ -136,27 +136,23 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             prompt = {"messages": kwargs.get("messages")}
-
+            output = None
             if response_obj is not None and (
                 kwargs.get("call_type", None) == "embedding"
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
-                input = prompt
                 output = None
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                input = prompt
                 output = response_obj.choices[0].text
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
-                input = prompt
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
@@ -169,7 +165,7 @@ class BraintrustLogger(CustomLogger):
                 metadata = copy.deepcopy(
                     metadata
                 )  # Avoid modifying the original metadata
-            except:
+            except Exception:
                 new_metadata = {}
                 for key, value in metadata.items():
                     if (
@@ -210,16 +206,13 @@ class BraintrustLogger(CustomLogger):
                 clean_metadata["litellm_response_cost"] = cost
 
             metrics: Optional[dict] = None
-            if (
-                response_obj is not None
-                and hasattr(response_obj, "usage")
-                and isinstance(response_obj.usage, litellm.Usage)
-            ):
-                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+            usage_obj = getattr(response_obj, "usage", None)
+            if usage_obj and isinstance(usage_obj, litellm.Usage):
+                litellm.utils.get_logging_id(start_time, response_obj)
                 metrics = {
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                    "total_tokens": response_obj.usage.total_tokens,
+                    "prompt_tokens": usage_obj.prompt_tokens,
+                    "completion_tokens": usage_obj.completion_tokens,
+                    "total_tokens": usage_obj.total_tokens,
                     "total_cost": cost,
                 }
 
@@ -255,27 +248,23 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             prompt = {"messages": kwargs.get("messages")}
-
+            output = None
             if response_obj is not None and (
                 kwargs.get("call_type", None) == "embedding"
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
-                input = prompt
                 output = None
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                input = prompt
                 output = response_obj.choices[0].text
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
-                input = prompt
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
@@ -331,16 +320,13 @@ class BraintrustLogger(CustomLogger):
                 clean_metadata["litellm_response_cost"] = cost
 
             metrics: Optional[dict] = None
-            if (
-                response_obj is not None
-                and hasattr(response_obj, "usage")
-                and isinstance(response_obj.usage, litellm.Usage)
-            ):
-                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+            usage_obj = getattr(response_obj, "usage", None)
+            if usage_obj and isinstance(usage_obj, litellm.Usage):
+                litellm.utils.get_logging_id(start_time, response_obj)
                 metrics = {
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                    "total_tokens": response_obj.usage.total_tokens,
+                    "prompt_tokens": usage_obj.prompt_tokens,
+                    "completion_tokens": usage_obj.completion_tokens,
+                    "total_tokens": usage_obj.total_tokens,
                     "total_cost": cost,
                 }
 

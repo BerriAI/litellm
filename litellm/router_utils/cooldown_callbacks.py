@@ -3,7 +3,7 @@ Callbacks triggered on cooling down deployments
 """
 
 import copy
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,7 +25,7 @@ async def router_cooldown_event_callback(
     """
     Callback triggered when a deployment is put into cooldown by litellm
 
-    - Updates deploymen state on Prometheus
+    - Updates deployment state on Prometheus
     - Increments cooldown metric for deployment on Prometheus
     """
     verbose_logger.debug("In router_cooldown_event_callback - updating prometheus")
@@ -53,16 +53,20 @@ async def router_cooldown_event_callback(
             model=litellm_model_name,
             custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
         )
-    except:
+    except Exception:
         pass
 
     # Trigger cooldown on Prometheus
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_custom_logger_compatible_class,
+    )
 
-    prometheusLogger = None
-    for callback in litellm.callbacks:
-        if isinstance(callback, PrometheusLogger):
-            prometheusLogger = callback
+    # get the prometheus logger from in memory loggers
+    prometheusLogger: Optional[CustomLogger] = get_custom_logger_compatible_class(
+        logging_integration="prometheus",
+    )
 
     if prometheusLogger is not None:
 

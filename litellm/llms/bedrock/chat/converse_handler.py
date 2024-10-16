@@ -18,6 +18,30 @@ from ...base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
+BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "anthropic.claude-3-opus-20240229-v1:0",
+    "anthropic.claude-3-sonnet-20240229-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-v1",
+    "anthropic.claude-instant-v1",
+    "ai21.jamba-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "meta.llama3-8b-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
+    "meta.llama3-2-1b-instruct-v1:0",
+    "meta.llama3-2-3b-instruct-v1:0",
+    "meta.llama3-2-11b-instruct-v1:0",
+    "meta.llama3-2-90b-instruct-v1:0",
+    "meta.llama3-2-405b-instruct-v1:0",
+]
+
 
 def make_sync_call(
     client: Optional[HTTPHandler],
@@ -159,7 +183,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return litellm.AmazonConverseConfig()._transform_response(

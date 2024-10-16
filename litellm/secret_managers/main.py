@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import KeyManagementSystem
 
@@ -29,7 +29,7 @@ def _is_base64(s):
         return False
 
 
-def str_to_bool(value: str) -> Optional[bool]:
+def str_to_bool(value: Optional[str]) -> Optional[bool]:
     """
     Converts a string to a boolean if it's a recognized boolean string.
     Returns None if the string is not a recognized boolean value.
@@ -37,6 +37,9 @@ def str_to_bool(value: str) -> Optional[bool]:
     :param value: The string to be checked.
     :return: True or False if the string is a recognized boolean, otherwise None.
     """
+    if value is None:
+        return None
+
     true_values = {"true"}
     false_values = {"false"}
 
@@ -48,6 +51,20 @@ def str_to_bool(value: str) -> Optional[bool]:
         return False
     else:
         return None
+
+
+def get_secret_str(
+    secret_name: str,
+    default_value: Optional[Union[str, bool]] = None,
+) -> Optional[str]:
+    """
+    Guarantees response from 'get_secret' is either string or none. Used for fixing linting errors.
+    """
+    value = get_secret(secret_name=secret_name, default_value=default_value)
+    if value is not None and not isinstance(value, str):
+        return None
+
+    return value
 
 
 def get_secret(
@@ -184,15 +201,15 @@ def get_secret(
                     encrypted_secret: Any = os.getenv(secret_name)
                     if encrypted_secret is None:
                         raise ValueError(
-                            f"Google KMS requires the encrypted secret to be in the environment!"
+                            "Google KMS requires the encrypted secret to be in the environment!"
                         )
                     b64_flag = _is_base64(encrypted_secret)
-                    if b64_flag == True:  # if passed in as encoded b64 string
+                    if b64_flag is True:  # if passed in as encoded b64 string
                         encrypted_secret = base64.b64decode(encrypted_secret)
                         ciphertext = encrypted_secret
                     else:
                         raise ValueError(
-                            f"Google KMS requires the encrypted secret to be encoded in base64"
+                            "Google KMS requires the encrypted secret to be encoded in base64"
                         )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
                     response = client.decrypt(
                         request={
@@ -276,7 +293,7 @@ def get_secret(
                         return secret_value_as_bool
                     else:
                         return secret
-            except:
+            except Exception:
                 return secret
         else:
             secret = os.environ.get(secret_name)

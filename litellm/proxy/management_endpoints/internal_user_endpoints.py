@@ -7,6 +7,8 @@ These are members of a Team on LiteLLM
 /user/new
 /user/update
 /user/delete
+/user/info
+/user/list
 """
 
 import asyncio
@@ -14,6 +16,7 @@ import copy
 import json
 import re
 import secrets
+import time
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -60,7 +63,6 @@ async def new_user(
     - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
     - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
     - teams: Optional[list] - specify a list of team id's a user belongs to.
-    - organization_id: Optional[str] - specify the org a user belongs to.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
@@ -76,6 +78,18 @@ async def new_user(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     - max_budget: (float|None) Max budget for given user.
+
+    Usage Example 
+
+    ```shell
+     curl -X POST "http://localhost:4000/user/new" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer sk-1234" \
+     -d '{
+         "username": "new_user",
+         "email": "new_user@example.com"
+     }'
+    ```
     """
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
@@ -83,7 +97,7 @@ async def new_user(
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
-    if auto_create_key == False:
+    if auto_create_key is False:
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
@@ -103,6 +117,7 @@ async def new_user(
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
+    # Add User to Team and Organization
     # if team_id passed add this user to the team
     if data_json.get("team_id", None) is not None:
         from litellm.proxy.management_endpoints.team_endpoints import team_member_add
@@ -132,7 +147,7 @@ async def new_user(
         event = WebhookEvent(
             event="internal_user_created",
             event_group="internal_user",
-            event_message=f"Welcome to LiteLLM Proxy",
+            event_message="Welcome to LiteLLM Proxy",
             token=response.get("token", ""),
             spend=response.get("spend", 0.0),
             max_budget=response.get("max_budget", 0.0),
@@ -273,31 +288,37 @@ async def ui_get_available_role(
     return _data_to_return
 
 
+def get_team_from_list(
+    team_list: Optional[Union[List[LiteLLM_TeamTable], List[TeamListResponseObject]]],
+    team_id: str,
+) -> Optional[Union[LiteLLM_TeamTable, LiteLLM_TeamMembership]]:
+    if team_list is None:
+        return None
+
+    for team in team_list:
+        if team.team_id == team_id:
+            return team
+    return None
+
+
 @router.get(
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
+    # response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
-    view_all: bool = fastapi.Query(
-        default=False,
-        description="set to true to View all users. When using view_all, don't pass user_id",
-    ),
-    page: Optional[int] = fastapi.Query(
-        default=0,
-        description="Page number for pagination. Only use when view_all is true",
-    ),
-    page_size: Optional[int] = fastapi.Query(
-        default=25,
-        description="Number of items per page. Only use when view_all is true",
-    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    [10/07/2024]
+    Note: To get all users (+pagination), use `/user/list` endpoint.
+
+
     Use this to get user information. (user row + all user key info)
 
     Example request
@@ -320,25 +341,23 @@ async def user_info(
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        elif view_all is True:
-            if page is None:
-                page = 0
-            if page_size is None:
-                page_size = 25
-            offset = (page) * page_size  # default is 0
-            limit = page_size  # default is 10
-            user_info = await prisma_client.get_data(
-                table_name="user", query_type="find_all", offset=offset, limit=limit
-            )
-            return user_info
         else:
             user_info = None
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
-        # _DEPRECATED_ check if user in 'member' field
-        teams_1 = await prisma_client.get_data(
-            user_id=user_id, table_name="team", query_type="find_all"
+        # get all teams user belongs to
+        # teams_1 = await prisma_client.get_data(
+        #     user_id=user_id, table_name="team", query_type="find_all"
+        # )
+        from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+        teams_1 = await list_team(
+            http_request=Request(
+                scope={"type": "http", "path": "/user/info"},
+            ),
+            user_id=user_id,
+            user_api_key_dict=user_api_key_dict,
         )
 
         if teams_1 is not None and isinstance(teams_1, list):
@@ -358,6 +377,7 @@ async def user_info(
                     if team.team_id not in team_id_list:
                         team_list.append(team)
                         team_id_list.append(team.team_id)
+
         elif (
             user_api_key_dict.user_id is not None and user_id is None
         ):  # the key querying the endpoint is the one asking for it's teams
@@ -413,13 +433,13 @@ async def user_info(
                 if (
                     key.token == litellm_master_key_hash
                     and general_settings.get("disable_master_key_return", False)
-                    == True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+                    is True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
                 ):
                     continue
 
                 try:
                     key = key.model_dump()  # noqa
-                except:
+                except Exception:
                     # if using pydantic v1
                     key = key.dict()
                 if (
@@ -427,29 +447,32 @@ async def user_info(
                     and key["team_id"] is not None
                     and key["team_id"] != "litellm-dashboard"
                 ):
-                    team_info = await prisma_client.get_data(
-                        team_id=key["team_id"], table_name="team"
+                    team_info = get_team_from_list(
+                        team_list=teams_1, team_id=key["team_id"]
                     )
-                    team_alias = getattr(team_info, "team_alias", None)
-                    key["team_alias"] = team_alias
+                    if team_info is not None:
+                        team_alias = getattr(team_info, "team_alias", None)
+                        key["team_alias"] = team_alias
+                    else:
+                        key["team_alias"] = None
                 else:
                     key["team_alias"] = "None"
                 returned_keys.append(key)
 
-        response_data = {
-            "user_id": user_id,
-            "user_info": user_info,
-            "keys": returned_keys,
-            "teams": team_list,
-        }
+        _user_info = (
+            user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
+        )
+        response_data = UserInfoResponse(
+            user_id=user_id, user_info=_user_info, keys=returned_keys, teams=team_list
+        )
+
         return response_data
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -628,7 +651,7 @@ async def user_request_model(request: Request):
         user_id = non_default_values.get("user_id", None)
         justification = non_default_values.get("justification", None)
 
-        response = await prisma_client.insert_data(
+        await prisma_client.insert_data(
             data={
                 "models": new_models,
                 "justification": justification,
@@ -717,16 +740,22 @@ async def user_get_requests():
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.get(
+    "/user/list",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_users(
-    role: str = fastapi.Query(
-        default=None,
-        description="Either 'proxy_admin', 'proxy_viewer', 'app_owner', 'app_user'",
-    )
+    role: Optional[str] = fastapi.Query(
+        default=None, description="Filter users by role"
+    ),
+    page: int = fastapi.Query(default=1, ge=1, description="Page number"),
+    page_size: int = fastapi.Query(
+        default=25, ge=1, le=100, description="Number of items per page"
+    ),
 ):
     """
-    [BETA] This could change without notice. Give feedback - https://github.com/BerriAI/litellm/issues
-
-    Get all users who are a specific `user_role`.
+    Get a paginated list of users, optionally filtered by role.
 
     Used by the UI to populate the user lists.
 
@@ -739,11 +768,36 @@ async def get_users(
             status_code=500,
             detail={"error": f"No db connected. prisma client={prisma_client}"},
         )
-    all_users = await prisma_client.get_data(
-        table_name="user", query_type="find_all", key_val={"user_role": role}
+
+    # Calculate skip and take for pagination
+    skip = (page - 1) * page_size
+    take = page_size
+
+    # Prepare the query
+    query = {}
+    if role:
+        query["user_role"] = role
+
+    # Get total count
+    total_count = await prisma_client.db.litellm_usertable.count(where=query)  # type: ignore
+
+    # Get paginated users
+    users = await prisma_client.db.litellm_usertable.find_many(
+        where=query,  # type: ignore
+        skip=skip,
+        take=take,
     )
 
-    return all_users
+    # Calculate total pages
+    total_pages = -(-total_count // page_size)  # Ceiling division
+
+    return {
+        "users": users,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @router.post(
@@ -846,3 +900,49 @@ async def delete_user(
     )
 
     return deleted_users
+
+
+async def add_internal_user_to_organization(
+    user_id: str,
+    organization_id: str,
+    user_role: LitellmUserRoles,
+):
+    """
+    Helper function to add an internal user to an organization
+
+    Adds the user to LiteLLM_OrganizationMembership table
+
+    - Checks if organization_id exists
+
+    Raises:
+    - Exception if database not connected
+    - Exception if user_id or organization_id not found
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise Exception("Database not connected")
+
+    try:
+        # Check if organization_id exists
+        organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id}
+        )
+        if organization_row is None:
+            raise Exception(
+                f"Organization not found, passed organization_id={organization_id}"
+            )
+
+        # Create a new organization membership entry
+        new_membership = await prisma_client.db.litellm_organizationmembership.create(
+            data={
+                "user_id": user_id,
+                "organization_id": organization_id,
+                "user_role": user_role,
+                # Note: You can also set budget within an organization if needed
+            }
+        )
+
+        return new_membership
+    except Exception as e:
+        raise Exception(f"Failed to add user to organization: {str(e)}")

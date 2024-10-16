@@ -76,6 +76,24 @@ def test_bedrock_optional_params_embeddings():
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-3-haiku-20240307-v1:0",
+        "us.meta.llama3-2-11b-instruct-v1:0",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+    ],
+)
+def test_bedrock_optional_params_completions(model):
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model=model, max_tokens=10, temperature=0.1, custom_llm_provider="bedrock"
+    )
+    print(f"optional_params: {optional_params}")
+    assert len(optional_params) == 3
+    assert optional_params == {"maxTokens": 10, "stream": False, "temperature": 0.1}
+
+
+@pytest.mark.parametrize(
     "model, expected_dimensions, dimensions_kwarg",
     [
         ("bedrock/amazon.titan-embed-text-v1", False, None),
@@ -600,3 +618,117 @@ def test_o1_model_params():
     )
     assert optional_params["seed"] == 10
     assert optional_params["user"] == "John"
+
+
+def test_azure_o1_model_params():
+    optional_params = get_optional_params(
+        model="o1-preview",
+        custom_llm_provider="azure",
+        seed=10,
+        user="John",
+    )
+    assert optional_params["seed"] == 10
+    assert optional_params["user"] == "John"
+
+
+@pytest.mark.parametrize(
+    "temperature, expected_error",
+    [(0.2, True), (1, False), (0, True)],
+)
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_o1_model_temperature_params(provider, temperature, expected_error):
+    if expected_error:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="o1-preview",
+                custom_llm_provider=provider,
+                temperature=temperature,
+            )
+    else:
+        get_optional_params(
+            model="o1-preview-2024-09-12",
+            custom_llm_provider="openai",
+            temperature=temperature,
+        )
+
+
+def test_unmapped_gemini_model_params():
+    """
+    Test if unmapped gemini model optional params are translated correctly
+    """
+    optional_params = get_optional_params(
+        model="gemini-new-model",
+        custom_llm_provider="vertex_ai",
+        stop="stop_word",
+    )
+    assert optional_params["stop_sequences"] == ["stop_word"]
+
+
+def _check_additional_properties(schema):
+    if isinstance(schema, dict):
+        # Remove the 'additionalProperties' key if it exists and is set to False
+        if "additionalProperties" in schema or "strict" in schema:
+            raise ValueError(
+                "additionalProperties and strict should not be in the schema"
+            )
+
+        # Recursively process all dictionary values
+        for key, value in schema.items():
+            _check_additional_properties(value)
+
+    elif isinstance(schema, list):
+        # Recursively process all items in the list
+        for item in schema:
+            _check_additional_properties(item)
+
+    return schema
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [
+        ("hosted_vllm", "my-vllm-model"),
+        ("gemini", "gemini-1.5-pro"),
+        ("vertex_ai", "gemini-1.5-pro"),
+    ],
+)
+def test_drop_nested_params_add_prop_and_strict(provider, model):
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5288
+
+    Relevant issue - https://github.com/BerriAI/litellm/issues/6136
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "structure_output",
+                "description": "Send structured output back to the user",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {"type": "string"},
+                        "sentiment": {"type": "string"},
+                    },
+                    "required": ["reasoning", "sentiment"],
+                    "additionalProperties": False,
+                },
+                "additionalProperties": False,
+            },
+        }
+    ]
+    tool_choice = {"type": "function", "function": {"name": "structure_output"}}
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        temperature=0.2,
+        tools=tools,
+        tool_choice=tool_choice,
+        additional_drop_params=[
+            ["tools", "function", "strict"],
+            ["tools", "function", "additionalProperties"],
+        ],
+    )
+
+    _check_additional_properties(optional_params["tools"])

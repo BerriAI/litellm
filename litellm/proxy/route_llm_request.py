@@ -58,6 +58,7 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "_arealtime",  # private function for realtime API
     ],
 ):
     """
@@ -65,8 +66,7 @@ async def route_request(
 
     """
     router_model_names = llm_router.model_names if llm_router is not None else []
-
-    if "api_key" in data:
+    if "api_key" in data or "api_base" in data:
         return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
@@ -109,7 +109,7 @@ async def route_request(
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
                 llm_router.default_deployment is not None
-                or len(llm_router.provider_default_deployments) > 0
+                or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
 

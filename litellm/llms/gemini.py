@@ -136,7 +136,7 @@ class GeminiConfig:
 # ):
 #     try:
 #         import google.generativeai as genai  # type: ignore
-#     except:
+#     except Exception:
 #         raise Exception(
 #             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
 #         )
@@ -282,7 +282,7 @@ class GeminiConfig:
 #         completion_response = model_response["choices"][0]["message"].get("content")
 #         if completion_response is None:
 #             raise Exception
-#     except:
+#     except Exception:
 #         original_response = f"response: {response}"
 #         if hasattr(response, "candidates"):
 #             original_response = f"response: {response.candidates}"
@@ -374,7 +374,7 @@ class GeminiConfig:
 #         completion_response = model_response["choices"][0]["message"].get("content")
 #         if completion_response is None:
 #             raise Exception
-#     except:
+#     except Exception:
 #         original_response = f"response: {response}"
 #         if hasattr(response, "candidates"):
 #             original_response = f"response: {response.candidates}"

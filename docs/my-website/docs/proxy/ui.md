@@ -180,6 +180,7 @@ GENERIC_USER_DISPLAY_NAME_ATTRIBUTE = "display_name"
 GENERIC_USER_FIRST_NAME_ATTRIBUTE = "first_name"
 GENERIC_USER_LAST_NAME_ATTRIBUTE = "last_name"
 GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
+GENERIC_USER_PROVIDER_ATTRIBUTE = "provider"
 GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
 GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
@@ -238,6 +239,22 @@ export PROXY_ADMIN_ID="116544810872468347480"
 If you don't see all your keys this could be due to a cached token. So just re-login and it should work.
 
 :::
+
+### Disable `Default Team` on Admin UI
+
+Use this if you want to hide the Default Team on the Admin UI
+
+The following logic will apply
+- If team assigned don't show `Default Team`
+- If no team assigned then they should see `Default Team`
+
+Set `default_team_disabled: true` on your litellm config.yaml
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  default_team_disabled: true # OR you can set env var PROXY_DEFAULT_TEAM_DISABLED="true"
+```
 
 ### Sign in with Username, Password when SSO is on
 

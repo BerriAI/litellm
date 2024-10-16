@@ -151,7 +151,7 @@ class AzureAssistantsAPI(BaseLLM):
         client=None,
         aget_assistants=None,
     ):
-        if aget_assistants is not None and aget_assistants == True:
+        if aget_assistants is not None and aget_assistants is True:
             return self.async_get_assistants(
                 api_key=api_key,
                 api_base=api_base,
@@ -260,7 +260,7 @@ class AzureAssistantsAPI(BaseLLM):
         client=None,
         a_add_message: Optional[bool] = None,
     ):
-        if a_add_message is not None and a_add_message == True:
+        if a_add_message is not None and a_add_message is True:
             return self.a_add_message(
                 thread_id=thread_id,
                 message_data=message_data,
@@ -365,7 +365,7 @@ class AzureAssistantsAPI(BaseLLM):
         client=None,
         aget_messages=None,
     ):
-        if aget_messages is not None and aget_messages == True:
+        if aget_messages is not None and aget_messages is True:
             return self.async_get_messages(
                 thread_id=thread_id,
                 api_key=api_key,
@@ -483,7 +483,7 @@ class AzureAssistantsAPI(BaseLLM):
         openai_api.create_thread(messages=[message])
         ```
         """
-        if acreate_thread is not None and acreate_thread == True:
+        if acreate_thread is not None and acreate_thread is True:
             return self.async_create_thread(
                 metadata=metadata,
                 api_key=api_key,
@@ -586,7 +586,7 @@ class AzureAssistantsAPI(BaseLLM):
         client=None,
         aget_thread=None,
     ):
-        if aget_thread is not None and aget_thread == True:
+        if aget_thread is not None and aget_thread is True:
             return self.async_get_thread(
                 thread_id=thread_id,
                 api_key=api_key,
@@ -774,8 +774,8 @@ class AzureAssistantsAPI(BaseLLM):
         arun_thread=None,
         event_handler: Optional[AssistantEventHandler] = None,
     ):
-        if arun_thread is not None and arun_thread == True:
-            if stream is not None and stream == True:
+        if arun_thread is not None and arun_thread is True:
+            if stream is not None and stream is True:
                 azure_client = self.async_get_azure_client(
                     api_key=api_key,
                     api_base=api_base,
@@ -823,7 +823,7 @@ class AzureAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        if stream is not None and stream == True:
+        if stream is not None and stream is True:
             return self.run_thread_stream(
                 client=openai_client,
                 thread_id=thread_id,
@@ -887,7 +887,7 @@ class AzureAssistantsAPI(BaseLLM):
         client=None,
         async_create_assistants=None,
     ):
-        if async_create_assistants is not None and async_create_assistants == True:
+        if async_create_assistants is not None and async_create_assistants is True:
             return self.async_create_assistants(
                 api_key=api_key,
                 api_base=api_base,
@@ -950,7 +950,7 @@ class AzureAssistantsAPI(BaseLLM):
         async_delete_assistants: Optional[bool] = None,
         client=None,
     ):
-        if async_delete_assistants is not None and async_delete_assistants == True:
+        if async_delete_assistants is not None and async_delete_assistants is True:
             return self.async_delete_assistant(
                 api_key=api_key,
                 api_base=api_base,

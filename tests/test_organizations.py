@@ -33,7 +33,7 @@ async def new_organization(session, i, organization_alias, max_budget=None):
 @pytest.mark.asyncio
 async def test_organization_new():
     """
-    Make 20 parallel calls to /user/new. Assert all worked.
+    Make 20 parallel calls to /organization/new. Assert all worked.
     """
     organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:

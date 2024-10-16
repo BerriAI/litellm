@@ -404,7 +404,7 @@ class LangsmithLogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
             )
-        except Exception as e:
+        except Exception:
             verbose_logger.exception(
                 f"Langsmith Layer Error - {traceback.format_exc()}"
             )

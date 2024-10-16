@@ -14,7 +14,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.types.utils import ProviderField
+from litellm.types.utils import ProviderField, StreamingChoices
 
 from .prompt_templates.factory import custom_prompt, prompt_factory
 
@@ -172,7 +172,7 @@ def _convert_image(image):
 
     try:
         from PIL import Image
-    except:
+    except Exception:
         raise Exception(
             "ollama image conversion failed please run `pip install Pillow`"
         )
@@ -184,7 +184,7 @@ def _convert_image(image):
         image_data = Image.open(io.BytesIO(base64.b64decode(image)))
         if image_data.format in ["JPEG", "PNG"]:
             return image
-    except:
+    except Exception:
         return orig
     jpeg_image = io.BytesIO()
     image_data.convert("RGB").save(jpeg_image, "JPEG")
@@ -195,13 +195,13 @@ def _convert_image(image):
 # ollama implementation
 def get_ollama_response(
     model_response: litellm.ModelResponse,
-    api_base="http://localhost:11434",
-    model="llama2",
-    prompt="Why is the sky blue?",
-    optional_params=None,
-    logging_obj=None,
+    model: str,
+    prompt: str,
+    optional_params: dict,
+    logging_obj: Any,
+    encoding: Any,
     acompletion: bool = False,
-    encoding=None,
+    api_base="http://localhost:11434",
 ):
     if api_base.endswith("/api/generate"):
         url = api_base
@@ -242,7 +242,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if stream == True:
+        if stream is True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -340,11 +340,16 @@ def ollama_completion_stream(url, data, logging_obj):
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
                 first_chunk = next(streamwrapper)
-                response_content = "".join(
-                    chunk.choices[0].delta.content
-                    for chunk in chain([first_chunk], streamwrapper)
-                    if chunk.choices[0].delta.content
-                )
+                content_chunks = []
+                for chunk in chain([first_chunk], streamwrapper):
+                    content_chunk = chunk.choices[0]
+                    if (
+                        isinstance(content_chunk, StreamingChoices)
+                        and hasattr(content_chunk, "delta")
+                        and hasattr(content_chunk.delta, "content")
+                    ):
+                        content_chunks.append(content_chunk.delta.content)
+                response_content = "".join(content_chunks)
 
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
@@ -392,15 +397,27 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
             # If format is JSON, this was a function call
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
-                first_chunk = await anext(streamwrapper)
-                first_chunk_content = first_chunk.choices[0].delta.content or ""
-                response_content = first_chunk_content + "".join(
-                    [
-                        chunk.choices[0].delta.content
-                        async for chunk in streamwrapper
-                        if chunk.choices[0].delta.content
-                    ]
-                )
+                first_chunk = await anext(streamwrapper)  # noqa F821
+                chunk_choice = first_chunk.choices[0]
+                if (
+                    isinstance(chunk_choice, StreamingChoices)
+                    and hasattr(chunk_choice, "delta")
+                    and hasattr(chunk_choice.delta, "content")
+                ):
+                    first_chunk_content = chunk_choice.delta.content or ""
+                else:
+                    first_chunk_content = ""
+
+                content_chunks = []
+                async for chunk in streamwrapper:
+                    chunk_choice = chunk.choices[0]
+                    if (
+                        isinstance(chunk_choice, StreamingChoices)
+                        and hasattr(chunk_choice, "delta")
+                        and hasattr(chunk_choice.delta, "content")
+                    ):
+                        content_chunks.append(chunk_choice.delta.content)
+                response_content = first_chunk_content + "".join(content_chunks)
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
                     content=None,
@@ -501,8 +518,8 @@ async def ollama_aembeddings(
     prompts: List[str],
     model_response: litellm.EmbeddingResponse,
     optional_params: dict,
-    logging_obj=None,
-    encoding=None,
+    logging_obj: Any,
+    encoding: Any,
 ):
     if api_base.endswith("/api/embed"):
         url = api_base
@@ -568,10 +585,11 @@ async def ollama_aembeddings(
         model_response,
         "usage",
         litellm.Usage(
-            **{
-                "prompt_tokens": total_input_tokens,
-                "total_tokens": total_input_tokens,
-            }
+            prompt_tokens=total_input_tokens,
+            completion_tokens=total_input_tokens,
+            total_tokens=total_input_tokens,
+            prompt_tokens_details=None,
+            completion_tokens_details=None,
         ),
     )
     return model_response
@@ -581,9 +599,9 @@ def ollama_embeddings(
     api_base: str,
     model: str,
     prompts: list,
-    optional_params=None,
-    logging_obj=None,
-    model_response=None,
+    optional_params: dict,
+    model_response: litellm.EmbeddingResponse,
+    logging_obj: Any,
     encoding=None,
 ):
     return asyncio.run(

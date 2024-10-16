@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
+from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
-from litellm.types.utils import ProviderField
+from litellm.types.utils import ProviderField, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -33,6 +34,7 @@ class LitellmUserRoles(str, enum.Enum):
     Admin Roles:
     PROXY_ADMIN: admin over the platform
     PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+    ORG_ADMIN: admin over a specific organization, can create teams, users only within their organization
 
     Internal User Roles:
     INTERNAL_USER: can login, view/create/delete their own keys, view their spend
@@ -51,6 +53,9 @@ class LitellmUserRoles(str, enum.Enum):
     # Admin Roles
     PROXY_ADMIN = "proxy_admin"
     PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
+
+    # Organization admins
+    ORG_ADMIN = "org_admin"
 
     # Internal User Roles
     INTERNAL_USER = "internal_user"
@@ -110,23 +115,6 @@ class LitellmTableNames(enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
 
 
-AlertType = Literal[
-    "llm_exceptions",
-    "llm_too_slow",
-    "llm_requests_hanging",
-    "budget_alerts",
-    "db_exceptions",
-    "daily_reports",
-    "spend_reports",
-    "cooldown_deployment",
-    "new_model_added",
-    "outage_alerts",
-    "region_outage_alerts",
-    "fallback_reports",
-    "failed_tracking_spend",
-]
-
-
 def hash_token(token: str):
     import hashlib
 
@@ -144,14 +132,14 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
     def fields_set(self):
         try:
             return self.model_fields_set  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.__fields_set__
 
@@ -270,6 +258,7 @@ class LiteLLMRoutes(enum.Enum):
 
     info_routes = [
         "/key/info",
+        "/key/health",
         "/team/info",
         "/team/list",
         "/user/info",
@@ -284,12 +273,7 @@ class LiteLLMRoutes(enum.Enum):
     master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
     sso_only_routes = [
-        "/key/generate",
-        "/key/update",
-        "/key/delete",
-        "/global/spend/logs",
-        "/global/predict/spend/logs",
-        "/sso/get/logout_url",
+        "/sso/get/ui_settings",
     ]
 
     management_routes = [  # key
@@ -297,6 +281,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/update",
         "/key/delete",
         "/key/info",
+        "/key/health",
         # user
         "/user/new",
         "/user/update",
@@ -336,6 +321,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/models",
         "/global/predict/spend/logs",
         "/global/spend/report",
+        "/global/spend/provider",
     ]
 
     public_routes = [
@@ -354,6 +340,7 @@ class LiteLLMRoutes(enum.Enum):
             "/key/generate",
             "/key/update",
             "/key/delete",
+            "/key/health",
             "/key/info",
             "/global/spend/tags",
             "/global/spend/keys",
@@ -367,10 +354,28 @@ class LiteLLMRoutes(enum.Enum):
         + sso_only_routes
     )
 
+    internal_user_view_only_routes = (
+        spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
+    )
+
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
     ]  # routes that manage their own allowed/disallowed logic
+
+    ## Org Admin Routes ##
+
+    # Routes only an Org Admin Can Access
+    org_admin_only_routes = [
+        "/organization/info",
+        "/organization/delete",
+        "/organization/member_add",
+    ]
+
+    # All routes accesible by an Org Admin
+    org_admin_allowed_routes = (
+        org_admin_only_routes + management_routes + self_managed_routes
+    )
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -632,6 +637,7 @@ class _GenerateKeyRequest(GenerateRequestBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    blocked: Optional[bool] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
@@ -707,12 +713,9 @@ class NewUserRequest(_GenerateKeyRequest):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     teams: Optional[list] = None
-    organization_id: Optional[str] = None
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -728,12 +731,9 @@ class NewUserResponse(GenerateKeyResponse):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     teams: Optional[list] = None
-    organization_id: Optional[str] = None
     user_alias: Optional[str] = None
 
 
@@ -751,8 +751,6 @@ class UpdateUserRequest(GenerateRequestBase):
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
             LitellmUserRoles.INTERNAL_USER,
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            LitellmUserRoles.TEAM,
-            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     max_budget: Optional[float] = None
@@ -823,7 +821,14 @@ class DeleteCustomerRequest(LiteLLMBase):
 
 
 class Member(LiteLLMBase):
-    role: Literal["admin", "user"]
+    role: Literal[
+        LitellmUserRoles.ORG_ADMIN,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        # older Member roles
+        "admin",
+        "user",
+    ]
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
@@ -867,51 +872,6 @@ class GlobalEndUsersSpend(LiteLLMBase):
     api_key: Optional[str] = None
     startTime: Optional[datetime] = None
     endTime: Optional[datetime] = None
-
-
-class TeamMemberAddRequest(LiteLLMBase):
-    team_id: str
-    member: Union[List[Member], Member]
-    max_budget_in_team: Optional[float] = None  # Users max budget within the team
-
-    def __init__(self, **data):
-        member_data = data.get("member")
-        if isinstance(member_data, list):
-            # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [Member(**item) for item in member_data]
-            # Replace member_data with the list of Member objects
-            data["member"] = members
-        elif isinstance(member_data, dict):
-            # If member is a dictionary, convert it to a single Member object
-            member = Member(**member_data)
-            # Replace member_data with the single Member object
-            data["member"] = member
-        # Call the superclass __init__ method to initialize the object
-        super().__init__(**data)
-
-
-class TeamMemberDeleteRequest(LiteLLMBase):
-    team_id: str
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values):
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
-
-
-class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
-    max_budget_in_team: float
-
-
-class TeamMemberUpdateResponse(LiteLLMBase):
-    team_id: str
-    user_id: str
-    user_email: Optional[str] = None
-    max_budget_in_team: float
 
 
 class UpdateTeamRequest(LiteLLMBase):
@@ -967,24 +927,45 @@ class BlockTeamRequest(LiteLLMBase):
     team_id: str  # required
 
 
+class BlockKeyRequest(LiteLLMBase):
+    key: str  # required
+
+
 class AddTeamCallback(LiteLLMBase):
     callback_name: str
     callback_type: Literal["success", "failure", "success_and_failure"]
-    # for now - only supported for langfuse
-    callback_vars: Dict[
-        Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
-    ]
+    callback_vars: Dict[str, str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_callback_vars(cls, values):
+        callback_vars = values.get("callback_vars", {})
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        for key in callback_vars:
+            if key not in valid_keys:
+                raise ValueError(
+                    f"Invalid callback variable: {key}. Must be one of {valid_keys}"
+                )
+        return values
 
 
 class TeamCallbackMetadata(LiteLLMBase):
     success_callback: Optional[List[str]] = []
     failure_callback: Optional[List[str]] = []
     # for now - only supported for langfuse
-    callback_vars: Optional[
-        Dict[
-            Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
-        ]
-    ] = {}
+    callback_vars: Optional[Dict[str, str]] = {}
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_callback_vars(cls, values):
+        callback_vars = values.get("callback_vars", {})
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        for key in callback_vars:
+            if key not in valid_keys:
+                raise ValueError(
+                    f"Invalid callback variable: {key}. Must be one of {valid_keys}"
+                )
+        return values
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -1359,6 +1340,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_spend: Dict = {}
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
+    blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
 
@@ -1422,9 +1404,36 @@ class UserAPIKeyAuth(
         arbitrary_types_allowed = True
 
 
+class UserInfoResponse(LiteLLMBase):
+    user_id: Optional[str]
+    user_info: Optional[Union[dict, BaseModel]]
+    keys: List
+    teams: List
+
+
 class LiteLLM_Config(LiteLLMBase):
     param_name: str
     param_value: Dict
+
+
+class LiteLLM_OrganizationMembershipTable(LiteLLMBase):
+    """
+    This is the table that track what organizations a user belongs to and users spend within the organization
+    """
+
+    user_id: str
+    organization_id: str
+    user_role: Optional[str] = None
+    spend: float = 0.0
+    budget_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_UserTable(LiteLLMBase):
@@ -1438,6 +1447,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
+    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1509,7 +1519,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     updated_at: datetime
     changed_by: str
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted"]
+    action: Literal["created", "updated", "deleted", "blocked"]
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
         LitellmTableNames.USER_TABLE_NAME,
@@ -1890,9 +1900,97 @@ class LiteLLM_TeamMembership(LiteLLMBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
 
+#### Organization / Team Member Requests ####
+
+
+class MemberAddRequest(LiteLLMBase):
+    member: Union[List[Member], Member]
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [Member(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = Member(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
+        super().__init__(**data)
+
+
 class TeamAddMemberResponse(LiteLLM_TeamTable):
     updated_users: List[LiteLLM_UserTable]
     updated_team_memberships: List[LiteLLM_TeamMembership]
+
+
+class OrganizationAddMemberResponse(LiteLLMBase):
+    organization_id: str
+    updated_users: List[LiteLLM_UserTable]
+    updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable]
+
+
+class MemberDeleteRequest(LiteLLMBase):
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_user_info(cls, values):
+        if values.get("user_id") is None and values.get("user_email") is None:
+            raise ValueError("Either user id or user email must be provided")
+        return values
+
+
+class MemberUpdateResponse(LiteLLMBase):
+    user_id: str
+    user_email: Optional[str] = None
+
+
+# Team Member Requests
+class TeamMemberAddRequest(MemberAddRequest):
+    team_id: str
+    max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+
+class TeamMemberDeleteRequest(MemberDeleteRequest):
+    team_id: str
+
+
+class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
+    max_budget_in_team: float
+
+
+class TeamMemberUpdateResponse(MemberUpdateResponse):
+    team_id: str
+    max_budget_in_team: float
+
+
+# Organization Member Requests
+class OrganizationMemberAddRequest(MemberAddRequest):
+    organization_id: str
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
+
+
+class OrganizationMemberDeleteRequest(MemberDeleteRequest):
+    organization_id: str
+
+
+class OrganizationMemberUpdateRequest(OrganizationMemberDeleteRequest):
+    max_budget_in_organization: float
+
+
+class OrganizationMemberUpdateResponse(MemberUpdateResponse):
+    organization_id: str
+    max_budget_in_organization: float
+
+
+##########################################
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -1900,3 +1998,24 @@ class TeamInfoResponseObject(TypedDict):
     team_info: LiteLLM_TeamTable
     keys: List
     team_memberships: List[LiteLLM_TeamMembership]
+
+
+class TeamListResponseObject(LiteLLM_TeamTable):
+    team_memberships: List[LiteLLM_TeamMembership]
+
+
+class CurrentItemRateLimit(TypedDict):
+    current_requests: int
+    current_tpm: int
+    current_rpm: int
+
+
+class LoggingCallbackStatus(TypedDict, total=False):
+    callbacks: List[str]
+    status: Literal["healthy", "unhealthy"]
+    details: Optional[str]
+
+
+class KeyHealthResponse(TypedDict, total=False):
+    key: Literal["healthy", "unhealthy"]
+    logging_callbacks: Optional[LoggingCallbackStatus]

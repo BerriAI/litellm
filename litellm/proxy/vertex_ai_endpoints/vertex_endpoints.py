@@ -208,7 +208,7 @@ async def vertex_proxy_route(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,
+        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value

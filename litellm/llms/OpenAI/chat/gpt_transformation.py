@@ -125,7 +125,11 @@ class OpenAIGPTConfig:
         return base_params + model_specific_params
 
     def _map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
@@ -134,10 +138,15 @@ class OpenAIGPTConfig:
         return optional_params
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         return self._map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=drop_params,
         )

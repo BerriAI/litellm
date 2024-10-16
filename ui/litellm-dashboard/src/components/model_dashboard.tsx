@@ -145,6 +145,7 @@ enum Providers {
   Bedrock = "Amazon Bedrock",
   Groq = "Groq",
   MistralAI = "Mistral AI",
+  Deepseek = "Deepseek",
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   Cohere = "Cohere",
@@ -165,6 +166,7 @@ const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  Deepseek: "deepseek",
   Ollama: "ollama",
 
 };

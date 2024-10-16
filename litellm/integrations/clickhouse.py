@@ -2,24 +2,23 @@
 
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
-
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
-
-from typing import Literal, Union
+import datetime
+import json
+import os
 import traceback
+from typing import Literal, Optional, Union
 
+import dotenv
+import requests
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import StandardLoggingPayload
 
 #### What this does ####
 #    On success + failure, log events to Supabase
-
-import dotenv, os
-import requests
-import traceback
-import datetime, subprocess, sys
-import litellm, uuid
-from litellm._logging import print_verbose, verbose_logger
 
 
 def create_client():
@@ -30,14 +29,30 @@ def create_client():
         clickhouse_host = os.getenv("CLICKHOUSE_HOST")
         if clickhouse_host is not None:
             verbose_logger.debug("setting up clickhouse")
+
+            port = os.getenv("CLICKHOUSE_PORT")
             if port is not None and isinstance(port, str):
                 port = int(port)
 
+            host: Optional[str] = os.getenv("CLICKHOUSE_HOST")
+            if host is None:
+                raise ValueError("CLICKHOUSE_HOST is not set")
+
+            username: Optional[str] = os.getenv("CLICKHOUSE_USERNAME")
+            if username is None:
+                raise ValueError("CLICKHOUSE_USERNAME is not set")
+
+            password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+            if password is None:
+                raise ValueError("CLICKHOUSE_PASSWORD is not set")
+            if port is None:
+                raise ValueError("CLICKHOUSE_PORT is not set")
+
             client = clickhouse_connect.get_client(
-                host=os.getenv("CLICKHOUSE_HOST"),
+                host=host,
                 port=port,
-                username=os.getenv("CLICKHOUSE_USERNAME"),
-                password=os.getenv("CLICKHOUSE_PASSWORD"),
+                username=username,
+                password=password,
             )
             return client
         else:
@@ -177,11 +192,29 @@ def _start_clickhouse():
         if port is not None and isinstance(port, str):
             port = int(port)
 
+        port = os.getenv("CLICKHOUSE_PORT")
+        if port is not None and isinstance(port, str):
+            port = int(port)
+
+        host: Optional[str] = os.getenv("CLICKHOUSE_HOST")
+        if host is None:
+            raise ValueError("CLICKHOUSE_HOST is not set")
+
+        username: Optional[str] = os.getenv("CLICKHOUSE_USERNAME")
+        if username is None:
+            raise ValueError("CLICKHOUSE_USERNAME is not set")
+
+        password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+        if password is None:
+            raise ValueError("CLICKHOUSE_PASSWORD is not set")
+        if port is None:
+            raise ValueError("CLICKHOUSE_PORT is not set")
+
         client = clickhouse_connect.get_client(
-            host=os.getenv("CLICKHOUSE_HOST"),
+            host=host,
             port=port,
-            username=os.getenv("CLICKHOUSE_USERNAME"),
-            password=os.getenv("CLICKHOUSE_PASSWORD"),
+            username=username,
+            password=password,
         )
         # view all tables in DB
         response = client.query("SHOW TABLES")
@@ -242,11 +275,25 @@ class ClickhouseLogger:
         if port is not None and isinstance(port, str):
             port = int(port)
 
+        host: Optional[str] = os.getenv("CLICKHOUSE_HOST")
+        if host is None:
+            raise ValueError("CLICKHOUSE_HOST is not set")
+
+        username: Optional[str] = os.getenv("CLICKHOUSE_USERNAME")
+        if username is None:
+            raise ValueError("CLICKHOUSE_USERNAME is not set")
+
+        password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+        if password is None:
+            raise ValueError("CLICKHOUSE_PASSWORD is not set")
+        if port is None:
+            raise ValueError("CLICKHOUSE_PORT is not set")
+
         client = clickhouse_connect.get_client(
-            host=os.getenv("CLICKHOUSE_HOST"),
+            host=host,
             port=port,
-            username=os.getenv("CLICKHOUSE_USERNAME"),
-            password=os.getenv("CLICKHOUSE_PASSWORD"),
+            username=username,
+            password=password,
         )
         self.client = client
 
@@ -260,18 +307,12 @@ class ClickhouseLogger:
                 f"ClickhouseLogger Logging - Enters logging function for model {kwargs}"
             )
             # follows the same params as langfuse.py
-            from litellm.proxy.utils import get_logging_payload
 
-            payload = get_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
+            payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
             )
-            metadata = payload.get("metadata", "") or ""
-            request_tags = payload.get("request_tags", "") or ""
-            payload["metadata"] = str(metadata)
-            payload["request_tags"] = str(request_tags)
+            if payload is None:
+                return
             # Build the initial payload
 
             verbose_logger.debug(f"\nClickhouse Logger - Logging payload = {payload}")

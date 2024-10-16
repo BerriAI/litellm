@@ -7,7 +7,7 @@ def make_json_serializable(payload):
             elif not isinstance(value, (str, int, float, bool, type(None))):
                 # everything else becomes a string
                 payload[key] = str(value)
-        except:
+        except Exception:
             # non blocking if it can't cast to a str
             pass
     return payload

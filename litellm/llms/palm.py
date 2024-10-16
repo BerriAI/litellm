@@ -96,13 +96,13 @@ def completion(
     api_key,
     encoding,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     litellm_params=None,
     logger_fn=None,
 ):
     try:
         import google.generativeai as palm  # type: ignore
-    except:
+    except Exception:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
         )
@@ -167,14 +167,14 @@ def completion(
             choice_obj = Choices(index=idx + 1, message=message_obj)
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
-    except Exception as e:
+    except Exception:
         raise PalmError(
             message=traceback.format_exc(), status_code=response.status_code
         )
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
-    except:
+    except Exception:
         raise PalmError(
             status_code=400,
             message=f"No response received. Original response - {response}",

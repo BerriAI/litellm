@@ -3,14 +3,17 @@
 ## This reduces the number of REDIS GET requests made during high-traffic by the proxy.
 ### [BETA] this is in Beta. And might change.
 
-from typing import Optional, Literal
-import litellm
-from litellm.caching import DualCache, RedisCache, InMemoryCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
+import json
+import traceback
+from typing import Literal, Optional
+
 from fastapi import HTTPException
-import json, traceback
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _PROXY_BatchRedisRequests(CustomLogger):
@@ -18,9 +21,10 @@ class _PROXY_BatchRedisRequests(CustomLogger):
     in_memory_cache: Optional[InMemoryCache] = None
 
     def __init__(self):
-        litellm.cache.async_get_cache = (
-            self.async_get_cache
-        )  # map the litellm 'get_cache' function to our custom function
+        if litellm.cache is not None:
+            litellm.cache.async_get_cache = (
+                self.async_get_cache
+            )  # map the litellm 'get_cache' function to our custom function
 
     def print_verbose(
         self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG"
@@ -58,7 +62,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 if isinstance(key, str) and key.startswith(cache_key_name):
                     in_memory_cache_exists = True
 
-            if in_memory_cache_exists == False and litellm.cache is not None:
+            if in_memory_cache_exists is False and litellm.cache is not None:
                 """
                 - Check if `litellm.Cache` is redis
                 - Get the relevant values
@@ -105,16 +109,25 @@ class _PROXY_BatchRedisRequests(CustomLogger):
         """
         - Check if the cache key is in-memory
 
-        - Else return None
+        - Else:
+            - add missing cache key from REDIS
+            - update in-memory cache
+            - return redis cache request
         """
         try:  # never block execution
+            cache_key: Optional[str] = None
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
-            else:
+            elif litellm.cache is not None:
                 cache_key = litellm.cache.get_cache_key(
                     *args, **kwargs
                 )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
-            if cache_key is not None and self.in_memory_cache is not None:
+
+            if (
+                cache_key is not None
+                and self.in_memory_cache is not None
+                and litellm.cache is not None
+            ):
                 cache_control_args = kwargs.get("cache", {})
                 max_age = cache_control_args.get(
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
@@ -122,8 +135,16 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 cached_result = self.in_memory_cache.get_cache(
                     cache_key, *args, **kwargs
                 )
+                if cached_result is None:
+                    cached_result = await litellm.cache.cache.async_get_cache(
+                        cache_key, *args, **kwargs
+                    )
+                    if cached_result is not None:
+                        await self.in_memory_cache.async_set_cache(
+                            cache_key, cached_result, ttl=60
+                        )
                 return litellm.cache._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
-        except Exception as e:
+        except Exception:
             return None

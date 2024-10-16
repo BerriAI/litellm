@@ -4,6 +4,7 @@ python script to pre-create all views required by LiteLLM Proxy Server
 
 import asyncio
 import os
+from update_unassigned_teams import apply_db_fixes
 
 # Enter your DATABASE_URL here
 
@@ -51,22 +52,25 @@ async def check_view_exists():
 
         print("LiteLLM_VerificationTokenView Created!")  # noqa
 
-    sql_query = """
-        CREATE MATERIALIZED VIEW IF NOT EXISTS "MonthlyGlobalSpend" AS 
+    try:
+        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
+        print("MonthlyGlobalSpend Exists!")  # noqa
+    except Exception as e:
+        sql_query = """
+        CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
         SELECT
-            DATE_TRUNC('day', "startTime") AS date, 
-            SUM("spend") AS spend 
+        DATE("startTime") AS date, 
+        SUM("spend") AS spend 
         FROM 
-            "LiteLLM_SpendLogs" 
+        "LiteLLM_SpendLogs" 
         WHERE 
-            "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+        "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
         GROUP BY 
-            DATE_TRUNC('day', "startTime");
-    """
-    # Execute the queries
-    await db.execute_raw(query=sql_query)
+        DATE("startTime");
+        """
+        await db.execute_raw(query=sql_query)
 
-    print("MonthlyGlobalSpend Created!")  # noqa
+        print("MonthlyGlobalSpend Created!")  # noqa
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
@@ -201,6 +205,7 @@ async def check_view_exists():
 
         print("Last30dTopEndUsersSpend Created!")  # noqa
 
+    await apply_db_fixes(db=db)
     return
 
 

@@ -1,6 +1,7 @@
 import traceback
-from litellm._logging import verbose_logger
+
 import litellm
+from litellm._logging import verbose_logger
 
 
 class TraceloopLogger:
@@ -11,14 +12,15 @@ class TraceloopLogger:
 
     def __init__(self):
         try:
-            from traceloop.sdk.tracing.tracing import TracerWrapper
+            from opentelemetry.sdk.trace.export import ConsoleSpanExporter
             from traceloop.sdk import Traceloop
             from traceloop.sdk.instruments import Instruments
-            from opentelemetry.sdk.trace.export import ConsoleSpanExporter
+            from traceloop.sdk.tracing.tracing import TracerWrapper
         except ModuleNotFoundError as e:
             verbose_logger.error(
                 f"Traceloop not installed, try running 'pip install traceloop-sdk' to fix this error: {e}\n{traceback.format_exc()}"
             )
+            raise e
 
         Traceloop.init(
             app_name="Litellm-Server",
@@ -38,8 +40,8 @@ class TraceloopLogger:
         status_message=None,
     ):
         from opentelemetry import trace
-        from opentelemetry.trace import SpanKind, Status, StatusCode
         from opentelemetry.semconv.ai import SpanAttributes
+        from opentelemetry.trace import SpanKind, Status, StatusCode
 
         try:
             print_verbose(
@@ -94,7 +96,7 @@ class TraceloopLogger:
                     )
                 if "temperature" in optional_params:
                     span.set_attribute(
-                        SpanAttributes.LLM_REQUEST_TEMPERATURE,
+                        SpanAttributes.LLM_REQUEST_TEMPERATURE,  # type: ignore
                         kwargs.get("temperature"),
                     )
 

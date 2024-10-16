@@ -161,6 +161,10 @@ spec:
             - secretRef:
                 name: {{ . }}
           {{- end }}
+          {{- range .Values.environmentConfigMaps }}
+            - configMapRef:
+                name: {{ . }}
+          {{- end }}
           args:
             - --config
             - /etc/litellm/config.yaml

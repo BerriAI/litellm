@@ -1,4 +1,4 @@
-# 🎉 Demo App
+# Demo App
 
 Here is a demo of the proxy. To log in pass in:
 
