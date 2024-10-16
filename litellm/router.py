@@ -3496,7 +3496,7 @@ class Router:
             model_info = kwargs["litellm_params"].get("model_info", {}) or {}
             id = model_info.get("id", None)
             if model_group is None or id is None:
-                return
+                return None
             elif isinstance(id, int):
                 id = str(id)
 
