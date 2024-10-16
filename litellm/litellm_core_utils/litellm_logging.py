@@ -938,19 +938,6 @@ class Logging:
             else:
                 callbacks = litellm.success_callback
 
-            ## STREAMING CACHING ##
-            if "cache" in callbacks and litellm.cache is not None:
-                # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                print_verbose("success_callback: reaches cache for logging!")
-                kwargs = self.model_call_details
-                if self.stream and _caching_complete_streaming_response is not None:
-                    print_verbose(
-                        "success_callback: reaches cache for logging, there is a complete_streaming_response. Adding to cache"
-                    )
-                    result = _caching_complete_streaming_response
-                    # only add to cache once we have a complete streaming response
-                    litellm.cache.add_cache(result, **kwargs)
-
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
                 model_call_details=(

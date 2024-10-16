@@ -765,7 +765,9 @@ def client(original_function):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
-        logging_obj = kwargs.get("litellm_logging_obj", None)
+        logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
+            "litellm_logging_obj", None
+        )
 
         # only set litellm_call_id if its not in kwargs
         call_type = original_function.__name__
@@ -787,6 +789,12 @@ def client(original_function):
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
+            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+                original_function=original_function,
+                request_kwargs=kwargs,
+                start_time=start_time,
+            )
+            logging_obj._llm_caching_handler = _llm_caching_handler
 
             # CHECK FOR 'os.environ/' in kwargs
             for k, v in kwargs.items():
@@ -1013,12 +1021,11 @@ def client(original_function):
             )
 
             # [OPTIONAL] ADD TO CACHE
-            if (
-                litellm.cache is not None
-                and litellm.cache.supported_call_types is not None
-                and call_type in litellm.cache.supported_call_types
-            ) and (kwargs.get("cache", {}).get("no-store", False) is not True):
-                litellm.cache.add_cache(result, *args, **kwargs)
+            _llm_caching_handler._sync_set_cache(
+                result=result,
+                args=args,
+                kwargs=kwargs,
+            )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
@@ -7886,7 +7893,10 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
-    def run_success_logging_in_thread(self, processed_chunk, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+        """
+        Runs success logging in a thread and adds the response to the cache
+        """
         if litellm.disable_streaming_logging is True:
             """
             [NOT RECOMMENDED]
@@ -7913,6 +7923,12 @@ class CustomStreamWrapper:
             )
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
+
+        ## Sync store in cache
+        if self.logging_obj._llm_caching_handler is not None:
+            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
+                processed_chunk
+            )
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -7960,7 +7976,7 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     threading.Thread(
-                        target=self.run_success_logging_in_thread,
+                        target=self.run_success_logging_and_cache_storage,
                         args=(response, cache_hit),
                     ).start()  # log response
                     choice = response.choices[0]
@@ -8028,7 +8044,7 @@ class CustomStreamWrapper:
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
                 threading.Thread(
-                    target=self.run_success_logging_in_thread,
+                    target=self.run_success_logging_and_cache_storage,
                     args=(processed_chunk, cache_hit),
                 ).start()  # log response
                 return processed_chunk
