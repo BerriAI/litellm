@@ -366,41 +366,6 @@ def test_anthropic_tool_streaming():
             assert tool_use["index"] == correct_tool_index
 
 
-@pytest.mark.asyncio
-async def test_anthropic_router_completion_e2e():
-    litellm.set_verbose = True
-
-    litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "claude-3-5-sonnet-20240620",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "mock_response": "hi this is macintosh.",
-                },
-            }
-        ]
-    )
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-    response = await router.aadapter_completion(
-        model="claude-3-5-sonnet-20240620",
-        messages=messages,
-        adapter_id="anthropic",
-        mock_response="This is a fake call",
-    )
-
-    print("Response: {}".format(response))
-
-    assert response is not None
-
-    assert isinstance(response, AnthropicResponse)
-
-    assert response.model == "gpt-3.5-turbo"
-
-
 def test_anthropic_tool_calling_translation():
     kwargs = {
         "model": "claude-3-5-sonnet-20240620",

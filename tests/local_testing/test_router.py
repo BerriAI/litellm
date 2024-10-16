@@ -1310,19 +1310,38 @@ def test_aembedding_on_router():
         router = Router(model_list=model_list)
 
         async def embedding_call():
+            ## Test 1: user facing function
             response = await router.aembedding(
                 model="text-embedding-ada-002",
                 input=["good morning from litellm", "this is another item"],
             )
             print(response)
 
+            ## Test 2: underlying function
+            response = await router._aembedding(
+                model="text-embedding-ada-002",
+                input=["good morning from litellm 2"],
+            )
+            print(response)
+            router.reset()
+
         asyncio.run(embedding_call())
 
         print("\n Making sync Embedding call\n")
+        ## Test 1: user facing function
         response = router.embedding(
             model="text-embedding-ada-002",
             input=["good morning from litellm 2"],
         )
+        print(response)
+        router.reset()
+
+        ## Test 2: underlying function
+        response = router._embedding(
+            model="text-embedding-ada-002",
+            input=["good morning from litellm 2"],
+        )
+        print(response)
         router.reset()
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
@@ -1843,7 +1862,13 @@ async def test_router_amoderation():
     ]
 
     router = Router(model_list=model_list)
+    ## Test 1: user facing function
     result = await router.amoderation(
+        model="openai-moderations", input="this is valid good text"
+    )
+
+    ## Test 2: underlying function
+    result = await router._amoderation(
         model="openai-moderations", input="this is valid good text"
     )
 

@@ -10,9 +10,6 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_utils import (
-    convert_litellm_response_object_to_dict,
-)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,

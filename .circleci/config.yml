@@ -199,7 +199,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing tests/router_unit_tests --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -328,6 +328,48 @@ jobs:
           paths:
             - llm_translation_coverage.xml
             - llm_translation_coverage
+  logging_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml logging_coverage.xml
+            mv .coverage logging_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - logging_coverage.xml
+            - logging_coverage
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -380,6 +422,7 @@ jobs:
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
       - run: python ./tests/documentation_tests/test_general_setting_keys.py
+      - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/documentation_tests/test_env_keys.py
     
   db_migration_disable_update_check:
@@ -768,7 +811,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage ui_endpoint_testing_coverage
+            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage ui_endpoint_testing_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -1004,9 +1047,16 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - logging_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - upload-coverage:
           requires:
             - llm_translation_testing
+            - logging_testing
             - litellm_router_testing
             - local_testing
             - litellm_assistants_api_testing
@@ -1035,6 +1085,7 @@ workflows:
             - build_and_test
             - load_testing
             - llm_translation_testing
+            - logging_testing
             - litellm_router_testing
             - litellm_assistants_api_testing
             - ui_endpoint_testing
