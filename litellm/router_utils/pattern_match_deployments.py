@@ -32,10 +32,7 @@ class PatternMatchRouter:
         regex = self._pattern_to_regex(pattern)
         if regex not in self.patterns:
             self.patterns[regex] = []
-        if isinstance(llm_deployment, list):
-            self.patterns[regex].extend(llm_deployment)
-        else:
-            self.patterns[regex].append(llm_deployment)
+        self.patterns[regex].append(llm_deployment)
 
     def _pattern_to_regex(self, pattern: str) -> str:
         """
