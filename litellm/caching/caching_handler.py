@@ -223,6 +223,8 @@ class LLMCachingHandler:
         kwargs: Dict[str, Any],
         args: Optional[Tuple[Any, ...]] = None,
     ) -> CachingHandlerResponse:
+        from litellm.utils import CustomStreamWrapper
+
         args = args or ()
         cached_result: Optional[Any] = None
         if litellm.cache is not None and self._is_call_type_supported_by_cache(
