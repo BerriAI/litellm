@@ -92,7 +92,10 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
-    if litellm_router_instance.allowed_fails_policy is None:
+    if (
+        litellm_router_instance.allowed_fails_policy is None
+        and litellm_router_instance.allowed_fails is None
+    ):
         num_successes_this_minute = get_deployment_successes_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )

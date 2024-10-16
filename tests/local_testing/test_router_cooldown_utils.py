@@ -280,6 +280,40 @@ def test_cast_exception_status_to_int():
     assert cast_exception_status_to_int("invalid") == 500
 
 
+@pytest.mark.asyncio
+async def test_should_cooldown_deployment_allowed_fails_set_on_router():
+    """
+    Test the _should_cooldown_deployment function when Router.allowed_fails is set
+    """
+    # Create a Router instance with a test deployment
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_id": "test_deployment",
+            },
+        ]
+    )
+
+    # Set up allowed_fails for the test deployment
+    router.allowed_fails = 100
+
+    # should not cooldown when fails are below the allowed limit
+    for _ in range(100):
+        assert (
+            _should_cooldown_deployment(
+                router, "test_deployment", 500, Exception("Test")
+            )
+            is False
+        )
+
+    assert (
+        _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test"))
+        is True
+    )
+
+
 def test_increment_deployment_successes_for_current_minute_does_not_write_to_redis(
     testing_litellm_router,
 ):
