@@ -121,6 +121,7 @@ class LLMCachingHandler:
         args = args or ()
 
         final_embedding_cached_response: Optional[EmbeddingResponse] = None
+        embedding_all_elements_cache_hit: bool = False
         cached_result: Optional[Any] = None
         if (
             (kwargs.get("caching", None) is None and litellm.cache is not None)
@@ -209,82 +210,21 @@ class LLMCachingHandler:
                         litellm.cache.cache, S3Cache
                     )  # s3 doesn't support bulk writing. Exclude.
                 ):
-                    remaining_list = []
-                    non_null_list = []
-                    for idx, cr in enumerate(cached_result):
-                        if cr is None:
-                            remaining_list.append(kwargs["input"][idx])
-                        else:
-                            non_null_list.append((idx, cr))
-                    original_kwargs_input = kwargs["input"]
-                    kwargs["input"] = remaining_list
-                    if len(non_null_list) > 0:
-                        print_verbose(f"EMBEDDING CACHE HIT! - {len(non_null_list)}")
-                        final_embedding_cached_response = EmbeddingResponse(
-                            model=kwargs.get("model"),
-                            data=[None] * len(original_kwargs_input),
-                        )
-                        final_embedding_cached_response._hidden_params["cache_hit"] = (
-                            True
-                        )
-
-                        for val in non_null_list:
-                            idx, cr = val  # (idx, cr) tuple
-                            if cr is not None:
-                                final_embedding_cached_response.data[idx] = Embedding(
-                                    embedding=cr["embedding"],
-                                    index=idx,
-                                    object="embedding",
-                                )
-                    if len(remaining_list) == 0:
-                        # LOG SUCCESS
-                        cache_hit = True
-                        end_time = datetime.datetime.now()
-                        (
-                            model,
-                            custom_llm_provider,
-                            dynamic_api_key,
-                            api_base,
-                        ) = litellm.get_llm_provider(
-                            model=model,
-                            custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                            api_base=kwargs.get("api_base", None),
-                            api_key=kwargs.get("api_key", None),
-                        )
-                        print_verbose(
-                            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-                        )
-
-                        self._update_litellm_logging_obj_environment(
-                            logging_obj=logging_obj,
-                            model=model,
-                            kwargs=kwargs,
-                            cached_result=final_embedding_cached_response,
-                            is_async=True,
-                            is_embedding=True,
-                        )
-
-                        asyncio.create_task(
-                            logging_obj.async_success_handler(
-                                final_embedding_cached_response,
-                                start_time,
-                                end_time,
-                                cache_hit,
-                            )
-                        )
-                        threading.Thread(
-                            target=logging_obj.success_handler,
-                            args=(
-                                final_embedding_cached_response,
-                                start_time,
-                                end_time,
-                                cache_hit,
-                            ),
-                        ).start()
-                        return CachingHandlerResponse(
-                            final_embedding_cached_response=final_embedding_cached_response,
-                            embedding_all_elements_cache_hit=True,
-                        )
+                    (
+                        final_embedding_cached_response,
+                        embedding_all_elements_cache_hit,
+                    ) = self._process_async_embedding_cached_response(
+                        final_embedding_cached_response=final_embedding_cached_response,
+                        cached_result=cached_result,
+                        kwargs=kwargs,
+                        logging_obj=logging_obj,
+                        start_time=start_time,
+                        model=model,
+                    )
+                    return CachingHandlerResponse(
+                        final_embedding_cached_response=final_embedding_cached_response,
+                        embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
+                    )
         return CachingHandlerResponse(
             cached_result=cached_result,
             final_embedding_cached_response=final_embedding_cached_response,
@@ -371,6 +311,110 @@ class LLMCachingHandler:
                         cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
+
+    def _process_async_embedding_cached_response(
+        self,
+        final_embedding_cached_response: Optional[EmbeddingResponse],
+        cached_result: List[Optional[Dict[str, Any]]],
+        kwargs: Dict[str, Any],
+        logging_obj: LiteLLMLoggingObj,
+        start_time: datetime.datetime,
+        model: str,
+    ) -> Tuple[Optional[EmbeddingResponse], bool]:
+        """
+        Returns the final embedding cached response and a boolean indicating if all elements in the list have a cache hit
+
+        For embedding responses, there can be a cache hit for some of the inputs in the list and a cache miss for others
+        This function processes the cached embedding responses and returns the final embedding cached response and a boolean indicating if all elements in the list have a cache hit
+
+        Args:
+            final_embedding_cached_response: Optional[EmbeddingResponse]:
+            cached_result: List[Optional[Dict[str, Any]]]:
+            kwargs: Dict[str, Any]:
+            logging_obj: LiteLLMLoggingObj:
+            start_time: datetime.datetime:
+            model: str:
+
+        Returns:
+            Tuple[Optional[EmbeddingResponse], bool]:
+            Returns the final embedding cached response and a boolean indicating if all elements in the list have a cache hit
+
+
+        """
+        embedding_all_elements_cache_hit: bool = False
+        remaining_list = []
+        non_null_list = []
+        for idx, cr in enumerate(cached_result):
+            if cr is None:
+                remaining_list.append(kwargs["input"][idx])
+            else:
+                non_null_list.append((idx, cr))
+        original_kwargs_input = kwargs["input"]
+        kwargs["input"] = remaining_list
+        if len(non_null_list) > 0:
+            print_verbose(f"EMBEDDING CACHE HIT! - {len(non_null_list)}")
+            final_embedding_cached_response = EmbeddingResponse(
+                model=kwargs.get("model"),
+                data=[None] * len(original_kwargs_input),
+            )
+            final_embedding_cached_response._hidden_params["cache_hit"] = True
+
+            for val in non_null_list:
+                idx, cr = val  # (idx, cr) tuple
+                if cr is not None:
+                    final_embedding_cached_response.data[idx] = Embedding(
+                        embedding=cr["embedding"],
+                        index=idx,
+                        object="embedding",
+                    )
+        if len(remaining_list) == 0:
+            # LOG SUCCESS
+            cache_hit = True
+            embedding_all_elements_cache_hit = True
+            end_time = datetime.datetime.now()
+            (
+                model,
+                custom_llm_provider,
+                dynamic_api_key,
+                api_base,
+            ) = litellm.get_llm_provider(
+                model=model,
+                custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                api_base=kwargs.get("api_base", None),
+                api_key=kwargs.get("api_key", None),
+            )
+            print_verbose(
+                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+            )
+
+            self._update_litellm_logging_obj_environment(
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                cached_result=final_embedding_cached_response,
+                is_async=True,
+                is_embedding=True,
+            )
+
+            asyncio.create_task(
+                logging_obj.async_success_handler(
+                    final_embedding_cached_response,
+                    start_time,
+                    end_time,
+                    cache_hit,
+                )
+            )
+            threading.Thread(
+                target=logging_obj.success_handler,
+                args=(
+                    final_embedding_cached_response,
+                    start_time,
+                    end_time,
+                    cache_hit,
+                ),
+            ).start()
+            return final_embedding_cached_response, embedding_all_elements_cache_hit
+        return final_embedding_cached_response, embedding_all_elements_cache_hit
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: Dict[str, Any], args: Tuple[Any, ...]
