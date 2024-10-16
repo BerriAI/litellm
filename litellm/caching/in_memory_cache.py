@@ -12,7 +12,7 @@ import json
 import time
 from typing import List, Optional
 
-from .caching import BaseCache
+from .base_cache import BaseCache
 
 
 class InMemoryCache(BaseCache):

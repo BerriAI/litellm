@@ -1,7 +1,7 @@
 """
 Redis Cache implementation
 
-Has 4 methods:
+Has 4 primary methods:
     - set_cache
     - get_cache
     - async_set_cache
@@ -16,12 +16,12 @@ import time
 from datetime import timedelta
 from typing import Any, List, Optional, Tuple
 
+from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.logging import print_verbose, verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import all_litellm_params
 
-from .caching import BaseCache
+from .base_cache import BaseCache
 
 
 class RedisCache(BaseCache):

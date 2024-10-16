@@ -7,6 +7,10 @@ This exposes two methods:
 
 This file is a wrapper around caching.py
 
+This class is used to handle caching logic specific for LLM API requests (completion / embedding / text_completion / transcription etc)
+
+It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache, DiskCache) based on what the user has setup
+
 In each method it will call the appropriate method from caching.py
 """
 

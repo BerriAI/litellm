@@ -14,10 +14,10 @@ import json
 from typing import Any, Optional
 
 import litellm
-from litellm.logging import print_verbose, verbose_logger
+from litellm._logging import print_verbose, verbose_logger
 from litellm.types.caching import LiteLLMCacheType
 
-from .caching import BaseCache
+from .base_cache import BaseCache
 
 
 class S3Cache(BaseCache):

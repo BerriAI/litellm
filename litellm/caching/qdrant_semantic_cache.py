@@ -13,10 +13,10 @@ import json
 from typing import Any
 
 import litellm
-from litellm.logging import print_verbose
+from litellm._logging import print_verbose
 from litellm.types.caching import LiteLLMCacheType
 
-from .caching import BaseCache
+from .base_cache import BaseCache
 
 
 class QdrantSemanticCache(BaseCache):
