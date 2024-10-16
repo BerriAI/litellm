@@ -131,14 +131,10 @@ class LLMCachingHandler:
         ):  # allow users to control returning cached responses from the completion function
             # checking cache
             print_verbose("INSIDE CHECKING CACHE")
-            if (
-                litellm.cache is not None
-                and litellm.cache.supported_call_types is not None
-                and str(original_function.__name__)
-                in litellm.cache.supported_call_types
+            if litellm.cache is not None and self._is_call_type_supported_by_cache(
+                original_function=original_function
             ):
                 print_verbose("Checking Cache")
-
                 cached_result = await self._retrieve_from_cache(
                     call_type=call_type,
                     kwargs=kwargs,
@@ -149,12 +145,7 @@ class LLMCachingHandler:
                     print_verbose("Cache Hit!")
                     cache_hit = True
                     end_time = datetime.datetime.now()
-                    (
-                        model,
-                        custom_llm_provider,
-                        dynamic_api_key,
-                        api_base,
-                    ) = litellm.get_llm_provider(
+                    model, _, _, _ = litellm.get_llm_provider(
                         model=model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
@@ -185,15 +176,13 @@ class LLMCachingHandler:
                     )
                     if kwargs.get("stream", False) is False:
                         # LOG SUCCESS
-                        asyncio.create_task(
-                            logging_obj.async_success_handler(
-                                cached_result, start_time, end_time, cache_hit
-                            )
+                        self._async_log_cache_hit_on_callbacks(
+                            logging_obj=logging_obj,
+                            cached_result=cached_result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            cache_hit=cache_hit,
                         )
-                        threading.Thread(
-                            target=logging_obj.success_handler,
-                            args=(cached_result, start_time, end_time, cache_hit),
-                        ).start()
                     cache_key = kwargs.get("preset_cache_key", None)
                     if (
                         isinstance(cached_result, BaseModel)
@@ -242,10 +231,8 @@ class LLMCachingHandler:
     ) -> CachingHandlerResponse:
         args = args or ()
         cached_result: Optional[Any] = None
-        if (
-            litellm.cache is not None
-            and litellm.cache.supported_call_types is not None
-            and str(original_function.__name__) in litellm.cache.supported_call_types
+        if litellm.cache is not None and self._is_call_type_supported_by_cache(
+            original_function=original_function
         ):
             print_verbose("Checking Cache")
             preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
@@ -395,26 +382,43 @@ class LLMCachingHandler:
                 is_async=True,
                 is_embedding=True,
             )
-
-            asyncio.create_task(
-                logging_obj.async_success_handler(
-                    final_embedding_cached_response,
-                    start_time,
-                    end_time,
-                    cache_hit,
-                )
+            self._async_log_cache_hit_on_callbacks(
+                logging_obj=logging_obj,
+                cached_result=final_embedding_cached_response,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
             )
-            threading.Thread(
-                target=logging_obj.success_handler,
-                args=(
-                    final_embedding_cached_response,
-                    start_time,
-                    end_time,
-                    cache_hit,
-                ),
-            ).start()
             return final_embedding_cached_response, embedding_all_elements_cache_hit
         return final_embedding_cached_response, embedding_all_elements_cache_hit
+
+    def _async_log_cache_hit_on_callbacks(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        cached_result: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        cache_hit: bool,
+    ):
+        """
+        Helper function to log the success of a cached result on callbacks
+
+        Args:
+            logging_obj (LiteLLMLoggingObj): The logging object.
+            cached_result: The cached result.
+            start_time (datetime): The start time of the operation.
+            end_time (datetime): The end time of the operation.
+            cache_hit (bool): Whether it was a cache hit.
+        """
+        asyncio.create_task(
+            logging_obj.async_success_handler(
+                cached_result, start_time, end_time, cache_hit
+            )
+        )
+        threading.Thread(
+            target=logging_obj.success_handler,
+            args=(cached_result, start_time, end_time, cache_hit),
+        ).start()
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: Dict[str, Any], args: Tuple[Any, ...]
@@ -691,6 +695,28 @@ class LLMCachingHandler:
             and (str(original_function.__name__) in litellm.cache.supported_call_types)
             and (kwargs.get("cache", {}).get("no-store", False) is not True)
         )
+
+    def _is_call_type_supported_by_cache(
+        self,
+        original_function: Callable,
+    ) -> bool:
+        """
+        Helper function to determine if the call type is supported by the cache.
+
+        call types are acompletion, aembedding, atext_completion, atranscription, arerank
+
+        Defined on `litellm.types.utils.CallTypes`
+
+        Returns:
+            bool: True if the call type is supported by the cache, False otherwise.
+        """
+        if (
+            litellm.cache is not None
+            and litellm.cache.supported_call_types is not None
+            and str(original_function.__name__) in litellm.cache.supported_call_types
+        ):
+            return True
+        return False
 
     async def _add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
         """
