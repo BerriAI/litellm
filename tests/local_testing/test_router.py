@@ -1050,7 +1050,7 @@ def test_filter_invalid_params_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-@pytest.mark.parametrize("allowed_model_region", ["eu", None])
+@pytest.mark.parametrize("allowed_model_region", ["eu", None, "us"])
 def test_router_region_pre_call_check(allowed_model_region):
     """
     If region based routing set
@@ -1065,7 +1065,7 @@ def test_router_region_pre_call_check(allowed_model_region):
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
                 "base_model": "azure/gpt-35-turbo",
-                "region_name": "eu",
+                "region_name": allowed_model_region,
             },
             "model_info": {"id": "1"},
         },
@@ -1091,7 +1091,9 @@ def test_router_region_pre_call_check(allowed_model_region):
     if allowed_model_region is None:
         assert len(_healthy_deployments) == 2
     else:
-        assert len(_healthy_deployments) == 1, "No models selected as healthy"
+        assert len(_healthy_deployments) == 1, "{} models selected as healthy".format(
+            len(_healthy_deployments)
+        )
         assert (
             _healthy_deployments[0]["model_info"]["id"] == "1"
         ), "Incorrect model id picked. Got id={}, expected id=1".format(
