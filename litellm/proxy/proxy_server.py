@@ -4229,7 +4229,7 @@ async def get_assistants(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.aget_assistants(**data)
+        response = await llm_router.assistants_api_router.aget_assistants(**data)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4326,7 +4326,7 @@ async def create_assistant(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.acreate_assistants(**data)
+        response = await llm_router.assistants_api_router.acreate_assistants(**data)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4422,7 +4422,9 @@ async def delete_assistant(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        response = await llm_router.assistants_api_router.adelete_assistant(
+            assistant_id=assistant_id, **data
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4518,7 +4520,7 @@ async def create_threads(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.acreate_thread(**data)
+        response = await llm_router.assistants_api_router.acreate_thread(**data)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4613,7 +4615,9 @@ async def get_thread(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.aget_thread(thread_id=thread_id, **data)
+        response = await llm_router.assistants_api_router.aget_thread(
+            thread_id=thread_id, **data
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4711,7 +4715,9 @@ async def add_messages(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.a_add_message(thread_id=thread_id, **data)
+        response = await llm_router.assistants_api_router.a_add_message(
+            thread_id=thread_id, **data
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4805,7 +4811,9 @@ async def get_messages(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.aget_messages(thread_id=thread_id, **data)
+        response = await llm_router.assistants_api_router.aget_messages(
+            thread_id=thread_id, **data
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -4901,7 +4909,9 @@ async def run_thread(
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
-        response = await llm_router.arun_thread(thread_id=thread_id, **data)
+        response = await llm_router.assistants_api_router.arun_thread(
+            thread_id=thread_id, **data
+        )
 
         if (
             "stream" in data and data["stream"] is True
