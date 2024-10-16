@@ -927,7 +927,7 @@ def client(original_function):
             )
 
             # [OPTIONAL] ADD TO CACHE
-            _llm_caching_handler._sync_set_cache(
+            _llm_caching_handler.sync_set_cache(
                 result=result,
                 args=args,
                 kwargs=kwargs,
@@ -1126,7 +1126,7 @@ def client(original_function):
             )
 
             ## Add response to cache
-            await _llm_caching_handler._async_set_cache(
+            await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
                 kwargs=kwargs,
