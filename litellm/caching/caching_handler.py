@@ -67,6 +67,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
     ):
         self.async_streaming_chunks: List[ModelResponse] = []
+        self.sync_streaming_chunks: List[ModelResponse] = []
         self.request_kwargs = request_kwargs
         self.original_function = original_function
         self.start_time = start_time
@@ -510,7 +511,6 @@ class LLMCachingHandler:
 
     def _sync_set_cache(
         self,
-        call_type: str,
         result: Any,
         kwargs: Dict[str, Any],
         args: Optional[Tuple[Any, ...]] = None,
@@ -570,5 +570,27 @@ class LLMCachingHandler:
             await self._async_set_cache(
                 result=complete_streaming_response,
                 original_function=self.original_function,
+                kwargs=self.request_kwargs,
+            )
+
+    def _sync_add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
+        """
+        Sync internal method to add the streaming response to the cache
+        """
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = _assemble_complete_response_from_streaming_chunks(
+            result=processed_chunk,
+            start_time=self.start_time,
+            end_time=datetime.datetime.now(),
+            request_kwargs=self.request_kwargs,
+            streaming_chunks=self.sync_streaming_chunks,
+            is_async=False,
+        )
+
+        # if a complete_streaming_response is assembled, add it to the cache
+        if complete_streaming_response is not None:
+            self._sync_set_cache(
+                result=complete_streaming_response,
                 kwargs=self.request_kwargs,
             )
