@@ -5017,17 +5017,17 @@ class Router:
 
         if model not in self.model_names:
             # check if provider/ specific wildcard routing use pattern matching
-            custom_llm_provider: Optional[str] = None
-            try:
-                (
-                    _,
-                    custom_llm_provider,
-                    _,
-                    _,
-                ) = litellm.get_llm_provider(model=model)
-            except Exception:
-                # get_llm_provider raises exception when provider is unknown
-                pass
+            # custom_llm_provider: Optional[str] = None
+            # try:
+            #     (
+            #         _,
+            #         custom_llm_provider,
+            #         _,
+            #         _,
+            #     ) = litellm.get_llm_provider(model=model)
+            # except Exception:
+            #     # get_llm_provider raises exception when provider is unknown
+            #     pass
 
             """
             self.pattern_router.route(model):
@@ -5036,9 +5036,7 @@ class Router:
             self.pattern_router.route(f"{custom_llm_provider}/{model}"):
                 does pattern matching using litellm.get_llm_provider(), example claude-3-5-sonnet-20240620 gets routed to anthropic/* since 'claude-3-5-sonnet-20240620' is an Anthropic Model
             """
-            _pattern_router_response = self.pattern_router.route(
-                model
-            ) or self.pattern_router.route(f"{custom_llm_provider}/{model}")
+            _pattern_router_response = self.pattern_router.route(model)
             if _pattern_router_response is not None:
                 provider_deployments = []
                 for deployment in _pattern_router_response:
