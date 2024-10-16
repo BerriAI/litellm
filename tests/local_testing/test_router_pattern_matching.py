@@ -149,7 +149,9 @@ def test_route_with_exception():
     )
     router.add_pattern("openai/*", deployment.to_json(exclude_none=True))
 
-    router.patterns = []
+    router.patterns = (
+        []
+    )  # this will cause router.route to raise an exception, since router.patterns should be a dict
 
     result = router.route("openai/gpt-3.5-turbo")
     assert result is None
