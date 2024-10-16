@@ -49,12 +49,13 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
 )
-from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.utils import CustomStreamWrapper
 else:
     LiteLLMLoggingObj = Any
+    CustomStreamWrapper = Any
 
 
 class CachingHandlerResponse(BaseModel):
