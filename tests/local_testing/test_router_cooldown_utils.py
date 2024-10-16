@@ -278,3 +278,51 @@ def test_cast_exception_status_to_int():
     assert cast_exception_status_to_int(200) == 200
     assert cast_exception_status_to_int("404") == 404
     assert cast_exception_status_to_int("invalid") == 500
+
+
+def test_increment_deployment_successes_for_current_minute_does_not_write_to_redis(
+    testing_litellm_router,
+):
+    """
+    Ensure tracking deployment metrics does not write to redis
+
+    Important - If it writes to redis on every request it will seriously impact performance / latency
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+        increment_deployment_successes_for_current_minute,
+    )
+
+    # Mock RedisCache
+    mock_redis_cache = MagicMock(spec=RedisCache)
+
+    testing_litellm_router.cache = DualCache(
+        redis_cache=mock_redis_cache, in_memory_cache=InMemoryCache()
+    )
+
+    # Call the function we're testing
+    increment_deployment_successes_for_current_minute(
+        litellm_router_instance=testing_litellm_router, deployment_id="test_deployment"
+    )
+
+    increment_deployment_failures_for_current_minute(
+        litellm_router_instance=testing_litellm_router, deployment_id="test_deployment"
+    )
+
+    time.sleep(1)
+
+    # Assert that no methods were called on the mock_redis_cache
+    assert not mock_redis_cache.method_calls, "RedisCache methods should not be called"
+
+    print(
+        "in memory cache values=",
+        testing_litellm_router.cache.in_memory_cache.cache_dict,
+    )
+    assert (
+        testing_litellm_router.cache.in_memory_cache.get_cache(
+            "test_deployment:successes"
+        )
+        is not None
+    )
