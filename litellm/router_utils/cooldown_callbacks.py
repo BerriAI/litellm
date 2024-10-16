@@ -25,7 +25,7 @@ async def router_cooldown_event_callback(
     """
     Callback triggered when a deployment is put into cooldown by litellm
 
-    - Updates deploymen state on Prometheus
+    - Updates deployment state on Prometheus
     - Increments cooldown metric for deployment on Prometheus
     """
     verbose_logger.debug("In router_cooldown_event_callback - updating prometheus")
