@@ -1151,30 +1151,13 @@ def client(original_function):
                 isinstance(result, EmbeddingResponse)
                 and _caching_handler_response.final_embedding_cached_response
                 is not None
-                and _caching_handler_response.final_embedding_cached_response.data
-                is not None
             ):
-                idx = 0
-                final_data_list = []
-                for (
-                    item
-                ) in _caching_handler_response.final_embedding_cached_response.data:
-                    if item is None and result.data is not None:
-                        final_data_list.append(result.data[idx])
-                        idx += 1
-                    else:
-                        final_data_list.append(item)
-
-                _caching_handler_response.final_embedding_cached_response.data = (
-                    final_data_list
+                return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
+                    _caching_handler_response=_caching_handler_response,
+                    embedding_response=result,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
-                _caching_handler_response.final_embedding_cached_response._hidden_params[
-                    "cache_hit"
-                ] = True
-                _caching_handler_response.final_embedding_cached_response._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000
-                return _caching_handler_response.final_embedding_cached_response
 
             return result
         except Exception as e:

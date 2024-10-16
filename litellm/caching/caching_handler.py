@@ -379,6 +379,47 @@ class LLMCachingHandler:
             return final_embedding_cached_response, embedding_all_elements_cache_hit
         return final_embedding_cached_response, embedding_all_elements_cache_hit
 
+    def _combine_cached_embedding_response_with_api_result(
+        self,
+        _caching_handler_response: CachingHandlerResponse,
+        embedding_response: EmbeddingResponse,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> EmbeddingResponse:
+        """
+        Combines the cached embedding response with the API EmbeddingResponse
+
+        For caching there can be a cache hit for some of the inputs in the list and a cache miss for others
+        This function combines the cached embedding response with the API EmbeddingResponse
+
+        Args:
+            caching_handler_response: CachingHandlerResponse:
+            embedding_response: EmbeddingResponse:
+
+        Returns:
+            EmbeddingResponse:
+        """
+        if _caching_handler_response.final_embedding_cached_response is None:
+            return embedding_response
+
+        idx = 0
+        final_data_list = []
+        for item in _caching_handler_response.final_embedding_cached_response.data:
+            if item is None and embedding_response.data is not None:
+                final_data_list.append(embedding_response.data[idx])
+                idx += 1
+            else:
+                final_data_list.append(item)
+
+        _caching_handler_response.final_embedding_cached_response.data = final_data_list
+        _caching_handler_response.final_embedding_cached_response._hidden_params[
+            "cache_hit"
+        ] = True
+        _caching_handler_response.final_embedding_cached_response._response_ms = (
+            end_time - start_time
+        ).total_seconds() * 1000
+        return _caching_handler_response.final_embedding_cached_response
+
     def _async_log_cache_hit_on_callbacks(
         self,
         logging_obj: LiteLLMLoggingObj,
