@@ -1067,7 +1067,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.5)
+        await asyncio.sleep(1)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
@@ -1082,8 +1082,8 @@ async def test_redis_cache_acompletion_stream_bedrock():
             response_2_content += chunk.choices[0].delta.content or ""
         print(response_2_content)
 
-        print("\nresponse 1", response_1_content)
-        print("\nresponse 2", response_2_content)
+        print("\nfinal response 1", response_1_content)
+        print("\nfinal response 2", response_2_content)
         assert (
             response_1_content == response_2_content
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
