@@ -129,8 +129,6 @@ class LLMCachingHandler:
         ) and (
             kwargs.get("cache", {}).get("no-cache", False) is not True
         ):  # allow users to control returning cached responses from the completion function
-            # checking cache
-            print_verbose("INSIDE CHECKING CACHE")
             if litellm.cache is not None and self._is_call_type_supported_by_cache(
                 original_function=original_function
             ):
@@ -151,10 +149,6 @@ class LLMCachingHandler:
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
-                    print_verbose(
-                        f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-                    )
-
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
@@ -247,9 +241,6 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
-                    print_verbose(
-                        f"Cache Response Object routing: call_type - {call_type}; cached_result instace: {type(cached_result)}"
-                    )
 
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
@@ -274,9 +265,6 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
-                    )
-                    print_verbose(
-                        f"Sync Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
                     )
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
@@ -369,9 +357,6 @@ class LLMCachingHandler:
                 custom_llm_provider=kwargs.get("custom_llm_provider", None),
                 api_base=kwargs.get("api_base", None),
                 api_key=kwargs.get("api_key", None),
-            )
-            print_verbose(
-                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
             )
 
             self._update_litellm_logging_obj_environment(
