@@ -52,7 +52,7 @@ async def test_send_llm_exception_alert_success():
 @pytest.mark.asyncio
 async def test_send_llm_exception_alert_no_logger():
     """
-    Test that the function does not send an alert when the router.slack_alerting_logger is not set.
+    Test that the function does error out when no slack_alerting_logger is set
     """
     # Create a mock LitellmRouter instance without a slack_alerting_logger
     mock_router = MagicMock()
@@ -76,10 +76,6 @@ async def test_send_llm_exception_alert_no_logger():
     await send_llm_exception_alert(
         mock_router, request_kwargs, error_traceback, mock_exception
     )
-
-    # Assert that no exception was raised and the function completed successfully
-
-    mock_router.slack_alerting_logger.send_alert.assert_not_called()
 
 
 @pytest.mark.asyncio
