@@ -175,7 +175,7 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import KeyManagementSystem
+from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
@@ -3839,18 +3839,13 @@ def _get_model_region(
     return litellm_params.region_name
 
 
-def _is_region_eu(litellm_params: LiteLLM_Params) -> bool:
+def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional[AllowedModelRegion]:
     """
-    Return true/false if a deployment is in the EU
-    """
-    if litellm_params.region_name == "eu":
-        return True
+    Infer if a model is in the EU or US region
 
-    ## ELSE ##
-    """
-    - get provider 
-    - get provider regions 
-    - return true if given region (get_provider_region) in eu region (config.get_eu_regions())
+    Returns:
+    - str (region) - "eu" or "us"
+    - None (if region not found)
     """
     model, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=litellm_params.model, litellm_params=litellm_params
@@ -3861,22 +3856,72 @@ def _is_region_eu(litellm_params: LiteLLM_Params) -> bool:
     )
 
     if model_region is None:
-        return False
+        verbose_logger.debug(
+            "Cannot infer model region for model: {}".format(litellm_params.model)
+        )
+        return None
 
     if custom_llm_provider == "azure":
         eu_regions = litellm.AzureOpenAIConfig().get_eu_regions()
+        us_regions = litellm.AzureOpenAIConfig().get_us_regions()
     elif custom_llm_provider == "vertex_ai":
         eu_regions = litellm.VertexAIConfig().get_eu_regions()
+        us_regions = litellm.VertexAIConfig().get_us_regions()
     elif custom_llm_provider == "bedrock":
         eu_regions = litellm.AmazonBedrockGlobalConfig().get_eu_regions()
+        us_regions = litellm.AmazonBedrockGlobalConfig().get_us_regions()
     elif custom_llm_provider == "watsonx":
         eu_regions = litellm.IBMWatsonXAIConfig().get_eu_regions()
+        us_regions = litellm.IBMWatsonXAIConfig().get_us_regions()
     else:
-        return False
+        eu_regions = []
+        us_regions = []
 
     for region in eu_regions:
         if region in model_region.lower():
-            return True
+            return "eu"
+    for region in us_regions:
+        if region in model_region.lower():
+            return "us"
+    return None
+
+
+def _is_region_eu(litellm_params: LiteLLM_Params) -> bool:
+    """
+    Return true/false if a deployment is in the EU
+    """
+    if litellm_params.region_name == "eu":
+        return True
+
+    ## Else - try and infer from model region
+    model_region = _infer_model_region(litellm_params=litellm_params)
+    if model_region is not None and model_region == "eu":
+        return True
+    return False
+
+
+def _is_region_us(litellm_params: LiteLLM_Params) -> bool:
+    """
+    Return true/false if a deployment is in the US
+    """
+    if litellm_params.region_name == "us":
+        return True
+
+    ## Else - try and infer from model region
+    model_region = _infer_model_region(litellm_params=litellm_params)
+    if model_region is not None and model_region == "us":
+        return True
+    return False
+
+
+def is_region_allowed(
+    litellm_params: LiteLLM_Params, allowed_model_region: str
+) -> bool:
+    """
+    Return true/false if a deployment is in the EU
+    """
+    if litellm_params.region_name == allowed_model_region:
+        return True
     return False
 
 

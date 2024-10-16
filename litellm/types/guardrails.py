@@ -19,6 +19,15 @@ litellm_settings:
 """
 
 
+class SupportedGuardrailIntegrations(Enum):
+    APORIA = "aporia"
+    BEDROCK = "bedrock"
+    GURDRAILS_AI = "guardrails_ai"
+    LAKERA = "lakera"
+    PRESIDIO = "presidio"
+    HIDE_SECRETS = "hide-secrets"
+
+
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"
@@ -91,6 +100,9 @@ class LitellmParams(TypedDict):
 
     # hide secrets params
     detect_secrets_config: Optional[dict]
+
+    # guardrails ai params
+    guard_name: Optional[str]
 
 
 class Guardrail(TypedDict):
