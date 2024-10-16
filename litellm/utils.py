@@ -1022,7 +1022,6 @@ def client(original_function):
 
             # [OPTIONAL] ADD TO CACHE
             _llm_caching_handler._sync_set_cache(
-                call_type=call_type,
                 result=result,
                 args=args,
                 kwargs=kwargs,
@@ -7894,7 +7893,10 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
-    def run_success_logging_in_thread(self, processed_chunk, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+        """
+        Runs success logging in a thread and adds the response to the cache
+        """
         if litellm.disable_streaming_logging is True:
             """
             [NOT RECOMMENDED]
@@ -7921,6 +7923,12 @@ class CustomStreamWrapper:
             )
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
+
+        ## Sync store in cache
+        if self.logging_obj._llm_caching_handler is not None:
+            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
+                processed_chunk
+            )
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -7968,7 +7976,7 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     threading.Thread(
-                        target=self.run_success_logging_in_thread,
+                        target=self.run_success_logging_and_cache_storage,
                         args=(response, cache_hit),
                     ).start()  # log response
                     choice = response.choices[0]
@@ -8036,7 +8044,7 @@ class CustomStreamWrapper:
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
                 threading.Thread(
-                    target=self.run_success_logging_in_thread,
+                    target=self.run_success_logging_and_cache_storage,
                     args=(processed_chunk, cache_hit),
                 ).start()  # log response
                 return processed_chunk
