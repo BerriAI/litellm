@@ -136,6 +136,7 @@ async def test_router_cooldown_event_callback_no_prometheus():
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
 
 
+@pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_deployment():
     """
     Test the router_cooldown_event_callback function
