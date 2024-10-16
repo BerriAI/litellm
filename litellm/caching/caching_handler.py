@@ -822,15 +822,13 @@ class LLMCachingHandler:
         litellm_params = {
             "logger_fn": kwargs.get("logger_fn", None),
             "acompletion": is_async,
+            "api_base": kwargs.get("api_base", ""),
             "metadata": kwargs.get("metadata", {}),
             "model_info": kwargs.get("model_info", {}),
             "proxy_server_request": kwargs.get("proxy_server_request", None),
             "preset_cache_key": kwargs.get("preset_cache_key", None),
             "stream_response": kwargs.get("stream_response", {}),
         }
-
-        if not is_embedding:
-            litellm_params["api_base"] = kwargs.get("api_base", "")
 
         logging_obj.update_environment_variables(
             model=model,
