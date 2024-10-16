@@ -168,7 +168,9 @@ def get_forwardable_headers(
     """
     forwarded_headers = {}
     for header, value in headers.items():
-        if header.startswith("x-"):
+        if header.lower().startswith("x-") and not header.lower().startswith(
+            "x-stainless"
+        ):  # causes openai sdk to fail
             forwarded_headers[header] = value
     return forwarded_headers
 

@@ -181,14 +181,22 @@ def test_add_headers_to_request(litellm_key_header_name):
     from fastapi import Request
     from starlette.datastructures import URL
     import json
-    from litellm.proxy.litellm_pre_call_utils import clean_headers
+    from litellm.proxy.litellm_pre_call_utils import (
+        clean_headers,
+        get_forwardable_headers,
+    )
 
-    headers = {"Authorization": "Bearer 1234", "X-Custom-Header": "Custom-Value"}
+    headers = {
+        "Authorization": "Bearer 1234",
+        "X-Custom-Header": "Custom-Value",
+        "X-Stainless-Header": "Stainless-Value",
+    }
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
     request._body = json.dumps({"model": "gpt-3.5-turbo"}).encode("utf-8")
     request_headers = clean_headers(headers, litellm_key_header_name)
-    assert request_headers == {"X-Custom-Header": "Custom-Value"}
+    forwarded_headers = get_forwardable_headers(request_headers)
+    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
 
 
 @pytest.mark.parametrize(
