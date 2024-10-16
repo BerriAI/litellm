@@ -5449,6 +5449,7 @@ class Router:
         """
         # if we can find the exception then in the retry policy -> return the number of retries
         retry_policy: Optional[RetryPolicy] = self.retry_policy
+
         if (
             self.model_group_retry_policy is not None
             and model_group is not None
@@ -5547,7 +5548,9 @@ class Router:
         litellm.success_callback.append(
             _slack_alerting_logger.response_taking_too_long_callback
         )
-        print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
+        verbose_router_logger.info(
+            "\033[94m\nInitialized Alerting for litellm.Router\033[0m\n"
+        )
 
     def set_custom_routing_strategy(
         self, CustomRoutingStrategy: CustomRoutingStrategyBase

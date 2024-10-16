@@ -708,3 +708,144 @@ def test_update_settings(model_list):
     router.update_settings(**{"allowed_fails": 20})
     assert router.allowed_fails != pre_update_allowed_fails
     assert router.allowed_fails == 20
+
+
+def test_common_checks_available_deployment(model_list):
+    """Test if the 'common_checks_available_deployment' function is working correctly"""
+    router = Router(model_list=model_list)
+    _, available_deployments = router._common_checks_available_deployment(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        input="hi",
+        specific_deployment=False,
+    )
+
+    assert len(available_deployments) > 0
+
+
+def test_filter_cooldown_deployments(model_list):
+    """Test if the 'filter_cooldown_deployments' function is working correctly"""
+    router = Router(model_list=model_list)
+    deployments = router._filter_cooldown_deployments(
+        healthy_deployments=router._get_all_deployments(model_name="gpt-3.5-turbo"),  # type: ignore
+        cooldown_deployments=[],
+    )
+    assert len(deployments) == len(
+        router._get_all_deployments(model_name="gpt-3.5-turbo")
+    )
+
+
+def test_track_deployment_metrics(model_list):
+    """Test if the 'track_deployment_metrics' function is working correctly"""
+    from litellm.types.utils import ModelResponse
+
+    router = Router(model_list=model_list)
+    router._track_deployment_metrics(
+        deployment=router.get_deployment_by_model_group_name(
+            model_group_name="gpt-3.5-turbo"
+        ),
+        response=ModelResponse(
+            model="gpt-3.5-turbo",
+            usage={"total_tokens": 100},
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "exception_type, exception_name, num_retries",
+    [
+        (litellm.exceptions.BadRequestError, "BadRequestError", 3),
+        (litellm.exceptions.AuthenticationError, "AuthenticationError", 4),
+        (litellm.exceptions.RateLimitError, "RateLimitError", 6),
+        (
+            litellm.exceptions.ContentPolicyViolationError,
+            "ContentPolicyViolationError",
+            7,
+        ),
+    ],
+)
+def test_get_num_retries_from_retry_policy(
+    model_list, exception_type, exception_name, num_retries
+):
+    """Test if the 'get_num_retries_from_retry_policy' function is working correctly"""
+    from litellm.router import RetryPolicy
+
+    data = {exception_name + "Retries": num_retries}
+    print("data", data)
+    router = Router(
+        model_list=model_list,
+        retry_policy=RetryPolicy(**data),
+    )
+    print("exception_type", exception_type)
+    calc_num_retries = router.get_num_retries_from_retry_policy(
+        exception=exception_type(
+            message="test", llm_provider="openai", model="gpt-3.5-turbo"
+        )
+    )
+    assert calc_num_retries == num_retries
+
+
+@pytest.mark.parametrize(
+    "exception_type, exception_name, allowed_fails",
+    [
+        (litellm.exceptions.BadRequestError, "BadRequestError", 3),
+        (litellm.exceptions.AuthenticationError, "AuthenticationError", 4),
+        (litellm.exceptions.RateLimitError, "RateLimitError", 6),
+        (
+            litellm.exceptions.ContentPolicyViolationError,
+            "ContentPolicyViolationError",
+            7,
+        ),
+    ],
+)
+def test_get_allowed_fails_from_policy(
+    model_list, exception_type, exception_name, allowed_fails
+):
+    """Test if the 'get_allowed_fails_from_policy' function is working correctly"""
+    from litellm.types.router import AllowedFailsPolicy
+
+    data = {exception_name + "AllowedFails": allowed_fails}
+    router = Router(
+        model_list=model_list, allowed_fails_policy=AllowedFailsPolicy(**data)
+    )
+    calc_allowed_fails = router.get_allowed_fails_from_policy(
+        exception=exception_type(
+            message="test", llm_provider="openai", model="gpt-3.5-turbo"
+        )
+    )
+    assert calc_allowed_fails == allowed_fails
+
+
+def test_initialize_alerting(model_list):
+    """Test if the 'initialize_alerting' function is working correctly"""
+    from litellm.types.router import AlertingConfig
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+
+    router = Router(
+        model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
+    )
+    router._initialize_alerting()
+
+    callback_added = False
+    for callback in litellm.callbacks:
+        if isinstance(callback, SlackAlerting):
+            callback_added = True
+    assert callback_added is True
+
+
+def test_flush_cache(model_list):
+    """Test if the 'flush_cache' function is working correctly"""
+    router = Router(model_list=model_list)
+    router.cache.set_cache("test", "test")
+    assert router.cache.get_cache("test") == "test"
+    router.flush_cache()
+    assert router.cache.get_cache("test") is None
+
+
+def test_async_completion_no_exceptions(model_list):
+    """Test if the 'async_completion' function is working correctly"""
+    router = Router(model_list=model_list)
+    resp = router._async_completion_no_exceptions(
+        model="gpt-3.5-turbo", messages=[{"role": "user", "content": "hi"}]
+    )
+    assert resp is not None
