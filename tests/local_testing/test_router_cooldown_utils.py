@@ -107,3 +107,30 @@ async def test_router_cooldown_event_callback():
         "openai",
         "429",
     ]
+
+
+@pytest.mark.asyncio
+async def test_router_cooldown_event_callback_no_prometheus():
+    """
+    Test the router_cooldown_event_callback function
+
+    Ensures that the router_cooldown_event_callback function does not raise an error when no PrometheusLogger is found
+    """
+    # Mock Router instance
+    mock_router = MagicMock()
+    mock_deployment = {
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_name": "gpt-3.5-turbo",
+        "model_info": ModelInfo(id="test-model-id"),
+    }
+    mock_router.get_deployment.return_value = mock_deployment
+
+    await router_cooldown_event_callback(
+        litellm_router_instance=mock_router,
+        deployment_id="test-deployment",
+        exception_status="429",
+        cooldown_time=60.0,
+    )
+
+    # Assert that the router's get_deployment method was called
+    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
