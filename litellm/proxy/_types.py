@@ -2030,3 +2030,8 @@ class SpecialHeaders(enum.Enum):
     openai_authorization = "Authorization"
     azure_authorization = "API-Key"
     anthropic_authorization = "x-api-key"
+
+
+class LitellmDataForBackendLLMCall(TypedDict, total=False):
+    headers: dict
+    organization: str
