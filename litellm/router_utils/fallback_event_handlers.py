@@ -26,7 +26,7 @@ async def run_async_fallback(
 
     If the call is successful, it logs the success and returns the response.
     If the call fails, it logs the failure and continues to the next fallback model group.
-    If all fallback model groups fail, it raises the original exception.
+    If all fallback model groups fail, it raises the most recent exception.
 
     Args:
         litellm_router: The litellm router instance.
@@ -39,7 +39,7 @@ async def run_async_fallback(
     Returns:
         The response from the successful fallback model group.
     Raises:
-        The original exception if all fallback model groups fail.
+        The most recent exception if all fallback model groups fail.
     """
     error_from_fallbacks = original_exception
     for mg in fallback_model_group:
