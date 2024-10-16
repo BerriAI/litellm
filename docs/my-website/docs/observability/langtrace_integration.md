@@ -46,7 +46,7 @@ model_list:
       model: openai/gpt-4
 
 litellm_settings:
-  success_callback: ["langtrace"]
+  callbacks: ["langtrace"]
 
 environment_variables:
   LANGTRACE_API_KEY: "fake-api-key"
