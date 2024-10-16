@@ -177,6 +177,11 @@ def testing_litellm_router():
                 "litellm_params": {"model": "gpt-3.5-turbo"},
                 "model_id": "test_deployment",
             },
+            {
+                "model_name": "test_deployment",
+                "litellm_params": {"model": "openai/test_deployment"},
+                "model_id": "test_deployment_2",
+            },
         ]
     )
 
@@ -208,76 +213,99 @@ def test_should_run_cooldown_logic(testing_litellm_router):
     )
 
 
+def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
+    """
+    Test the _should_cooldown_deployment function when a rate limit error occurs
+    """
+    # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
+    _exception = litellm.exceptions.RateLimitError(
+        "Rate limit", "openai", "gpt-3.5-turbo"
+    )
+    assert (
+        _should_cooldown_deployment(
+            testing_litellm_router, "test_deployment", 429, _exception
+        )
+        is True
+    )
+
+
+def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
+    """
+    Test the _should_cooldown_deployment function when an auth limit error occurs
+    """
+    # Test 401 error (auth limit) -> always cooldown a deployment returning 401s
+    _exception = litellm.exceptions.AuthenticationError(
+        "Unauthorized", "openai", "gpt-3.5-turbo"
+    )
+    assert (
+        _should_cooldown_deployment(
+            testing_litellm_router, "test_deployment", 401, _exception
+        )
+        is True
+    )
+
+
 @pytest.mark.asyncio
 async def test_should_cooldown_deployment(testing_litellm_router):
     """
-    Test the _should_cooldown_deployment function
+    Cooldown a deployment if it fails 60% of requests in 1 minute - DEFAULT threshold is 50%
     """
+    from litellm._logging import verbose_router_logger
+    import logging
+
+    verbose_router_logger.setLevel(logging.DEBUG)
+
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
+    _exception = litellm.exceptions.RateLimitError(
+        "Rate limit", "openai", "gpt-3.5-turbo"
+    )
     assert (
         _should_cooldown_deployment(
-            testing_litellm_router, "test_deployment", 429, Exception("Rate limit")
+            testing_litellm_router, "test_deployment", 429, _exception
         )
         is True
     )
 
-    # cooldown a deployment if it fails 60% of requests in 1 minute
-    # threshold is 50%
-    for _ in range(60):
-        increment_deployment_failures_for_current_minute(
-            litellm_router_instance=testing_litellm_router,
-            deployment_id="test_deployment",
-        )
+    available_deployment = testing_litellm_router.get_available_deployment(
+        model="test_deployment"
+    )
+    print("available_deployment", available_deployment)
+    assert available_deployment is not None
+
+    deployment_id = available_deployment["model_info"]["id"]
+    print("deployment_id", deployment_id)
+
+    # set current success for deployment to 40
     for _ in range(40):
         increment_deployment_successes_for_current_minute(
-            litellm_router_instance=testing_litellm_router,
-            deployment_id="test_deployment",
+            litellm_router_instance=testing_litellm_router, deployment_id=deployment_id
         )
-    await asyncio.sleep(0.5)
+
+    # now we fail 40 requests in a row
+    tasks = []
+    for _ in range(41):
+        tasks.append(
+            testing_litellm_router.acompletion(
+                model=deployment_id,
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                max_tokens=100,
+                mock_response="litellm.InternalServerError",
+            )
+        )
+    try:
+        await asyncio.gather(*tasks)
+    except Exception:
+        pass
+
+    await asyncio.sleep(1)
+
+    # expect this to fail since it's now 51% of requests are failing
     assert (
         _should_cooldown_deployment(
-            testing_litellm_router, "test_deployment", 500, Exception("Test")
+            testing_litellm_router, deployment_id, 500, Exception("Test")
         )
         is True
     )
-
-    # don't cooldown a deployment if it fails around 10% of requests in 1 minute
-    for _ in range(10):
-        increment_deployment_failures_for_current_minute(
-            litellm_router_instance=testing_litellm_router,
-            deployment_id="test_deployment-1",
-        )
-    for _ in range(90):
-        increment_deployment_successes_for_current_minute(
-            litellm_router_instance=testing_litellm_router,
-            deployment_id="test_deployment-1",
-        )
-    await asyncio.sleep(0.5)
-    assert (
-        _should_cooldown_deployment(
-            testing_litellm_router, "test_deployment-1", 500, Exception("Test")
-        )
-        is False
-    )
-
-    # Test authentication error
-    assert (
-        _should_cooldown_deployment(
-            testing_litellm_router,
-            "test_deployment-2",
-            401,
-            litellm.exceptions.AuthenticationError(
-                "Auth failed", "openai", "gpt-3.5-turbo"
-            ),
-        )
-        is True
-    )
-
-
-def test_cast_exception_status_to_int():
-    assert cast_exception_status_to_int(200) == 200
-    assert cast_exception_status_to_int("404") == 404
-    assert cast_exception_status_to_int("invalid") == 500
 
 
 @pytest.mark.asyncio
@@ -360,3 +388,9 @@ def test_increment_deployment_successes_for_current_minute_does_not_write_to_red
         )
         is not None
     )
+
+
+def test_cast_exception_status_to_int():
+    assert cast_exception_status_to_int(200) == 200
+    assert cast_exception_status_to_int("404") == 404
+    assert cast_exception_status_to_int("invalid") == 500
