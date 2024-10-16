@@ -23,6 +23,9 @@ def model_list():
                 "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
+            "model_info": {
+                "access_groups": ["group1", "group2"],
+            },
         },
         {
             "model_name": "gpt-4o",
@@ -36,16 +39,6 @@ def model_list():
             "litellm_params": {
                 "model": "dall-e-3",
                 "api_key": os.getenv("OPENAI_API_KEY"),
-            },
-        },
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": os.getenv("OPENAI_API_KEY"),
-            },
-            "model_info": {
-                "access_groups": ["group1", "group2"],
             },
         },
     ]
@@ -626,6 +619,7 @@ def test_add_deployment(model_list):
 def test_upsert_deployment(model_list):
     """Test if the 'upsert_deployment' function is working correctly"""
     router = Router(model_list=model_list)
+    print("model list", len(router.model_list))
     deployment = router.get_deployment_by_model_group_name(
         model_group_name="gpt-3.5-turbo"
     )
