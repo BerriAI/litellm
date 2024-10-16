@@ -16,8 +16,6 @@ export default function SearchBarWrapper(props) {
       import("@getcanary/web/components/canary-search-results"),
       import("@getcanary/web/components/canary-search-match-github-issue"),
       import("@getcanary/web/components/canary-search-match-github-discussion"),
-      import("@getcanary/web/components/canary-ask"),
-      import("@getcanary/web/components/canary-ask-results"),
       import("@getcanary/web/components/canary-filter-tabs-glob.js"),
       import("@getcanary/web/components/canary-filter-tags.js"),
       import("@getcanary/web/components/canary-footer.js"),
@@ -75,9 +73,6 @@ export default function SearchBarWrapper(props) {
                   ></canary-filter-tabs-glob>
                   <canary-search-results slot="body"></canary-search-results>
                 </canary-search>
-                <canary-ask slot="mode">
-                  <canary-ask-results slot="body"></canary-ask-results>
-                </canary-ask>
                 <canary-footer slot="footer"></canary-footer>
               </canary-content>
             </canary-modal>
