@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT
@@ -32,15 +32,19 @@ class AsyncHTTPHandler:
     def __init__(
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        event_hooks: Optional[Mapping[str, list[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
     ):
         self.timeout = timeout
         self.client = self.create_client(
-            timeout=timeout, concurrent_limit=concurrent_limit
+            timeout=timeout, concurrent_limit=concurrent_limit, event_hooks=event_hooks
         )
 
     def create_client(
-        self, timeout: Optional[Union[float, httpx.Timeout]], concurrent_limit: int
+        self,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        concurrent_limit: int,
+        event_hooks: Optional[Mapping[str, list[Callable[..., Any]]]] = None,
     ) -> httpx.AsyncClient:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
@@ -55,6 +59,7 @@ class AsyncHTTPHandler:
         # Create a client with a connection pool
 
         return httpx.AsyncClient(
+            event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
