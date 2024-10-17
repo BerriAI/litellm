@@ -23,10 +23,6 @@ import logging
 
 from litellm.proxy.common_utils.base_config_class import BaseProxyConfig
 
-# get all the files from example_config_yaml
-files = os.listdir("example_config_yaml")
-print(files)
-
 
 @pytest.mark.asyncio
 async def test_basic_reading_configs_from_files():
@@ -35,9 +31,14 @@ async def test_basic_reading_configs_from_files():
     """
     _base_config = BaseProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
+    example_config_yaml_path = os.path.join(current_path, "example_config_yaml")
+
+    # get all the files from example_config_yaml
+    files = os.listdir(example_config_yaml_path)
+    print(files)
 
     for file in files:
-        config_path = os.path.join(current_path, "example_config_yaml", file)
+        config_path = os.path.join(example_config_yaml_path, file)
         config = await _base_config.get_config(config_file_path=config_path)
         print(config)
 
