@@ -1246,6 +1246,9 @@ all_litellm_params = [
     "user_continue_message",
     "configurable_clientside_auth_params",
     "weight",
+    "ensure_alternating_roles",
+    "assistant_continue_message",
+    "user_continue_message",
 ]
 
 

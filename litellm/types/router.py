@@ -5,15 +5,25 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import TypedDict
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .utils import ModelResponse
+
+
+class ConfigurableClientsideParamsCustomAuth(TypedDict):
+    api_base: str
+
+
+CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = Optional[
+    List[Union[str, ConfigurableClientsideParamsCustomAuth]]
+]
 
 
 class ModelConfig(BaseModel):
@@ -139,7 +149,7 @@ class GenericLiteLLMParams(BaseModel):
     )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
-    configurable_clientside_auth_params: Optional[List[str]] = None
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
     ## VERTEX AI ##
@@ -311,9 +321,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
     organization: Optional[Union[List, str]]  # for openai orgs
-    configurable_clientside_auth_params: Optional[
-        List[str]
-    ]  # for allowing api base switching on finetuned models
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
@@ -496,7 +504,7 @@ class ModelGroupInfo(BaseModel):
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
-    configurable_clientside_auth_params: Optional[List[str]] = None
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
 
 class AssistantsTypedDict(TypedDict):
