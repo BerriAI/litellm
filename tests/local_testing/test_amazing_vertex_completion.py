@@ -1900,11 +1900,11 @@ async def test_vertexai_embedding(sync_mode):
         assert len(response.data) == len(input_text)
 
         # Assert that each embedding is a non-empty list of floats
-        for embedding in response.data:
-            assert "embedding" in embedding
-            assert isinstance(embedding["embedding"], list)
-            assert len(embedding["embedding"]) > 0
-            assert all(isinstance(x, float) for x in embedding["embedding"])
+        for item in response.data:
+            assert "embedding" in item
+            assert isinstance(item["embedding"], list)
+            assert len(item["embedding"]) > 0
+            assert all(isinstance(x, float) for x in item["embedding"])
 
     except litellm.RateLimitError as e:
         pass
