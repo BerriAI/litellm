@@ -372,7 +372,7 @@ class AzureChatCompletion(BaseLLM):
                     status_code=422, message="Missing model or messages"
                 )
 
-            max_retries = optional_params.pop("max_retries", 2)
+            max_retries = optional_params.get("max_retries", 2)
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
@@ -406,6 +406,8 @@ class AzureChatCompletion(BaseLLM):
                     else:
                         client = AzureOpenAI(**azure_client_params)
 
+                # Already included azure_client_params
+                optional_params.pop('max_retries', None)
                 data = {"model": None, "messages": messages, **optional_params}
             else:
                 data = litellm.AzureOpenAIConfig.transform_request(
@@ -512,6 +514,9 @@ class AzureChatCompletion(BaseLLM):
                         status_code=500,
                         message="azure_client is not an instance of AzureOpenAI",
                     )
+
+                # Already included in azure_client_params
+                data.pop("max_retries", None)
 
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
                     azure_client=azure_client, data=data, timeout=timeout
