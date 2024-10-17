@@ -75,29 +75,28 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "__init__",
-    "_acreate_file",
-    "_acreate_batch",
-    "acreate_assistants",
-    "adelete_assistant",
-    "aget_assistants",
-    "acreate_thread",
-    "aget_thread",
-    "a_add_message",
-    "aget_messages",
-    "arun_thread",
-    "try_retrieve_batch",
 ]
 
 
 def main():
-    router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
-    # router_file = "../../litellm/router.py"  ## LOCAL TESTING
+    router_file = [
+        "./litellm/router.py",
+        "./litellm/router_utils/batch_utils.py",
+        "./litellm/router_utils/pattern_match_deployments.py",
+    ]
+    # router_file = [
+    #     "../../litellm/router.py",
+    #     "../../litellm/router_utils/pattern_match_deployments.py",
+    #     "../../litellm/router_utils/batch_utils.py",
+    # ]  ## LOCAL TESTING
     tests_dir = (
         "./tests/"  # Update this path if your tests directory is located elsewhere
     )
     # tests_dir = "../../tests/"  # LOCAL TESTING
 
-    router_functions = get_functions_from_router(router_file)
+    router_functions = []
+    for file in router_file:
+        router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
     untested_functions = [

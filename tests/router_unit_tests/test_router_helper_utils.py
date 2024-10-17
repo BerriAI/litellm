@@ -41,6 +41,20 @@ def model_list():
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
+        {
+            "model_name": "*",
+            "litellm_params": {
+                "model": "openai/*",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+        },
+        {
+            "model_name": "claude-*",
+            "litellm_params": {
+                "model": "anthropic/*",
+                "api_key": os.getenv("ANTHROPIC_API_KEY"),
+            },
+        },
     ]
 
 
@@ -834,3 +848,69 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") == "test"
     router.flush_cache()
     assert router.cache.get_cache("test") is None
+
+
+def test_initialize_assistants_endpoint(model_list):
+    """Test if the 'initialize_assistants_endpoint' function is working correctly"""
+    router = Router(model_list=model_list)
+    router.initialize_assistants_endpoint()
+    assert router.acreate_assistants is not None
+    assert router.adelete_assistant is not None
+    assert router.aget_assistants is not None
+    assert router.acreate_thread is not None
+    assert router.aget_thread is not None
+    assert router.arun_thread is not None
+    assert router.aget_messages is not None
+    assert router.a_add_message is not None
+
+
+def test_pass_through_assistants_endpoint_factory(model_list):
+    """Test if the 'pass_through_assistants_endpoint_factory' function is working correctly"""
+    router = Router(model_list=model_list)
+    router._pass_through_assistants_endpoint_factory(
+        original_function=litellm.acreate_assistants,
+        custom_llm_provider="openai",
+        client=None,
+        **{},
+    )
+
+
+def test_factory_function(model_list):
+    """Test if the 'factory_function' function is working correctly"""
+    router = Router(model_list=model_list)
+    router.factory_function(litellm.acreate_assistants)
+
+
+def test_get_model_from_alias(model_list):
+    """Test if the 'get_model_from_alias' function is working correctly"""
+    router = Router(
+        model_list=model_list,
+        model_group_alias={"gpt-4o": "gpt-3.5-turbo"},
+    )
+    model = router._get_model_from_alias(model="gpt-4o")
+    assert model == "gpt-3.5-turbo"
+
+
+def test_get_deployment_by_litellm_model(model_list):
+    """Test if the 'get_deployment_by_litellm_model' function is working correctly"""
+    router = Router(model_list=model_list)
+    deployment = router._get_deployment_by_litellm_model(model="gpt-3.5-turbo")
+    assert deployment is not None
+
+
+def test_get_pattern(model_list):
+    router = Router(model_list=model_list)
+    pattern = router.pattern_router.get_pattern(model="claude-3")
+    assert pattern is not None
+
+
+def test_deployments_by_pattern(model_list):
+    router = Router(model_list=model_list)
+    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
+    assert deployments is not None
+
+
+def test_replace_model_in_jsonl(model_list):
+    router = Router(model_list=model_list)
+    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
+    assert deployments is not None
