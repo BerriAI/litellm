@@ -12,16 +12,18 @@ import litellm
 litellm.num_retries = 3
 
 import time, random
-from litellm._logging import verbose_logger
-import logging
 import pytest
 import boto3
+from litellm._logging import verbose_logger
+import logging
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.flaky(retries=6, delay=1)
-async def test_basic_s3_logging(sync_mode):
+@pytest.mark.parametrize(
+    "sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)]
+)
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_logging(sync_mode, streaming):
     verbose_logger.setLevel(level=logging.DEBUG)
     litellm.success_callback = ["s3"]
     litellm.s3_callback_params = {
@@ -31,27 +33,41 @@ async def test_basic_s3_logging(sync_mode):
         "s3_region_name": "us-west-2",
     }
     litellm.set_verbose = True
-
+    response_id = None
     if sync_mode is True:
         response = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "This is a test"}],
             mock_response="It's simple to use and easy to get started",
+            stream=streaming,
         )
+        if streaming:
+            for chunk in response:
+                print()
+                response_id = chunk.id
+        else:
+            response_id = response.id
+        time.sleep(2)
     else:
         response = await litellm.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "This is a test"}],
             mock_response="It's simple to use and easy to get started",
+            stream=streaming,
         )
+        if streaming:
+            async for chunk in response:
+                print(chunk)
+                response_id = chunk.id
+        else:
+            response_id = response.id
+        await asyncio.sleep(2)
     print(f"response: {response}")
-
-    await asyncio.sleep(12)
 
     total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
 
     # assert that atlest one key has response.id in it
-    assert any(response.id in key for key in all_s3_keys)
+    assert any(response_id in key for key in all_s3_keys)
     s3 = boto3.client("s3")
     # delete all objects
     for key in all_s3_keys:
