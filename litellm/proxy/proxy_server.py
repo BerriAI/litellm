@@ -461,7 +461,7 @@ user_temperature = None
 user_telemetry = True
 user_config = None
 user_headers = None
-user_config_file_path = f"config_{int(time.time())}.yaml"
+user_config_file_path: Optional[str] = None
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
