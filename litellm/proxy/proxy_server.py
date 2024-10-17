@@ -155,10 +155,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
 )
-from litellm.proxy.common_utils.load_config_utils import (
-    get_config_file_contents_from_gcs,
-    get_file_contents_from_s3,
-)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
