@@ -2298,3 +2298,70 @@ def test_basic_caching_import():
 
     assert Cache is not None
     print("Cache imported successfully")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio()
+async def test_caching_kwargs_input(sync_mode):
+    from litellm import acompletion
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.types.utils import (
+        Choices,
+        EmbeddingResponse,
+        Message,
+        ModelResponse,
+        Usage,
+        CompletionTokensDetails,
+        PromptTokensDetails,
+    )
+    from datetime import datetime
+
+    llm_caching_handler = LLMCachingHandler(
+        original_function=acompletion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    input = {
+        "result": ModelResponse(
+            id="chatcmpl-AJ119H5XsDnYiZPp5axJ5d7niwqeR",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Hello! I'm just a computer program, so I don't have feelings, but I'm here to assist you. How can I help you today?",
+                        role="assistant",
+                        tool_calls=None,
+                        function_call=None,
+                    ),
+                )
+            ],
+            created=1729095507,
+            model="gpt-3.5-turbo-0125",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(
+                completion_tokens=31,
+                prompt_tokens=16,
+                total_tokens=47,
+                completion_tokens_details=CompletionTokensDetails(
+                    audio_tokens=None, reasoning_tokens=0
+                ),
+                prompt_tokens_details=PromptTokensDetails(
+                    audio_tokens=None, cached_tokens=0
+                ),
+            ),
+            service_tier=None,
+        ),
+        "kwargs": {
+            "messages": [{"role": "user", "content": "42HHey, how's it going?"}],
+            "caching": True,
+            "litellm_call_id": "fae2aa4f-9f75-4f11-8c9c-63ab8d9fae26",
+            "preset_cache_key": "2f69f5640d5e0f25315d0e132f1278bb643554d14565d2c61d61564b10ade90f",
+        },
+        "args": ("gpt-3.5-turbo",),
+    }
+    if sync_mode is True:
+        llm_caching_handler.sync_set_cache(**input)
+    else:
+        input["original_function"] = acompletion
+        await llm_caching_handler.async_set_cache(**input)

@@ -9,6 +9,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
+    LitellmDataForBackendLLMCall,
     LiteLLMRoutes,
     SpecialHeaders,
     TeamCallbackMetadata,
@@ -172,7 +173,42 @@ def get_forwardable_headers(
             "x-stainless"
         ):  # causes openai sdk to fail
             forwarded_headers[header] = value
+
     return forwarded_headers
+
+
+def get_openai_org_id_from_headers(
+    headers: dict, general_settings: Optional[Dict] = None
+) -> Optional[str]:
+    """
+    Get the OpenAI Org ID from the headers.
+    """
+    if (
+        general_settings is not None
+        and general_settings.get("forward_openai_org_id") is not True
+    ):
+        return None
+    for header, value in headers.items():
+        if header.lower() == "openai-organization":
+            return value
+    return None
+
+
+def add_litellm_data_for_backend_llm_call(
+    headers: dict, general_settings: Optional[Dict[str, Any]] = None
+) -> LitellmDataForBackendLLMCall:
+    """
+    - Adds forwardable headers
+    - Adds org id
+    """
+    data = LitellmDataForBackendLLMCall()
+    _headers = get_forwardable_headers(headers)
+    if _headers != {}:
+        data["headers"] = _headers
+    _organization = get_openai_org_id_from_headers(headers, general_settings)
+    if _organization is not None:
+        data["organization"] = _organization
+    return data
 
 
 async def add_litellm_data_to_request(
@@ -210,8 +246,8 @@ async def add_litellm_data_to_request(
         ),
     )
 
-    if get_forwardable_headers(_headers) != {}:
-        data["headers"] = get_forwardable_headers(_headers)
+    data.update(add_litellm_data_for_backend_llm_call(_headers, general_settings))
+
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
