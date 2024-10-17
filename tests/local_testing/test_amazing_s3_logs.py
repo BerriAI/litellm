@@ -12,8 +12,6 @@ import litellm
 litellm.num_retries = 3
 
 import time, random
-from litellm._logging import verbose_logger
-import logging
 import pytest
 import boto3
 

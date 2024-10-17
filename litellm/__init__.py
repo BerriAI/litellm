@@ -53,7 +53,6 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
-    "s3",
     "opik",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
