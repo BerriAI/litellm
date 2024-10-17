@@ -111,7 +111,7 @@ async def test_async_set_get_cache(response):
         result=result, original_function=original_function, kwargs=kwargs
     )
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(2)
 
     # Verify the result was cached
     cached_response = await caching_handler._async_get_cache(
@@ -209,12 +209,15 @@ async def test_async_log_cache_hit_on_callbacks():
 def test_convert_cached_result_to_model_response(
     call_type, cached_result, expected_type
 ):
+    """
+    Assert that the cached result is converted to the correct type
+    """
     caching_handler = LLMCachingHandler(
         original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
     )
     logging_obj = LiteLLMLogging(
         litellm_call_id=str(datetime.now()),
-        call_type=CallTypes.completion.value,
+        call_type=call_type,
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hello, how can I help you today?"}],
         function_id=str(uuid.uuid4()),
