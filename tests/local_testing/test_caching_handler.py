@@ -23,7 +23,6 @@ from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
 
 from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime
 from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse
 from litellm.caching.caching import LiteLLMCacheType
 from litellm.types.utils import CallTypes
@@ -34,6 +33,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
 )
+from datetime import timedelta, datetime
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm._logging import verbose_logger
 import logging
@@ -72,7 +72,7 @@ text_completion_response = litellm.TextCompletionResponse(
 @pytest.mark.parametrize(
     "response", [chat_completion_response, text_completion_response]
 )
-async def test_async_set_cache(response):
+async def test_async_set_get_cache(response):
     litellm.set_verbose = True
     setup_cache()
     verbose_logger.setLevel(logging.DEBUG)
@@ -125,3 +125,49 @@ async def test_async_set_cache(response):
 
     assert cached_response.cached_result is not None
     assert cached_response.cached_result.id == result.id
+
+
+@pytest.mark.asyncio
+async def test_async_log_cache_hit_on_callbacks():
+    """
+    Assert logging callbacks are called after a cache hit
+    """
+    # Setup
+    caching_handler = LLMCachingHandler(
+        original_function=completion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.success_handler = MagicMock()
+
+    cached_result = "Mocked cached result"
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+    cache_hit = True
+
+    # Call the method
+    caching_handler._async_log_cache_hit_on_callbacks(
+        logging_obj=mock_logging_obj,
+        cached_result=cached_result,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=cache_hit,
+    )
+
+    # Wait for the async task to complete
+    await asyncio.sleep(0.5)
+
+    print("mock logging obj methods called", mock_logging_obj.mock_calls)
+
+    # Assertions
+    mock_logging_obj.async_success_handler.assert_called_once_with(
+        cached_result, start_time, end_time, cache_hit
+    )
+
+    # Wait for the thread to complete
+    await asyncio.sleep(0.5)
+
+    mock_logging_obj.success_handler.assert_called_once_with(
+        cached_result, start_time, end_time, cache_hit
+    )
