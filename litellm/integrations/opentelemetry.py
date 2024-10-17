@@ -72,7 +72,7 @@ class OpenTelemetryConfig:
 class OpenTelemetry(CustomLogger):
     def __init__(
         self,
-        config=OpenTelemetryConfig.from_env(),
+        config: OpenTelemetryConfig = OpenTelemetryConfig.from_env(),
         callback_name: Optional[str] = None,
         **kwargs,
     ):
