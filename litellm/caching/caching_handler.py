@@ -512,7 +512,16 @@ class LLMCachingHandler:
         model: str,
         args: Tuple[Any, ...],
         custom_llm_provider: Optional[str] = None,
-    ) -> Optional[Any]:
+    ) -> Optional[
+        Union[
+            ModelResponse,
+            TextCompletionResponse,
+            EmbeddingResponse,
+            RerankResponse,
+            TranscriptionResponse,
+            CustomStreamWrapper,
+        ]
+    ]:
         """
         Internal method to process the cached result
 
