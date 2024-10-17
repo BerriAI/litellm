@@ -1425,7 +1425,7 @@ class ProxyConfig:
                         else:
                             # if it's not in the config - then add it
                             config[param_name] = param_value
-
+        config = self._check_for_os_environ_vars(config=config)
         return config
 
     async def save_config(self, new_config: dict):
@@ -1491,6 +1491,36 @@ class ProxyConfig:
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+
+    def _check_for_os_environ_vars(
+        self, config: dict, depth: int = 0, max_depth: int = 10
+    ) -> dict:
+        """
+        Check for os.environ/ variables in the config and replace them with the actual values.
+        Includes a depth limit to prevent infinite recursion.
+
+        Args:
+            config (dict): The configuration dictionary to process.
+            depth (int): Current recursion depth.
+            max_depth (int): Maximum allowed recursion depth.
+
+        Returns:
+            dict: Processed configuration dictionary.
+        """
+        if depth > max_depth:
+            verbose_proxy_logger.warning(
+                f"Maximum recursion depth ({max_depth}) reached while processing config."
+            )
+            return config
+
+        for key, value in config.items():
+            if isinstance(value, dict):
+                config[key] = self._check_for_os_environ_vars(
+                    config=value, depth=depth + 1, max_depth=max_depth
+                )
+            elif isinstance(value, str) and value.startswith("os.environ/"):
+                config[key] = get_secret_str(value)
+        return config
 
     async def load_config(
         self, router: Optional[litellm.Router], config_file_path: str

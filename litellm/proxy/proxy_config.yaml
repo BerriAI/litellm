@@ -5,6 +5,7 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-litellm_settings:
-  callbacks: ["arize"]
 
+litellm_settings:
+  default_internal_user_params:
+    user_role: os.environ/DEFAULT_USER_ROLE
