@@ -2569,6 +2569,15 @@ async def test_router_batch_endpoints(provider):
     )
     print("Response from creating file=", file_obj)
 
+    ## TEST 2 - test underlying create_file function
+    file_obj = await router._acreate_file(
+        model="my-custom-name",
+        file=open(file_path, "rb"),
+        purpose="batch",
+        custom_llm_provider=provider,
+    )
+    print("Response from creating file=", file_obj)
+
     await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
     assert (
@@ -2576,6 +2585,15 @@ async def test_router_batch_endpoints(provider):
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
     create_batch_response = await router.acreate_batch(
+        model="my-custom-name",
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider=provider,
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    ## TEST 2 - test underlying create_batch function
+    create_batch_response = await router._acreate_batch(
         model="my-custom-name",
         completion_window="24h",
         endpoint="/v1/chat/completions",

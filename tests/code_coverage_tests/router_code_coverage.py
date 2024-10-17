@@ -75,27 +75,16 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "__init__",
-    "_acreate_file",
-    "_acreate_batch",
-    "acreate_assistants",
-    "adelete_assistant",
-    "aget_assistants",
-    "acreate_thread",
-    "aget_thread",
-    "a_add_message",
-    "aget_messages",
-    "arun_thread",
-    "try_retrieve_batch",
 ]
 
 
 def main():
-    router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
-    # router_file = "../../litellm/router.py"  ## LOCAL TESTING
-    tests_dir = (
-        "./tests/"  # Update this path if your tests directory is located elsewhere
-    )
-    # tests_dir = "../../tests/"  # LOCAL TESTING
+    # router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
+    router_file = "../../litellm/router.py"  ## LOCAL TESTING
+    # tests_dir = (
+    #     "./tests/"  # Update this path if your tests directory is located elsewhere
+    # )
+    tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = get_functions_from_router(router_file)
     print("router_functions: ", router_functions)

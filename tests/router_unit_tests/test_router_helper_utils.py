@@ -834,3 +834,34 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") == "test"
     router.flush_cache()
     assert router.cache.get_cache("test") is None
+
+
+def test_initialize_assistants_endpoint(model_list):
+    """Test if the 'initialize_assistants_endpoint' function is working correctly"""
+    router = Router(model_list=model_list)
+    router.initialize_assistants_endpoint()
+    assert router.acreate_assistants is not None
+    assert router.adelete_assistant is not None
+    assert router.aget_assistants is not None
+    assert router.acreate_thread is not None
+    assert router.aget_thread is not None
+    assert router.arun_thread is not None
+    assert router.aget_messages is not None
+    assert router.a_add_message is not None
+
+
+def test_pass_through_assistants_endpoint_factory(model_list):
+    """Test if the 'pass_through_assistants_endpoint_factory' function is working correctly"""
+    router = Router(model_list=model_list)
+    router._pass_through_assistants_endpoint_factory(
+        original_function=litellm.acreate_assistants,
+        custom_llm_provider="openai",
+        client=None,
+        **{},
+    )
+
+
+def test_factory_function(model_list):
+    """Test if the 'factory_function' function is working correctly"""
+    router = Router(model_list=model_list)
+    router.factory_function(litellm.acreate_assistants)

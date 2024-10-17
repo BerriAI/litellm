@@ -24,7 +24,18 @@ import traceback
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
+)
 
 import httpx
 import openai
@@ -519,6 +530,19 @@ class Router:
         self.alerting_config: Optional[AlertingConfig] = alerting_config
         if self.alerting_config is not None:
             self._initialize_alerting()
+
+        self.initialize_assistants_endpoint()
+
+    def initialize_assistants_endpoint(self):
+        ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
+        self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
+        self.adelete_assistant = self.factory_function(litellm.adelete_assistant)
+        self.aget_assistants = self.factory_function(litellm.aget_assistants)
+        self.acreate_thread = self.factory_function(litellm.acreate_thread)
+        self.aget_thread = self.factory_function(litellm.aget_thread)
+        self.a_add_message = self.factory_function(litellm.a_add_message)
+        self.aget_messages = self.factory_function(litellm.aget_messages)
+        self.arun_thread = self.factory_function(litellm.arun_thread)
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -2167,7 +2191,6 @@ class Router:
             raise e
 
     #### FILES API ####
-
     async def acreate_file(
         self,
         model: str,
@@ -2504,114 +2527,29 @@ class Router:
 
     #### ASSISTANTS API ####
 
-    async def acreate_assistants(
-        self,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        client: Optional[AsyncOpenAI] = None,
-        **kwargs,
-    ) -> Assistant:
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-
-        return await litellm.acreate_assistants(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
-
-    async def adelete_assistant(
-        self,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        client: Optional[AsyncOpenAI] = None,
-        **kwargs,
-    ) -> AssistantDeleted:
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-
-        return await litellm.adelete_assistant(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
-
-    async def aget_assistants(
-        self,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        client: Optional[AsyncOpenAI] = None,
-        **kwargs,
-    ) -> AsyncCursorPage[Assistant]:
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-
-        return await litellm.aget_assistants(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
-
-    async def acreate_thread(
-        self,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        client: Optional[AsyncOpenAI] = None,
-        **kwargs,
-    ) -> Thread:
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-        return await litellm.acreate_thread(
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
-
-    async def aget_thread(
-        self,
-        thread_id: str,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        client: Optional[AsyncOpenAI] = None,
-        **kwargs,
-    ) -> Thread:
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-        return await litellm.aget_thread(
-            custom_llm_provider=custom_llm_provider,
-            thread_id=thread_id,
-            client=client,
+    def factory_function(self, original_function: Callable):
+        async def new_function(
+            custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
+            client: Optional["AsyncOpenAI"] = None,
             **kwargs,
-        )
+        ):
+            return await self._pass_through_assistants_endpoint_factory(
+                original_function=original_function,
+                custom_llm_provider=custom_llm_provider,
+                client=client,
+                **kwargs,
+            )
 
-    async def a_add_message(
+        return new_function
+
+    async def _pass_through_assistants_endpoint_factory(
         self,
-        thread_id: str,
-        role: Literal["user", "assistant"],
-        content: str,
-        attachments: Optional[List[Attachment]] = None,
-        metadata: Optional[dict] = None,
+        original_function: Callable,
         custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
-    ) -> OpenAIMessage:
+    ):
+        """Internal helper function to pass through the assistants endpoint"""
         if custom_llm_provider is None:
             if self.assistants_config is not None:
                 custom_llm_provider = self.assistants_config["custom_llm_provider"]
@@ -2620,76 +2558,8 @@ class Router:
                 raise Exception(
                     "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
                 )
-
-        return await litellm.a_add_message(
-            custom_llm_provider=custom_llm_provider,
-            thread_id=thread_id,
-            role=role,
-            content=content,
-            attachments=attachments,
-            metadata=metadata,
-            client=client,
-            **kwargs,
-        )
-
-    async def aget_messages(
-        self,
-        thread_id: str,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        client: Optional[AsyncOpenAI] = None,
-        **kwargs,
-    ) -> AsyncCursorPage[OpenAIMessage]:
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-        return await litellm.aget_messages(
-            custom_llm_provider=custom_llm_provider,
-            thread_id=thread_id,
-            client=client,
-            **kwargs,
-        )
-
-    async def arun_thread(
-        self,
-        thread_id: str,
-        assistant_id: str,
-        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
-        additional_instructions: Optional[str] = None,
-        instructions: Optional[str] = None,
-        metadata: Optional[dict] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        tools: Optional[Iterable[AssistantToolParam]] = None,
-        client: Optional[Any] = None,
-        **kwargs,
-    ) -> Run:
-
-        if custom_llm_provider is None:
-            if self.assistants_config is not None:
-                custom_llm_provider = self.assistants_config["custom_llm_provider"]
-                kwargs.update(self.assistants_config["litellm_params"])
-            else:
-                raise Exception(
-                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
-                )
-
-        return await litellm.arun_thread(
-            custom_llm_provider=custom_llm_provider,
-            thread_id=thread_id,
-            assistant_id=assistant_id,
-            additional_instructions=additional_instructions,
-            instructions=instructions,
-            metadata=metadata,
-            model=model,
-            stream=stream,
-            tools=tools,
-            client=client,
-            **kwargs,
+        return await original_function(  # type: ignore
+            custom_llm_provider=custom_llm_provider, client=client, **kwargs
         )
 
     #### [END] ASSISTANTS API ####
