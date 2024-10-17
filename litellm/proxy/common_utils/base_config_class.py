@@ -1,4 +1,6 @@
 import asyncio
+import copy
+import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -59,6 +61,14 @@ class BaseProxyConfig:
         else:
             # default to file
             config = await self._get_config_from_file(config_file_path=config_file_path)
+
+        ## PRINT YAML FOR CONFIRMING IT WORKS
+        printed_yaml = copy.deepcopy(config)
+        printed_yaml.pop("environment_variables", None)
+
+        verbose_proxy_logger.debug(
+            f"Loaded config YAML (api_key and environment_variables are not shown):\n{json.dumps(printed_yaml, indent=2)}"
+        )
 
         config = self._check_for_os_environ_vars(config=config)
         return config

@@ -1415,14 +1415,6 @@ class ProxyConfig(BaseProxyConfig):
         global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         config: dict = await self.get_config(config_file_path=config_file_path)
-        ## PRINT YAML FOR CONFIRMING IT WORKS
-        printed_yaml = copy.deepcopy(config)
-        printed_yaml.pop("environment_variables", None)
-
-        verbose_proxy_logger.debug(
-            f"Loaded config YAML (api_key and environment_variables are not shown):\n{json.dumps(printed_yaml, indent=2)}"
-        )
-
         ## ENVIRONMENT VARIABLES
         environment_variables = config.get("environment_variables", None)
         if environment_variables:
