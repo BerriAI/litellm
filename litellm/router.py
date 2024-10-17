@@ -4927,7 +4927,7 @@ class Router:
             deployment = self.get_deployment(model_id=model)
             if deployment is not None:
                 deployment_model = deployment.litellm_params.model
-                return deployment_model, deployment.model_dump()
+                return deployment_model, deployment.model_dump(exclude_none=True)
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in \
                     Model ID List: {self.get_model_ids}"
@@ -4956,6 +4956,7 @@ class Router:
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = self._get_all_deployments(model_name=model)
+
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = self._get_deployment_by_litellm_model(model=model)
@@ -5010,7 +5011,6 @@ class Router:
                 input=input,
                 specific_deployment=specific_deployment,
             )  # type: ignore
-
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
 
