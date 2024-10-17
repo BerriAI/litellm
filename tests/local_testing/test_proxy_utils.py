@@ -368,3 +368,41 @@ def test_is_request_body_safe_model_enabled(
         error_raised = True
 
     assert expect_error == error_raised
+
+
+def test_reading_openai_org_id_from_headers():
+    from litellm.proxy.litellm_pre_call_utils import get_openai_org_id_from_headers
+
+    headers = {
+        "OpenAI-Organization": "test_org_id",
+    }
+    org_id = get_openai_org_id_from_headers(headers)
+    assert org_id == "test_org_id"
+
+
+@pytest.mark.parametrize(
+    "headers, expected_data",
+    [
+        ({"OpenAI-Organization": "test_org_id"}, {"organization": "test_org_id"}),
+        ({"openai-organization": "test_org_id"}, {"organization": "test_org_id"}),
+        ({}, {}),
+        (
+            {
+                "OpenAI-Organization": "test_org_id",
+                "Authorization": "Bearer test_token",
+            },
+            {
+                "organization": "test_org_id",
+            },
+        ),
+    ],
+)
+def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
+    import json
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_litellm_data_for_backend_llm_call,
+    )
+
+    data = add_litellm_data_for_backend_llm_call(headers)
+
+    assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
