@@ -14,6 +14,8 @@ litellm.num_retries = 3
 import time, random
 import pytest
 import boto3
+from litellm._logging import verbose_logger
+import logging
 
 
 @pytest.mark.asyncio
