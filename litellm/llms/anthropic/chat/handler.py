@@ -376,9 +376,7 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        async_handler = client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.ANTHROPIC
-        )
+        async_handler = client or litellm.module_level_aclient
 
         try:
             response = await async_handler.post(
