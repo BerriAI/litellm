@@ -41,6 +41,20 @@ def model_list():
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
+        {
+            "model_name": "*",
+            "litellm_params": {
+                "model": "openai/*",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+        },
+        {
+            "model_name": "claude-*",
+            "litellm_params": {
+                "model": "anthropic/*",
+                "api_key": os.getenv("ANTHROPIC_API_KEY"),
+            },
+        },
     ]
 
 
@@ -882,3 +896,21 @@ def test_get_deployment_by_litellm_model(model_list):
     router = Router(model_list=model_list)
     deployment = router._get_deployment_by_litellm_model(model="gpt-3.5-turbo")
     assert deployment is not None
+
+
+def test_get_pattern(model_list):
+    router = Router(model_list=model_list)
+    pattern = router.pattern_router.get_pattern(model="claude-3")
+    assert pattern is not None
+
+
+def test_deployments_by_pattern(model_list):
+    router = Router(model_list=model_list)
+    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
+    assert deployments is not None
+
+
+def test_replace_model_in_jsonl(model_list):
+    router = Router(model_list=model_list)
+    deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
+    assert deployments is not None
