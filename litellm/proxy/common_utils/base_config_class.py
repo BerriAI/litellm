@@ -183,7 +183,7 @@ class BaseProxyConfig:
         except ImportError as e:
             # this is most likely if a user is not using the litellm docker container
             verbose_proxy_logger.error(f"ImportError: {str(e)}")
-            pass
+            return None
         except Exception as e:
             verbose_proxy_logger.error(f"Error retrieving file contents: {str(e)}")
             return None
