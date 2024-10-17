@@ -7322,7 +7322,7 @@ async def model_info_v1(
             model_info: Dict = cast(Dict, litellm.get_model_info(model=user_model))
         except Exception:
             model_info = {}
-        deployment_info = Deployment(
+        deployment_info: Optional[Deployment] = Deployment(
             model_name="*",
             litellm_params=LiteLLM_Params(
                 model=user_model,
