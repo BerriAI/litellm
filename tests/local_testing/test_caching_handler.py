@@ -32,6 +32,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     TextCompletionResponse,
     TranscriptionResponse,
+    Embedding,
 )
 from datetime import timedelta, datetime
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -236,3 +237,107 @@ def test_convert_cached_result_to_model_response(
 
     assert isinstance(result, expected_type)
     assert result is not None
+
+
+def test_combine_cached_embedding_response_with_api_result():
+    """
+    If the cached response has [cache_hit, None, cache_hit]
+    result should be [cache_hit, api_result, cache_hit]
+    """
+    # Setup
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    # Create a CachingHandlerResponse with some cached and some None values
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
+            None,
+            Embedding(embedding=[0.7, 0.8, 0.9], index=2, object="embedding"),
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+
+    # Create an API EmbeddingResponse for the missing value
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.4, 0.5, 0.6], index=1, object="embedding")]
+    )
+
+    # Call the method
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Assertions
+    assert isinstance(result, EmbeddingResponse)
+    assert len(result.data) == 3
+    assert result.data[0].embedding == [0.1, 0.2, 0.3]
+    assert result.data[1].embedding == [0.4, 0.5, 0.6]
+    assert result.data[2].embedding == [0.7, 0.8, 0.9]
+    assert result._hidden_params["cache_hit"] == True
+    assert isinstance(result._response_ms, float)
+    assert result._response_ms > 0
+
+
+def test_combine_cached_embedding_response_multiple_missing_values():
+    """
+    If the cached response has [cache_hit, None, None, cache_hit, None]
+    result should be            [cache_hit, api_result, api_result, cache_hit, api_result]
+    """
+
+    # Setup
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    # Create a CachingHandlerResponse with some cached and some None values
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
+            None,
+            None,
+            Embedding(embedding=[0.7, 0.8, 0.9], index=3, object="embedding"),
+            None,
+        ]
+    )
+
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+
+    # Create an API EmbeddingResponse for the missing values
+    api_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.4, 0.5, 0.6], index=1, object="embedding"),
+            Embedding(embedding=[0.4, 0.5, 0.6], index=2, object="embedding"),
+            Embedding(embedding=[0.4, 0.5, 0.6], index=4, object="embedding"),
+        ]
+    )
+
+    # Call the method
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Assertions
+    assert isinstance(result, EmbeddingResponse)
+    assert len(result.data) == 5
+    assert result.data[0].embedding == [0.1, 0.2, 0.3]
+    assert result.data[1].embedding == [0.4, 0.5, 0.6]
+    assert result.data[2].embedding == [0.4, 0.5, 0.6]
+    assert result.data[3].embedding == [0.7, 0.8, 0.9]
