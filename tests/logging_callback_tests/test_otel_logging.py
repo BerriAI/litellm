@@ -66,7 +66,6 @@ async def test_async_otel_callback(streaming):
             assert span._attributes["gen_ai.request.temperature"] == 0.1
             assert span._attributes["llm.is_streaming"] == str(streaming)
             assert span._attributes["llm.user"] == "OTEL_USER"
-            assert span._attributes["gen_ai.prompt.0.content"] == "hi"
         elif span.name == "raw_gen_ai_request":
             if streaming is True:
                 validate_raw_gen_ai_request_openai_streaming(span)

@@ -767,6 +767,9 @@ class DeleteUserRequest(LiteLLMBase):
     user_ids: List[str]  # required
 
 
+AllowedModelRegion = Literal["eu", "us"]
+
+
 class NewCustomerRequest(LiteLLMBase):
     """
     Create a new customer, allocate a budget to them
@@ -777,7 +780,7 @@ class NewCustomerRequest(LiteLLMBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[Literal["eu"]] = (
+    allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
     default_model: Optional[str] = (
@@ -804,7 +807,7 @@ class UpdateCustomerRequest(LiteLLMBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[Literal["eu"]] = (
+    allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
     default_model: Optional[str] = (
@@ -1384,7 +1387,7 @@ class UserAPIKeyAuth(
 
     api_key: Optional[str] = None
     user_role: Optional[LitellmUserRoles] = None
-    allowed_model_region: Optional[Literal["eu"]] = None
+    allowed_model_region: Optional[AllowedModelRegion] = None
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
     tpm_limit_per_model: Optional[Dict[str, int]] = None
@@ -1466,7 +1469,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
-    allowed_model_region: Optional[Literal["eu"]] = None
+    allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
@@ -2019,3 +2022,16 @@ class LoggingCallbackStatus(TypedDict, total=False):
 class KeyHealthResponse(TypedDict, total=False):
     key: Literal["healthy", "unhealthy"]
     logging_callbacks: Optional[LoggingCallbackStatus]
+
+
+class SpecialHeaders(enum.Enum):
+    """Used by user_api_key_auth.py to get litellm key"""
+
+    openai_authorization = "Authorization"
+    azure_authorization = "API-Key"
+    anthropic_authorization = "x-api-key"
+
+
+class LitellmDataForBackendLLMCall(TypedDict, total=False):
+    headers: dict
+    organization: str

@@ -811,6 +811,8 @@ general_settings:
 | oauth2_config_mappings | Dict[str, str] | Define the OAuth2 config mappings | 
 | pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+| forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
+
 ### router_settings - Reference
 
 ```yaml
@@ -858,6 +860,7 @@ router_settings:
 | retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
 | allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
 | allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
+
 
 ### environment variables - Reference
 

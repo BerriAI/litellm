@@ -22,7 +22,7 @@ class RerankRequest(BaseModel):
 class RerankResponse(BaseModel):
     id: str
     results: List[dict]  # Contains index and relevance_score
-    meta: dict  # Contains api_version and billed_units
+    meta: Optional[dict] = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)

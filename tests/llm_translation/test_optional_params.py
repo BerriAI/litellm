@@ -732,3 +732,18 @@ def test_drop_nested_params_add_prop_and_strict(provider, model):
     )
 
     _check_additional_properties(optional_params["tools"])
+
+
+def test_hosted_vllm_tool_param():
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/6228
+    """
+    optional_params = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        temperature=0.2,
+        tools=None,
+        tool_choice=None,
+    )
+    assert "tools" not in optional_params
+    assert "tool_choice" not in optional_params

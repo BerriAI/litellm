@@ -24,21 +24,25 @@ curl -X POST --location 'http://0.0.0.0:4000/end_user/new' \
 
 ### 2. Add eu models to model-group 
 
-Add eu models to a model group. For azure models, litellm can automatically infer the region (no need to set it). 
+Add eu models to a model group. Use the 'region_name' param to specify the region for each model.
+
+Supported regions are 'eu' and 'us'.
 
 ```yaml
 model_list:
-    - model_name: gpt-3.5-turbo
-      litellm_params:
-        model: azure/gpt-35-turbo-eu # 👈 EU azure model
-        api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
-        api_key: os.environ/AZURE_EUROPE_API_KEY
-    - model_name: gpt-3.5-turbo
-      litellm_params:
-        model: azure/chatgpt-v-2
-        api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-        api_version: "2023-05-15"
-        api_key: os.environ/AZURE_API_KEY
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-35-turbo # 👈 EU azure model
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: os.environ/AZURE_EUROPE_API_KEY
+      region_name: "eu"
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_API_KEY
+      region_name: "us"
 
 router_settings:
   enable_pre_call_checks: true # 👈 IMPORTANT
@@ -74,6 +78,7 @@ Expected API Base in response headers
 
 ```
 x-litellm-api-base: "https://my-endpoint-europe-berri-992.openai.azure.com/"
+x-litellm-model-region: "eu" # 👈 CONFIRMS REGION-BASED ROUTING WORKED
 ```
 
 ### FAQ 

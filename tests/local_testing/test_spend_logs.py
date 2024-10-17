@@ -102,7 +102,6 @@ def test_spend_logs_payload():
                     "method": "POST",
                     "headers": {
                         "content-type": "application/json",
-                        "authorization": "Bearer sk-1234",
                         "user-agent": "PostmanRuntime/7.32.3",
                         "accept": "*/*",
                         "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",

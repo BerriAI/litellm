@@ -2,9 +2,11 @@
 Class to handle llm wildcard routing and regex pattern matching
 """
 
+import copy
 import re
 from typing import Dict, List, Optional
 
+from litellm import get_llm_provider
 from litellm._logging import verbose_router_logger
 
 
@@ -32,10 +34,7 @@ class PatternMatchRouter:
         regex = self._pattern_to_regex(pattern)
         if regex not in self.patterns:
             self.patterns[regex] = []
-        if isinstance(llm_deployment, list):
-            self.patterns[regex].extend(llm_deployment)
-        else:
-            self.patterns[regex].append(llm_deployment)
+        self.patterns[regex].append(llm_deployment)
 
     def _pattern_to_regex(self, pattern: str) -> str:
         """
@@ -84,6 +83,55 @@ class PatternMatchRouter:
             verbose_router_logger.debug(f"Error in PatternMatchRouter.route: {str(e)}")
 
         return None  # No matching pattern found
+
+    def get_pattern(
+        self, model: str, custom_llm_provider: Optional[str] = None
+    ) -> Optional[List[Dict]]:
+        """
+        Check if a pattern exists for the given model and custom llm provider
+
+        Args:
+            model: str
+            custom_llm_provider: Optional[str]
+
+        Returns:
+            bool: True if pattern exists, False otherwise
+        """
+        if custom_llm_provider is None:
+            try:
+                (
+                    _,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = get_llm_provider(model=model)
+            except Exception:
+                # get_llm_provider raises exception when provider is unknown
+                pass
+        return self.route(model) or self.route(f"{custom_llm_provider}/{model}")
+
+    def get_deployments_by_pattern(
+        self, model: str, custom_llm_provider: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        Get the deployments by pattern
+
+        Args:
+            model: str
+            custom_llm_provider: Optional[str]
+
+        Returns:
+            List[Dict]: llm deployments matching the pattern
+        """
+        pattern_match = self.get_pattern(model, custom_llm_provider)
+        if pattern_match:
+            provider_deployments = []
+            for deployment in pattern_match:
+                dep = copy.deepcopy(deployment)
+                dep["litellm_params"]["model"] = model
+                provider_deployments.append(dep)
+            return provider_deployments
+        return []
 
 
 # Example usage:

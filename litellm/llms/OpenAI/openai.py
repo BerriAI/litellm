@@ -590,6 +590,7 @@ class OpenAIChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        raw_response = None
         try:
             raw_response = openai_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -602,7 +603,14 @@ class OpenAIChatCompletion(BaseLLM):
             response = raw_response.parse()
             return headers, response
         except Exception as e:
-            raise e
+            if raw_response is not None:
+                raise Exception(
+                    "error - {}, Received response - {}, Type of response - {}".format(
+                        e, raw_response, type(raw_response)
+                    )
+                )
+            else:
+                raise e
 
     def completion(  # type: ignore
         self,

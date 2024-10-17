@@ -178,6 +178,14 @@ class IBMWatsonXAIConfig:
             "eu-gb",
         ]
 
+    def get_us_regions(self) -> List[str]:
+        """
+        Source: https://www.ibm.com/docs/en/watsonx/saas?topic=integrations-regional-availability
+        """
+        return [
+            "us-south",
+        ]
+
 
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict) -> str:
     # handle anthropic prompts and amazon titan prompts
