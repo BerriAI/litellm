@@ -87,10 +87,11 @@ class AmazonConverseConfig:
             or model.startswith("mistral")
             or model.startswith("cohere")
             or model.startswith("meta.llama3-1")
+            or model.startswith("us.anthropic")
         ):
             supported_params.append("tools")
 
-        if model.startswith("anthropic") or model.startswith("mistral"):
+        if model.startswith("anthropic") or model.startswith("mistral") or model.startswith("us.anthropic"):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
