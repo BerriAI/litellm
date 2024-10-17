@@ -19,6 +19,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
@@ -7313,18 +7314,40 @@ async def model_info_v1(
 
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
+
+    if user_model is not None:
+        # user is trying to get specific model from litellm router
+        try:
+            model_info: Dict = cast(Dict, litellm.get_model_info(model=user_model))
+        except Exception:
+            model_info = {}
+        _deployment_info = Deployment(
+            model_name="*",
+            litellm_params=LiteLLM_Params(
+                model=user_model,
+            ),
+            model_info=model_info,
+        )
+        _deployment_info_dict = _deployment_info.model_dump()
+        _deployment_info_dict = remove_sensitive_info_from_deployment(
+            deployment_dict=_deployment_info_dict
+        )
+        return {"data": _deployment_info_dict}
 
     if llm_model_list is None:
         raise HTTPException(
-            status_code=500, detail={"error": "LLM Model List not loaded in"}
+            status_code=500,
+            detail={
+                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+            },
         )
 
     if llm_router is None:
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI."
+                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
             },
         )
 

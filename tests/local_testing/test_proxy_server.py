@@ -1796,3 +1796,81 @@ async def test_proxy_model_group_info_rerank(prisma_client):
     print(resp)
     models = resp["data"]
     assert models[0].mode == "rerank"
+
+
+# @pytest.mark.asyncio
+# async def test_proxy_team_member_add(prisma_client):
+#     """
+#     Add 10 people to a team. Confirm all 10 are added.
+#     """
+#     from litellm.proxy.management_endpoints.team_endpoints import (
+#         team_member_add,
+#         new_team,
+#     )
+#     from litellm.proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
+
+#     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     try:
+
+#         async def test():
+#             await litellm.proxy.proxy_server.prisma_client.connect()
+#             from litellm.proxy.proxy_server import user_api_key_cache
+
+#             user_api_key_dict = UserAPIKeyAuth(
+#                 user_role=LitellmUserRoles.PROXY_ADMIN,
+#                 api_key="sk-1234",
+#                 user_id="1234",
+#             )
+
+#             new_team()
+#             for _ in range(10):
+#                 request = TeamMemberAddRequest(
+#                     team_id="1234",
+#                     member=Member(
+#                         user_id="1234",
+#                         user_role=LitellmUserRoles.INTERNAL_USER,
+#                     ),
+#                 )
+#                 key = await team_member_add(
+#                     request, user_api_key_dict=user_api_key_dict
+#                 )
+
+#             print(key)
+#             user_id = key.user_id
+
+#             # check /user/info to verify user_role was set correctly
+#             new_user_info = await user_info(
+#                 user_id=user_id, user_api_key_dict=user_api_key_dict
+#             )
+#             new_user_info = new_user_info.user_info
+#             print("new_user_info=", new_user_info)
+#             assert new_user_info["user_role"] == LitellmUserRoles.INTERNAL_USER
+#             assert new_user_info["user_id"] == user_id
+
+#             generated_key = key.key
+#             bearer_token = "Bearer " + generated_key
+
+#             assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+
+#             value_from_prisma = await prisma_client.get_data(
+#                 token=generated_key,
+#             )
+#             print("token from prisma", value_from_prisma)
+
+#             request = Request(
+#                 {
+#                     "type": "http",
+#                     "route": api_route,
+#                     "path": api_route.path,
+#                     "headers": [("Authorization", bearer_token)],
+#                 }
+#             )
+
+#             # use generated key to auth in
+#             result = await user_api_key_auth(request=request, api_key=bearer_token)
+#             print("result from user auth with new key", result)
+
+#         asyncio.run(test())
+#     except Exception as e:
+#         pytest.fail(f"An exception occurred - {str(e)}")
