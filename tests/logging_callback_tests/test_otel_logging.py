@@ -89,11 +89,6 @@ def validate_litellm_request(span):
         "llm.usage.total_tokens",
         "gen_ai.usage.completion_tokens",
         "gen_ai.usage.prompt_tokens",
-        "gen_ai.prompt.0.role",
-        "gen_ai.prompt.0.content",
-        "gen_ai.completion.0.finish_reason",
-        "gen_ai.completion.0.role",
-        "gen_ai.completion.0.content",
     ]
 
     # get the str of all the span attributes
