@@ -547,7 +547,7 @@ async def auth_callback(request: Request):
     ## CHECK IF ROLE ALLOWED TO USE PROXY ##
     if ui_access_mode == "admin_only" and (
         user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+        or user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
     ):
         verbose_proxy_logger.debug("EXCEPTION RAISED")
         raise HTTPException(
