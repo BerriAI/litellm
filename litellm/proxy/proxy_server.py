@@ -139,6 +139,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.admin_ui_utils import html_form
+from litellm.proxy.common_utils.base_config_class import BaseProxyConfig
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
@@ -1358,96 +1359,13 @@ async def _run_background_health_check():
             await asyncio.sleep(health_check_interval)
 
 
-class ProxyConfig:
+class ProxyConfig(BaseProxyConfig):
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
     """
 
     def __init__(self) -> None:
         pass
-
-    def is_yaml(self, config_file_path: str) -> bool:
-        if not os.path.isfile(config_file_path):
-            return False
-
-        _, file_extension = os.path.splitext(config_file_path)
-        return file_extension.lower() == ".yaml" or file_extension.lower() == ".yml"
-
-    async def get_config(self, config_file_path: Optional[str] = None) -> dict:
-        global prisma_client, user_config_file_path
-
-        file_path = config_file_path or user_config_file_path
-        if config_file_path is not None:
-            user_config_file_path = config_file_path
-        # Load existing config
-        ## Yaml
-        if os.path.exists(f"{file_path}"):
-            with open(f"{file_path}", "r") as config_file:
-                config = yaml.safe_load(config_file)
-        else:
-            config = {
-                "model_list": [],
-                "general_settings": {},
-                "router_settings": {},
-                "litellm_settings": {},
-            }
-
-        ## DB
-        if prisma_client is not None and (
-            general_settings.get("store_model_in_db", False) is True
-            or store_model_in_db is True
-        ):
-            _tasks = []
-            keys = [
-                "general_settings",
-                "router_settings",
-                "litellm_settings",
-                "environment_variables",
-            ]
-            for k in keys:
-                response = prisma_client.get_generic_data(
-                    key="param_name", value=k, table_name="config"
-                )
-                _tasks.append(response)
-
-            responses = await asyncio.gather(*_tasks)
-            for response in responses:
-                if response is not None:
-                    param_name = getattr(response, "param_name", None)
-                    param_value = getattr(response, "param_value", None)
-                    if param_name is not None and param_value is not None:
-                        # check if param_name is already in the config
-                        if param_name in config:
-                            if isinstance(config[param_name], dict):
-                                config[param_name].update(param_value)
-                            else:
-                                config[param_name] = param_value
-                        else:
-                            # if it's not in the config - then add it
-                            config[param_name] = param_value
-        config = self._check_for_os_environ_vars(config=config)
-        return config
-
-    async def save_config(self, new_config: dict):
-        global prisma_client, general_settings, user_config_file_path, store_model_in_db
-        # Load existing config
-        ## DB - writes valid config to db
-        """
-        - Do not write restricted params like 'api_key' to the database
-        - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
-        """
-        if prisma_client is not None and (
-            general_settings.get("store_model_in_db", False) is True
-            or store_model_in_db
-        ):
-            # if using - db for config - models are in ModelTable
-            new_config.pop("model_list", None)
-            await prisma_client.insert_data(data=new_config, table_name="config")
-        else:
-            # Save the updated config - if user is not using a dB
-            ## YAML
-            with open(f"{user_config_file_path}", "w") as config_file:
-                yaml.dump(new_config, config_file, default_flow_style=False)
 
     async def load_team_config(self, team_id: str):
         """
@@ -1492,36 +1410,6 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-    def _check_for_os_environ_vars(
-        self, config: dict, depth: int = 0, max_depth: int = 10
-    ) -> dict:
-        """
-        Check for os.environ/ variables in the config and replace them with the actual values.
-        Includes a depth limit to prevent infinite recursion.
-
-        Args:
-            config (dict): The configuration dictionary to process.
-            depth (int): Current recursion depth.
-            max_depth (int): Maximum allowed recursion depth.
-
-        Returns:
-            dict: Processed configuration dictionary.
-        """
-        if depth > max_depth:
-            verbose_proxy_logger.warning(
-                f"Maximum recursion depth ({max_depth}) reached while processing config."
-            )
-            return config
-
-        for key, value in config.items():
-            if isinstance(value, dict):
-                config[key] = self._check_for_os_environ_vars(
-                    config=value, depth=depth + 1, max_depth=max_depth
-                )
-            elif isinstance(value, str) and value.startswith("os.environ/"):
-                config[key] = get_secret_str(value)
-        return config
-
     async def load_config(
         self, router: Optional[litellm.Router], config_file_path: str
     ):
@@ -1530,28 +1418,7 @@ class ProxyConfig:
         """
         global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
-        # Load existing config
-        if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
-            bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
-            object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
-            bucket_type = os.environ.get("LITELLM_CONFIG_BUCKET_TYPE")
-            verbose_proxy_logger.debug(
-                "bucket_name: %s, object_key: %s", bucket_name, object_key
-            )
-            if bucket_type == "gcs":
-                config = await get_config_file_contents_from_gcs(
-                    bucket_name=bucket_name, object_key=object_key
-                )
-            else:
-                config = get_file_contents_from_s3(
-                    bucket_name=bucket_name, object_key=object_key
-                )
-
-            if config is None:
-                raise Exception("Unable to load config from given source.")
-        else:
-            # default to file
-            config = await self.get_config(config_file_path=config_file_path)
+        config: dict = await self.get_config(config_file_path=config_file_path)
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
