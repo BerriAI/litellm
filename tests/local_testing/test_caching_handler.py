@@ -171,3 +171,65 @@ async def test_async_log_cache_hit_on_callbacks():
     mock_logging_obj.success_handler.assert_called_once_with(
         cached_result, start_time, end_time, cache_hit
     )
+
+
+@pytest.mark.parametrize(
+    "call_type, cached_result, expected_type",
+    [
+        (
+            CallTypes.completion.value,
+            {
+                "id": "test",
+                "choices": [{"message": {"role": "assistant", "content": "Hello"}}],
+            },
+            ModelResponse,
+        ),
+        (
+            CallTypes.text_completion.value,
+            {"id": "test", "choices": [{"text": "Hello"}]},
+            TextCompletionResponse,
+        ),
+        (
+            CallTypes.embedding.value,
+            {"data": [{"embedding": [0.1, 0.2, 0.3]}]},
+            EmbeddingResponse,
+        ),
+        (
+            CallTypes.rerank.value,
+            {"id": "test", "results": [{"index": 0, "score": 0.9}]},
+            RerankResponse,
+        ),
+        (
+            CallTypes.transcription.value,
+            {"text": "Hello, world!"},
+            TranscriptionResponse,
+        ),
+    ],
+)
+def test_convert_cached_result_to_model_response(
+    call_type, cached_result, expected_type
+):
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.completion.value,
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how can I help you today?"}],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=call_type,
+        kwargs={},
+        logging_obj=logging_obj,
+        model="test-model",
+        args=(),
+    )
+
+    assert isinstance(result, expected_type)
+    assert result is not None
