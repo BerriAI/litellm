@@ -200,6 +200,12 @@ def test_completion_claude_3_function_call_with_otel(model):
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("global_redact", [True, False])
 async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
+    """
+    No content should be logged when message logging is off
+
+    tests when litellm.turn_off_message_logging is set to True
+    tests when OpenTelemetry(message_logging=False) is set
+    """
     litellm.set_verbose = True
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
     if global_redact is False:
@@ -255,5 +261,10 @@ def validate_redacted_message_span_attributes(span):
         "gen_ai.usage.completion_tokens",
         "gen_ai.usage.prompt_tokens",
     ]
+
+    _all_attributes = set([name for name in span.attributes.keys()])
+    print("all_attributes", _all_attributes)
+
+    assert _all_attributes == set(expected_attributes)
 
     pass
