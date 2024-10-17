@@ -1818,7 +1818,7 @@ class ProxyException(Exception):
         code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
-        self.message = message
+        self.message = message.decode('utf-8') if isinstance(message, bytes) else message
         self.type = type
         self.param = param
 
