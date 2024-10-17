@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import yaml
 
 from litellm._logging import verbose_proxy_logger
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -81,6 +81,8 @@ class BaseProxyConfig:
         if os.path.exists(f"{file_path}"):
             with open(f"{file_path}", "r") as config_file:
                 config = yaml.safe_load(config_file)
+        elif config_file_path is not None:
+            raise Exception(f"Config file not found at {config_file_path}")
         else:
             config = {
                 "model_list": [],
@@ -245,8 +247,15 @@ class BaseProxyConfig:
                 config[key] = self._check_for_os_environ_vars(
                     config=value, depth=depth + 1, max_depth=max_depth
                 )
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        item = self._check_for_os_environ_vars(
+                            config=item, depth=depth + 1, max_depth=max_depth
+                        )
+            # if the value is a string and starts with "os.environ/" - then it's an environment variable
             elif isinstance(value, str) and value.startswith("os.environ/"):
-                config[key] = get_secret_str(value)
+                config[key] = get_secret(value)
         return config
 
     async def save_config(self, new_config: dict):
