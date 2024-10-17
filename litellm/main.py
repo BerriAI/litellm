@@ -109,6 +109,7 @@ from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
+from .llms.prompt_templates.common_utils import get_messages
 from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
@@ -144,7 +145,11 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
     VertexEmbedding,
 )
 from .llms.watsonx import IBMWatsonXAI
-from .types.llms.openai import HttpxBinaryResponseContent
+from .types.llms.openai import (
+    ChatCompletionAssistantMessage,
+    ChatCompletionUserMessage,
+    HttpxBinaryResponseContent,
+)
 from .types.utils import (
     AdapterCompletionStreamWrapper,
     ChatCompletionMessageToolCall,
@@ -748,6 +753,15 @@ def completion(  # type: ignore
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
     headers = kwargs.get("headers", None) or extra_headers
+    ensure_alternating_roles: Optional[bool] = kwargs.get(
+        "ensure_alternating_roles", None
+    )
+    user_continue_message: Optional[ChatCompletionUserMessage] = kwargs.get(
+        "user_continue_message", None
+    )
+    assistant_continue_message: Optional[ChatCompletionAssistantMessage] = kwargs.get(
+        "assistant_continue_message", None
+    )
     if headers is None:
         headers = {}
 
@@ -784,7 +798,12 @@ def completion(  # type: ignore
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
-    messages = deepcopy(messages)
+    messages = get_messages(
+        messages=messages,
+        ensure_alternating_roles=ensure_alternating_roles,
+        user_continue_message=user_continue_message,
+        assistant_continue_message=assistant_continue_message,
+    )
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
