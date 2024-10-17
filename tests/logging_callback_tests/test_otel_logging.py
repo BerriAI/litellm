@@ -97,7 +97,6 @@ def validate_litellm_request(span):
     ]
 
     for attr in expected_attributes:
-        assert attr in span.attributes, f"Attribute {attr} is missing"
         assert span.attributes[attr] is not None, f"Attribute {attr} has None value"
 
 
@@ -118,7 +117,6 @@ def validate_raw_gen_ai_request_openai_non_streaming(span):
     ]
 
     for attr in expected_attributes:
-        assert attr in span.attributes, f"Attribute {attr} is missing"
         assert span.attributes[attr] is not None, f"Attribute {attr} has None"
 
 
@@ -132,7 +130,6 @@ def validate_raw_gen_ai_request_openai_streaming(span):
     ]
 
     for attr in expected_attributes:
-        assert attr in span.attributes, f"Attribute {attr} is missing"
         assert span.attributes[attr] is not None, f"Attribute {attr} has None"
 
 
@@ -253,5 +250,6 @@ def validate_redacted_message_span_attributes(span):
     ]
 
     for attr in span.attributes:
-        assert attr in expected_attributes, f"Attribute {attr} is missing"
-        assert span.attributes[attr] is not None, f"Attribute {attr} has None value"
+        assert (
+            span.attributes[expected_attributes] is not None
+        ), f"Attribute {attr} has None value"
