@@ -865,3 +865,20 @@ def test_factory_function(model_list):
     """Test if the 'factory_function' function is working correctly"""
     router = Router(model_list=model_list)
     router.factory_function(litellm.acreate_assistants)
+
+
+def test_get_model_from_alias(model_list):
+    """Test if the 'get_model_from_alias' function is working correctly"""
+    router = Router(
+        model_list=model_list,
+        model_group_alias={"gpt-4o": "gpt-3.5-turbo"},
+    )
+    model = router._get_model_from_alias(model="gpt-4o")
+    assert model == "gpt-3.5-turbo"
+
+
+def test_get_deployment_by_litellm_model(model_list):
+    """Test if the 'get_deployment_by_litellm_model' function is working correctly"""
+    router = Router(model_list=model_list)
+    deployment = router._get_deployment_by_litellm_model(model="gpt-3.5-turbo")
+    assert deployment is not None

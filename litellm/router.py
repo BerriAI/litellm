@@ -4479,7 +4479,7 @@ class Router:
         """
         returned_models: List[DeploymentTypedDict] = []
         for model in self.model_list:
-            if model["model_name"] == model_name:
+            if model_name is not None and model["model_name"] == model_name:
                 if model_alias is not None:
                     alias_model = copy.deepcopy(model)
                     alias_model["model_name"] = model_alias
@@ -4877,82 +4877,73 @@ class Router:
 
         return _returned_deployments
 
+    def _get_model_from_alias(self, model: str) -> Optional[str]:
+        """
+        Get the model from the alias.
+
+        Returns:
+        - str, the litellm model name
+        - None, if model is not in model group alias
+        """
+        if model not in self.model_group_alias:
+            return None
+
+        _item = self.model_group_alias[model]
+        if isinstance(_item, str):
+            model = _item
+        else:
+            model = _item["model"]
+
+        return model
+
+    def _get_deployment_by_litellm_model(self, model: str) -> List:
+        """
+        Get the deployment by litellm model.
+        """
+        return [m for m in self.model_list if m["litellm_params"]["model"] == model]
+
     def _common_checks_available_deployment(
         self,
         model: str,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
-    ) -> Tuple[str, Union[list, dict]]:
+    ) -> Tuple[str, Union[List, Dict]]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
 
         If 'healthy_deployments' returned is None, this means the user chose a specific deployment
 
         Returns
-        - Dict, if specific model chosen
+        - str, the litellm model name
         - List, if multiple models chosen
+        - Dict, if specific model chosen
         """
+
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
-            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
-            for deployment in self.model_list:
-                deployment_model = deployment.get("litellm_params").get("model")
-                if deployment_model == model:
-                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
-                    # return the first deployment where the `model` matches the specificed deployment name
-                    return deployment_model, deployment
-            raise ValueError(
-                f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.get_model_names()}"
-            )
+            return model, self._get_deployment_by_litellm_model(model=model)
         elif model in self.get_model_ids():
-            deployment = self.get_model_info(id=model)
+            deployment = self.get_deployment(model_id=model)
             if deployment is not None:
-                deployment_model = deployment.get("litellm_params", {}).get("model")
-                return deployment_model, deployment
+                deployment_model = deployment.litellm_params.model
+                return deployment_model, deployment.model_dump()
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in \
                     Model ID List: {self.get_model_ids}"
             )
 
-        if model in self.model_group_alias:
-            _item = self.model_group_alias[model]
-            if isinstance(_item, str):
-                model = _item
-            else:
-                model = _item["model"]
+        _model_from_alias = self._get_model_from_alias(model=model)
+        if _model_from_alias is not None:
+            model = _model_from_alias
 
         if model not in self.model_names:
             # check if provider/ specific wildcard routing use pattern matching
-            custom_llm_provider: Optional[str] = None
-            try:
-                (
-                    _,
-                    custom_llm_provider,
-                    _,
-                    _,
-                ) = litellm.get_llm_provider(model=model)
-            except Exception:
-                # get_llm_provider raises exception when provider is unknown
-                pass
-
-            """
-            self.pattern_router.route(model):
-                does exact pattern matching. Example openai/gpt-3.5-turbo gets routed to pattern openai/*
-
-            self.pattern_router.route(f"{custom_llm_provider}/{model}"):
-                does pattern matching using litellm.get_llm_provider(), example claude-3-5-sonnet-20240620 gets routed to anthropic/* since 'claude-3-5-sonnet-20240620' is an Anthropic Model
-            """
-            _pattern_router_response = self.pattern_router.route(
-                model
-            ) or self.pattern_router.route(f"{custom_llm_provider}/{model}")
-            if _pattern_router_response is not None:
-                provider_deployments = []
-                for deployment in _pattern_router_response:
-                    dep = copy.deepcopy(deployment)
-                    dep["litellm_params"]["model"] = model
-                    provider_deployments.append(dep)
-                return model, provider_deployments
+            pattern_deployments = self.pattern_router.get_deployments_by_pattern(
+                model=model,
+            )
+            if pattern_deployments:
+                return model, pattern_deployments
 
             # check if default deployment is set
             if self.default_deployment is not None:
@@ -4964,12 +4955,10 @@ class Router:
 
         ## get healthy deployments
         ### get all deployments
-        healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
+        healthy_deployments = self._get_all_deployments(model_name=model)
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
-            healthy_deployments = [
-                m for m in self.model_list if m["litellm_params"]["model"] == model
-            ]
+            healthy_deployments = self._get_deployment_by_litellm_model(model=model)
 
         verbose_router_logger.debug(
             f"initial list of deployments: {healthy_deployments}"
