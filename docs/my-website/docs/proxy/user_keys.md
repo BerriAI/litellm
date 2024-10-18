@@ -1158,11 +1158,13 @@ model_list:
     litellm_params:
       model: "fireworks_ai/*"
       configurable_clientside_auth_params: ["api_base"]
+      # OR 
+      configurable_clientside_auth_params: [{"api_base": "^https://litellm.*direct\.fireworks\.ai/v1$"}] # 👈 regex
 ```
 
 Specify any/all auth params you want the user to be able to configure:
 
-- api_base
+- api_base (✅ regex supported)
 - api_key
 - base_url 
 
@@ -1185,7 +1187,7 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
         "content": "this is a test request, write a short poem"
     }
 ], 
-    extra_body={"api_key": "my-bad-key"}) # 👈 User Key
+    extra_body={"api_key": "my-bad-key", "api_base": "https://litellm-dev.direct.fireworks.ai/v1"}) # 👈 clientside credentials
 
 print(response)
 ```
