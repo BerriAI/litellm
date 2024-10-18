@@ -244,7 +244,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs, response_obj, start_time, end_time
+    ):  # noqa: PLR0915
         try:
             """
             Update latency usage on success
@@ -375,7 +377,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    def get_available_deployments(
+    def get_available_deployments(  # noqa: PLR0915
         self,
         model_group: str,
         healthy_deployments: list,
