@@ -277,6 +277,7 @@ const sidebars = {
         "observability/literalai_integration",
         "observability/opentelemetry_integration",
         "observability/logfire_integration",
+        "observability/argilla",
         "observability/arize_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
