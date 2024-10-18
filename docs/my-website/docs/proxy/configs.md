@@ -873,6 +873,11 @@ router_settings:
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
+| ARGILLA_BATCH_SIZE | Batch size for Argilla logging
+| ARGILLA_API_KEY | API key for Argilla platform
+| ARGILLA_SAMPLING_RATE | Sampling rate for Argilla logging
+| ARGILLA_DATASET_NAME | Dataset name for Argilla logging
+| ARGILLA_BASE_URL | Base URL for Argilla service
 | ATHINA_API_KEY | API key for Athina service
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
