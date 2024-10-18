@@ -44,14 +44,8 @@ securityContext: {}
 # A list of Kubernetes Secret objects that will be exported to the LiteLLM proxy
 #  pod as environment variables.  These secrets can then be referenced in the
 #  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
-environmentSecrets: []
-  # - litellm-env-secret
-
-# A list of Kubernetes ConfigMap objects that will be exported to the LiteLLM proxy
-#  pod as environment variables.  The ConfigMap kv-pairs can then be referenced in the
-#  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
-environmentConfigMaps: []
-  # - litellm-env-configmap
+environmentSecrets:
+  - litellm-secret
 
 service:
   type: ClusterIP
@@ -80,16 +74,38 @@ ingress:
 #  Reference: https://docs.litellm.ai/docs/proxy/configs
 proxy_config:
   model_list:
-    # At least one model must exist for the proxy to start.
     - model_name: gpt-3.5-turbo
       litellm_params:
-        model: gpt-3.5-turbo
-        api_key: eXaMpLeOnLy
-    - model_name: fake-openai-endpoint
+        model: openai/gpt-35-turbo
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        description: "GPT-3.5 Turbo"
+    - model_name: gpt-4o
       litellm_params:
-        model: openai/fake
-        api_key: fake-key
-        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+        model: openai/gpt-4o
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        description: "GPT-4o"
+    - model_name: gpt-4o-mini
+      litellm_params:
+        model: openai/gpt-4o-mini
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        description: "GPT-4o mini"
+    - model_name: text-embedding-ada-002
+      litellm_params:
+        model: openai/text-embedding-ada-002
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        mode: embedding
+        description: "text-embedding-ada-002"
+    - model_name: text-embedding-3-small
+      litellm_params:
+        model: openai/text-embedding-3-small
+        api_key: os.environ/OPENAI_API_KEY
+      model_info:
+        mode: embedding
+        description: "text-embedding-3-small"
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
@@ -164,14 +180,15 @@ postgresql:
 
     # You should override these on the helm command line with
     #  `--set postgresql.auth.postgres-password=<some good password>,postgresql.auth.password=<some good password>`
-    password: NoTaGrEaTpAsSwOrD
-    postgres-password: NoTaGrEaTpAsSwOrD
+    # password: NoTaGrEaTpAsSwOrD
+    # postgres-password: NoTaGrEaTpAsSwOrD
 
     # A secret is created by this chart (litellm-helm) with the credentials that
     #  the new Postgres instance should use.
-    # existingSecret: ""
-    # secretKeys:
-    #   userPasswordKey: password
+    existingSecret: "litellm-secret"
+    secretKeys:
+      userPasswordKey: password
+      postgresPasswordKey: postgres-password
 
 # requires cache: true in config file
 # either enable this or pass a secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL
