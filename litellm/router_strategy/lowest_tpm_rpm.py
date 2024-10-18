@@ -166,7 +166,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             verbose_router_logger.debug(traceback.format_exc())
             pass
 
-    def get_available_deployments(
+    def get_available_deployments(  # noqa: PLR0915
         self,
         model_group: str,
         healthy_deployments: list,

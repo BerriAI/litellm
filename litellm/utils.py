@@ -4573,9 +4573,9 @@ def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
 
-def get_model_info(
+def get_model_info(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
-) -> ModelInfo:  # noqa: PLR0915
+) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
