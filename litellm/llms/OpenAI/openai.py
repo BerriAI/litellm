@@ -347,6 +347,14 @@ class OpenAIConfig:
                 model=model,
                 drop_params=drop_params,
             )
+        elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
+            return litellm.openAIGPTAudioConfig.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+
         return litellm.openAIGPTConfig.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,

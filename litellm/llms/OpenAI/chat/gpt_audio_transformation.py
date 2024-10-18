@@ -38,7 +38,7 @@ class OpenAIGPTAudioConfig(OpenAIGPTConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         """
-        Get the supported OpenAI params for the given model
+        Get the supported OpenAI params for the `gpt-audio` models
 
         """
 
@@ -50,3 +50,17 @@ class OpenAIGPTAudioConfig(OpenAIGPTConfig):
         if model in litellm.open_ai_chat_completion_models and "audio" in model:
             return True
         return False
+
+    def _map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        return super()._map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )

@@ -21,6 +21,7 @@ import requests
 
 @pytest.mark.asyncio
 async def test_audio_output_from_model():
+    litellm.set_verbose = True
     completion = await litellm.acompletion(
         model="gpt-4o-audio-preview",
         modalities=["text", "audio"],
@@ -37,6 +38,7 @@ async def test_audio_output_from_model():
         f.write(wav_bytes)
 
 
+@pytest.mark.asyncio
 async def test_audio_input_to_model():
     # Fetch the audio file and convert it to a base64 encoded string
     url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
