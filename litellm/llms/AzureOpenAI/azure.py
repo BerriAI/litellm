@@ -344,7 +344,7 @@ class AzureChatCompletion(BaseLLM):
         except Exception as e:
             raise e
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,

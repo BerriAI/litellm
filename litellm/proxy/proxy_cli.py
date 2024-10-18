@@ -216,7 +216,7 @@ def is_port_in_use(port):
     envvar="SSL_CERTFILE_PATH",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
-def run_server(
+def run_server(  # noqa: PLR0915
     host,
     port,
     api_base,

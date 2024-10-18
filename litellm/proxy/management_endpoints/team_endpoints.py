@@ -92,7 +92,7 @@ async def get_all_team_memberships(
     response_model=LiteLLM_TeamTable,
 )
 @management_endpoint_wrapper
-async def new_team(
+async def new_team(  # noqa: PLR0915
     data: NewTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
