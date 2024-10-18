@@ -1396,6 +1396,8 @@ class ProxyConfig:
         if os.path.exists(f"{file_path}"):
             with open(f"{file_path}", "r") as config_file:
                 config = yaml.safe_load(config_file)
+        elif file_path is not None:
+            raise Exception(f"Config file not found: {file_path}")
         else:
             config = {
                 "model_list": [],

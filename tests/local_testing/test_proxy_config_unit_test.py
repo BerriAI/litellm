@@ -29,7 +29,7 @@ async def test_basic_reading_configs_from_files():
     """
     Test that the config is read correctly from the files in the example_config_yaml folder
     """
-    _base_config = ProxyConfig()
+    proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
     example_config_yaml_path = os.path.join(current_path, "example_config_yaml")
 
@@ -39,7 +39,7 @@ async def test_basic_reading_configs_from_files():
 
     for file in files:
         config_path = os.path.join(example_config_yaml_path, file)
-        config = await _base_config.get_config(config_file_path=config_path)
+        config = await proxy_config_instance.get_config(config_file_path=config_path)
         print(config)
 
 
@@ -48,10 +48,10 @@ async def test_read_config_from_bad_file_path():
     """
     Raise an exception if the file path is not valid
     """
-    _base_config = ProxyConfig()
+    proxy_config_instance = ProxyConfig()
     config_path = "non-existent-file.yaml"
     with pytest.raises(Exception):
-        config = await _base_config.get_config(config_file_path=config_path)
+        config = await proxy_config_instance.get_config(config_file_path=config_path)
 
 
 @pytest.mark.asyncio
@@ -81,12 +81,12 @@ async def test_read_config_file_with_os_environ_vars():
         os.environ[key] = value
 
     # Read config
-    _base_config = ProxyConfig()
+    proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(
         current_path, "example_config_yaml", "config_with_env_vars.yaml"
     )
-    config = await _base_config.get_config(config_file_path=config_path)
+    config = await proxy_config_instance.get_config(config_file_path=config_path)
     print(config)
 
     # Add assertions
