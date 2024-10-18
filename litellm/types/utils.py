@@ -376,12 +376,11 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 
 
 class Message(OpenAIObject):
-
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
-    audio: Optional[ChatCompletionAudioResponse]
+    # Note: audio is not supported in OpenAI compatible APIs like mistral API, it should not be required for the Message() object
 
     def __init__(
         self,
@@ -410,8 +409,11 @@ class Message(OpenAIObject):
                 if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
-            "audio": audio,
         }
+
+        if audio is not None:
+            init_values["audio"] = audio
+
         super(Message, self).__init__(
             **init_values,  # type: ignore
             **params,
