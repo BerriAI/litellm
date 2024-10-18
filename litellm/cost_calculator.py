@@ -693,7 +693,11 @@ def completion_cost(
                 completion_response, RerankResponse
             ):
                 meta_obj = completion_response.meta
-                billed_units = meta_obj.get("billed_units", {}) or {}
+                if meta_obj is not None:
+                    billed_units = meta_obj.get("billed_units", {}) or {}
+                else:
+                    billed_units = {}
+
                 search_units = (
                     billed_units.get("search_units") or 1
                 )  # cohere charges per request by default.
