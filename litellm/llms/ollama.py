@@ -347,6 +347,7 @@ def ollama_completion_stream(url, data, logging_obj):
                         isinstance(content_chunk, StreamingChoices)
                         and hasattr(content_chunk, "delta")
                         and hasattr(content_chunk.delta, "content")
+                        and content_chunk.delta.content is not None
                     ):
                         content_chunks.append(content_chunk.delta.content)
                 response_content = "".join(content_chunks)
