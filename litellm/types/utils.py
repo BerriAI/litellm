@@ -451,11 +451,17 @@ class Delta(OpenAIObject):
         role=None,
         function_call=None,
         tool_calls=None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
+
+        # Set default values and correct types
+        self.function_call: Optional[Union[FunctionCall, Any]] = None
+        self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
+        self.audio: Optional[ChatCompletionAudioResponse] = None
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -472,6 +478,8 @@ class Delta(OpenAIObject):
                     self.tool_calls.append(tool_call)
         else:
             self.tool_calls = tool_calls
+
+        self.audio = audio
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
