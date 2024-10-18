@@ -36,7 +36,8 @@ async def test_audio_output_from_model():
 
     assert completion.choices[0].message.audio is not None
     assert isinstance(
-        completion.choices[0].message.audio, litellm.types.utils.ChatCompletionAudio
+        completion.choices[0].message.audio,
+        litellm.types.utils.ChatCompletionAudioResponse,
     )
     assert len(completion.choices[0].message.audio.data) > 0
 
