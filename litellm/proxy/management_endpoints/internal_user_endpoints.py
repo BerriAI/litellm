@@ -308,7 +308,7 @@ def get_team_from_list(
     # response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
-async def user_info(
+async def user_info(  # noqa: PLR0915
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),

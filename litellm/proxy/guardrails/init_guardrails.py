@@ -86,7 +86,7 @@ Map guardrail_name: <pre_call>, <post_call>, during_call
 """
 
 
-def init_guardrails_v2(
+def init_guardrails_v2(  # noqa: PLR0915
     all_guardrails: List[Dict],
     config_file_path: Optional[str] = None,
 ):

@@ -156,7 +156,7 @@ class Router:
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         model_list: Optional[
             Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
@@ -2565,7 +2565,7 @@ class Router:
 
     #### [END] ASSISTANTS API ####
 
-    async def async_function_with_fallbacks(self, *args, **kwargs):
+    async def async_function_with_fallbacks(self, *args, **kwargs):  # noqa: PLR0915
         """
         Try calling the function_with_retries
         If it fails after num_retries, fall back to another model group
@@ -4170,7 +4170,7 @@ class Router:
         model_name = model_info["model_name"]
         return self.get_model_list(model_name=model_name)
 
-    def _set_model_group_info(
+    def _set_model_group_info(  # noqa: PLR0915
         self, model_group: str, user_facing_model_group_name: str
     ) -> Optional[ModelGroupInfo]:
         """
@@ -4696,7 +4696,7 @@ class Router:
                     client = self.cache.get_cache(key=cache_key)
                 return client
 
-    def _pre_call_checks(
+    def _pre_call_checks(  # noqa: PLR0915
         self,
         model: str,
         healthy_deployments: List,
