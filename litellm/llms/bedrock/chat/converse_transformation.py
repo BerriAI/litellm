@@ -82,15 +82,19 @@ class AmazonConverseConfig:
             "response_format",
         ]
 
+        ## Filter out 'cross-region' from model name
+        base_model = self._get_base_model(model)
+
         if (
-            model.startswith("anthropic")
-            or model.startswith("mistral")
-            or model.startswith("cohere")
-            or model.startswith("meta.llama3-1")
+            base_model.startswith("anthropic")
+            or base_model.startswith("mistral")
+            or base_model.startswith("cohere")
+            or base_model.startswith("meta.llama3-1")
+            or base_model.startswith("meta.llama3-2")
         ):
             supported_params.append("tools")
 
-        if model.startswith("anthropic") or model.startswith("mistral"):
+        if base_model.startswith("anthropic") or base_model.startswith("mistral"):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
