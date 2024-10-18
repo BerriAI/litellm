@@ -1,13 +1,17 @@
 import re
 import sys
 import traceback
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    ConfigurableClientsideParamsCustomAuth,
+)
 
 
 def _get_request_ip_address(
@@ -73,8 +77,41 @@ def check_complete_credentials(request_body: dict) -> bool:
     return False
 
 
+def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
+    """
+    Check if request_body_value matches the regex_str or is equal to param
+    """
+    if re.match(regex_str, request_body_value) or regex_str == request_body_value:
+        return True
+    return False
+
+
+def _is_param_allowed(
+    param: str,
+    request_body_value: Any,
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+) -> bool:
+    """
+    Check if param is a str or dict and if request_body_value is in the list of allowed values
+    """
+    if configurable_clientside_auth_params is None:
+        return False
+
+    for item in configurable_clientside_auth_params:
+        if isinstance(item, str) and param == item:
+            return True
+        elif isinstance(item, Dict):
+            if param == "api_base" and check_regex_or_str_match(
+                request_body_value=request_body_value,
+                regex_str=item["api_base"],
+            ):  # assume param is a regex
+                return True
+
+    return False
+
+
 def _allow_model_level_clientside_configurable_parameters(
-    model: str, param: str, llm_router: Optional[Router]
+    model: str, param: str, request_body_value: Any, llm_router: Optional[Router]
 ) -> bool:
     """
     Check if model is allowed to use configurable client-side params
@@ -99,10 +136,11 @@ def _allow_model_level_clientside_configurable_parameters(
     if model_info is None or model_info.configurable_clientside_auth_params is None:
         return False
 
-    if param in model_info.configurable_clientside_auth_params:
-        return True
-
-    return False
+    return _is_param_allowed(
+        param=param,
+        request_body_value=request_body_value,
+        configurable_clientside_auth_params=model_info.configurable_clientside_auth_params,
+    )
 
 
 def is_request_body_safe(
@@ -127,7 +165,10 @@ def is_request_body_safe(
                 return True
             elif (
                 _allow_model_level_clientside_configurable_parameters(
-                    model=model, param=param, llm_router=llm_router
+                    model=model,
+                    param=param,
+                    request_body_value=request_body[param],
+                    llm_router=llm_router,
                 )
                 is True
             ):

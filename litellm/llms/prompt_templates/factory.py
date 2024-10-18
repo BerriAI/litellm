@@ -1388,9 +1388,14 @@ def anthropic_messages_pt(
                 for m in user_message_types_block["content"]:
                     if m.get("type", "") == "image_url":
                         m = cast(ChatCompletionImageObject, m)
-                        image_chunk = convert_to_anthropic_image_obj(
-                            openai_image_url=m["image_url"]["url"]  # type: ignore
-                        )
+                        if isinstance(m["image_url"], str):
+                            image_chunk = convert_to_anthropic_image_obj(
+                                openai_image_url=m["image_url"]
+                            )
+                        else:
+                            image_chunk = convert_to_anthropic_image_obj(
+                                openai_image_url=m["image_url"]["url"]
+                            )
 
                         _anthropic_content_element = AnthropicMessagesImageParam(
                             type="image",

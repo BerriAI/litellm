@@ -54,6 +54,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langtrace",
     "gcs_bucket",
     "opik",
+    "argilla",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -61,6 +62,8 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
+argilla_batch_size: Optional[int] = None
+argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
