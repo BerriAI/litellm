@@ -101,9 +101,9 @@ def _is_param_allowed(
         if isinstance(item, str) and param == item:
             return True
         elif isinstance(item, Dict):
-            if param == list(item.keys())[0] and check_regex_or_str_match(
+            if param == "api_base" and check_regex_or_str_match(
                 request_body_value=request_body_value,
-                regex_str=item[param],
+                regex_str=item["api_base"],
             ):  # assume param is a regex
                 return True
 

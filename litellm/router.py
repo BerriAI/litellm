@@ -104,6 +104,7 @@ from litellm.types.llms.openai import (
     Thread,
 )
 from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     SPECIAL_MODEL_INFO_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
     AlertingConfig,
@@ -4183,7 +4184,7 @@ class Router:
 
         total_tpm: Optional[int] = None
         total_rpm: Optional[int] = None
-        configurable_clientside_auth_params: Optional[List[str]] = None
+        configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
         for model in self.model_list:
             is_match = False

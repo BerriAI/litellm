@@ -199,7 +199,7 @@ def _insert_assistant_continue_message(
     return modified_messages
 
 
-def get_messages(
+def get_completion_messages(
     messages: List[AllMessageValues],
     assistant_continue_message: Optional[ChatCompletionAssistantMessage],
     user_continue_message: Optional[ChatCompletionUserMessage],

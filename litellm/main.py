@@ -109,7 +109,7 @@ from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
-from .llms.prompt_templates.common_utils import get_messages
+from .llms.prompt_templates.common_utils import get_completion_messages
 from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
@@ -798,9 +798,9 @@ def completion(  # type: ignore
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
-    messages = get_messages(
+    messages = get_completion_messages(
         messages=messages,
-        ensure_alternating_roles=ensure_alternating_roles,
+        ensure_alternating_roles=ensure_alternating_roles or False,
         user_continue_message=user_continue_message,
         assistant_continue_message=assistant_continue_message,
     )
