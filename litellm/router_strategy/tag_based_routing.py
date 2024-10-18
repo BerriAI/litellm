@@ -22,7 +22,7 @@ else:
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
-    healthy_deployments: Union[List[Any], Dict[Any, Any]],
+    healthy_deployments: Optional[Union[List[Any], Dict[Any, Any]]] = None,
     request_kwargs: Optional[Dict[Any, Any]] = None,
 ):
     """
@@ -51,7 +51,8 @@ async def get_deployments_for_tag(
         metadata = request_kwargs["metadata"]
         request_tags = metadata.get("tags")
 
-        new_healthy_deployments = []
+        new_healthy_deployments: List[Dict] = []
+        new_default_deployments: List[Dict] = []
         if request_tags:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: router_keys: %s", request_tags
@@ -84,9 +85,12 @@ async def get_deployments_for_tag(
                         deployment_tags,
                         request_tags,
                     )
-                    new_healthy_deployments.append(deployment)
+                    new_default_deployments.append(deployment)
 
-            if len(new_healthy_deployments) == 0:
+            if len(new_healthy_deployments) == 0 and len(new_default_deployments) > 0:
+                return new_default_deployments
+
+            elif len(new_healthy_deployments) == 0:
                 raise ValueError(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
