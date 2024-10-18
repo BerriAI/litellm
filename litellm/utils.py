@@ -3453,6 +3453,8 @@ def get_optional_params(  # noqa: PLR0915
             optional_params["temperature"] = temperature
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
+        if max_retries is not None:
+            optional_params["max_retries"] = max_retries
         if top_p is not None:
             optional_params["top_p"] = top_p
         if stream is not None:
