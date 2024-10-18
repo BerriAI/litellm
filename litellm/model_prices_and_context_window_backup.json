@@ -10,6 +10,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
+        "supports_audio": true,
         "supports_prompt_caching": true
     },
     "gpt-4": {
@@ -36,6 +37,30 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true
+    },
+    "gpt-4o-audio-preview": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_audio": true
+    },
+    "gpt-4o-audio-preview-2024-10-01": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_audio": true
     },
     "gpt-4o-mini": {
         "max_tokens": 16384,
