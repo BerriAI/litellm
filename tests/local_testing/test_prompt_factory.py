@@ -23,7 +23,7 @@ from litellm.llms.prompt_templates.factory import (
     prompt_factory,
 )
 from litellm.llms.prompt_templates.common_utils import (
-    get_messages,
+    get_completion_messages,
 )
 from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
     _gemini_convert_messages_with_history,
@@ -593,7 +593,7 @@ def test_ensure_alternating_roles(
     messages, expected_messages, user_continue_message, assistant_continue_message
 ):
 
-    messages = get_messages(
+    messages = get_completion_messages(
         messages=messages,
         assistant_continue_message=assistant_continue_message,
         user_continue_message=user_continue_message,
