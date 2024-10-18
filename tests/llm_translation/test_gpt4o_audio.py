@@ -20,18 +20,25 @@ import requests
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_output_from_model():
     litellm.set_verbose = True
     completion = await litellm.acompletion(
         model="gpt-4o-audio-preview",
         modalities=["text", "audio"],
         audio={"voice": "alloy", "format": "wav"},
-        messages=[
-            {"role": "user", "content": "Is a golden retriever a good family dog?"}
-        ],
+        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
     )
 
+    print("response= ", completion)
+
     print(completion.choices[0])
+
+    assert completion.choices[0].message.audio is not None
+    assert isinstance(
+        completion.choices[0].message.audio, litellm.types.utils.ChatCompletionAudio
+    )
+    assert len(completion.choices[0].message.audio.data) > 0
 
     wav_bytes = base64.b64decode(completion.choices[0].message.audio.data)
     with open("dog.wav", "wb") as f:

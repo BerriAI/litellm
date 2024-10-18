@@ -5736,6 +5736,7 @@ def convert_to_model_response_object(
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
+                        audio=choice["message"].get("audio", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
