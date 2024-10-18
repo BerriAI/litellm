@@ -385,7 +385,9 @@ known_tokenizer_config = {
 }
 
 
-def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
+def hf_chat_template(  # noqa: PLR0915
+    model: str, messages: list, chat_template: Optional[Any] = None
+):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
 
@@ -1339,7 +1341,7 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
-def anthropic_messages_pt(
+def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
     llm_provider: str,
@@ -1797,7 +1799,7 @@ def convert_to_cohere_tool_invoke(tool_calls: list) -> List[ToolCallObject]:
     return cohere_tool_invoke
 
 
-def cohere_messages_pt_v2(
+def cohere_messages_pt_v2(  # noqa: PLR0915
     messages: List,
     model: str,
     llm_provider: str,
@@ -2409,7 +2411,7 @@ def _insert_assistant_continue_message(
     return messages
 
 
-def _bedrock_converse_messages_pt(
+def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
     model: str,
     llm_provider: str,

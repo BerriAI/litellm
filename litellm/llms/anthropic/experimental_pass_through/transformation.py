@@ -73,7 +73,7 @@ class AnthropicExperimentalPassThroughConfig:
         """
         return ["messages", "metadata", "system", "tool_choice", "tools"]
 
-    def translate_anthropic_messages_to_openai(
+    def translate_anthropic_messages_to_openai(  # noqa: PLR0915
         self,
         messages: List[
             Union[

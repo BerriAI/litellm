@@ -182,7 +182,7 @@ class OpikLogger(CustomBatchLogger):
                 url=self.span_url, headers=self.headers, batch={"spans": spans}
             )
 
-    def _create_opik_payload(
+    def _create_opik_payload(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
     ) -> List[Dict]:
 

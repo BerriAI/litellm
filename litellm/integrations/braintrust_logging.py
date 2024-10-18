@@ -125,7 +125,9 @@ class BraintrustLogger(CustomLogger):
 
         self.default_project_id = project_dict["id"]
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")
@@ -237,7 +239,9 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")

@@ -328,7 +328,7 @@ def custom_llm_setup():
             litellm._custom_providers.append(custom_llm["provider"])
 
 
-def function_setup(
+def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
@@ -605,7 +605,7 @@ def function_setup(
         raise e
 
 
-def client(original_function):
+def client(original_function):  # noqa: PLR0915
     global liteDebuggerClient
     rules_obj = Rules()
 
@@ -721,7 +721,7 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -1007,7 +1007,7 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    async def wrapper_async(*args, **kwargs):
+    async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -1289,7 +1289,7 @@ def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = 
     return dec
 
 
-def openai_token_counter(
+def openai_token_counter(  # noqa: PLR0915
     messages: Optional[list] = None,
     model="gpt-3.5-turbo-0613",
     text: Optional[str] = None,
@@ -1930,7 +1930,7 @@ def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     return existing_dict
 
 
-def register_model(model_cost: Union[str, dict]):
+def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2253,7 +2253,7 @@ def get_optional_params_image_gen(
     return optional_params
 
 
-def get_optional_params_embeddings(
+def get_optional_params_embeddings(  # noqa: PLR0915
     # 2 optional params
     model: str,
     user: Optional[str] = None,
@@ -2469,7 +2469,7 @@ def _remove_strict_from_schema(schema):
     return schema
 
 
-def get_optional_params(
+def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
     model: str,
@@ -4081,7 +4081,7 @@ def get_first_chars_messages(kwargs: dict) -> str:
         return ""
 
 
-def get_supported_openai_params(
+def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
@@ -4577,7 +4577,9 @@ def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
 
-def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
+def get_model_info(  # noqa: PLR0915
+    model: str, custom_llm_provider: Optional[str] = None
+) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
@@ -5120,7 +5122,7 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
-def validate_environment(
+def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None, api_key: Optional[str] = None
 ) -> dict:
     """
@@ -5609,7 +5611,7 @@ def _handle_invalid_parallel_tool_calls(
     return tool_calls
 
 
-def convert_to_model_response_object(
+def convert_to_model_response_object(  # noqa: PLR0915
     response_object: Optional[dict] = None,
     model_response_object: Optional[
         Union[
@@ -7175,7 +7177,7 @@ class CustomStreamWrapper:
             is_empty = False
         return is_empty
 
-    def chunk_creator(self, chunk):  # type: ignore
+    def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
         response_obj = {}
         try:
@@ -7896,7 +7898,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self):
+    def __next__(self):  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -8031,7 +8033,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self):
+    async def __anext__(self):  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None

@@ -105,7 +105,7 @@ async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optiona
     return headers
 
 
-async def chat_completion_pass_through_endpoint(
+async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
     fastapi_response: Response,
     request: Request,
     adapter_id: str,
@@ -306,7 +306,7 @@ def get_endpoint_type(url: str) -> EndpointType:
     return EndpointType.GENERIC
 
 
-async def pass_through_request(
+async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
     custom_headers: dict,

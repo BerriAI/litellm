@@ -53,7 +53,7 @@ async def test_endpoint(request: Request):
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def health_services_endpoint(
+async def health_services_endpoint(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: Union[
         Literal[

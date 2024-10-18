@@ -211,7 +211,7 @@ def add_litellm_data_for_backend_llm_call(
     return data
 
 
-async def add_litellm_data_to_request(
+async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,

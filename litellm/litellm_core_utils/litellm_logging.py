@@ -428,7 +428,7 @@ class Logging:
         ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -868,7 +868,7 @@ class Logging:
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(
+    def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
@@ -1494,7 +1494,7 @@ class Logging:
                 ),
             )
 
-    async def async_success_handler(
+    async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -1833,7 +1833,7 @@ class Logging:
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(
+    def failure_handler(  # noqa: PLR0915
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -2191,7 +2191,7 @@ class Logging:
         return None
 
 
-def set_callbacks(callback_list, function_id=None):
+def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
@@ -2301,7 +2301,7 @@ def set_callbacks(callback_list, function_id=None):
         raise e
 
 
-def _init_custom_logger_compatible_class(
+def _init_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -2629,7 +2629,7 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
-def get_standard_logging_object_payload(
+def get_standard_logging_object_payload(  # noqa: PLR0915
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,

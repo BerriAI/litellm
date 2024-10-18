@@ -143,7 +143,7 @@ class LangFuseLogger:
     #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
     #         status_message='error' # can be any string (e.g. stringified stack trace or error body)
     #     )
-    def log_event(
+    def log_event(  # noqa: PLR0915
         self,
         kwargs,
         response_obj,
@@ -349,7 +349,7 @@ class LangFuseLogger:
             )
         )
 
-    def _log_langfuse_v2(
+    def _log_langfuse_v2(  # noqa: PLR0915
         self,
         user_id,
         metadata,

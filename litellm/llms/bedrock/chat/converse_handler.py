@@ -200,7 +200,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,

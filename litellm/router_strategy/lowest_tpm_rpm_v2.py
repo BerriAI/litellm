@@ -318,7 +318,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             )
             pass
 
-    def _common_checks_available_deployment(
+    def _common_checks_available_deployment(  # noqa: PLR0915
         self,
         model_group: str,
         healthy_deployments: list,
