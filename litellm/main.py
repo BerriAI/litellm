@@ -147,6 +147,8 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
+    ChatCompletionAudioParam,
+    ChatCompletionModality,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
 )
@@ -287,6 +289,8 @@ async def acompletion(
     stop=None,
     max_tokens: Optional[int] = None,
     max_completion_tokens: Optional[int] = None,
+    modalities: Optional[List[ChatCompletionModality]] = None,
+    audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -327,6 +331,8 @@ async def acompletion(
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
+        modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request. You can use `["text", "audio"]`
+        audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -366,6 +372,8 @@ async def acompletion(
         "stop": stop,
         "max_tokens": max_tokens,
         "max_completion_tokens": max_completion_tokens,
+        "modalities": modalities,
+        "audio": audio,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
         "logit_bias": logit_bias,
@@ -670,6 +678,8 @@ def completion(  # type: ignore # noqa: PLR0915
     stop=None,
     max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
+    modalities: Optional[List[ChatCompletionModality]] = None,
+    audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -712,6 +722,8 @@ def completion(  # type: ignore # noqa: PLR0915
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
+        modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request.. You can use `["text", "audio"]`
+        audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -816,6 +828,8 @@ def completion(  # type: ignore # noqa: PLR0915
         "stream_options",
         "stop",
         "max_completion_tokens",
+        "modalities",
+        "audio",
         "max_tokens",
         "presence_penalty",
         "frequency_penalty",
@@ -975,6 +989,8 @@ def completion(  # type: ignore # noqa: PLR0915
             stop=stop,
             max_tokens=max_tokens,
             max_completion_tokens=max_completion_tokens,
+            modalities=modalities,
+            audio=audio,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
@@ -1515,7 +1531,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+                if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
                     response = openai_o1_chat_completions.completion(
                         model=model,
                         messages=messages,

@@ -2483,6 +2483,8 @@ def get_optional_params(  # noqa: PLR0915
     stop=None,
     max_tokens=None,
     max_completion_tokens=None,
+    modalities=None,
+    audio=None,
     presence_penalty=None,
     frequency_penalty=None,
     logit_bias=None,
@@ -2562,6 +2564,8 @@ def get_optional_params(  # noqa: PLR0915
         "stop": None,
         "max_tokens": None,
         "max_completion_tokens": None,
+        "modalities": None,
+        "audio": None,
         "presence_penalty": None,
         "frequency_penalty": None,
         "logit_bias": None,
@@ -5734,6 +5738,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
+                        audio=choice["message"].get("audio", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
