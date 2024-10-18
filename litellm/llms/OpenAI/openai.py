@@ -612,7 +612,7 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 raise e
 
-    def completion(  # type: ignore
+    def completion(  # type: ignore # noqa: PLR0915
         self,
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],

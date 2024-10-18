@@ -119,7 +119,7 @@ class lakeraAI_Moderation(CustomGuardrail):
 
         return None
 
-    async def _check(
+    async def _check(  # noqa: PLR0915
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,

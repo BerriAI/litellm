@@ -881,7 +881,7 @@ def _set_spend_logs_payload(
     return prisma_client
 
 
-async def update_database(
+async def update_database(  # noqa: PLR0915
     token,
     response_cost,
     user_id=None,
@@ -1063,7 +1063,7 @@ async def update_database(
         )
 
 
-async def update_cache(
+async def update_cache(  # noqa: PLR0915
     token: Optional[str],
     user_id: Optional[str],
     end_user_id: Optional[str],
@@ -1492,7 +1492,7 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-    async def load_config(
+    async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
     ):
         """
@@ -2144,7 +2144,7 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
-    async def _update_llm_router(
+    async def _update_llm_router(  # noqa: PLR0915
         self,
         new_models: list,
         proxy_logging_obj: ProxyLogging,
@@ -2387,7 +2387,7 @@ def save_worker_config(**data):
     os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 
-async def initialize(
+async def initialize(  # noqa: PLR0915
     model=None,
     alias=None,
     api_base=None,
@@ -2728,7 +2728,7 @@ def giveup(e):
 
 
 @router.on_event("startup")
-async def startup_event():
+async def startup_event():  # noqa: PLR0915
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
 
@@ -3078,7 +3078,7 @@ async def model_list(
     giveup=giveup,
     logger=verbose_proxy_logger,
 )
-async def chat_completion(
+async def chat_completion(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
@@ -3357,7 +3357,7 @@ async def chat_completion(
     dependencies=[Depends(user_api_key_auth)],
     tags=["completions"],
 )
-async def completion(
+async def completion(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
@@ -3580,7 +3580,7 @@ async def completion(
     response_class=ORJSONResponse,
     tags=["embeddings"],
 )  # azure compatible endpoint
-async def embeddings(
+async def embeddings(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     model: Optional[str] = None,
@@ -5469,7 +5469,7 @@ async def moderations(
     dependencies=[Depends(user_api_key_auth)],
     response_model=AnthropicResponse,
 )
-async def anthropic_response(
+async def anthropic_response(  # noqa: PLR0915
     anthropic_data: AnthropicMessagesRequest,
     fastapi_response: Response,
     request: Request,
@@ -7278,7 +7278,7 @@ async def model_metrics_exceptions(
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def model_info_v1(
+async def model_info_v1(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
 ):
@@ -7985,7 +7985,7 @@ async def fallback_login(request: Request):
 @router.post(
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
-async def login(request: Request):
+async def login(request: Request):  # noqa: PLR0915
     global premium_user, general_settings
     try:
         import multipart
@@ -8653,7 +8653,7 @@ async def invitation_delete(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def update_config(config_info: ConfigYAML):
+async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
     """
     For Admin UI - allows admin to update config via UI
 
@@ -9156,7 +9156,7 @@ async def delete_config_general_settings(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_config():
+async def get_config():  # noqa: PLR0915
     """
     For Admin UI - allows admin to view config via UI
     # return the callbacks and the env variables for the callback

@@ -657,7 +657,7 @@ def mock_completion(
 
 
 @client
-def completion(  # type: ignore
+def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -3136,7 +3136,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
 
 @client
-def embedding(
+def embedding(  # noqa: PLR0915
     model,
     input=[],
     # Optional params
@@ -3911,7 +3911,7 @@ async def atext_completion(
 
 
 @client
-def text_completion(
+def text_completion(  # noqa: PLR0915
     prompt: Union[
         str, List[Union[str, List[Union[str, List[int]]]]]
     ],  # Required: The prompt(s) to generate completions for.
@@ -4378,7 +4378,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 
 
 @client
-def image_generation(
+def image_generation(  # noqa: PLR0915
     prompt: str,
     model: Optional[str] = None,
     n: Optional[int] = None,
@@ -5111,7 +5111,7 @@ def speech(
 ##### Health Endpoints #######################
 
 
-async def ahealth_check(
+async def ahealth_check(  # noqa: PLR0915
     model_params: dict,
     mode: Optional[
         Literal[
@@ -5374,7 +5374,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-def stream_chunk_builder(
+def stream_chunk_builder(  # noqa: PLR0915
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:

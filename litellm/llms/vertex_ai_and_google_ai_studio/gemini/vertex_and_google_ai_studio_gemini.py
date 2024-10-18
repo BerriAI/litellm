@@ -742,7 +742,7 @@ class VertexLLM(VertexBase):
     def __init__(self) -> None:
         super().__init__()
 
-    def _process_response(
+    def _process_response(  # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
