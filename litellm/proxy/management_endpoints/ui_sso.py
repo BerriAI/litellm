@@ -46,7 +46,7 @@ router = APIRouter()
 
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request):
+async def google_login(request: Request):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
@@ -221,7 +221,7 @@ async def google_login(request: Request):
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request):
+async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
