@@ -2035,3 +2035,14 @@ class SpecialHeaders(enum.Enum):
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
+
+
+class JWTKeyItem(TypedDict, total=False):
+    kid: str
+
+
+JWKKeyValue = Union[List[JWTKeyItem], JWTKeyItem]
+
+
+class JWKUrlResponse(TypedDict, total=False):
+    keys: JWKKeyValue
