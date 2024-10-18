@@ -451,6 +451,7 @@ class Delta(OpenAIObject):
         role=None,
         function_call=None,
         tool_calls=None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
@@ -472,6 +473,8 @@ class Delta(OpenAIObject):
                     self.tool_calls.append(tool_call)
         else:
             self.tool_calls = tool_calls
+
+        self.audio = audio
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
