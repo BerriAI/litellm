@@ -20,7 +20,7 @@ from .base_cache import BaseCache
 
 
 class QdrantSemanticCache(BaseCache):
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         qdrant_api_base=None,
         qdrant_api_key=None,

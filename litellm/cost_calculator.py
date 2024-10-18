@@ -79,7 +79,7 @@ def _cost_per_token_custom_pricing_helper(
     return None
 
 
-def cost_per_token(
+def cost_per_token(  # noqa: PLR0915
     model: str = "",
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
@@ -474,7 +474,7 @@ def _select_model_name_for_cost_calc(
     return return_model
 
 
-def completion_cost(
+def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
     prompt="",
