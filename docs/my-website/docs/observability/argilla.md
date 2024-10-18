@@ -57,3 +57,11 @@ litellm_settings:
 ## Example Output
 
 <Image img={require('../../img/argilla.png')} />
+
+## Add sampling rate to Argilla calls
+
+To just log a sample of calls to argilla, add `ARGILLA_SAMPLING_RATE` to your env vars.
+
+```bash
+ARGILLA_SAMPLING_RATE=0.1 # log 10% of calls to argilla
+```
