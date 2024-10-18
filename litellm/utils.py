@@ -4870,7 +4870,13 @@ def get_model_info(  # noqa: PLR0915
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_audio_token=_model_info.get(
+                    "input_cost_per_audio_token", None
+                ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_audio_token=_model_info.get(
+                    "output_cost_per_audio_token", None
+                ),
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
                 ),
