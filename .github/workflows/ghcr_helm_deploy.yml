@@ -33,7 +33,7 @@ jobs:
 
       - name: Get LiteLLM Latest Tag
         id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+        uses: WyriHaximus/github-action-get-previous-tag@v1.4.0
 
       - name: Get last published chart version
         id: current_version
