@@ -987,9 +987,18 @@ from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.OpenAI.chat.o1_transformation import (
     OpenAIO1Config,
 )
+
+openAIO1Config = OpenAIO1Config()
 from .llms.OpenAI.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+
+openAIGPTConfig = OpenAIGPTConfig()
+from .llms.OpenAI.chat.gpt_audio_transformation import (
+    OpenAIGPTAudioConfig,
+)
+
+openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
 from .llms.nvidia_nim.chat import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
