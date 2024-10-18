@@ -65,7 +65,7 @@ class HttpxPartType(TypedDict, total=False):
 
 class HttpxContentType(TypedDict, total=False):
     role: Literal["user", "model"]
-    parts: Required[List[HttpxPartType]]
+    parts: List[HttpxPartType]
 
 
 class ContentType(TypedDict, total=False):

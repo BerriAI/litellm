@@ -1124,6 +1124,7 @@ class PrismaClient:
                 "MonthlyGlobalSpendPerKey",
                 "MonthlyGlobalSpendPerUserPerKey",
                 "Last30dTopEndUsersSpend",
+                "DailyTagSpend",
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
