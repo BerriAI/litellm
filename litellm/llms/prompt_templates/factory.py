@@ -385,9 +385,9 @@ known_tokenizer_config = {
 }
 
 
-def hf_chat_template(
+def hf_chat_template(  # noqa: PLR0915
     model: str, messages: list, chat_template: Optional[Any] = None
-):  # noqa: PLR0915
+):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
 
