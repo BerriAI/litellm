@@ -146,9 +146,9 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
 )
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import (
+    ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
     ChatCompletionModality,
-    ChatCompletionAssistantMessage,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
 )
@@ -1531,7 +1531,7 @@ def completion(  # type: ignore
 
             ## COMPLETION CALL
             try:
-                if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+                if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
                     response = openai_o1_chat_completions.completion(
                         model=model,
                         messages=messages,
