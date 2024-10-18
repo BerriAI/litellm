@@ -404,7 +404,7 @@ class ArgillaLogger(CustomBatchLogger):
                 verbose_logger.debug(
                     "Batch of %s runs successfully created", len(self.log_queue)
                 )
-        except httpx.HTTPStatusError as e:
+        except httpx.HTTPStatusError:
             verbose_logger.exception("Argilla HTTP Error")
         except Exception:
             verbose_logger.exception("Argilla Layer Error")
