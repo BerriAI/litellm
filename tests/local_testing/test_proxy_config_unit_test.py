@@ -21,7 +21,7 @@ sys.path.insert(
 import asyncio
 import logging
 
-from litellm.proxy.common_utils.base_config_class import BaseProxyConfig
+from litellm.proxy.proxy_server import ProxyConfig
 
 
 @pytest.mark.asyncio
@@ -29,7 +29,7 @@ async def test_basic_reading_configs_from_files():
     """
     Test that the config is read correctly from the files in the example_config_yaml folder
     """
-    _base_config = BaseProxyConfig()
+    _base_config = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
     example_config_yaml_path = os.path.join(current_path, "example_config_yaml")
 
@@ -48,7 +48,7 @@ async def test_read_config_from_bad_file_path():
     """
     Raise an exception if the file path is not valid
     """
-    _base_config = BaseProxyConfig()
+    _base_config = ProxyConfig()
     config_path = "non-existent-file.yaml"
     with pytest.raises(Exception):
         config = await _base_config.get_config(config_file_path=config_path)
@@ -81,7 +81,7 @@ async def test_read_config_file_with_os_environ_vars():
         os.environ[key] = value
 
     # Read config
-    _base_config = BaseProxyConfig()
+    _base_config = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(
         current_path, "example_config_yaml", "config_with_env_vars.yaml"
