@@ -391,7 +391,7 @@ class Message(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
-        init_values = {
+        init_values: Dict[str, Any] = {
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (
