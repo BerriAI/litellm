@@ -67,7 +67,7 @@ def get_secret_str(
     return value
 
 
-def get_secret(
+def get_secret(  # noqa: PLR0915
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):

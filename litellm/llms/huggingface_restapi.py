@@ -333,7 +333,7 @@ class Huggingface(BaseLLM):
             headers = default_headers
         return headers
 
-    def convert_to_model_response_object(
+    def convert_to_model_response_object(  # noqa: PLR0915
         self,
         completion_response,
         model_response: litellm.ModelResponse,
@@ -447,7 +447,7 @@ class Huggingface(BaseLLM):
         model_response._hidden_params["original_response"] = completion_response
         return model_response
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,

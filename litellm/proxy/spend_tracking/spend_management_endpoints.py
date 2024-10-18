@@ -1597,7 +1597,7 @@ async def calculate_spend(request: SpendCalculateRequest):
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def view_spend_logs(
+async def view_spend_logs(  # noqa: PLR0915
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",

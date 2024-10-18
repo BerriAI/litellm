@@ -67,7 +67,7 @@ def handle_cohere_chat_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def get_llm_provider(
+def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,

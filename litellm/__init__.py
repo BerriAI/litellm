@@ -53,8 +53,8 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
-    "s3",
     "opik",
+    "argilla",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -62,6 +62,8 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
+argilla_batch_size: Optional[int] = None
+argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -985,9 +987,18 @@ from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.OpenAI.chat.o1_transformation import (
     OpenAIO1Config,
 )
+
+openAIO1Config = OpenAIO1Config()
 from .llms.OpenAI.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+
+openAIGPTConfig = OpenAIGPTConfig()
+from .llms.OpenAI.chat.gpt_audio_transformation import (
+    OpenAIGPTAudioConfig,
+)
+
+openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
 from .llms.nvidia_nim.chat import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig

@@ -59,6 +59,7 @@ from litellm.utils import (
 )
 
 from ..integrations.aispend import AISpendLogger
+from ..integrations.argilla import ArgillaLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -119,6 +120,7 @@ lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
+s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
 greenscaleLogger = None
@@ -426,7 +428,7 @@ class Logging:
         ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -866,7 +868,7 @@ class Logging:
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(
+    def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
@@ -1328,6 +1330,36 @@ class Logging:
                             user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
+                    if callback == "s3":
+                        global s3Logger
+                        if s3Logger is None:
+                            s3Logger = S3Logger()
+                        if self.stream:
+                            if "complete_streaming_response" in self.model_call_details:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - Completed Stream Response"
+                                )
+                                s3Logger.log_event(
+                                    kwargs=self.model_call_details,
+                                    response_obj=self.model_call_details[
+                                        "complete_streaming_response"
+                                    ],
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    print_verbose=print_verbose,
+                                )
+                            else:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - No complete stream response as yet"
+                                )
+                        else:
+                            s3Logger.log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                            )
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -1462,7 +1494,7 @@ class Logging:
                 ),
             )
 
-    async def async_success_handler(
+    async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -1801,7 +1833,7 @@ class Logging:
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(
+    def failure_handler(  # noqa: PLR0915
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -2159,11 +2191,11 @@ class Logging:
         return None
 
 
-def set_callbacks(callback_list, function_id=None):
+def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2237,6 +2269,8 @@ def set_callbacks(callback_list, function_id=None):
                 dataDogLogger = DataDogLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
+            elif callback == "s3":
+                s3Logger = S3Logger()
             elif callback == "wandb":
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "logfire":
@@ -2267,7 +2301,7 @@ def set_callbacks(callback_list, function_id=None):
         raise e
 
 
-def _init_custom_logger_compatible_class(
+def _init_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -2306,6 +2340,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback  # type: ignore
+
+        _argilla_logger = ArgillaLogger()
+        _in_memory_loggers.append(_argilla_logger)
+        return _argilla_logger  # type: ignore
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2330,14 +2372,6 @@ def _init_custom_logger_compatible_class(
         _datadog_logger = DataDogLogger()
         _in_memory_loggers.append(_datadog_logger)
         return _datadog_logger  # type: ignore
-    elif logging_integration == "s3":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, S3Logger):
-                return callback  # type: ignore
-
-        _s3_logger = S3Logger()
-        _in_memory_loggers.append(_s3_logger)
-        return _s3_logger  # type: ignore
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
@@ -2496,6 +2530,10 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
                 return callback
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2503,10 +2541,6 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
             if isinstance(callback, PrometheusLogger):
-                return callback
-    elif logging_integration == "s3":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, S3Logger):
                 return callback
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
@@ -2595,7 +2629,7 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
-def get_standard_logging_object_payload(
+def get_standard_logging_object_payload(  # noqa: PLR0915
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,
