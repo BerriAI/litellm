@@ -727,7 +727,7 @@ curl http://localhost:4000/v1/chat/completions \
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
     "user_id": "222",
     "metadata": {
         "cache": {
@@ -743,7 +743,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer <YOUR_NEW_KEY>' \
--D '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
 ```
 
 ### Deleting Cache Keys - `/cache/delete` 
