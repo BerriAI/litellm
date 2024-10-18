@@ -37,7 +37,6 @@ def mock_chat_response() -> Dict[str, Any]:
                     "content": "Hello! I'm an AI assistant. I'm doing well. How can I help?",
                     "function_call": None,
                     "tool_calls": None,
-                    "audio": None,
                 },
                 "finish_reason": "stop",
             }
