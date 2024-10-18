@@ -7637,6 +7637,10 @@ class CustomStreamWrapper:
                                 )
                             )
                             model_response.choices[0].delta = Delta()
+                    elif (
+                        delta is not None and getattr(delta, "audio", None) is not None
+                    ):
+                        model_response.choices[0].delta.audio = delta.audio
                     else:
                         try:
                             delta = (
@@ -7802,6 +7806,12 @@ class CustomStreamWrapper:
                 if self.sent_first_chunk is False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
+                return model_response
+            elif (
+                len(model_response.choices) > 0
+                and hasattr(model_response.choices[0].delta, "audio")
+                and model_response.choices[0].delta.audio is not None
+            ):
                 return model_response
             else:
                 if hasattr(model_response, "usage"):
