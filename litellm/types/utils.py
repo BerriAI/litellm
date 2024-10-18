@@ -104,6 +104,8 @@ class ModelInfo(TypedDict, total=False):
     supports_function_calling: Optional[bool]
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
+    supports_audio_input: Optional[bool]
+    supports_audio_output: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
