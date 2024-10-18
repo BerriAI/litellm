@@ -5,7 +5,7 @@ from litellm import verbose_logger
 _db = Any
 
 
-async def create_missing_views(db: _db):
+async def create_missing_views(db: _db):  # noqa: PLR0915
     """
     --------------------------------------------------
     NOTE: Copy of `litellm/db_scripts/create_views.py`.

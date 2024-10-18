@@ -393,7 +393,7 @@ class OpenTelemetry(CustomLogger):
         except Exception:
             return ""
 
-    def set_attributes(self, span: Span, kwargs, response_obj):
+    def set_attributes(self, span: Span, kwargs, response_obj):  # noqa: PLR0915
         try:
             if self.callback_name == "arize":
                 from litellm.integrations.arize_ai import set_arize_ai_attributes

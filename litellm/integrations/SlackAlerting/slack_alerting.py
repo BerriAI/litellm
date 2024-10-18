@@ -287,7 +287,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             return 0
 
-    async def send_daily_reports(self, router) -> bool:
+    async def send_daily_reports(self, router) -> bool:  # noqa: PLR0915
         """
         Send a daily report on:
         - Top 5 deployments with most failed requests
@@ -573,7 +573,7 @@ class SlackAlerting(CustomBatchLogger):
                 ttl=self.alerting_args.budget_alert_ttl,
             )
 
-    async def budget_alerts(
+    async def budget_alerts(  # noqa: PLR0915
         self,
         type: Literal[
             "token_budget",

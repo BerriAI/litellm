@@ -132,7 +132,9 @@ class LangsmithLogger(CustomBatchLogger):
             LANGSMITH_PROJECT=_credentials_project,
         )
 
-    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
+    def _prepare_log_data(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         import json
         from datetime import datetime as dt
 

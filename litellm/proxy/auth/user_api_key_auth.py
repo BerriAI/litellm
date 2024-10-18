@@ -105,7 +105,7 @@ def _get_bearer_token(
     return api_key
 
 
-async def user_api_key_auth(
+async def user_api_key_auth(  # noqa: PLR0915
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
     azure_api_key_header: str = fastapi.Security(azure_api_key_header),

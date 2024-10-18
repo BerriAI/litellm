@@ -213,7 +213,7 @@ class OllamaChatConfig:
 
 
 # ollama implementation
-def get_ollama_response(
+def get_ollama_response(  # noqa: PLR0915
     model_response: litellm.ModelResponse,
     messages: list,
     optional_params: dict,

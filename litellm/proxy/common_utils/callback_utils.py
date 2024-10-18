@@ -11,7 +11,7 @@ blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
 
 
-def initialize_callbacks_on_proxy(
+def initialize_callbacks_on_proxy(  # noqa: PLR0915
     value: Any,
     premium_user: bool,
     config_file_path: str,

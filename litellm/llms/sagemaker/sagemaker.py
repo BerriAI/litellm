@@ -248,7 +248,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         return prompt
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,
