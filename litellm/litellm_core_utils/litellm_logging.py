@@ -59,6 +59,7 @@ from litellm.utils import (
 )
 
 from ..integrations.aispend import AISpendLogger
+from ..integrations.argilla import ArgillaLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -2339,6 +2340,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback  # type: ignore
+
+        _argilla_logger = ArgillaLogger()
+        _in_memory_loggers.append(_argilla_logger)
+        return _argilla_logger  # type: ignore
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2520,6 +2529,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
                 return callback
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
