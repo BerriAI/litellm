@@ -380,7 +380,7 @@ class Message(OpenAIObject):
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
-    # Note: audio is not supported in OpenAI compatible APIs like mistral API, it should not be required for the Message() object
+    audio: Optional[ChatCompletionAudioResponse] = None
 
     def __init__(
         self,
@@ -418,6 +418,11 @@ class Message(OpenAIObject):
             **init_values,  # type: ignore
             **params,
         )
+
+        if audio is None:
+            # delete audio from self
+            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
+            del self.audio
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
