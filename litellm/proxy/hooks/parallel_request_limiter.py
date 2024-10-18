@@ -117,7 +117,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             headers={"retry-after": str(self.time_to_next_minute())},
         )
 
-    async def async_pre_call_hook(
+    async def async_pre_call_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -411,7 +411,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
         return
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
