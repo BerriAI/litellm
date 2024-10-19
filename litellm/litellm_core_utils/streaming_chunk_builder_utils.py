@@ -330,9 +330,16 @@ class ChunkProcessor:
 
         if cache_creation_input_tokens is not None:
             returned_usage._cache_creation_input_tokens = cache_creation_input_tokens
+            setattr(
+                returned_usage,
+                "cache_creation_input_tokens",
+                cache_creation_input_tokens,
+            )  # for anthropic
         if cache_read_input_tokens is not None:
             returned_usage._cache_read_input_tokens = cache_read_input_tokens
-
+            setattr(
+                returned_usage, "cache_read_input_tokens", cache_read_input_tokens
+            )  # for anthropic
         if completion_tokens_details is not None:
             returned_usage.completion_tokens_details = completion_tokens_details
         if prompt_tokens_details is not None:
