@@ -6,6 +6,17 @@ import traceback
 
 import pytest
 from typing import List
+from litellm.types.utils import StreamingChoices, ChatCompletionAudioResponse
+
+
+def check_non_streaming_response(completion):
+    assert completion.choices[0].message.audio is not None, "Audio response is missing"
+    print("audio", completion.choices[0].message.audio)
+    assert isinstance(
+        completion.choices[0].message.audio, ChatCompletionAudioResponse
+    ), "Invalid audio response type"
+    assert len(completion.choices[0].message.audio.data) > 0, "Audio data is empty"
+
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -667,7 +678,7 @@ def test_stream_chunk_builder_openai_prompt_caching():
             assert response_usage_value == v
 
 
-def test_stream_chunk_builder_openai_audio_output():
+def test_stream_chunk_builder_openai_audio_output_usage():
     from pydantic import BaseModel
     from openai import OpenAI
     from typing import Optional
@@ -702,6 +713,8 @@ def test_stream_chunk_builder_openai_audio_output():
     print(f"usage_obj: {usage_obj}")
     response = stream_chunk_builder(chunks=chunks)
     print(f"response usage: {response.usage}")
+    check_non_streaming_response(response)
+    print(f"response: {response}")
     for k, v in usage_obj.model_dump(exclude_none=True).items():
         print(k, v)
         response_usage_value = getattr(response.usage, k)  # type: ignore

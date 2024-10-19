@@ -295,6 +295,13 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+class ChatCompletionAudioDelta(TypedDict, total=False):
+    data: str
+    transcript: str
+    expires_at: int
+    id: str
+
+
 class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
