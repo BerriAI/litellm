@@ -210,6 +210,6 @@ def test_convert_dict_to_image_generation_response_full_openai_format():
     assert isinstance(result, ImageResponse)
     assert result.created == 1589478378
     assert len(result.data) == 1
-    assert result.data[0].b64_json == "base64encodedimagedata..."
-    assert result.data[0].url == "https://example.com/generated_image.png"
-    assert result.data[0].revised_prompt == "A beautiful sunset over mountains"
+    assert result.data[0]["b64_json"] == "base64encodedimagedata..."
+    assert result.data[0]["url"] == "https://example.com/generated_image.png"
+    assert result.data[0]["revised_prompt"] == "A beautiful sunset over mountains"
