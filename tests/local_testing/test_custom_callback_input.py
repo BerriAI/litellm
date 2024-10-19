@@ -1267,6 +1267,100 @@ def test_standard_logging_payload(model, turn_off_message_logging):
             assert "redacted-by-litellm" == slobject["response"]
 
 
+@pytest.mark.parametrize(
+    "stream",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "turn_off_message_logging",
+    [
+        True,
+    ],
+)  # False
+def test_standard_logging_payload_audio(turn_off_message_logging, stream):
+    """
+    Ensure valid standard_logging_payload is passed for logging calls to s3
+
+    Motivation: provide a standard set of things that are logged to s3/gcs/future integrations across all llm calls
+    """
+    from litellm.types.utils import StandardLoggingPayload
+
+    # sync completion
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    litellm.turn_off_message_logging = turn_off_message_logging
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        response = litellm.completion(
+            model="gpt-4o-audio-preview",
+            modalities=["text", "audio"],
+            audio={"voice": "alloy", "format": "pcm16"},
+            messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+            stream=stream,
+        )
+
+        if stream:
+            for chunk in response:
+                continue
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        print(
+            f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
+        )
+        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            is not None
+        )
+
+        print(
+            "Standard Logging Object - {}".format(
+                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+        )
+
+        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+
+        for k in keys_list:
+            assert (
+                k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+
+        ## json serializable
+        json_str_payload = json.dumps(
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+        )
+        json.loads(json_str_payload)
+
+        ## response cost
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "response_cost"
+            ]
+            > 0
+        )
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "model_map_information"
+            ]["model_map_value"]
+            is not None
+        )
+
+        ## turn off message logging
+        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
+        if turn_off_message_logging:
+            print("checks redacted-by-litellm")
+            assert "redacted-by-litellm" == slobject["messages"][0]["content"]
+            assert "redacted-by-litellm" == slobject["response"]
+
+
 @pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
 def test_aaastandard_logging_payload_cache_hit():
     from litellm.types.utils import StandardLoggingPayload
