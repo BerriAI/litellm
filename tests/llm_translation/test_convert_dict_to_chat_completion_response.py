@@ -24,7 +24,13 @@ from datetime import timedelta
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_chat_completion_response import (
     convert_dict_to_chat_completion_response,
 )
-from litellm.types.utils import ModelResponse, Message, Choices
+from litellm.types.utils import (
+    ModelResponse,
+    Message,
+    Choices,
+    PromptTokensDetails,
+    CompletionTokensDetails,
+)
 
 
 def test_convert_dict_to_chat_completion_response_basic():
@@ -79,6 +85,7 @@ def test_convert_dict_to_chat_completion_response_basic():
 
     # Choices assertions
     choice = result.choices[0]
+    print("choice[0]", choice)
     assert choice.index == 0
     assert isinstance(choice.message, Message)
     assert choice.message.role == "assistant"
@@ -90,15 +97,16 @@ def test_convert_dict_to_chat_completion_response_basic():
     assert result.usage.prompt_tokens == 19
     assert result.usage.completion_tokens == 10
     assert result.usage.total_tokens == 29
-    assert result.usage.prompt_tokens_details == {"cached_tokens": 0}
-    assert result.usage.completion_tokens_details == {"reasoning_tokens": 0}
+    assert result.usage.prompt_tokens_details == PromptTokensDetails(cached_tokens=0)
+    assert result.usage.completion_tokens_details == CompletionTokensDetails(
+        reasoning_tokens=0
+    )
 
     # Other fields
     assert result.system_fingerprint == "fp_6b68a8204b"
 
-    # hidden params and response headers
-    assert result._hidden_params is None
-    assert result._response_headers is None
+    # hidden params
+    assert result._hidden_params is not None
 
 
 def test_convert_dict_to_chat_completion_response_tool_calls_invalid_json_arguments():

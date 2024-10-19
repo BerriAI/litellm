@@ -523,8 +523,7 @@ class Choices(OpenAIObject):
                 self.message = message
             elif isinstance(message, dict):
                 self.message = Message(**message)
-        if logprobs is not None:
-            self.logprobs = logprobs
+        self.logprobs = logprobs
         if enhancements is not None:
             self.enhancements = enhancements
 
