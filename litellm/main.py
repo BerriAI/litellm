@@ -5407,6 +5407,16 @@ def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
+        if chunks is None:
+            raise APIError(
+                status_code=500,
+                message="Error building chunks for logging/streaming usage calculation",
+                llm_provider="",
+                model="",
+            )
+        if not chunks:
+            return None
+
         processor = ChunkProcessor(chunks, messages)
         chunks = processor.chunks
 

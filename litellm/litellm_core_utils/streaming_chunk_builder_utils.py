@@ -23,17 +23,7 @@ from litellm.utils import print_verbose, token_counter
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: Optional[list] = None):
-        if chunks is None:
-            raise APIError(
-                status_code=500,
-                message="Error building chunks for logging/streaming usage calculation",
-                llm_provider="",
-                model="",
-            )
-        if not chunks:
-            return None
-
+    def __init__(self, chunks: List, messages: Optional[list] = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
