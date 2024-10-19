@@ -197,3 +197,49 @@ def test_get_model_param_value():
         },
     }
     assert cache._get_model_param_value(kwargs) == "not-in-caching-group-gpt-3.5-turbo"
+
+
+def test_preset_cache_key():
+    """
+    Test that the preset cache key is used if it is set in kwargs["litellm_params"]
+    """
+    cache = Cache()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "temperature": 0.7,
+        "litellm_params": {"preset_cache_key": "preset-cache-key"},
+    }
+
+    assert cache.get_cache_key(**kwargs) == "preset-cache-key"
+
+
+def test_generate_streaming_content():
+    cache = Cache()
+    content = "Hello, this is a test message."
+    generator = cache.generate_streaming_content(content)
+
+    full_response = ""
+    chunk_count = 0
+
+    for chunk in generator:
+        chunk_count += 1
+        assert "choices" in chunk
+        assert len(chunk["choices"]) == 1
+        assert "delta" in chunk["choices"][0]
+        assert "role" in chunk["choices"][0]["delta"]
+        assert chunk["choices"][0]["delta"]["role"] == "assistant"
+        assert "content" in chunk["choices"][0]["delta"]
+
+        chunk_content = chunk["choices"][0]["delta"]["content"]
+        full_response += chunk_content
+
+        # Check that each chunk is no longer than 5 characters
+        assert len(chunk_content) <= 5
+    print("full_response from generate_streaming_content", full_response)
+    # Check that the full content is reconstructed correctly
+    assert full_response == content
+    # Check that there were multiple chunks
+    assert chunk_count > 1
+
+    print(f"Number of chunks: {chunk_count}")
