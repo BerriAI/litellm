@@ -8,7 +8,7 @@ def convert_dict_to_transcription_response(
     response_object: Optional[Dict],
     hidden_params: Optional[Dict],
     _response_headers: Optional[Dict],
-):
+) -> TranscriptionResponse:
     if response_object is None:
         raise Exception("Error in response object format")
 
@@ -28,3 +28,4 @@ def convert_dict_to_transcription_response(
 
     if _response_headers is not None:
         model_response_object._response_headers = _response_headers
+    return model_response_object

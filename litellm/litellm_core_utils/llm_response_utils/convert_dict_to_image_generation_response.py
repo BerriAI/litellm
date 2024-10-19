@@ -7,7 +7,7 @@ def convert_dict_to_image_generation_response(
     model_response_object: Optional[ImageResponse],
     response_object: Optional[Dict],
     hidden_params: Optional[Dict],
-):
+) -> ImageResponse:
     if response_object is None:
         raise Exception("Error in response object format")
 
