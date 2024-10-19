@@ -7573,7 +7573,7 @@ class CustomStreamWrapper:
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 self.response_id = original_chunk.id
-                if len(original_chunk.choices) > 0:
+                if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None

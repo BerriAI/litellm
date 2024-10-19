@@ -295,6 +295,13 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+class ChatCompletionAudioDelta(TypedDict, total=False):
+    data: str
+    transcript: str
+    expires_at: int
+    id: str
+
+
 class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
@@ -482,8 +489,13 @@ class ChatCompletionDeltaChunk(TypedDict, total=False):
     role: str
 
 
+ChatCompletionAssistantContentValue = (
+    str  # keep as var, used in stream_chunk_builder as well
+)
+
+
 class ChatCompletionResponseMessage(TypedDict, total=False):
-    content: Optional[str]
+    content: Optional[ChatCompletionAssistantContentValue]
     tool_calls: List[ChatCompletionToolCallChunk]
     role: Literal["assistant"]
     function_call: ChatCompletionToolCallFunctionChunk
