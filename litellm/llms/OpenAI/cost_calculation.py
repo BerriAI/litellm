@@ -64,7 +64,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         else None
     )
     if _output_cost_per_audio_token is not None and _output_audio_tokens is not None:
-        audio_cost: float = _output_audio_tokens * _output_cost_per_audio_token
+        audio_cost = _output_audio_tokens * _output_cost_per_audio_token
         completion_cost += audio_cost
 
     ## Prompt Caching cost calculation
