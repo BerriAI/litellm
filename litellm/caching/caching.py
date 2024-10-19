@@ -233,7 +233,7 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
-    def get_cache_key(self, *args, **kwargs) -> str:  # noqa: PLR0915
+    def get_cache_key(self, *args, **kwargs) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -245,7 +245,7 @@ class Cache:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
         cache_key = ""
-        print_verbose(f"\nGetting Cache key. Kwargs: {kwargs}")
+        verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
         preset_cache_key = self._get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
@@ -256,51 +256,9 @@ class Cache:
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
             if param in combined_kwargs:
-                # check if param == model and model_group is passed in, then override model with model_group
-                if param == "model":
-                    model_group = None
-                    caching_group = None
-                    metadata = kwargs.get("metadata", None)
-                    litellm_params = kwargs.get("litellm_params", {})
-                    if metadata is not None:
-                        model_group = metadata.get("model_group")
-                        model_group = metadata.get("model_group", None)
-                        caching_groups = metadata.get("caching_groups", None)
-                        if caching_groups:
-                            for group in caching_groups:
-                                if model_group in group:
-                                    caching_group = group
-                                    break
-                    if litellm_params is not None:
-                        metadata = litellm_params.get("metadata", None)
-                        if metadata is not None:
-                            model_group = metadata.get("model_group", None)
-                            caching_groups = metadata.get("caching_groups", None)
-                            if caching_groups:
-                                for group in caching_groups:
-                                    if model_group in group:
-                                        caching_group = group
-                                        break
-                    param_value = (
-                        caching_group or model_group or kwargs[param]
-                    )  # use caching_group, if set then model_group if it exists, else use kwargs["model"]
-                elif param == "file":
-                    file = kwargs.get("file")
-                    metadata = kwargs.get("metadata", {})
-                    litellm_params = kwargs.get("litellm_params", {})
-
-                    # get checksum of file content
-                    param_value = (
-                        metadata.get("file_checksum")
-                        or getattr(file, "name", None)
-                        or metadata.get("file_name")
-                        or litellm_params.get("file_name")
-                    )
-                else:
-                    if kwargs[param] is None:
-                        continue  # ignore None params
-                    param_value = kwargs[param]
-                cache_key += f"{str(param)}: {str(param_value)}"
+                param_value: Optional[str] = self._get_param_value(param, kwargs)
+                if param_value is not None:
+                    cache_key += f"{str(param)}: {str(param_value)}"
             elif (
                 param not in litellm_param_kwargs
             ):  # check if user passed in optional param - e.g. top_k
@@ -312,7 +270,7 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{str(param)}: {str(param_value)}"
 
-        print_verbose(f"\nCreated cache key: {cache_key}")
+        verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = self._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_redis_namespace_to_cache_key(
             hashed_cache_key, **kwargs
@@ -321,6 +279,59 @@ class Cache:
             preset_cache_key=hashed_cache_key, **kwargs
         )
         return hashed_cache_key
+
+    def _get_param_value(
+        self,
+        param: str,
+        kwargs: dict,
+    ) -> Optional[str]:
+        """
+        Get the value for the given param from kwargs
+        """
+        if param == "model":
+            return self._get_model_param_value(kwargs)
+        elif param == "file":
+            return self._get_file_param_value(kwargs)
+        return kwargs[param]
+
+    def _get_model_param_value(self, kwargs: dict) -> str:
+        """
+        Handles getting the value for the 'model' param from kwargs
+
+        1. If caching groups are set, then return the caching group as the model https://docs.litellm.ai/docs/routing#caching-across-model-groups
+        2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
+        3. Else use the `model` passed in kwargs
+        """
+        metadata = kwargs.get("metadata", {})
+        litellm_params = kwargs.get("litellm_params", {})
+        model_group: Optional[str] = metadata.get("model_group") or litellm_params.get(
+            "metadata", {}
+        ).get("model_group")
+        caching_group = self._get_caching_group(metadata, model_group)
+        return caching_group or model_group or kwargs["model"]
+
+    def _get_caching_group(
+        self, metadata: dict, model_group: Optional[str]
+    ) -> Optional[str]:
+        caching_groups = metadata.get("caching_groups", [])
+        for group in caching_groups:
+            if model_group in group:
+                return group
+        return None
+
+    def _get_file_param_value(self, kwargs: dict) -> str:
+        """
+        Handles getting the value for the 'file' param from kwargs. Used for `transcription` requests
+        """
+        file = kwargs.get("file")
+        metadata = kwargs.get("metadata", {})
+        litellm_params = kwargs.get("litellm_params", {})
+        return (
+            metadata.get("file_checksum")
+            or getattr(file, "name", None)
+            or metadata.get("file_name")
+            or litellm_params.get("file_name")
+        )
 
     def _get_preset_cache_key_from_kwargs(self, **kwargs) -> Optional[str]:
         """
