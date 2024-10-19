@@ -304,9 +304,7 @@ class Cache:
         """
         metadata: Dict = kwargs.get("metadata", {}) or {}
         litellm_params: Dict = kwargs.get("litellm_params", {}) or {}
-        metadata_in_litellm_params: Optional[Dict] = (
-            litellm_params.get("metadata", {}) or {}
-        )
+        metadata_in_litellm_params: Dict = litellm_params.get("metadata", {}) or {}
         model_group: Optional[str] = metadata.get(
             "model_group"
         ) or metadata_in_litellm_params.get("model_group")
