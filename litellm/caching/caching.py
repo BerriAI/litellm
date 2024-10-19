@@ -331,6 +331,7 @@ class Cache:
         embedding_kwargs = self._get_litellm_supported_embedding_kwargs()
         transcription_kwargs = self._get_litellm_supported_transcription_kwargs()
         rerank_kwargs = self._get_litellm_supported_rerank_kwargs()
+        exclude_kwargs = self._get_kwargs_to_exclude_from_cache_key()
 
         combined_kwargs = chat_completion_kwargs.union(
             text_completion_kwargs,
@@ -338,7 +339,7 @@ class Cache:
             transcription_kwargs,
             rerank_kwargs,
         )
-
+        combined_kwargs = combined_kwargs.difference(exclude_kwargs)
         return combined_kwargs
 
     def _get_litellm_supported_chat_completion_kwargs(self) -> Set[str]:
@@ -384,6 +385,12 @@ class Cache:
         This follows the OpenAI API Spec
         """
         return set(TranscriptionCreateParams.__annotations__.keys())
+
+    def _get_kwargs_to_exclude_from_cache_key(self) -> Set[str]:
+        """
+        Get the kwargs to exclude from the cache key
+        """
+        return set(["metadata"])
 
     def _get_hashed_cache_key(self, cache_key: str) -> str:
         """
