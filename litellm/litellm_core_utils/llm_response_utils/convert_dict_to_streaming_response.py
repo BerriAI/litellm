@@ -28,18 +28,18 @@ async def convert_to_streaming_response_async(
     Returns:
         None
     """
-    model_response_object = _get_streaming_respons_object(response_object)
+    model_response_object = _get_streaming_response_object(response_object)
     yield model_response_object
     await asyncio.sleep(0)
 
 
 def convert_to_streaming_response(response_object: Optional[dict] = None) -> Generator:
     # used for yielding Cache hits when stream == True
-    model_response_object = _get_streaming_respons_object(response_object)
+    model_response_object = _get_streaming_response_object(response_object)
     yield model_response_object
 
 
-def _get_streaming_respons_object(
+def _get_streaming_response_object(
     response_object: Optional[dict] = None,
 ) -> ModelResponse:
     """
