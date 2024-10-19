@@ -4698,7 +4698,9 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
         - get function name from recipient_name value
         - parameters will be JSON object for function arguments
     """
-    from litellm.utils import _handle_invalid_parallel_tool_calls
+    from litellm.litellm_core_utils.llm_response_utils import (
+        _handle_invalid_parallel_tool_calls,
+    )
     from litellm.types.utils import ChatCompletionMessageToolCall
 
     response = _handle_invalid_parallel_tool_calls(
