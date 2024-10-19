@@ -1,12 +1,9 @@
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, Iterable, List, Literal, Optional, Union
+from typing import Dict, Generator, Iterable, List, Literal, Optional, Union
 
 import litellm
-from litellm.litellm_core_utils.llm_response_utils_temp.convert_to_streaming_response import (
-    convert_to_streaming_response,
-)
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -23,6 +20,7 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .convert_dict_to_streaming_response import convert_to_streaming_response
 from .handle_parallel_tool_calls import _handle_invalid_parallel_tool_calls
 
 
@@ -35,7 +33,7 @@ def convert_dict_to_chat_completion_response(  # noqa: PLR0915
     hidden_params: Optional[Dict],
     _response_headers: Optional[Dict],
     convert_tool_call_to_json_mode: Optional[bool],
-) -> ModelResponse:
+) -> Union[ModelResponse, Generator]:
     if response_object is None or model_response_object is None:
         raise Exception("Error in response object format")
 
