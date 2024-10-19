@@ -318,7 +318,7 @@ class Cache:
         if caching_groups:
             for group in caching_groups:
                 if model_group in group:
-                    return group
+                    return str(group)
         return None
 
     def _get_file_param_value(self, kwargs: dict) -> str:

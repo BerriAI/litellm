@@ -44,3 +44,156 @@ def test_get_kwargs_for_cache_key():
     _cache = litellm.Cache()
     relevant_kwargs = _cache._get_relevant_args_to_use_for_cache_key()
     print(relevant_kwargs)
+
+
+def test_get_cache_key_chat_completion():
+    cache = Cache()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "temperature": 0.7,
+    }
+    cache_key_1 = cache.get_cache_key(**kwargs)
+    assert isinstance(cache_key_1, str)
+    assert len(cache_key_1) > 0
+
+    kwargs_2 = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "max_completion_tokens": 100,
+    }
+    cache_key_2 = cache.get_cache_key(**kwargs_2)
+    assert cache_key_1 != cache_key_2
+
+    kwargs_3 = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "max_completion_tokens": 100,
+    }
+    cache_key_3 = cache.get_cache_key(**kwargs_3)
+    assert cache_key_2 == cache_key_3
+
+
+def test_get_cache_key_embedding():
+    cache = Cache()
+    kwargs = {
+        "model": "text-embedding-3-small",
+        "input": "Hello, world!",
+        "dimensions": 1536,
+    }
+    cache_key_1 = cache.get_cache_key(**kwargs)
+    assert isinstance(cache_key_1, str)
+    assert len(cache_key_1) > 0
+
+    kwargs_2 = {
+        "model": "text-embedding-3-small",
+        "input": "Hello, world!",
+        "dimensions": 1539,
+    }
+    cache_key_2 = cache.get_cache_key(**kwargs_2)
+    assert cache_key_1 != cache_key_2
+
+    kwargs_3 = {
+        "model": "text-embedding-3-small",
+        "input": "Hello, world!",
+        "dimensions": 1539,
+    }
+    cache_key_3 = cache.get_cache_key(**kwargs_3)
+    assert cache_key_2 == cache_key_3
+
+
+def test_get_cache_key_text_completion():
+    cache = Cache()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "prompt": "Hello, world! here is a second line",
+        "best_of": 3,
+        "logit_bias": {"123": 1},
+        "seed": 42,
+    }
+    cache_key_1 = cache.get_cache_key(**kwargs)
+    assert isinstance(cache_key_1, str)
+    assert len(cache_key_1) > 0
+
+    kwargs_2 = {
+        "model": "gpt-3.5-turbo",
+        "prompt": "Hello, world! here is a second line",
+        "best_of": 30,
+    }
+    cache_key_2 = cache.get_cache_key(**kwargs_2)
+    assert cache_key_1 != cache_key_2
+
+    kwargs_3 = {
+        "model": "gpt-3.5-turbo",
+        "prompt": "Hello, world! here is a second line",
+        "best_of": 30,
+    }
+    cache_key_3 = cache.get_cache_key(**kwargs_3)
+    assert cache_key_2 == cache_key_3
+
+
+def test_get_hashed_cache_key():
+    cache = Cache()
+    cache_key = "model:gpt-3.5-turbo,messages:Hello world"
+    hashed_key = cache._get_hashed_cache_key(cache_key)
+    assert len(hashed_key) == 64  # SHA-256 produces a 64-character hex string
+
+
+def test_add_redis_namespace_to_cache_key():
+    cache = Cache(namespace="test_namespace")
+    hashed_key = "abcdef1234567890"
+
+    # Test with class-level namespace
+    result = cache._add_redis_namespace_to_cache_key(hashed_key)
+    assert result == "test_namespace:abcdef1234567890"
+
+    # Test with metadata namespace
+    kwargs = {"metadata": {"redis_namespace": "custom_namespace"}}
+    result = cache._add_redis_namespace_to_cache_key(hashed_key, **kwargs)
+    assert result == "custom_namespace:abcdef1234567890"
+
+
+def test_get_model_param_value():
+    cache = Cache()
+
+    # Test with regular model
+    kwargs = {"model": "gpt-3.5-turbo"}
+    assert cache._get_model_param_value(kwargs) == "gpt-3.5-turbo"
+
+    # Test with model_group
+    kwargs = {"model": "gpt-3.5-turbo", "metadata": {"model_group": "gpt-group"}}
+    assert cache._get_model_param_value(kwargs) == "gpt-group"
+
+    # Test with caching_group
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {
+            "model_group": "openai-gpt-3.5-turbo",
+            "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
+        },
+    }
+    assert (
+        cache._get_model_param_value(kwargs)
+        == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {
+            "model_group": "azure-gpt-3.5-turbo",
+            "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
+        },
+    }
+    assert (
+        cache._get_model_param_value(kwargs)
+        == "('openai-gpt-3.5-turbo', 'azure-gpt-3.5-turbo')"
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {
+            "model_group": "not-in-caching-group-gpt-3.5-turbo",
+            "caching_groups": [("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")],
+        },
+    }
+    assert cache._get_model_param_value(kwargs) == "not-in-caching-group-gpt-3.5-turbo"
