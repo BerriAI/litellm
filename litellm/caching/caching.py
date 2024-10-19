@@ -345,18 +345,45 @@ class Cache:
                     cache_key += f"{str(param)}: {str(param_value)}"
 
         print_verbose(f"\nCreated cache key: {cache_key}")
-        # Use hashlib to create a sha256 hash of the cache key
+        hashed_cache_key = self._get_hashed_cache_key(cache_key)
+        hashed_cache_key = self._add_redis_namespace_to_cache_key(
+            hashed_cache_key, **kwargs
+        )
+        return hashed_cache_key
+
+    def _get_hashed_cache_key(self, cache_key: str) -> str:
+        """
+        Get the hashed cache key for the given cache key.
+
+        Use hashlib to create a sha256 hash of the cache key
+
+        Args:
+            cache_key (str): The cache key to hash.
+
+        Returns:
+            str: The hashed cache key.
+        """
         hash_object = hashlib.sha256(cache_key.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
-        print_verbose(f"Hashed cache key (SHA-256): {hash_hex}")
-        if kwargs.get("metadata", {}).get("redis_namespace", None) is not None:
-            _namespace = kwargs.get("metadata", {}).get("redis_namespace", None)
-            hash_hex = f"{_namespace}:{hash_hex}"
-            print_verbose(f"Hashed Key with Namespace: {hash_hex}")
-        elif self.namespace is not None:
-            hash_hex = f"{self.namespace}:{hash_hex}"
-            print_verbose(f"Hashed Key with Namespace: {hash_hex}")
+        verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
+        return hash_hex
+
+    def _add_redis_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
+        """
+        If a redis namespace is provided, add it to the cache key
+
+        Args:
+            hash_hex (str): The hashed cache key.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            str: The final hashed cache key with the redis namespace.
+        """
+        namespace = kwargs.get("metadata", {}).get("redis_namespace") or self.namespace
+        if namespace:
+            hash_hex = f"{namespace}:{hash_hex}"
+        verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
     def generate_streaming_content(self, content):
