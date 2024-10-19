@@ -664,10 +664,10 @@ class LangFuseLogger:
             if "cache_key" in litellm.langfuse_default_tags:
                 _hidden_params = metadata.get("hidden_params", {}) or {}
                 _cache_key = _hidden_params.get("cache_key", None)
-                if _cache_key is None:
+                if _cache_key is None and litellm.cache is not None:
                     # fallback to using "preset_cache_key"
-                    _preset_cache_key = kwargs.get("litellm_params", {}).get(
-                        "preset_cache_key", None
+                    _preset_cache_key = litellm.cache._get_preset_cache_key_from_kwargs(
+                        **kwargs
                     )
                     _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")

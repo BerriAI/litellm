@@ -247,13 +247,10 @@ class Cache:
         cache_key = ""
         print_verbose(f"\nGetting Cache key. Kwargs: {kwargs}")
 
-        # for streaming, we use preset_cache_key. It's created in wrapper(), we do this because optional params like max_tokens, get transformed for bedrock -> max_new_tokens
-        if kwargs.get("litellm_params", {}).get("preset_cache_key", None) is not None:
-            _preset_cache_key = kwargs.get("litellm_params", {}).get(
-                "preset_cache_key", None
-            )
-            print_verbose(f"\nReturning preset cache key: {_preset_cache_key}")
-            return _preset_cache_key
+        preset_cache_key = self._get_preset_cache_key_from_kwargs(**kwargs)
+        if preset_cache_key is not None:
+            verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
+            return preset_cache_key
 
         combined_kwargs = self._get_relevant_args_to_use_for_cache_key()
         litellm_param_kwargs = all_litellm_params
@@ -320,7 +317,36 @@ class Cache:
         hashed_cache_key = self._add_redis_namespace_to_cache_key(
             hashed_cache_key, **kwargs
         )
+        self._set_preset_cache_key_in_kwargs(
+            preset_cache_key=hashed_cache_key, **kwargs
+        )
         return hashed_cache_key
+
+    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> Optional[str]:
+        """
+        Get the preset cache key from kwargs["litellm_params"]
+
+        We use _get_preset_cache_keys for two reasons
+
+        1. optional params like max_tokens, get transformed for bedrock -> max_new_tokens
+        2. avoid doing duplicate / repeated work
+        """
+        if kwargs:
+            if "litellm_params" in kwargs:
+                return kwargs["litellm_params"].get("preset_cache_key", None)
+        return None
+
+    def _set_preset_cache_key_in_kwargs(self, preset_cache_key: str, **kwargs) -> None:
+        """
+        Set the calculated cache key in kwargs
+
+        This is used to avoid doing duplicate / repeated work
+
+        Placed in kwargs["litellm_params"]
+        """
+        if kwargs:
+            if "litellm_params" in kwargs:
+                kwargs["litellm_params"]["preset_cache_key"] = preset_cache_key
 
     def _get_relevant_args_to_use_for_cache_key(self) -> Set[str]:
         """
