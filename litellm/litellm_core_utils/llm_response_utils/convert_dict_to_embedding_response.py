@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, Optional
 
-from litellm.litellm_core_utils.llm_response_utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 
 
 def convert_dict_to_embedding_response(

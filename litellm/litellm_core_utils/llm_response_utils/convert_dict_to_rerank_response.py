@@ -1,6 +1,6 @@
 from typing import Dict, Optional
 
-from litellm.litellm_core_utils.llm_response_utils import RerankResponse
+from litellm.types.rerank import RerankResponse
 
 
 def convert_dict_to_rerank_response(
