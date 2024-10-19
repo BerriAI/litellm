@@ -464,7 +464,7 @@ user_temperature = None
 user_telemetry = True
 user_config = None
 user_headers = None
-user_config_file_path = f"config_{int(time.time())}.yaml"
+user_config_file_path: Optional[str] = None
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
@@ -1373,7 +1373,19 @@ class ProxyConfig:
         _, file_extension = os.path.splitext(config_file_path)
         return file_extension.lower() == ".yaml" or file_extension.lower() == ".yml"
 
-    async def get_config(self, config_file_path: Optional[str] = None) -> dict:
+    async def _get_config_from_file(
+        self, config_file_path: Optional[str] = None
+    ) -> dict:
+        """
+        Given a config file path, load the config from the file.
+
+        If `store_model_in_db` is True, then read the DB and update the config with the DB values.
+
+        Args:
+            config_file_path (str): path to the config file
+        Returns:
+            dict: config
+        """
         global prisma_client, user_config_file_path
 
         file_path = config_file_path or user_config_file_path
@@ -1384,6 +1396,8 @@ class ProxyConfig:
         if os.path.exists(f"{file_path}"):
             with open(f"{file_path}", "r") as config_file:
                 config = yaml.safe_load(config_file)
+        elif file_path is not None:
+            raise Exception(f"Config file not found: {file_path}")
         else:
             config = {
                 "model_list": [],
@@ -1449,6 +1463,43 @@ class ProxyConfig:
             with open(f"{user_config_file_path}", "w") as config_file:
                 yaml.dump(new_config, config_file, default_flow_style=False)
 
+    def _check_for_os_environ_vars(
+        self, config: dict, depth: int = 0, max_depth: int = 10
+    ) -> dict:
+        """
+        Check for os.environ/ variables in the config and replace them with the actual values.
+        Includes a depth limit to prevent infinite recursion.
+
+        Args:
+            config (dict): The configuration dictionary to process.
+            depth (int): Current recursion depth.
+            max_depth (int): Maximum allowed recursion depth.
+
+        Returns:
+            dict: Processed configuration dictionary.
+        """
+        if depth > max_depth:
+            verbose_proxy_logger.warning(
+                f"Maximum recursion depth ({max_depth}) reached while processing config."
+            )
+            return config
+
+        for key, value in config.items():
+            if isinstance(value, dict):
+                config[key] = self._check_for_os_environ_vars(
+                    config=value, depth=depth + 1, max_depth=max_depth
+                )
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        item = self._check_for_os_environ_vars(
+                            config=item, depth=depth + 1, max_depth=max_depth
+                        )
+            # if the value is a string and starts with "os.environ/" - then it's an environment variable
+            elif isinstance(value, str) and value.startswith("os.environ/"):
+                config[key] = get_secret(value)
+        return config
+
     async def load_team_config(self, team_id: str):
         """
         - for a given team id
@@ -1492,14 +1543,21 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
-    async def load_config(  # noqa: PLR0915
-        self, router: Optional[litellm.Router], config_file_path: str
-    ):
+    async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
-        Load config values into proxy global state
-        """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+        Load config file
+        Supports reading from:
+        - .yaml file paths
+        - LiteLLM connected DB
+        - GCS
+        - S3
 
+        Args:
+            config_file_path (str): path to the config file
+        Returns:
+            dict: config
+
+        """
         # Load existing config
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
             bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
@@ -1521,7 +1579,7 @@ class ProxyConfig:
                 raise Exception("Unable to load config from given source.")
         else:
             # default to file
-            config = await self.get_config(config_file_path=config_file_path)
+            config = await self._get_config_from_file(config_file_path=config_file_path)
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
@@ -1529,6 +1587,20 @@ class ProxyConfig:
         verbose_proxy_logger.debug(
             f"Loaded config YAML (api_key and environment_variables are not shown):\n{json.dumps(printed_yaml, indent=2)}"
         )
+
+        config = self._check_for_os_environ_vars(config=config)
+
+        return config
+
+    async def load_config(  # noqa: PLR0915
+        self, router: Optional[litellm.Router], config_file_path: str
+    ):
+        """
+        Load config values into proxy global state
+        """
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+
+        config: dict = await self.get_config(config_file_path=config_file_path)
 
         ## ENVIRONMENT VARIABLES
         environment_variables = config.get("environment_variables", None)
