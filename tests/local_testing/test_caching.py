@@ -974,7 +974,7 @@ async def test_redis_cache_acompletion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
