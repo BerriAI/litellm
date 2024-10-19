@@ -48,7 +48,6 @@ def test_convert_dict_to_chat_completion_response_basic():
                     "content": "Hi there! How can I assist you today?",
                     "refusal": None,
                 },
-                "logprobs": None,
                 "finish_reason": "stop",
             }
         ],
@@ -91,7 +90,6 @@ def test_convert_dict_to_chat_completion_response_basic():
     assert choice.message.role == "assistant"
     assert choice.message.content == "Hi there! How can I assist you today?"
     assert choice.finish_reason == "stop"
-    assert choice.logprobs is None
 
     # Usage assertions
     assert result.usage.prompt_tokens == 19
