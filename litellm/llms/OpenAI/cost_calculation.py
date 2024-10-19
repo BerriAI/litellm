@@ -11,10 +11,7 @@ from litellm.utils import get_model_info
 
 
 def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_second"]:
-    if (
-        call_type == CallTypes.atranscription.value
-        or call_type == CallTypes.transcription.value
-    ):
+    if call_type == CallTypes.atranscription or call_type == CallTypes.transcription:
         return "cost_per_second"
     else:
         return "cost_per_token"
@@ -35,10 +32,20 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     model_info = get_model_info(model=model, custom_llm_provider="openai")
 
     ## CALCULATE INPUT COST
-    not_cached_prompt_tokens: float = (
-        usage["prompt_tokens"] - usage._cache_read_input_tokens
-    )
-    prompt_cost: float = not_cached_prompt_tokens * model_info["input_cost_per_token"]
+    ### Non-cached text tokens
+    non_cached_text_tokens = usage.prompt_tokens
+    cached_tokens: Optional[int] = None
+    if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens:
+        cached_tokens = usage.prompt_tokens_details.cached_tokens
+        non_cached_text_tokens = non_cached_text_tokens - cached_tokens
+    prompt_cost: float = non_cached_text_tokens * model_info["input_cost_per_token"]
+    ## Prompt Caching cost calculation
+    if model_info.get("cache_read_input_token_cost") is not None and cached_tokens:
+        # Note: We read ._cache_read_input_tokens from the Usage - since cost_calculator.py standardizes the cache read tokens on usage._cache_read_input_tokens
+        prompt_cost += cached_tokens * (
+            model_info.get("cache_read_input_token_cost", 0) or 0
+        )
+
     _audio_tokens: Optional[int] = (
         usage.prompt_tokens_details.audio_tokens
         if usage.prompt_tokens_details is not None
@@ -66,13 +73,6 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     if _output_cost_per_audio_token is not None and _output_audio_tokens is not None:
         audio_cost = _output_audio_tokens * _output_cost_per_audio_token
         completion_cost += audio_cost
-
-    ## Prompt Caching cost calculation
-    if model_info.get("cache_read_input_token_cost") is not None:
-        # Note: We read ._cache_read_input_tokens from the Usage - since cost_calculator.py standardizes the cache read tokens on usage._cache_read_input_tokens
-        prompt_cost += usage._cache_read_input_tokens * (
-            model_info.get("cache_read_input_token_cost", 0) or 0
-        )
 
     return prompt_cost, completion_cost
 

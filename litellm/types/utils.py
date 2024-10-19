@@ -143,6 +143,27 @@ class CallTypes(Enum):
     arealtime = "_arealtime"
 
 
+CallTypesLiteral = Literal[
+    "embedding",
+    "aembedding",
+    "completion",
+    "acompletion",
+    "atext_completion",
+    "text_completion",
+    "image_generation",
+    "aimage_generation",
+    "moderation",
+    "amoderation",
+    "atranscription",
+    "transcription",
+    "aspeech",
+    "speech",
+    "rerank",
+    "arerank",
+    "_arealtime",
+]
+
+
 class PassthroughCallTypes(Enum):
     passthrough_image_generation = "passthrough-image-generation"
 

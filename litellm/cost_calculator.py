@@ -46,7 +46,7 @@ from litellm.llms.together_ai.cost_calculator import get_model_params_and_catego
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
-from litellm.types.utils import PassthroughCallTypes, Usage
+from litellm.types.utils import CallTypesLiteral, PassthroughCallTypes, Usage
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -104,24 +104,7 @@ def cost_per_token(  # noqa: PLR0915
     ### USAGE OBJECT ###
     usage_object: Optional[Usage] = None,  # just read the usage object if provided
     ### CALL TYPE ###
-    call_type: Literal[
-        "embedding",
-        "aembedding",
-        "completion",
-        "acompletion",
-        "atext_completion",
-        "text_completion",
-        "image_generation",
-        "aimage_generation",
-        "moderation",
-        "amoderation",
-        "atranscription",
-        "transcription",
-        "aspeech",
-        "speech",
-        "rerank",
-        "arerank",
-    ] = "completion",
+    call_type: CallTypesLiteral = "completion",
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -499,6 +482,33 @@ def _get_usage_object(
     return usage_obj
 
 
+def _infer_call_type(
+    call_type: Optional[CallTypesLiteral], completion_response: Any
+) -> Optional[CallTypesLiteral]:
+    if call_type is not None:
+        return call_type
+
+    if completion_response is None:
+        return None
+
+    if isinstance(completion_response, ModelResponse):
+        return "completion"
+    elif isinstance(completion_response, EmbeddingResponse):
+        return "embedding"
+    elif isinstance(completion_response, TranscriptionResponse):
+        return "transcription"
+    elif isinstance(completion_response, HttpxBinaryResponseContent):
+        return "speech"
+    elif isinstance(completion_response, RerankResponse):
+        return "rerank"
+    elif isinstance(completion_response, ImageResponse):
+        return "image_generation"
+    elif isinstance(completion_response, TextCompletionResponse):
+        return "text_completion"
+
+    return call_type
+
+
 def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
@@ -506,24 +516,7 @@ def completion_cost(  # noqa: PLR0915
     messages: List = [],
     completion="",
     total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
-    call_type: Literal[
-        "embedding",
-        "aembedding",
-        "completion",
-        "acompletion",
-        "atext_completion",
-        "text_completion",
-        "image_generation",
-        "aimage_generation",
-        "moderation",
-        "amoderation",
-        "atranscription",
-        "transcription",
-        "aspeech",
-        "speech",
-        "rerank",
-        "arerank",
-    ] = "completion",
+    call_type: Optional[CallTypesLiteral] = None,
     ### REGION ###
     custom_llm_provider=None,
     region_name=None,  # used for bedrock pricing
@@ -564,6 +557,7 @@ def completion_cost(  # noqa: PLR0915
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+        call_type = _infer_call_type(call_type, completion_response) or "completion"
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
             and model is not None

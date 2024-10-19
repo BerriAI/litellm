@@ -1320,7 +1320,10 @@ def test_completion_cost_fireworks_ai(model):
 
 def test_cost_azure_openai_prompt_caching():
     from litellm.utils import Choices, Message, ModelResponse, Usage
-    from litellm.types.utils import PromptTokensDetails, CompletionTokensDetails
+    from litellm.types.utils import (
+        PromptTokensDetailsWrapper,
+        CompletionTokensDetailsWrapper,
+    )
     from litellm import get_model_info
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1351,7 +1354,9 @@ def test_cost_azure_openai_prompt_caching():
             completion_tokens=10,
             prompt_tokens=14,
             total_tokens=24,
-            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=2),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=2
+            ),
         ),
     )
 
@@ -1378,10 +1383,12 @@ def test_cost_azure_openai_prompt_caching():
             completion_tokens=10,
             prompt_tokens=0,
             total_tokens=10,
-            prompt_tokens_details=PromptTokensDetails(
+            prompt_tokens_details=PromptTokensDetailsWrapper(
                 cached_tokens=14,
             ),
-            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=2),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=2
+            ),
         ),
     )
 
@@ -1502,7 +1509,7 @@ def test_cost_openai_prompt_caching():
         system_fingerprint=None,
         usage=Usage(
             completion_tokens=10,
-            prompt_tokens=0,
+            prompt_tokens=14,
             total_tokens=10,
             prompt_tokens_details=PromptTokensDetails(
                 cached_tokens=14,
