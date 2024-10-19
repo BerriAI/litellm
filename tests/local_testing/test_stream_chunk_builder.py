@@ -656,12 +656,12 @@ def test_stream_chunk_builder_openai_prompt_caching():
     response = stream_chunk_builder(chunks=chunks)
     print(f"response: {response}")
     print(f"response usage: {response.usage}")
-    for k, v in usage_obj.model_dump().items():
+    for k, v in usage_obj.model_dump(exclude_none=True).items():
         print(k, v)
         response_usage_value = getattr(response.usage, k)  # type: ignore
         print(f"response_usage_value: {response_usage_value}")
         print(f"type: {type(response_usage_value)}")
         if isinstance(response_usage_value, BaseModel):
-            assert response_usage_value.model_dump() == v
+            assert response_usage_value.model_dump(exclude_none=True) == v
         else:
             assert response_usage_value == v
