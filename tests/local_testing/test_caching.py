@@ -974,7 +974,7 @@ async def test_redis_cache_acompletion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
@@ -2365,3 +2365,32 @@ async def test_caching_kwargs_input(sync_mode):
     else:
         input["original_function"] = acompletion
         await llm_caching_handler.async_set_cache(**input)
+
+
+@pytest.mark.skip(reason="audio caching not supported yet")
+@pytest.mark.parametrize("stream", [False])  # True,
+@pytest.mark.asyncio()
+async def test_audio_caching(stream):
+    litellm.cache = Cache(type="local")
+
+    ## CALL 1 - no cache hit
+    completion = await litellm.acompletion(
+        model="gpt-4o-audio-preview",
+        modalities=["text", "audio"],
+        audio={"voice": "alloy", "format": "pcm16"},
+        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+        stream=stream,
+    )
+
+    assert "cache_hit" not in completion._hidden_params
+
+    ## CALL 2 - cache hit
+    completion = await litellm.acompletion(
+        model="gpt-4o-audio-preview",
+        modalities=["text", "audio"],
+        audio={"voice": "alloy", "format": "pcm16"},
+        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+        stream=stream,
+    )
+
+    assert "cache_hit" in completion._hidden_params
