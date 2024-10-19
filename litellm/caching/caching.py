@@ -17,13 +17,20 @@ import logging
 import time
 import traceback
 from enum import Enum
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, List, Literal, Optional, Set, Tuple, Union
 
+from openai.types.audio.transcription_create_params import TranscriptionCreateParams
+from openai.types.chat.completion_create_params import CompletionCreateParams
+from openai.types.completion_create_params import (
+    CompletionCreateParams as TextCompletionCreateParams,
+)
+from openai.types.embedding_create_params import EmbeddingCreateParams
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.types.caching import *
+from litellm.types.rerank import RerankRequest
 from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
@@ -242,49 +249,7 @@ class Cache:
             print_verbose(f"\nReturning preset cache key: {_preset_cache_key}")
             return _preset_cache_key
 
-        # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
-        completion_kwargs = [
-            "model",
-            "messages",
-            "prompt",
-            "temperature",
-            "top_p",
-            "n",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "stream",
-        ]
-        embedding_only_kwargs = [
-            "input",
-            "encoding_format",
-        ]  # embedding kwargs = model, input, user, encoding_format. Model, user are checked in completion_kwargs
-        transcription_only_kwargs = [
-            "file",
-            "language",
-        ]
-        rerank_only_kwargs = [
-            "top_n",
-            "rank_fields",
-            "return_documents",
-            "max_chunks_per_doc",
-            "documents",
-            "query",
-        ]
-        # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
-        combined_kwargs = (
-            completion_kwargs
-            + embedding_only_kwargs
-            + transcription_only_kwargs
-            + rerank_only_kwargs
-        )
+        combined_kwargs = self._get_relevant_args_to_use_for_cache_key(*args, **kwargs)
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
             if param in combined_kwargs:
@@ -350,6 +315,64 @@ class Cache:
             hashed_cache_key, **kwargs
         )
         return hashed_cache_key
+
+    def _get_relevant_args_to_use_for_cache_key(self, *args, **kwargs) -> Set[str]:
+        chat_completion_kwargs = self._get_litellm_supported_chat_completion_kwargs(
+            **kwargs
+        )
+        text_completion_kwargs = self._get_litellm_supported_text_completion_kwargs(
+            **kwargs
+        )
+        embedding_kwargs = self._get_litellm_supported_embedding_kwargs()
+        transcription_kwargs = self._get_litellm_supported_transcription_kwargs()
+        rerank_kwargs = self._get_litellm_supported_rerank_kwargs()
+
+        combined_kwargs = chat_completion_kwargs.union(
+            text_completion_kwargs,
+            embedding_kwargs,
+            transcription_kwargs,
+            rerank_kwargs,
+        )
+
+        return combined_kwargs
+
+    def _get_litellm_supported_chat_completion_kwargs(self) -> Set[str]:
+        """
+        Get the litellm supported chat completion kwargs
+
+        This follows the OpenAI API Spec
+        """
+        return set(CompletionCreateParams.__annotations__.keys())
+
+    def _get_litellm_supported_text_completion_kwargs(self) -> Set[str]:
+        """
+        Get the litellm supported text completion kwargs
+
+        This follows the OpenAI API Spec
+        """
+        return set(TextCompletionCreateParams.__annotations__.keys())
+
+    def _get_litellm_supported_rerank_kwargs(self) -> Set[str]:
+        """
+        Get the litellm supported rerank kwargs
+        """
+        return set(RerankRequest.model_fields.keys())
+
+    def _get_litellm_supported_embedding_kwargs(self) -> Set[str]:
+        """
+        Get the litellm supported embedding kwargs
+
+        This follows the OpenAI API Spec
+        """
+        return set(EmbeddingCreateParams.__annotations__.keys())
+
+    def _get_litellm_supported_transcription_kwargs(self) -> Set[str]:
+        """
+        Get the litellm supported transcription kwargs
+
+        This follows the OpenAI API Spec
+        """
+        return set(TranscriptionCreateParams.__annotations__.keys())
 
     def _get_hashed_cache_key(self, cache_key: str) -> str:
         """
