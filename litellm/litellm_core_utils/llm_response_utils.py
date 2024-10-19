@@ -34,6 +34,42 @@ from litellm.types.utils import (
 )
 
 
+def _get_openai_headers(_response_headers: Dict) -> Dict:
+    openai_headers = {}
+    if "x-ratelimit-limit-requests" in _response_headers:
+        openai_headers["x-ratelimit-limit-requests"] = _response_headers[
+            "x-ratelimit-limit-requests"
+        ]
+    if "x-ratelimit-remaining-requests" in _response_headers:
+        openai_headers["x-ratelimit-remaining-requests"] = _response_headers[
+            "x-ratelimit-remaining-requests"
+        ]
+    if "x-ratelimit-limit-tokens" in _response_headers:
+        openai_headers["x-ratelimit-limit-tokens"] = _response_headers[
+            "x-ratelimit-limit-tokens"
+        ]
+    if "x-ratelimit-remaining-tokens" in _response_headers:
+        openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
+            "x-ratelimit-remaining-tokens"
+        ]
+
+    return openai_headers
+
+
+def _set_headers_in_hidden_params(hidden_params: Dict, _response_headers: Dict) -> Dict:
+    openai_headers = _get_openai_headers(_response_headers)
+    llm_response_headers = {
+        "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
+    }
+
+    if hidden_params is not None:
+        hidden_params["additional_headers"] = {
+            **llm_response_headers,
+            **openai_headers,
+        }
+    return hidden_params
+
+
 def convert_to_model_response_object(  # noqa: PLR0915
     response_object: Optional[dict] = None,
     model_response_object: Optional[
@@ -57,38 +93,14 @@ def convert_to_model_response_object(  # noqa: PLR0915
         bool
     ] = None,  # used for supporting 'json_schema' on older models
 ):
+    hidden_params = hidden_params or {}
     received_args = locals()
-
     if _response_headers is not None:
-        openai_headers = {}
-        if "x-ratelimit-limit-requests" in _response_headers:
-            openai_headers["x-ratelimit-limit-requests"] = _response_headers[
-                "x-ratelimit-limit-requests"
-            ]
-        if "x-ratelimit-remaining-requests" in _response_headers:
-            openai_headers["x-ratelimit-remaining-requests"] = _response_headers[
-                "x-ratelimit-remaining-requests"
-            ]
-        if "x-ratelimit-limit-tokens" in _response_headers:
-            openai_headers["x-ratelimit-limit-tokens"] = _response_headers[
-                "x-ratelimit-limit-tokens"
-            ]
-        if "x-ratelimit-remaining-tokens" in _response_headers:
-            openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
-                "x-ratelimit-remaining-tokens"
-            ]
-        llm_response_headers = {
-            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
-        }
-        if hidden_params is not None:
-            hidden_params["additional_headers"] = {
-                **llm_response_headers,
-                **openai_headers,
-            }
-        else:
-            hidden_params = {
-                "additional_headers": {**llm_response_headers, **openai_headers}
-            }
+        hidden_params = _set_headers_in_hidden_params(
+            hidden_params=hidden_params,
+            _response_headers=_response_headers,
+        )
+
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     if (
         response_object is not None
