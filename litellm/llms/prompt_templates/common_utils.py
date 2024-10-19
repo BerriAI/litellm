@@ -4,12 +4,13 @@ Common utility functions used for translating messages across providers
 
 import json
 from copy import deepcopy
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 
 import litellm
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionResponseMessage,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices
@@ -67,12 +68,18 @@ def convert_openai_message_to_only_content_messages(
     return converted_messages
 
 
-def get_content_from_model_response(response: ModelResponse) -> str:
+def get_content_from_model_response(response: Union[ModelResponse, dict]) -> str:
     """
     Gets content from model response
     """
+    if isinstance(response, dict):
+        new_response = ModelResponse(**response)
+    else:
+        new_response = response
+
     content = ""
-    for choice in response.choices:
+
+    for choice in new_response.choices:
         if isinstance(choice, Choices):
             content += choice.message.content if choice.message.content else ""
             if choice.message.function_call:
