@@ -273,10 +273,10 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        cost_router = openai_cost_router(call_type=CallTypes(call_type))
-        if cost_router == "cost_per_token":
+        openai_cost_route = openai_cost_router(call_type=CallTypes(call_type))
+        if openai_cost_route == "cost_per_token":
             return openai_cost_per_token(model=model, usage=usage_block)
-        elif cost_router == "cost_per_second":
+        elif openai_cost_route == "cost_per_second":
             return openai_cost_per_second(
                 model=model, usage=usage_block, response_time_ms=response_time_ms
             )
@@ -494,7 +494,7 @@ def _get_usage_object(
     if completion_response is not None and isinstance(
         completion_response, ModelResponse
     ):
-        usage_obj: Optional[Usage] = completion_response.get("usage")
+        usage_obj = completion_response.get("usage")
 
     return usage_obj
 
