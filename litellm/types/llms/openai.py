@@ -482,8 +482,13 @@ class ChatCompletionDeltaChunk(TypedDict, total=False):
     role: str
 
 
+ChatCompletionAssistantContentValue = (
+    str  # keep as var, used in stream_chunk_builder as well
+)
+
+
 class ChatCompletionResponseMessage(TypedDict, total=False):
-    content: Optional[str]
+    content: Optional[ChatCompletionAssistantContentValue]
     tool_calls: List[ChatCompletionToolCallChunk]
     role: Literal["assistant"]
     function_call: ChatCompletionToolCallFunctionChunk

@@ -656,12 +656,30 @@ def test_stream_chunk_builder_openai_prompt_caching():
     response = stream_chunk_builder(chunks=chunks)
     print(f"response: {response}")
     print(f"response usage: {response.usage}")
-    for k, v in usage_obj.model_dump().items():
+    for k, v in usage_obj.model_dump(exclude_none=True).items():
         print(k, v)
         response_usage_value = getattr(response.usage, k)  # type: ignore
         print(f"response_usage_value: {response_usage_value}")
         print(f"type: {type(response_usage_value)}")
         if isinstance(response_usage_value, BaseModel):
-            assert response_usage_value.model_dump() == v
+            assert response_usage_value.model_dump(exclude_none=True) == v
         else:
             assert response_usage_value == v
+
+
+# def test_stream_chunk_builder_openai_audio_output():
+#     completion = litellm.completion(
+#         model="gpt-4o-audio-preview",
+#         modalities=["text", "audio"],
+#         audio={"voice": "alloy", "format": "pcm16"},
+#         messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+#         stream=True,
+#     )
+
+#     chunks = []
+#     for chunk in completion:
+#         chunks.append(litellm.ModelResponse(**chunk.model_dump(), stream=True))
+
+#     response = stream_chunk_builder(chunks=chunks)
+#     print(f"response: {response}")
+#     print(f"response usage: {response.usage}")
