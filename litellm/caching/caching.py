@@ -20,9 +20,15 @@ from enum import Enum
 from typing import Any, List, Literal, Optional, Set, Tuple, Union
 
 from openai.types.audio.transcription_create_params import TranscriptionCreateParams
-from openai.types.chat.completion_create_params import CompletionCreateParams
+from openai.types.chat.completion_create_params import (
+    CompletionCreateParamsNonStreaming,
+    CompletionCreateParamsStreaming,
+)
 from openai.types.completion_create_params import (
-    CompletionCreateParams as TextCompletionCreateParams,
+    CompletionCreateParamsNonStreaming as TextCompletionCreateParamsNonStreaming,
+)
+from openai.types.completion_create_params import (
+    CompletionCreateParamsStreaming as TextCompletionCreateParamsStreaming,
 )
 from openai.types.embedding_create_params import EmbeddingCreateParams
 from pydantic import BaseModel
@@ -249,7 +255,7 @@ class Cache:
             print_verbose(f"\nReturning preset cache key: {_preset_cache_key}")
             return _preset_cache_key
 
-        combined_kwargs = self._get_relevant_args_to_use_for_cache_key(*args, **kwargs)
+        combined_kwargs = self._get_relevant_args_to_use_for_cache_key()
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
             if param in combined_kwargs:
@@ -316,13 +322,12 @@ class Cache:
         )
         return hashed_cache_key
 
-    def _get_relevant_args_to_use_for_cache_key(self, *args, **kwargs) -> Set[str]:
-        chat_completion_kwargs = self._get_litellm_supported_chat_completion_kwargs(
-            **kwargs
-        )
-        text_completion_kwargs = self._get_litellm_supported_text_completion_kwargs(
-            **kwargs
-        )
+    def _get_relevant_args_to_use_for_cache_key(self) -> Set[str]:
+        """
+        Gets the supported kwargs for each call type and combines them
+        """
+        chat_completion_kwargs = self._get_litellm_supported_chat_completion_kwargs()
+        text_completion_kwargs = self._get_litellm_supported_text_completion_kwargs()
         embedding_kwargs = self._get_litellm_supported_embedding_kwargs()
         transcription_kwargs = self._get_litellm_supported_transcription_kwargs()
         rerank_kwargs = self._get_litellm_supported_rerank_kwargs()
@@ -342,7 +347,10 @@ class Cache:
 
         This follows the OpenAI API Spec
         """
-        return set(CompletionCreateParams.__annotations__.keys())
+        all_chat_completion_kwargs = set(
+            CompletionCreateParamsNonStreaming.__annotations__.keys()
+        ).union(set(CompletionCreateParamsStreaming.__annotations__.keys()))
+        return all_chat_completion_kwargs
 
     def _get_litellm_supported_text_completion_kwargs(self) -> Set[str]:
         """
@@ -350,7 +358,10 @@ class Cache:
 
         This follows the OpenAI API Spec
         """
-        return set(TextCompletionCreateParams.__annotations__.keys())
+        all_text_completion_kwargs = set(
+            TextCompletionCreateParamsNonStreaming.__annotations__.keys()
+        ).union(set(TextCompletionCreateParamsStreaming.__annotations__.keys()))
+        return all_text_completion_kwargs
 
     def _get_litellm_supported_rerank_kwargs(self) -> Set[str]:
         """
