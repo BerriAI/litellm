@@ -5408,7 +5408,7 @@ def stream_chunk_builder(
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:
-            raise APIError(
+            raise litellm.APIError(
                 status_code=500,
                 message="Error building chunks for logging/streaming usage calculation",
                 llm_provider="",
