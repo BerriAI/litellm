@@ -5660,56 +5660,6 @@ def register_prompt_template(
     return litellm.custom_prompt_dict
 
 
-####### DEPRECATED ################
-
-
-def get_all_keys(llm_provider=None):
-    try:
-        global last_fetched_at_keys
-        # if user is using hosted product -> instantiate their env with their hosted api keys - refresh every 5 minutes
-        print_verbose(f"Reaches get all keys, llm_provider: {llm_provider}")
-        user_email = (
-            os.getenv("LITELLM_EMAIL")
-            or litellm.email
-            or litellm.token
-            or os.getenv("LITELLM_TOKEN")
-        )
-        if user_email:
-            time_delta = 0
-            if last_fetched_at_keys is not None:
-                current_time = time.time()
-                time_delta = current_time - last_fetched_at_keys
-            if (
-                time_delta > 300 or last_fetched_at_keys is None or llm_provider
-            ):  # if the llm provider is passed in , assume this happening due to an AuthError for that provider
-                # make the api call
-                last_fetched_at = time.time()
-                print_verbose(f"last_fetched_at: {last_fetched_at}")
-                response = requests.post(
-                    url="http://api.litellm.ai/get_all_keys",
-                    headers={"content-type": "application/json"},
-                    data=json.dumps({"user_email": user_email}),
-                )
-                print_verbose(f"get model key response: {response.text}")
-                data = response.json()
-                # update model list
-                for key, value in data[
-                    "model_keys"
-                ].items():  # follows the LITELLM API KEY format - <UPPERCASE_PROVIDER_NAME>_API_KEY - e.g. HUGGINGFACE_API_KEY
-                    os.environ[key] = value
-                # set model alias map
-                for model_alias, value in data["model_alias_map"].items():
-                    litellm.model_alias_map[model_alias] = value
-                return "it worked!"
-            return None
-        return None
-    except Exception:
-        print_verbose(
-            f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}"
-        )
-        pass
-
-
 def get_model_list():
     global last_fetched_at, print_verbose
     try:

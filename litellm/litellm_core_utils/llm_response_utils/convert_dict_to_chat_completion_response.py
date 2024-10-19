@@ -5,19 +5,10 @@ from typing import Dict, Generator, Iterable, List, Literal, Optional, Union
 
 import litellm
 from litellm.types.utils import (
-    ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
-    Delta,
-    EmbeddingResponse,
-    Function,
-    ImageResponse,
     Message,
     ModelResponse,
-    RerankResponse,
-    StreamingChoices,
-    TranscriptionResponse,
-    Usage,
 )
 
 from .convert_dict_to_streaming_response import convert_to_streaming_response
