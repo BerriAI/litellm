@@ -5407,10 +5407,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
-from litellm.types.utils import Function, FunctionCall
 
 
 class ChunkProcessor:
+    from litellm.types.utils import Function, FunctionCall
+
     def __init__(self, chunks: list, messages: Optional[list] = None):
         if chunks is None:
             raise litellm.APIError(
@@ -5535,7 +5536,7 @@ class ChunkProcessor:
                 tool_calls_list.append(
                     ChatCompletionMessageToolCall(
                         id=prev_id,
-                        function=Function(
+                        function=self.Function(
                             arguments=combined_arguments,
                             name=prev_name,
                         ),
@@ -5555,7 +5556,7 @@ class ChunkProcessor:
             ChatCompletionMessageToolCall(
                 id=id,
                 type="function",
-                function=Function(
+                function=self.Function(
                     arguments=combined_arguments,
                     name=name,
                 ),
@@ -5585,7 +5586,7 @@ class ChunkProcessor:
 
         combined_arguments = "".join(argument_list)
 
-        return FunctionCall(
+        return self.FunctionCall(
             name=function_call_name,
             arguments=combined_arguments,
         )
