@@ -316,10 +316,11 @@ class Cache:
     def _get_caching_group(
         self, metadata: dict, model_group: Optional[str]
     ) -> Optional[str]:
-        caching_groups = metadata.get("caching_groups", [])
-        for group in caching_groups:
-            if model_group in group:
-                return group
+        caching_groups: Optional[List] = metadata.get("caching_groups", [])
+        if caching_groups:
+            for group in caching_groups:
+                if model_group in group:
+                    return group
         return None
 
     def _get_file_param_value(self, kwargs: dict) -> str:
