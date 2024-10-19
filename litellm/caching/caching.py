@@ -17,7 +17,7 @@ import logging
 import time
 import traceback
 from enum import Enum
-from typing import Any, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 
 from openai.types.audio.transcription_create_params import TranscriptionCreateParams
 from openai.types.chat.completion_create_params import (
@@ -302,11 +302,14 @@ class Cache:
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
         3. Else use the `model` passed in kwargs
         """
-        metadata = kwargs.get("metadata", {})
-        litellm_params = kwargs.get("litellm_params", {})
-        model_group: Optional[str] = metadata.get("model_group") or litellm_params.get(
-            "metadata", {}
-        ).get("model_group")
+        metadata: Dict = kwargs.get("metadata", {}) or {}
+        litellm_params: Dict = kwargs.get("litellm_params", {}) or {}
+        metadata_in_litellm_params: Optional[Dict] = (
+            litellm_params.get("metadata", {}) or {}
+        )
+        model_group: Optional[str] = metadata.get(
+            "model_group"
+        ) or metadata_in_litellm_params.get("model_group")
         caching_group = self._get_caching_group(metadata, model_group)
         return caching_group or model_group or kwargs["model"]
 
