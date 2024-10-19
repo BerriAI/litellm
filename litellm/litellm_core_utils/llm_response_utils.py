@@ -33,6 +33,11 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .llm_response_utils_temp.convert_to_embedding import (
+    convert_dict_to_embedding_response,
+)
+from .llm_response_utils_temp.convert_to_rerank import convert_dict_to_rerank_response
+
 
 def _get_openai_headers(_response_headers: Dict) -> Dict:
     openai_headers = {}
@@ -246,37 +251,14 @@ def convert_to_model_response_object(  # noqa: PLR0915
             model_response_object is None
             or isinstance(model_response_object, EmbeddingResponse)
         ):
-            if response_object is None:
-                raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = EmbeddingResponse()
-
-            if "model" in response_object:
-                model_response_object.model = response_object["model"]
-
-            if "object" in response_object:
-                model_response_object.object = response_object["object"]
-
-            model_response_object.data = response_object["data"]
-
-            if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
-
-            if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
-
-            if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
-
-            if _response_headers is not None:
-                model_response_object._response_headers = _response_headers
-
-            return model_response_object
+            return convert_dict_to_embedding_response(
+                model_response_object=model_response_object,
+                response_object=response_object,
+                start_time=start_time,
+                end_time=end_time,
+                hidden_params=hidden_params,
+                _response_headers=_response_headers,
+            )
         elif response_type == "image_generation" and (
             model_response_object is None
             or isinstance(model_response_object, ImageResponse)
@@ -326,23 +308,10 @@ def convert_to_model_response_object(  # noqa: PLR0915
             model_response_object is None
             or isinstance(model_response_object, RerankResponse)
         ):
-            if response_object is None:
-                raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = RerankResponse(**response_object)
-                return model_response_object
-
-            if "id" in response_object:
-                model_response_object.id = response_object["id"]
-
-            if "meta" in response_object:
-                model_response_object.meta = response_object["meta"]
-
-            if "results" in response_object:
-                model_response_object.results = response_object["results"]
-
-            return model_response_object
+            return convert_dict_to_rerank_response(
+                model_response_object=model_response_object,
+                response_object=response_object,
+            )
     except Exception:
         raise Exception(
             f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
