@@ -335,6 +335,31 @@ class LiteLLMRoutes(enum.Enum):
         "/metrics",
     ]
 
+    ui_routes = [
+        "/sso",
+        "/sso/get/ui_settings",
+        "/login",
+        "/key/generate",
+        "/key/update",
+        "/key/info",
+        "/key/delete",
+        "/config",
+        "/spend",
+        "/user",
+        "/model/info",
+        "/v2/model/info",
+        "/v2/key/info",
+        "/models",
+        "/v1/models",
+        "/global/spend",
+        "/global/spend/logs",
+        "/global/spend/keys",
+        "/global/spend/models",
+        "/global/predict/spend/logs",
+        "/global/activity",
+        "/health/services",
+    ] + info_routes
+
     internal_user_routes = (
         [
             "/key/generate",
