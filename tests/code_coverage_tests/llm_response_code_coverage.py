@@ -77,7 +77,7 @@ ignored_function_names = [
 
 
 def main():
-    llm_response_utils_folder = "../../litellm/litellm_core_utils/llm_response_utils"
+    llm_response_utils_folder = "./litellm/litellm_core_utils/llm_response_utils"
     llm_response_utils_files = []
 
     # get all files in llm_response_utils folder
