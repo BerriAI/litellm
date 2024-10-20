@@ -1068,6 +1068,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 "/key/generate",
                 "/key/update",
                 "/key/info",
+                "/key/delete",
                 "/config",
                 "/spend",
                 "/user",
