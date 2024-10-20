@@ -23,6 +23,7 @@ from datetime import timedelta
 
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_chat_completion_response import (
     convert_dict_to_chat_completion_response,
+    _process_choices_in_response,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -30,6 +31,7 @@ from litellm.types.utils import (
     Choices,
     PromptTokensDetails,
     CompletionTokensDetails,
+    ChatCompletionMessageToolCall,
 )
 
 
@@ -705,3 +707,111 @@ def test_convert_dict_to_chat_completion_response_error():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+
+def test_process_choices_in_response():
+    # Test case 1: Basic response without tool calls
+    response_object = {
+        "choices": [
+            {
+                "message": {
+                    "content": "Hello, how can I help you?",
+                    "role": "assistant",
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    result = _process_choices_in_response(response_object, False)
+    assert len(result) == 1
+    assert isinstance(result[0], Choices)
+    assert result[0].message.content == "Hello, how can I help you?"
+    assert result[0].message.role == "assistant"
+    assert result[0].finish_reason == "stop"
+
+    # Test case 2: Response with tool calls
+    response_object = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "New York"}',
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    result = _process_choices_in_response(response_object, False)
+    assert len(result) == 1
+    assert isinstance(result[0], Choices)
+    assert result[0].message.content is None
+    assert result[0].message.role == "assistant"
+    assert result[0].message.tool_calls is not None
+    assert len(result[0].message.tool_calls) == 1
+    assert isinstance(result[0].message.tool_calls[0], ChatCompletionMessageToolCall)
+    assert result[0].finish_reason == "tool_calls"
+    assert result[0].message.tool_calls[0].id == "call_123"
+    assert result[0].message.tool_calls[0].type == "function"
+    assert result[0].message.tool_calls[0].function.name == "get_weather"
+    assert (
+        result[0].message.tool_calls[0].function.arguments == '{"location": "New York"}'
+    )
+
+    # Test case 3: JSON mode conversion
+    response_object = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "New York"}',
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": None,
+            }
+        ]
+    }
+    result = _process_choices_in_response(response_object, True)
+    assert len(result) == 1
+    assert isinstance(result[0], Choices)
+    assert result[0].message.content == '{"location": "New York"}'
+    assert result[0].message.role == "assistant"
+    assert result[0].finish_reason == "stop"
+
+    # Test case 4: Multiple choices
+    response_object = {
+        "choices": [
+            {
+                "message": {"content": "Response 1", "role": "assistant"},
+                "finish_reason": "length",
+            },
+            {
+                "message": {"content": "Response 2", "role": "assistant"},
+                "finish_reason": "stop",
+            },
+        ]
+    }
+    result = _process_choices_in_response(response_object, False)
+    assert len(result) == 2
+    assert result[0].message.content == "Response 1"
+    assert result[0].finish_reason == "length"
+    assert result[1].message.content == "Response 2"
+    assert result[1].finish_reason == "stop"
