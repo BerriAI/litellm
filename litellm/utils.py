@@ -1821,6 +1821,7 @@ def supports_function_calling(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        ## CHECK IF MODEL SUPPORTS FUNCTION CALLING ##
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -4716,6 +4717,8 @@ def get_model_info(  # noqa: PLR0915
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
             )
+        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+            return litellm.OllamaConfig().get_model_info(model)
         else:
             """
             Check if: (in order of specificity)
