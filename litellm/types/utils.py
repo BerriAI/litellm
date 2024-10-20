@@ -1230,6 +1230,39 @@ class TranscriptionResponse(OpenAIObject):
             return self.dict()
 
 
+class VerboseTranscriptionResponse(TranscriptionResponse):
+    language: Optional[str] = None
+    """The language of the input audio."""
+
+    segments: Optional[List] = None
+    """Segments of the transcribed text and their corresponding details."""
+
+    words: Optional[List] = None
+    """Extracted words and their corresponding timestamps."""
+
+    task: Optional[str] = None
+    """The task of the transcription."""
+
+    duration: Optional[str] = None
+    """The duration of the input audio."""
+
+    def __init__(
+        self,
+        text=None,
+        language=None,
+        segments=None,
+        words=None,
+        task=None,
+        duration=None,
+    ):
+        super().__init__(text=text)
+        self.language = language
+        self.segments = segments
+        self.words = words
+        self.task = task
+        self.duration = duration
+
+
 class GenericImageParsingChunk(TypedDict):
     # {
     #         "type": "base64",
