@@ -1084,7 +1084,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 "/global/predict/spend/logs",
                 "/global/activity",
                 "/health/services",
-            ] + LiteLLMRoutes.info_routes.value  # type: ignore
+            ] + LiteLLMRoutes.info_routes.value
             # check if the current route startswith any of the allowed routes
             if (
                 route is not None
