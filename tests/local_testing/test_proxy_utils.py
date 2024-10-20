@@ -406,3 +406,29 @@ def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
     data = add_litellm_data_for_backend_llm_call(headers)
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
+
+
+def test_update_internal_user_params():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    data = NewUserRequest(user_role="internal_user", user_email="krrish3@berri.ai")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_user_params(data_json, data)
+    assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
+    assert (
+        updated_data_json["max_budget"]
+        == litellm.default_internal_user_params["max_budget"]
+    )
+    assert (
+        updated_data_json["budget_duration"]
+        == litellm.default_internal_user_params["budget_duration"]
+    )
