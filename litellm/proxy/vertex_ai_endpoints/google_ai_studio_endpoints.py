@@ -40,6 +40,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
+from litellm.secret_managers.main import get_secret_str
 
 router = APIRouter()
 default_vertex_config = None
@@ -223,6 +224,56 @@ async def bedrock_proxy_route(
         stream=is_streaming_request,  # type: ignore
         custom_body=data,  # type: ignore
         query_params={},  # type: ignore
+    )
+
+    return received_value
+
+
+@router.api_route("/azure/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def azure_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
+    if base_target_url is None:
+        raise Exception(
+            "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
+        )
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    # Add or update query parameters
+    azure_api_key = get_secret_str(secret_name="AZURE_API_KEY")
+
+    ## check for streaming
+    is_streaming_request = False
+    if "stream" in str(updated_url):
+        is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={
+            "authorization": "Bearer {}".format(azure_api_key),
+            "api-key": "{}".format(azure_api_key),
+        },
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+        stream=is_streaming_request,  # type: ignore
+        query_params=dict(request.query_params),  # type: ignore
     )
 
     return received_value
