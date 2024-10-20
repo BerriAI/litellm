@@ -5403,7 +5403,7 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-def stream_chunk_builder(
+def stream_chunk_builder(  # noqa: PLR0915
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
