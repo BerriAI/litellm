@@ -993,3 +993,29 @@ async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
             ):  # Replace with the actual exception raised on failure
                 resp = await user_api_key_auth(request=request, api_key=bearer_token)
                 print(resp)
+
+
+def test_get_public_key_from_jwk_url():
+    import litellm
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+
+    jwk_response = [
+        {
+            "kty": "RSA",
+            "alg": "RS256",
+            "kid": "RaPJB8QVptWHjHcoHkVlUWO4f0D3BtcY6iSDXgGVBgk",
+            "use": "sig",
+            "e": "AQAB",
+            "n": "zgLDu57gLpkzzIkKrTKQVyjK8X40hvu6X_JOeFjmYmI0r3bh7FTOmre5rTEkDOL-1xvQguZAx4hjKmCzBU5Kz84FbsGiqM0ug19df4kwdTS6XOM6YEKUZrbaw4P7xTPsbZj7W2G_kxWNm3Xaxq6UKFdUF7n9snnBKKD6iUA-cE6HfsYmt9OhYZJfy44dbAbuanFmAsWw97SHrPFL3ueh3Ixt19KgpF4iSsXNg3YvoesdFM8psmivgePyyHA8k7pK1Yq7rNQX1Q9nzhvP-F7ocFbP52KYPlaSTu30YwPTVTFKYpDNmHT1fZ7LXZZNLrP_7-NSY76HS2ozSpzjsGVelQ",
+        }
+    ]
+
+    public_key = jwt_handler.parse_keys(
+        keys=jwk_response,
+        kid="RaPJB8QVptWHjHcoHkVlUWO4f0D3BtcY6iSDXgGVBgk",
+    )
+
+    assert public_key is not None
+    assert public_key == jwk_response[0]

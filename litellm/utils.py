@@ -1835,6 +1835,54 @@ def supports_function_calling(
         )
 
 
+def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
+    """
+    Check if the given model supports function calling and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports function calling, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found or there's an error in retrieval.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if model_info.get(key, False) is True:
+            return True
+        return False
+    except Exception as e:
+        raise Exception(
+            f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+
+
+def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """Check if a given model supports audio input in a chat completion call"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input"
+    )
+
+
+def supports_audio_output(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """Check if a given model supports audio output in a chat completion call"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input"
+    )
+
+
 def supports_prompt_caching(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -4602,9 +4650,11 @@ def get_model_info(  # noqa: PLR0915
             ]  # only for vertex ai models
             input_cost_per_query: Optional[float] # only for rerank models
             input_cost_per_image: Optional[float]  # only for vertex ai models
+            input_cost_per_audio_token: Optional[float]
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
             input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
             output_cost_per_token: Required[float]
+            output_cost_per_audio_token: Optional[float]
             output_cost_per_character: Optional[float]  # only for vertex ai models
             output_cost_per_token_above_128k_tokens: Optional[
                 float
@@ -4628,6 +4678,8 @@ def get_model_info(  # noqa: PLR0915
             supports_vision: Optional[bool]
             supports_function_calling: Optional[bool]
             supports_prompt_caching: Optional[bool]
+            supports_audio_input: Optional[bool]
+            supports_audio_output: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
@@ -4873,7 +4925,13 @@ def get_model_info(  # noqa: PLR0915
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_audio_token=_model_info.get(
+                    "input_cost_per_audio_token", None
+                ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_audio_token=_model_info.get(
+                    "output_cost_per_audio_token", None
+                ),
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
                 ),
@@ -4906,6 +4964,8 @@ def get_model_info(  # noqa: PLR0915
                 supports_prompt_caching=_model_info.get(
                     "supports_prompt_caching", False
                 ),
+                supports_audio_input=_model_info.get("supports_audio_input", False),
+                supports_audio_output=_model_info.get("supports_audio_output", False),
             )
     except Exception as e:
         if "OllamaError" in str(e):
@@ -7578,7 +7638,7 @@ class CustomStreamWrapper:
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 self.response_id = original_chunk.id
-                if len(original_chunk.choices) > 0:
+                if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None

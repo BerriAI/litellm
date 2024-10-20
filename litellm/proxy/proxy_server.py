@@ -1543,6 +1543,7 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+            
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
