@@ -21,51 +21,20 @@ from pydantic import BaseModel  # type: ignore
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.llms.prompt_templates.common_utils import get_content_from_model_response
+from litellm.types.integrations.argilla import (
+    SUPPORTED_PAYLOAD_FIELDS,
+    ArgillaCredentialsObject,
+    ArgillaItem,
+    ArgillaPayload,
+)
 from litellm.types.utils import StandardLoggingPayload
-
-
-class LangsmithInputs(BaseModel):
-    model: Optional[str] = None
-    messages: Optional[List[Any]] = None
-    stream: Optional[bool] = None
-    call_type: Optional[str] = None
-    litellm_call_id: Optional[str] = None
-    completion_start_time: Optional[datetime] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    custom_llm_provider: Optional[str] = None
-    input: Optional[List[Any]] = None
-    log_event_type: Optional[str] = None
-    original_response: Optional[Any] = None
-    response_cost: Optional[float] = None
-
-    # LiteLLM Virtual Key specific fields
-    user_api_key: Optional[str] = None
-    user_api_key_user_id: Optional[str] = None
-    user_api_key_team_alias: Optional[str] = None
-
-
-class ArgillaItem(TypedDict):
-    fields: Dict[str, Any]
-
-
-class ArgillaPayload(TypedDict):
-    items: List[ArgillaItem]
-
-
-class ArgillaCredentialsObject(TypedDict):
-    ARGILLA_API_KEY: str
-    ARGILLA_DATASET_NAME: str
-    ARGILLA_BASE_URL: str
-
-
-SUPPORTED_PAYLOAD_FIELDS = ["messages", "response"]
 
 
 def is_serializable(value):
@@ -215,7 +184,7 @@ class ArgillaLogger(CustomBatchLogger):
 
     def _prepare_log_data(
         self, kwargs, response_obj, start_time, end_time
-    ) -> ArgillaItem:
+    ) -> Optional[ArgillaItem]:
         try:
             # Ensure everything in the payload is converted to str
             payload: Optional[StandardLoggingPayload] = kwargs.get(
@@ -235,6 +204,7 @@ class ArgillaLogger(CustomBatchLogger):
                     argilla_item["fields"][k] = argilla_response
                 else:
                     argilla_item["fields"][k] = payload.get(v, None)
+
             return argilla_item
         except Exception:
             raise
@@ -294,6 +264,9 @@ class ArgillaLogger(CustomBatchLogger):
                 response_obj,
             )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            if data is None:
+                return
+
             self.log_queue.append(data)
             verbose_logger.debug(
                 f"Langsmith, event added to queue. Will flush in {self.flush_interval} seconds..."
@@ -321,7 +294,25 @@ class ArgillaLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
+            payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
+
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+
+            ## ALLOW CUSTOM LOGGERS TO MODIFY / FILTER DATA BEFORE LOGGING
+            for callback in litellm.callbacks:
+                if isinstance(callback, CustomLogger):
+                    try:
+                        if data is None:
+                            break
+                        data = await callback.async_dataset_hook(data, payload)
+                    except NotImplementedError:
+                        pass
+
+            if data is None:
+                return
+
             self.log_queue.append(data)
             verbose_logger.debug(
                 "Langsmith logging: queue length %s, batch size %s",

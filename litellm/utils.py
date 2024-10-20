@@ -1821,6 +1821,7 @@ def supports_function_calling(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        ## CHECK IF MODEL SUPPORTS FUNCTION CALLING ##
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -4768,6 +4769,8 @@ def get_model_info(  # noqa: PLR0915
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
             )
+        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+            return litellm.OllamaConfig().get_model_info(model)
         else:
             """
             Check if: (in order of specificity)
@@ -4964,7 +4967,9 @@ def get_model_info(  # noqa: PLR0915
                 supports_audio_input=_model_info.get("supports_audio_input", False),
                 supports_audio_output=_model_info.get("supports_audio_output", False),
             )
-    except Exception:
+    except Exception as e:
+        if "OllamaError" in str(e):
+            raise e
         raise Exception(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider

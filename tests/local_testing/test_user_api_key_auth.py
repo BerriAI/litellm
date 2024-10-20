@@ -291,3 +291,28 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
     setattr(proxy_server, "general_settings", initial_general_settings)
+
+
+@pytest.mark.parametrize("route", ["/global/spend/logs", "/key/delete"])
+def test_is_ui_route_allowed(route):
+    from litellm.proxy.auth.user_api_key_auth import _is_ui_route_allowed
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    received_args: dict = {
+        "route": route,
+        "user_obj": LiteLLM_UserTable(
+            user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+            max_budget=None,
+            spend=0.0,
+            model_max_budget={},
+            model_spend={},
+            user_email="my-test-email@1234.com",
+            models=[],
+            tpm_limit=None,
+            rpm_limit=None,
+            user_role="internal_user",
+            organization_memberships=[],
+        ),
+    }
+
+    assert _is_ui_route_allowed(**received_args)
