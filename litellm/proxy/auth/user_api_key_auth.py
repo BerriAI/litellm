@@ -147,9 +147,7 @@ def _is_api_route_allowed(
     _user_role = _get_user_role(user_obj=user_obj)
 
     if valid_token is None:
-        raise HTTPException(
-            status_code=401, detail="Unable to retrieve key from DB. valid_token=None."
-        )
+        raise HTTPException(status_code=401, detail="Invalid proxy server token passed")
 
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         non_proxy_admin_allowed_routes_check(
