@@ -49,6 +49,13 @@ sample_response = {
 
 @pytest.mark.asyncio
 async def test_convert_to_streaming_response_async():
+    """
+
+    Convert a Dict of a Non-Streamed Response to a Streaming Response
+
+    Used for caching hits when stream == True
+
+    """
     async for response in convert_to_streaming_response_async(sample_response):
         assert isinstance(response, ModelResponse)
         assert (
@@ -81,6 +88,9 @@ def test_convert_to_streaming_response():
 
 
 def test_get_streaming_response_object():
+    """
+    Get a Streaming Response Object from a Dict of a Non-Streamed Response
+    """
     response = _get_streaming_response_object(sample_response)
     assert isinstance(response, ModelResponse)
     assert response.choices[0].delta.content == "Hi there! How can I assist you today?"
@@ -95,6 +105,9 @@ def test_get_streaming_response_object():
 
 
 def test_get_streaming_response_object_with_tool_calls():
+    """
+    Get a Streaming Response Object from a Dict of a Non-Streamed Response with Tool Calls
+    """
     response_with_tool_calls = {
         "id": "chatcmpl-AK1uqisVA9OjUNkEuE53GJc8HPYlz",
         "choices": [
