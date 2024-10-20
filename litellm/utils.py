@@ -4907,7 +4907,9 @@ def get_model_info(  # noqa: PLR0915
                     "supports_prompt_caching", False
                 ),
             )
-    except Exception:
+    except Exception as e:
+        if "OllamaError" in str(e):
+            raise e
         raise Exception(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider

@@ -456,7 +456,6 @@ def test_token_counter():
         ("groq/gemma-7b-it", True),
         ("anthropic.claude-instant-v1", False),
         ("palm/chat-bison", False),
-        ("ollama/llama2", False),
     ],
 )
 def test_supports_function_calling(model, expected_bool):

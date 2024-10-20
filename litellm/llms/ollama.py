@@ -194,7 +194,7 @@ class OllamaConfig:
             )
         except Exception as e:
             raise Exception(
-                f"Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
+                f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
             )
 
         model_info = response.json()
