@@ -98,6 +98,7 @@ api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
 databricks_key: Optional[str] = None
+openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
@@ -710,6 +711,8 @@ model_list = (
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"  # embedding only
+    JINA_AI = "jina_ai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -1013,6 +1016,7 @@ from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfi
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
+from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (

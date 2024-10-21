@@ -278,7 +278,7 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "empower"
         elif model == "*":
             custom_llm_provider = "openai"
-        if custom_llm_provider is None or custom_llm_provider == "":
+        if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
                 print(  # noqa
@@ -462,6 +462,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.MistralConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "jina_ai":
+        (
+            custom_llm_provider,
+            api_base,
+            dynamic_api_key,
+        ) = litellm.JinaAIEmbeddingConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "voyage":

@@ -151,3 +151,12 @@ def test_default_api_base():
                     elif provider == "github" and other_provider == "azure":
                         continue
                     assert other_provider.value not in api_base.replace("/openai", "")
+
+
+def test_get_llm_provider_jina_ai():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="jina_ai/jina-embeddings-v3",
+    )
+    assert custom_llm_provider == "openai_like"
+    assert api_base == "https://api.jina.ai/v1"
+    assert model == "jina-embeddings-v3"
