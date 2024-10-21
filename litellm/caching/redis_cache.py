@@ -16,6 +16,7 @@ import time
 from datetime import timedelta
 from typing import Any, List, Optional, Tuple
 
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
@@ -104,6 +105,11 @@ class RedisCache(BaseCache):
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
 
+        if litellm.default_redis_ttl is not None:
+            super().__init__(default_ttl=int(litellm.default_redis_ttl))
+        else:
+            super().__init__()  # defaults to 60s
+
     def init_async_client(self):
         from .._redis import get_redis_async_client
 
@@ -121,7 +127,7 @@ class RedisCache(BaseCache):
         return key
 
     def set_cache(self, key, value, **kwargs):
-        ttl = kwargs.get("ttl", None)
+        ttl = self.get_ttl(**kwargs)
         print_verbose(
             f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
         )
@@ -139,15 +145,16 @@ class RedisCache(BaseCache):
     ) -> int:
         _redis_client = self.redis_client
         start_time = time.time()
+        set_ttl = self.get_ttl(ttl=ttl)
         try:
             result: int = _redis_client.incr(name=key, amount=value)  # type: ignore
 
-            if ttl is not None:
+            if set_ttl is not None:
                 # check if key already has ttl, if not -> set ttl
                 current_ttl = _redis_client.ttl(key)
                 if current_ttl == -1:
                     # Key has no expiration
-                    _redis_client.expire(key, ttl)  # type: ignore
+                    _redis_client.expire(key, set_ttl)  # type: ignore
             return result
         except Exception as e:
             ## LOGGING ##
@@ -236,7 +243,7 @@ class RedisCache(BaseCache):
 
         key = self.check_and_fix_namespace(key=key)
         async with _redis_client as redis_client:
-            ttl = kwargs.get("ttl", None)
+            ttl = self.get_ttl(**kwargs)
             print_verbose(
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
@@ -452,16 +459,17 @@ class RedisCache(BaseCache):
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
+        _used_ttl = self.get_ttl(ttl=ttl)
         try:
             async with _redis_client as redis_client:
                 result = await redis_client.incrbyfloat(name=key, amount=value)
 
-                if ttl is not None:
+                if _used_ttl is not None:
                     # check if key already has ttl, if not -> set ttl
                     current_ttl = await redis_client.ttl(key)
                     if current_ttl == -1:
                         # Key has no expiration
-                        await redis_client.expire(key, ttl)
+                        await redis_client.expire(key, _used_ttl)
 
                 ## LOGGING ##
                 end_time = time.time()

@@ -2394,3 +2394,71 @@ async def test_audio_caching(stream):
     )
 
     assert "cache_hit" in completion._hidden_params
+
+
+def test_redis_caching_default_ttl():
+    """
+    Ensure that the default redis cache TTL is 60s
+    """
+    from litellm.caching.redis_cache import RedisCache
+
+    litellm.default_redis_ttl = 120
+
+    cache_obj = RedisCache()
+    assert cache_obj.default_ttl == 120
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_redis_caching_llm_caching_ttl(sync_mode):
+    """
+    Ensure default redis cache ttl is used for a sample redis cache object
+    """
+    from litellm.caching.redis_cache import RedisCache
+
+    litellm.default_redis_ttl = 120
+    cache_obj = RedisCache()
+    assert cache_obj.default_ttl == 120
+
+    if sync_mode is False:
+        # Create an AsyncMock for the Redis client
+        mock_redis_instance = AsyncMock()
+
+        # Make sure the mock can be used as an async context manager
+        mock_redis_instance.__aenter__.return_value = mock_redis_instance
+        mock_redis_instance.__aexit__.return_value = None
+
+    ## Set cache
+    if sync_mode is True:
+        with patch.object(cache_obj.redis_client, "set") as mock_set:
+            cache_obj.set_cache(key="test", value="test")
+            mock_set.assert_called_once_with(name="test", value="test", ex=120)
+    else:
+
+        # Patch self.init_async_client to return our mock Redis client
+        with patch.object(
+            cache_obj, "init_async_client", return_value=mock_redis_instance
+        ):
+            # Call async_set_cache
+            await cache_obj.async_set_cache(key="test", value="test_value")
+
+            # Verify that the set method was called on the mock Redis instance
+            mock_redis_instance.set.assert_called_once_with(
+                name="test", value='"test_value"', ex=120
+            )
+
+    ## Increment cache
+    if sync_mode is True:
+        with patch.object(cache_obj.redis_client, "ttl") as mock_incr:
+            cache_obj.increment_cache(key="test", value=1)
+            mock_incr.assert_called_once_with("test")
+    else:
+        # Patch self.init_async_client to return our mock Redis client
+        with patch.object(
+            cache_obj, "init_async_client", return_value=mock_redis_instance
+        ):
+            # Call async_set_cache
+            await cache_obj.async_increment(key="test", value="test_value")
+
+            # Verify that the set method was called on the mock Redis instance
+            mock_redis_instance.ttl.assert_called_once_with("test")
