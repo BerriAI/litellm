@@ -2867,13 +2867,9 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = StandardLoggingMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in StandardLoggingMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
+        for k, v in metadata.items():
+            if k in StandardLoggingMetadata.__annotations__.keys():
+                clean_metadata[k] = v
 
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
