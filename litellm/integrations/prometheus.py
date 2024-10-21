@@ -97,6 +97,19 @@ class PrometheusLogger(CustomLogger):
                 buckets=LATENCY_BUCKETS,
             )
 
+            self.litellm_llm_api_time_to_first_token_metric = Histogram(
+                "litellm_llm_api_time_to_first_token_metric",
+                "Time to first token for a models LLM API call",
+                labelnames=[
+                    "model",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "team",
+                    "team_alias",
+                ],
+                buckets=LATENCY_BUCKETS,
+            )
+
             # Counter for spend
             self.litellm_spend_metric = Counter(
                 "litellm_spend_metric",
@@ -467,6 +480,22 @@ class PrometheusLogger(CustomLogger):
         total_time: timedelta = kwargs.get("end_time") - kwargs.get("start_time")
         total_time_seconds = total_time.total_seconds()
         api_call_start_time = kwargs.get("api_call_start_time", None)
+
+        completion_start_time = kwargs.get("completion_start_time", None)
+
+        if completion_start_time is not None and isinstance(
+            completion_start_time, datetime
+        ):
+            time_to_first_token_seconds = (
+                completion_start_time - api_call_start_time
+            ).total_seconds()
+            self.litellm_llm_api_time_to_first_token_metric.labels(
+                model,
+                user_api_key,
+                user_api_key_alias,
+                user_api_team,
+                user_api_team_alias,
+            ).observe(time_to_first_token_seconds)
 
         if api_call_start_time is not None and isinstance(
             api_call_start_time, datetime
