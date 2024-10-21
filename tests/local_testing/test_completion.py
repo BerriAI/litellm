@@ -4571,7 +4571,7 @@ def test_completion_response_ratelimit_headers(model, stream):
 
     if model == "azure/chatgpt-v-2":
         # Azure OpenAI header
-        assert "lm_provider-x-request-id" in additional_headers
+        assert "llm_provider-azureml-model-session" in additional_headers
     if model == "claude-3-sonnet-20240229":
         # anthropic header
         assert "llm_provider-anthropic-ratelimit-requests-reset" in additional_headers
