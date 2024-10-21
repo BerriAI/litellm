@@ -2935,21 +2935,21 @@ async def startup_event():  # noqa: PLR0915
             verbose_proxy_logger.info("Skipping writing master key hash to db")
         else:
             # add master key to db
-            asyncio.create_task(
-                generate_key_helper_fn(
-                    request_type="user",
-                    duration=None,
-                    models=[],
-                    aliases={},
-                    config={},
-                    spend=0,
-                    token=master_key,
-                    user_id=litellm_proxy_admin_name,
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    query_type="update_data",
-                    update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
-                )
+            # add 'admin' user to db. Fixes https://github.com/BerriAI/litellm/issues/6206
+            task_1 = generate_key_helper_fn(
+                request_type="user",
+                duration=None,
+                models=[],
+                aliases={},
+                config={},
+                spend=0,
+                token=master_key,
+                user_id=litellm_proxy_admin_name,
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                query_type="update_data",
+                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
             )
+            asyncio.create_task(task_1)
 
     if prisma_client is not None and litellm.max_budget > 0:
         if litellm.budget_duration is None:
@@ -8107,16 +8107,16 @@ async def login(request: Request):  # noqa: PLR0915
     ):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
-        user_id = username
+        user_id = litellm_proxy_admin_name
 
         # we want the key created to have PROXY_ADMIN_PERMISSIONS
         key_user_id = litellm_proxy_admin_name
         if (
             os.getenv("PROXY_ADMIN_ID", None) is not None
             and os.environ["PROXY_ADMIN_ID"] == user_id
-        ) or user_id == "admin":
+        ) or user_id == litellm_proxy_admin_name:
             # checks if user is admin
-            key_user_id = os.getenv("PROXY_ADMIN_ID", "default_user_id")
+            key_user_id = os.getenv("PROXY_ADMIN_ID", litellm_proxy_admin_name)
 
         # Admin is Authe'd in - generate key for the UI to access Proxy
 
@@ -8161,7 +8161,7 @@ async def login(request: Request):  # noqa: PLR0915
             {
                 "user_id": user_id,
                 "key": key,
-                "user_email": user_id,
+                "user_email": None,
                 "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
                 "login_method": "username_password",
                 "premium_user": premium_user,
