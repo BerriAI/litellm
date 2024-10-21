@@ -50,4 +50,6 @@ def _get_llm_provider_headers(response_headers: dict) -> dict:
         if "llm_provider" not in k:
             _key = "{}-{}".format("llm_provider", k)
             llm_provider_headers[_key] = v
+        else:
+            llm_provider_headers[k] = v
     return llm_provider_headers
