@@ -32,7 +32,7 @@ class BaseCache:
     async def async_get_cache(self, key, **kwargs):
         raise NotImplementedError
 
-    async def batch_cache_write(self, result, *args, **kwargs):
+    async def batch_cache_write(self, key, value, **kwargs):
         raise NotImplementedError
 
     async def disconnect(self):
