@@ -173,6 +173,26 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+def test_get_settings_request_timeout(client_no_auth):
+    """
+    When no timeout is set, it should use the litellm.request_timeout value
+    """
+    # Set a known value for litellm.request_timeout
+    import litellm
+
+    # Make a GET request to /settings
+    response = client_no_auth.get("/settings")
+
+    # Check if the request was successful
+    assert response.status_code == 200
+
+    # Parse the JSON response
+    settings = response.json()
+    print("settings", settings)
+
+    assert settings["litellm.request_timeout"] == litellm.request_timeout
+
+
 @pytest.mark.parametrize(
     "litellm_key_header_name",
     ["x-litellm-key", None],

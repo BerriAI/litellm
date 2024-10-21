@@ -21,6 +21,7 @@ general_settings:
   database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
 
 litellm_settings:
+  request_timeout: 600    # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
   set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
   json_logs: true         # Get debug logs in json format
 ```
