@@ -354,14 +354,15 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.callbacks) > 0:
             for callback in litellm.callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
-                if isinstance(callback, str):
+                if (
+                    isinstance(callback, str)
+                    and callback in litellm._known_custom_logger_compatible_callbacks
+                ):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                         callback, internal_usage_cache=None, llm_router=None
                     )
-                    if callback is not None:
-                        add_custom_logger_compatible_class_to_litellm_callbacks(
-                            callback
-                        )
+                if callback is not None and isinstance(callback, CustomLogger):
+                    add_custom_logger_compatible_class_to_litellm_callbacks(callback)
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )
@@ -407,18 +408,10 @@ def function_setup(  # noqa: PLR0915
                     callback_class = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                         callback, internal_usage_cache=None, llm_router=None  # type: ignore
                     )
-
-                    # don't double add a callback
-                    if callback_class is not None and not any(
-                        isinstance(cb, type(callback_class)) for cb in litellm.callbacks
-                    ):
-                        litellm.callbacks.append(callback_class)  # type: ignore
-                        litellm.input_callback.append(callback_class)  # type: ignore
-                        litellm.success_callback.append(callback_class)  # type: ignore
-                        litellm.failure_callback.append(callback_class)  # type: ignore
-                        litellm._async_success_callback.append(callback_class)  # type: ignore
-                        litellm._async_failure_callback.append(callback_class)  # type: ignore
-
+                    if callback_class is not None:
+                        add_custom_logger_compatible_class_to_litellm_callbacks(
+                            callback_class
+                        )
             # Pop the async items from success_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
                 litellm.success_callback.pop(index)

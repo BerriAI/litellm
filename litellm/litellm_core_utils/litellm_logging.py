@@ -2627,6 +2627,10 @@ def add_custom_logger_compatible_class_to_litellm_callbacks(callback: CustomLogg
         isinstance(cb, type(callback)) for cb in litellm._async_success_callback
     ):  # don't double add a callback
         return
+    if any(
+        isinstance(cb, type(callback)) for cb in litellm.callbacks
+    ):  # don't double add a callback
+        return
     if callback not in litellm.input_callback:
         litellm.input_callback.append(callback)
     if callback not in litellm.success_callback:
