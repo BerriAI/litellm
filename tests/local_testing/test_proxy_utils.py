@@ -368,3 +368,67 @@ def test_is_request_body_safe_model_enabled(
         error_raised = True
 
     assert expect_error == error_raised
+
+
+def test_reading_openai_org_id_from_headers():
+    from litellm.proxy.litellm_pre_call_utils import get_openai_org_id_from_headers
+
+    headers = {
+        "OpenAI-Organization": "test_org_id",
+    }
+    org_id = get_openai_org_id_from_headers(headers)
+    assert org_id == "test_org_id"
+
+
+@pytest.mark.parametrize(
+    "headers, expected_data",
+    [
+        ({"OpenAI-Organization": "test_org_id"}, {"organization": "test_org_id"}),
+        ({"openai-organization": "test_org_id"}, {"organization": "test_org_id"}),
+        ({}, {}),
+        (
+            {
+                "OpenAI-Organization": "test_org_id",
+                "Authorization": "Bearer test_token",
+            },
+            {
+                "organization": "test_org_id",
+            },
+        ),
+    ],
+)
+def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
+    import json
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_litellm_data_for_backend_llm_call,
+    )
+
+    data = add_litellm_data_for_backend_llm_call(headers)
+
+    assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
+
+
+def test_update_internal_user_params():
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+    from litellm.proxy._types import NewUserRequest
+
+    litellm.default_internal_user_params = {
+        "max_budget": 100,
+        "budget_duration": "30d",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    data = NewUserRequest(user_role="internal_user", user_email="krrish3@berri.ai")
+    data_json = data.model_dump()
+    updated_data_json = _update_internal_user_params(data_json, data)
+    assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
+    assert (
+        updated_data_json["max_budget"]
+        == litellm.default_internal_user_params["max_budget"]
+    )
+    assert (
+        updated_data_json["budget_duration"]
+        == litellm.default_internal_user_params["budget_duration"]
+    )

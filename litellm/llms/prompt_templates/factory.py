@@ -385,7 +385,9 @@ known_tokenizer_config = {
 }
 
 
-def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
+def hf_chat_template(  # noqa: PLR0915
+    model: str, messages: list, chat_template: Optional[Any] = None
+):
     # Define Jinja2 environment
     env = ImmutableSandboxedEnvironment()
 
@@ -920,6 +922,31 @@ def anthropic_messages_pt_xml(messages: list):
 # ------------------------------------------------------------------------------
 
 
+def _azure_tool_call_invoke_helper(
+    function_call_params: ChatCompletionToolCallFunctionChunk,
+) -> Optional[ChatCompletionToolCallFunctionChunk]:
+    """
+    Azure requires 'arguments' to be a string.
+    """
+    if function_call_params.get("arguments") is None:
+        function_call_params["arguments"] = ""
+    return function_call_params
+
+
+def convert_to_azure_openai_messages(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    for m in messages:
+        if m["role"] == "assistant":
+            function_call = m.get("function_call", None)
+            if function_call is not None:
+                m["function_call"] = _azure_tool_call_invoke_helper(function_call)
+    return messages
+
+
+# ------------------------------------------------------------------------------
+
+
 def infer_protocol_value(
     value: Any,
 ) -> Literal[
@@ -1314,7 +1341,7 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
-def anthropic_messages_pt(
+def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
     llm_provider: str,
@@ -1363,9 +1390,14 @@ def anthropic_messages_pt(
                 for m in user_message_types_block["content"]:
                     if m.get("type", "") == "image_url":
                         m = cast(ChatCompletionImageObject, m)
-                        image_chunk = convert_to_anthropic_image_obj(
-                            openai_image_url=m["image_url"]["url"]  # type: ignore
-                        )
+                        if isinstance(m["image_url"], str):
+                            image_chunk = convert_to_anthropic_image_obj(
+                                openai_image_url=m["image_url"]
+                            )
+                        else:
+                            image_chunk = convert_to_anthropic_image_obj(
+                                openai_image_url=m["image_url"]["url"]
+                            )
 
                         _anthropic_content_element = AnthropicMessagesImageParam(
                             type="image",
@@ -1767,7 +1799,7 @@ def convert_to_cohere_tool_invoke(tool_calls: list) -> List[ToolCallObject]:
     return cohere_tool_invoke
 
 
-def cohere_messages_pt_v2(
+def cohere_messages_pt_v2(  # noqa: PLR0915
     messages: List,
     model: str,
     llm_provider: str,
@@ -2379,7 +2411,7 @@ def _insert_assistant_continue_message(
     return messages
 
 
-def _bedrock_converse_messages_pt(
+def _bedrock_converse_messages_pt(  # noqa: PLR0915
     messages: List,
     model: str,
     llm_provider: str,

@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -10,11 +10,20 @@ class CustomGuardrail(CustomLogger):
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
+        supported_event_hooks: Optional[List[GuardrailEventHooks]] = None,
         event_hook: Optional[GuardrailEventHooks] = None,
         **kwargs,
     ):
         self.guardrail_name = guardrail_name
+        self.supported_event_hooks = supported_event_hooks
         self.event_hook: Optional[GuardrailEventHooks] = event_hook
+
+        if supported_event_hooks:
+            ## validate event_hook is in supported_event_hooks
+            if event_hook and event_hook not in supported_event_hooks:
+                raise ValueError(
+                    f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}"
+                )
         super().__init__(**kwargs)
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:

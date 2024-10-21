@@ -17,7 +17,7 @@ db = Prisma(
 )
 
 
-async def check_view_exists():
+async def check_view_exists():  # noqa: PLR0915
     """
     Checks if the LiteLLM_VerificationTokenView and MonthlyGlobalSpend exists in the user's db.
 

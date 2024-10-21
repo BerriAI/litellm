@@ -28,7 +28,8 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             _tools = _remove_additional_properties(_tools)
             # remove 'strict' from tools
             _tools = _remove_strict_from_schema(_tools)
-        non_default_params["tools"] = _tools
+        if _tools is not None:
+            non_default_params["tools"] = _tools
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )

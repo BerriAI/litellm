@@ -23,7 +23,18 @@ from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Type,
+    Union,
+    cast,
+)
 
 import dotenv
 import httpx
@@ -42,7 +53,12 @@ from litellm import (  # type: ignore
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.mock_functions import (
+    mock_embedding,
+    mock_image_generation,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.prompt_templates.common_utils import get_content_from_model_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
@@ -66,6 +82,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
+from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms import (
     aleph_alpha,
     baseten,
@@ -105,6 +122,7 @@ from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
+from .llms.prompt_templates.common_utils import get_completion_messages
 from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
@@ -140,7 +158,13 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
     VertexEmbedding,
 )
 from .llms.watsonx import IBMWatsonXAI
-from .types.llms.openai import HttpxBinaryResponseContent
+from .types.llms.openai import (
+    ChatCompletionAssistantMessage,
+    ChatCompletionAudioParam,
+    ChatCompletionModality,
+    ChatCompletionUserMessage,
+    HttpxBinaryResponseContent,
+)
 from .types.utils import (
     AdapterCompletionStreamWrapper,
     ChatCompletionMessageToolCall,
@@ -278,6 +302,8 @@ async def acompletion(
     stop=None,
     max_tokens: Optional[int] = None,
     max_completion_tokens: Optional[int] = None,
+    modalities: Optional[List[ChatCompletionModality]] = None,
+    audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -318,6 +344,8 @@ async def acompletion(
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
+        modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request. You can use `["text", "audio"]`
+        audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -357,6 +385,8 @@ async def acompletion(
         "stop": stop,
         "max_tokens": max_tokens,
         "max_completion_tokens": max_completion_tokens,
+        "modalities": modalities,
+        "audio": audio,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
         "logit_bias": logit_bias,
@@ -648,7 +678,7 @@ def mock_completion(
 
 
 @client
-def completion(  # type: ignore
+def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -661,6 +691,8 @@ def completion(  # type: ignore
     stop=None,
     max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
+    modalities: Optional[List[ChatCompletionModality]] = None,
+    audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -703,6 +735,8 @@ def completion(  # type: ignore
         stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
+        modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request.. You can use `["text", "audio"]`
+        audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
@@ -744,6 +778,15 @@ def completion(  # type: ignore
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
     headers = kwargs.get("headers", None) or extra_headers
+    ensure_alternating_roles: Optional[bool] = kwargs.get(
+        "ensure_alternating_roles", None
+    )
+    user_continue_message: Optional[ChatCompletionUserMessage] = kwargs.get(
+        "user_continue_message", None
+    )
+    assistant_continue_message: Optional[ChatCompletionAssistantMessage] = kwargs.get(
+        "assistant_continue_message", None
+    )
     if headers is None:
         headers = {}
 
@@ -780,7 +823,12 @@ def completion(  # type: ignore
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
-    messages = deepcopy(messages)
+    messages = get_completion_messages(
+        messages=messages,
+        ensure_alternating_roles=ensure_alternating_roles or False,
+        user_continue_message=user_continue_message,
+        assistant_continue_message=assistant_continue_message,
+    )
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -793,6 +841,8 @@ def completion(  # type: ignore
         "stream_options",
         "stop",
         "max_completion_tokens",
+        "modalities",
+        "audio",
         "max_tokens",
         "presence_penalty",
         "frequency_penalty",
@@ -952,6 +1002,8 @@ def completion(  # type: ignore
             stop=stop,
             max_tokens=max_tokens,
             max_completion_tokens=max_completion_tokens,
+            modalities=modalities,
+            audio=audio,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
@@ -1492,7 +1544,7 @@ def completion(  # type: ignore
 
             ## COMPLETION CALL
             try:
-                if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
+                if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
                     response = openai_o1_chat_completions.completion(
                         model=model,
                         messages=messages,
@@ -3113,7 +3165,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
 
 @client
-def embedding(
+def embedding(  # noqa: PLR0915
     model,
     input=[],
     # Optional params
@@ -3163,6 +3215,7 @@ def embedding(
     tpm = kwargs.pop("tpm", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     cooldown_time = kwargs.get("cooldown_time", None)
+    mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
     max_parallel_requests = kwargs.pop("max_parallel_requests", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
@@ -3268,6 +3321,9 @@ def embedding(
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
+
+    if mock_response is not None:
+        return mock_embedding(model=model, mock_response=mock_response)
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if input_cost_per_token is not None and output_cost_per_token is not None:
         litellm.register_model(
@@ -3884,7 +3940,7 @@ async def atext_completion(
 
 
 @client
-def text_completion(
+def text_completion(  # noqa: PLR0915
     prompt: Union[
         str, List[Union[str, List[Union[str, List[int]]]]]
     ],  # Required: The prompt(s) to generate completions for.
@@ -4051,12 +4107,12 @@ def text_completion(
                     return response["choices"][0]
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = [
+                    completed_futures = [
                         executor.submit(process_prompt, i, individual_prompt)
                         for i, individual_prompt in enumerate(prompt)
                     ]
                     for i, future in enumerate(
-                        concurrent.futures.as_completed(futures)
+                        concurrent.futures.as_completed(completed_futures)
                     ):
                         responses[i] = future.result()
                     text_completion_response.choices = responses  # type: ignore
@@ -4351,7 +4407,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 
 
 @client
-def image_generation(
+def image_generation(  # noqa: PLR0915
     prompt: str,
     model: Optional[str] = None,
     n: Optional[int] = None,
@@ -4377,6 +4433,7 @@ def image_generation(
         aimg_generation = kwargs.get("aimg_generation", False)
         litellm_call_id = kwargs.get("litellm_call_id", None)
         logger_fn = kwargs.get("logger_fn", None)
+        mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
         proxy_server_request = kwargs.get("proxy_server_request", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
@@ -4486,6 +4543,8 @@ def image_generation(
             },
             custom_llm_provider=custom_llm_provider,
         )
+        if mock_response is not None:
+            return mock_image_generation(model=model, mock_response=mock_response)
 
         if custom_llm_provider == "azure":
             # azure configs
@@ -5081,7 +5140,7 @@ def speech(
 ##### Health Endpoints #######################
 
 
-async def ahealth_check(
+async def ahealth_check(  # noqa: PLR0915
     model_params: dict,
     mode: Optional[
         Literal[
@@ -5344,73 +5403,37 @@ def stream_chunk_builder_text_completion(
     return TextCompletionResponse(**response)
 
 
-def stream_chunk_builder(
+def stream_chunk_builder(  # noqa: PLR0915
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
-        model_response = litellm.ModelResponse()
+        if chunks is None:
+            raise litellm.APIError(
+                status_code=500,
+                message="Error building chunks for logging/streaming usage calculation",
+                llm_provider="",
+                model="",
+            )
+        if not chunks:
+            return None
+
+        processor = ChunkProcessor(chunks, messages)
+        chunks = processor.chunks
+
         ### BASE-CASE ###
         if len(chunks) == 0:
             return None
-        ### SORT CHUNKS BASED ON CREATED ORDER ##
-        print_verbose("Goes into checking if chunk has hiddden created at param")
-        if chunks[0]._hidden_params.get("created_at", None):
-            print_verbose("Chunks have a created at hidden param")
-            # Sort chunks based on created_at in ascending order
-            chunks = sorted(
-                chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
-            )
-            print_verbose("Chunks sorted")
-
-        # set hidden params from chunk to model_response
-        if model_response is not None and hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = chunks[0].get("_hidden_params", {})
-        id = chunks[0]["id"]
-        object = chunks[0]["object"]
-        created = chunks[0]["created"]
-        model = chunks[0]["model"]
-        system_fingerprint = chunks[0].get("system_fingerprint", None)
-
+        ## Route to the text completion logic
         if isinstance(
             chunks[0]["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
             return stream_chunk_builder_text_completion(
                 chunks=chunks, messages=messages
             )
-        role = chunks[0]["choices"][0]["delta"]["role"]
-        finish_reason = "stop"
-        for chunk in chunks:
-            if "choices" in chunk and len(chunk["choices"]) > 0:
-                if hasattr(chunk["choices"][0], "finish_reason"):
-                    finish_reason = chunk["choices"][0].finish_reason
-                elif "finish_reason" in chunk["choices"][0]:
-                    finish_reason = chunk["choices"][0]["finish_reason"]
 
+        model = chunks[0]["model"]
         # Initialize the response dictionary
-        response = {
-            "id": id,
-            "object": object,
-            "created": created,
-            "model": model,
-            "system_fingerprint": system_fingerprint,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": role, "content": ""},
-                    "finish_reason": finish_reason,
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 0,  # Modify as needed
-                "completion_tokens": 0,  # Modify as needed
-                "total_tokens": 0,  # Modify as needed
-            },
-        }
-
-        # Extract the "content" strings from the nested dictionaries within "choices"
-        content_list = []
-        combined_content = ""
-        combined_arguments = ""
+        response = processor.build_base_response(chunks)
 
         tool_call_chunks = [
             chunk
@@ -5421,75 +5444,10 @@ def stream_chunk_builder(
         ]
 
         if len(tool_call_chunks) > 0:
-            argument_list: List = []
-            delta = tool_call_chunks[0]["choices"][0]["delta"]
-            message = response["choices"][0]["message"]
-            message["tool_calls"] = []
-            id = None
-            name = None
-            type = None
-            tool_calls_list = []
-            prev_index = None
-            prev_name = None
-            prev_id = None
-            curr_id = None
-            curr_index = 0
-            for chunk in tool_call_chunks:
-                choices = chunk["choices"]
-                for choice in choices:
-                    delta = choice.get("delta", {})
-                    tool_calls = delta.get("tool_calls", "")
-                    # Check if a tool call is present
-                    if tool_calls and tool_calls[0].function is not None:
-                        if tool_calls[0].id:
-                            id = tool_calls[0].id
-                            curr_id = id
-                            if prev_id is None:
-                                prev_id = curr_id
-                        if tool_calls[0].index:
-                            curr_index = tool_calls[0].index
-                        if tool_calls[0].function.arguments:
-                            # Now, tool_calls is expected to be a dictionary
-                            arguments = tool_calls[0].function.arguments
-                            argument_list.append(arguments)
-                        if tool_calls[0].function.name:
-                            name = tool_calls[0].function.name
-                        if tool_calls[0].type:
-                            type = tool_calls[0].type
-                if prev_index is None:
-                    prev_index = curr_index
-                if prev_name is None:
-                    prev_name = name
-                if curr_index != prev_index:  # new tool call
-                    combined_arguments = "".join(argument_list)
-                    tool_calls_list.append(
-                        {
-                            "id": prev_id,
-                            "function": {
-                                "arguments": combined_arguments,
-                                "name": prev_name,
-                            },
-                            "type": type,
-                        }
-                    )
-                    argument_list = []  # reset
-                    prev_index = curr_index
-                    prev_id = curr_id
-                    prev_name = name
-
-            combined_arguments = (
-                "".join(argument_list) or "{}"
-            )  # base case, return empty dict
-
-            tool_calls_list.append(
-                {
-                    "id": id,
-                    "function": {"arguments": combined_arguments, "name": name},
-                    "type": type,
-                }
-            )
-            response["choices"][0]["message"]["content"] = None
-            response["choices"][0]["message"]["tool_calls"] = tool_calls_list
+            tool_calls_list = processor.get_combined_tool_content(tool_call_chunks)
+            _choice = cast(Choices, response.choices[0])
+            _choice.message.content = None
+            _choice.message.tool_calls = tool_calls_list
 
         function_call_chunks = [
             chunk
@@ -5500,32 +5458,11 @@ def stream_chunk_builder(
         ]
 
         if len(function_call_chunks) > 0:
-            argument_list = []
-            delta = function_call_chunks[0]["choices"][0]["delta"]
-            function_call = delta.get("function_call", "")
-            function_call_name = function_call.name
-
-            message = response["choices"][0]["message"]
-            message["function_call"] = {}
-            message["function_call"]["name"] = function_call_name
-
-            for chunk in function_call_chunks:
-                choices = chunk["choices"]
-                for choice in choices:
-                    delta = choice.get("delta", {})
-                    function_call = delta.get("function_call", "")
-
-                    # Check if a function call is present
-                    if function_call:
-                        # Now, function_call is expected to be a dictionary
-                        arguments = function_call.arguments
-                        argument_list.append(arguments)
-
-            combined_arguments = "".join(argument_list)
-            response["choices"][0]["message"]["content"] = None
-            response["choices"][0]["message"]["function_call"][
-                "arguments"
-            ] = combined_arguments
+            _choice = cast(Choices, response.choices[0])
+            _choice.message.content = None
+            _choice.message.function_call = (
+                processor.get_combined_function_call_content(function_call_chunks)
+            )
 
         content_chunks = [
             chunk
@@ -5536,109 +5473,34 @@ def stream_chunk_builder(
         ]
 
         if len(content_chunks) > 0:
-            for chunk in chunks:
-                choices = chunk["choices"]
-                for choice in choices:
-                    delta = choice.get("delta", {})
-                    content = delta.get("content", "")
-                    if content is None:
-                        continue  # openai v1.0.0 sets content = None for chunks
-                    content_list.append(content)
-
-            # Combine the "content" strings into a single string || combine the 'function' strings into a single string
-            combined_content = "".join(content_list)
-
-            # Update the "content" field within the response dictionary
-            response["choices"][0]["message"]["content"] = combined_content
-
-        completion_output = ""
-        if len(combined_content) > 0:
-            completion_output += combined_content
-        if len(combined_arguments) > 0:
-            completion_output += combined_arguments
-
-        # # Update usage information if needed
-        prompt_tokens = 0
-        completion_tokens = 0
-        ## anthropic prompt caching information ##
-        cache_creation_input_tokens: Optional[int] = None
-        cache_read_input_tokens: Optional[int] = None
-        completion_tokens_details: Optional[CompletionTokensDetails] = None
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
-        for chunk in chunks:
-            usage_chunk: Optional[Usage] = None
-            if "usage" in chunk:
-                usage_chunk = chunk.usage
-            elif hasattr(chunk, "_hidden_params") and "usage" in chunk._hidden_params:
-                usage_chunk = chunk._hidden_params["usage"]
-            if usage_chunk is not None:
-                if "prompt_tokens" in usage_chunk:
-                    prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
-                if "completion_tokens" in usage_chunk:
-                    completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
-                if "cache_creation_input_tokens" in usage_chunk:
-                    cache_creation_input_tokens = usage_chunk.get(
-                        "cache_creation_input_tokens"
-                    )
-                if "cache_read_input_tokens" in usage_chunk:
-                    cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
-                if hasattr(usage_chunk, "completion_tokens_details"):
-                    if isinstance(usage_chunk.completion_tokens_details, dict):
-                        completion_tokens_details = CompletionTokensDetails(
-                            **usage_chunk.completion_tokens_details
-                        )
-                    elif isinstance(
-                        usage_chunk.completion_tokens_details, CompletionTokensDetails
-                    ):
-                        completion_tokens_details = (
-                            usage_chunk.completion_tokens_details
-                        )
-                if hasattr(usage_chunk, "prompt_tokens_details"):
-                    if isinstance(usage_chunk.prompt_tokens_details, dict):
-                        prompt_tokens_details = PromptTokensDetails(
-                            **usage_chunk.prompt_tokens_details
-                        )
-                    elif isinstance(
-                        usage_chunk.prompt_tokens_details, PromptTokensDetails
-                    ):
-                        prompt_tokens_details = usage_chunk.prompt_tokens_details
-
-        try:
-            response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
-                model=model, messages=messages
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
             )
-        except (
-            Exception
-        ):  # don't allow this failing to block a complete streaming response from being returned
-            print_verbose("token_counter failed, assuming prompt tokens is 0")
-            response["usage"]["prompt_tokens"] = 0
-        response["usage"]["completion_tokens"] = completion_tokens or token_counter(
+
+        audio_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "audio" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["audio"] is not None
+        ]
+
+        if len(audio_chunks) > 0:
+            _choice = cast(Choices, response.choices[0])
+            _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
+
+        completion_output = get_content_from_model_response(response)
+
+        usage = processor.calculate_usage(
+            chunks=chunks,
             model=model,
-            text=completion_output,
-            count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
-        )
-        response["usage"]["total_tokens"] = (
-            response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
+            completion_output=completion_output,
+            messages=messages,
         )
 
-        if cache_creation_input_tokens is not None:
-            response["usage"][
-                "cache_creation_input_tokens"
-            ] = cache_creation_input_tokens
-        if cache_read_input_tokens is not None:
-            response["usage"]["cache_read_input_tokens"] = cache_read_input_tokens
+        setattr(response, "usage", usage)
 
-        if completion_tokens_details is not None:
-            response["usage"]["completion_tokens_details"] = completion_tokens_details
-        if prompt_tokens_details is not None:
-            response["usage"]["prompt_tokens_details"] = prompt_tokens_details
-
-        return convert_to_model_response_object(
-            response_object=response,
-            model_response_object=model_response,
-            start_time=start_time,
-            end_time=end_time,
-        )  # type: ignore
+        return response
     except Exception as e:
         verbose_logger.exception(
             "litellm.main.py::stream_chunk_builder() - Exception occurred - {}".format(

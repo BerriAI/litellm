@@ -811,6 +811,8 @@ general_settings:
 | oauth2_config_mappings | Dict[str, str] | Define the OAuth2 config mappings | 
 | pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+| forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
+
 ### router_settings - Reference
 
 ```yaml
@@ -859,6 +861,7 @@ router_settings:
 | allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
 | allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
 
+
 ### environment variables - Reference
 
 | Name | Description |
@@ -870,6 +873,11 @@ router_settings:
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
+| ARGILLA_BATCH_SIZE | Batch size for Argilla logging
+| ARGILLA_API_KEY | API key for Argilla platform
+| ARGILLA_SAMPLING_RATE | Sampling rate for Argilla logging
+| ARGILLA_DATASET_NAME | Dataset name for Argilla logging
+| ARGILLA_BASE_URL | Base URL for Argilla service
 | ATHINA_API_KEY | API key for Athina service
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services

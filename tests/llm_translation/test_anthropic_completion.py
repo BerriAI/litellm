@@ -34,6 +34,9 @@ from litellm import (
 from litellm.adapters.anthropic_adapter import anthropic_adapter
 from litellm.types.llms.anthropic import AnthropicResponse
 
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
+from httpx import Headers
+
 
 def test_anthropic_completion_messages_translation():
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
@@ -366,41 +369,6 @@ def test_anthropic_tool_streaming():
             assert tool_use["index"] == correct_tool_index
 
 
-@pytest.mark.asyncio
-async def test_anthropic_router_completion_e2e():
-    litellm.set_verbose = True
-
-    litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "claude-3-5-sonnet-20240620",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "mock_response": "hi this is macintosh.",
-                },
-            }
-        ]
-    )
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-    response = await router.aadapter_completion(
-        model="claude-3-5-sonnet-20240620",
-        messages=messages,
-        adapter_id="anthropic",
-        mock_response="This is a fake call",
-    )
-
-    print("Response: {}".format(response))
-
-    assert response is not None
-
-    assert isinstance(response, AnthropicResponse)
-
-    assert response.model == "gpt-3.5-turbo"
-
-
 def test_anthropic_tool_calling_translation():
     kwargs = {
         "model": "claude-3-5-sonnet-20240620",
@@ -492,3 +460,70 @@ def test_anthropic_tool_calling_translation():
 
     assert len(translated_params["messages"]) > 0
     assert translated_params["messages"][0]["role"] == "user"
+
+
+def test_process_anthropic_headers_empty():
+    result = process_anthropic_headers({})
+    assert result == {}, "Expected empty dictionary for no input"
+
+
+def test_process_anthropic_headers_with_all_headers():
+    input_headers = Headers(
+        {
+            "anthropic-ratelimit-requests-limit": "100",
+            "anthropic-ratelimit-requests-remaining": "90",
+            "anthropic-ratelimit-tokens-limit": "10000",
+            "anthropic-ratelimit-tokens-remaining": "9000",
+            "other-header": "value",
+        }
+    )
+
+    expected_output = {
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "90",
+        "x-ratelimit-limit-tokens": "10000",
+        "x-ratelimit-remaining-tokens": "9000",
+        "llm_provider-anthropic-ratelimit-requests-limit": "100",
+        "llm_provider-anthropic-ratelimit-requests-remaining": "90",
+        "llm_provider-anthropic-ratelimit-tokens-limit": "10000",
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "9000",
+        "llm_provider-other-header": "value",
+    }
+
+    result = process_anthropic_headers(input_headers)
+    assert result == expected_output, "Unexpected output for all Anthropic headers"
+
+
+def test_process_anthropic_headers_with_partial_headers():
+    input_headers = Headers(
+        {
+            "anthropic-ratelimit-requests-limit": "100",
+            "anthropic-ratelimit-tokens-remaining": "9000",
+            "other-header": "value",
+        }
+    )
+
+    expected_output = {
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-tokens": "9000",
+        "llm_provider-anthropic-ratelimit-requests-limit": "100",
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "9000",
+        "llm_provider-other-header": "value",
+    }
+
+    result = process_anthropic_headers(input_headers)
+    assert result == expected_output, "Unexpected output for partial Anthropic headers"
+
+
+def test_process_anthropic_headers_with_no_matching_headers():
+    input_headers = Headers(
+        {"unrelated-header-1": "value1", "unrelated-header-2": "value2"}
+    )
+
+    expected_output = {
+        "llm_provider-unrelated-header-1": "value1",
+        "llm_provider-unrelated-header-2": "value2",
+    }
+
+    result = process_anthropic_headers(input_headers)
+    assert result == expected_output, "Unexpected output for non-matching headers"

@@ -163,10 +163,11 @@ class AsyncHTTPHandler:
         try:
             if timeout is None:
                 timeout = self.timeout
+
             req = self.client.build_request(
                 "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
             )
-            response = await self.client.send(req, stream=stream)
+            response = await self.client.send(req)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):

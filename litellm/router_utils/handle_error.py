@@ -19,7 +19,8 @@ async def send_llm_exception_alert(
     original_exception,
 ):
     """
-    Sends a Slack / MS Teams alert for the LLM API call failure.
+    Only runs if router.slack_alerting_logger is set
+    Sends a Slack / MS Teams alert for the LLM API call failure. Only if router.slack_alerting_logger is set.
 
     Parameters:
         litellm_router_instance (_Router): The LitellmRouter instance.

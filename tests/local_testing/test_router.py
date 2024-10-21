@@ -1050,7 +1050,7 @@ def test_filter_invalid_params_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-@pytest.mark.parametrize("allowed_model_region", ["eu", None])
+@pytest.mark.parametrize("allowed_model_region", ["eu", None, "us"])
 def test_router_region_pre_call_check(allowed_model_region):
     """
     If region based routing set
@@ -1065,7 +1065,7 @@ def test_router_region_pre_call_check(allowed_model_region):
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
                 "base_model": "azure/gpt-35-turbo",
-                "region_name": "eu",
+                "region_name": allowed_model_region,
             },
             "model_info": {"id": "1"},
         },
@@ -1091,7 +1091,9 @@ def test_router_region_pre_call_check(allowed_model_region):
     if allowed_model_region is None:
         assert len(_healthy_deployments) == 2
     else:
-        assert len(_healthy_deployments) == 1, "No models selected as healthy"
+        assert len(_healthy_deployments) == 1, "{} models selected as healthy".format(
+            len(_healthy_deployments)
+        )
         assert (
             _healthy_deployments[0]["model_info"]["id"] == "1"
         ), "Incorrect model id picked. Got id={}, expected id=1".format(
@@ -1310,19 +1312,38 @@ def test_aembedding_on_router():
         router = Router(model_list=model_list)
 
         async def embedding_call():
+            ## Test 1: user facing function
             response = await router.aembedding(
                 model="text-embedding-ada-002",
                 input=["good morning from litellm", "this is another item"],
             )
             print(response)
 
+            ## Test 2: underlying function
+            response = await router._aembedding(
+                model="text-embedding-ada-002",
+                input=["good morning from litellm 2"],
+            )
+            print(response)
+            router.reset()
+
         asyncio.run(embedding_call())
 
         print("\n Making sync Embedding call\n")
+        ## Test 1: user facing function
         response = router.embedding(
             model="text-embedding-ada-002",
             input=["good morning from litellm 2"],
         )
+        print(response)
+        router.reset()
+
+        ## Test 2: underlying function
+        response = router._embedding(
+            model="text-embedding-ada-002",
+            input=["good morning from litellm 2"],
+        )
+        print(response)
         router.reset()
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
@@ -1843,7 +1864,13 @@ async def test_router_amoderation():
     ]
 
     router = Router(model_list=model_list)
+    ## Test 1: user facing function
     result = await router.amoderation(
+        model="openai-moderations", input="this is valid good text"
+    )
+
+    ## Test 2: underlying function
+    result = await router._amoderation(
         model="openai-moderations", input="this is valid good text"
     )
 
@@ -2542,6 +2569,15 @@ async def test_router_batch_endpoints(provider):
     )
     print("Response from creating file=", file_obj)
 
+    ## TEST 2 - test underlying create_file function
+    file_obj = await router._acreate_file(
+        model="my-custom-name",
+        file=open(file_path, "rb"),
+        purpose="batch",
+        custom_llm_provider=provider,
+    )
+    print("Response from creating file=", file_obj)
+
     await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
     assert (
@@ -2549,6 +2585,15 @@ async def test_router_batch_endpoints(provider):
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
     create_batch_response = await router.acreate_batch(
+        model="my-custom-name",
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider=provider,
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    ## TEST 2 - test underlying create_batch function
+    create_batch_response = await router._acreate_batch(
         model="my-custom-name",
         completion_window="24h",
         endpoint="/v1/chat/completions",

@@ -974,7 +974,7 @@ async def test_redis_cache_acompletion_stream():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
@@ -1067,7 +1067,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
             response_1_content += chunk.choices[0].delta.content or ""
         print(response_1_content)
 
-        time.sleep(0.5)
+        await asyncio.sleep(1)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
         response2 = await litellm.acompletion(
@@ -1082,8 +1082,8 @@ async def test_redis_cache_acompletion_stream_bedrock():
             response_2_content += chunk.choices[0].delta.content or ""
         print(response_2_content)
 
-        print("\nresponse 1", response_1_content)
-        print("\nresponse 2", response_2_content)
+        print("\nfinal response 1", response_1_content)
+        print("\nfinal response 2", response_2_content)
         assert (
             response_1_content == response_2_content
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
@@ -2291,3 +2291,106 @@ async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hi
     assert response.results is not None
 
     assert_response_shape(response, custom_llm_provider="cohere")
+
+
+def test_basic_caching_import():
+    from litellm.caching import Cache
+
+    assert Cache is not None
+    print("Cache imported successfully")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio()
+async def test_caching_kwargs_input(sync_mode):
+    from litellm import acompletion
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.types.utils import (
+        Choices,
+        EmbeddingResponse,
+        Message,
+        ModelResponse,
+        Usage,
+        CompletionTokensDetails,
+        PromptTokensDetails,
+    )
+    from datetime import datetime
+
+    llm_caching_handler = LLMCachingHandler(
+        original_function=acompletion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    input = {
+        "result": ModelResponse(
+            id="chatcmpl-AJ119H5XsDnYiZPp5axJ5d7niwqeR",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Hello! I'm just a computer program, so I don't have feelings, but I'm here to assist you. How can I help you today?",
+                        role="assistant",
+                        tool_calls=None,
+                        function_call=None,
+                    ),
+                )
+            ],
+            created=1729095507,
+            model="gpt-3.5-turbo-0125",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(
+                completion_tokens=31,
+                prompt_tokens=16,
+                total_tokens=47,
+                completion_tokens_details=CompletionTokensDetails(
+                    audio_tokens=None, reasoning_tokens=0
+                ),
+                prompt_tokens_details=PromptTokensDetails(
+                    audio_tokens=None, cached_tokens=0
+                ),
+            ),
+            service_tier=None,
+        ),
+        "kwargs": {
+            "messages": [{"role": "user", "content": "42HHey, how's it going?"}],
+            "caching": True,
+            "litellm_call_id": "fae2aa4f-9f75-4f11-8c9c-63ab8d9fae26",
+            "preset_cache_key": "2f69f5640d5e0f25315d0e132f1278bb643554d14565d2c61d61564b10ade90f",
+        },
+        "args": ("gpt-3.5-turbo",),
+    }
+    if sync_mode is True:
+        llm_caching_handler.sync_set_cache(**input)
+    else:
+        input["original_function"] = acompletion
+        await llm_caching_handler.async_set_cache(**input)
+
+
+@pytest.mark.skip(reason="audio caching not supported yet")
+@pytest.mark.parametrize("stream", [False])  # True,
+@pytest.mark.asyncio()
+async def test_audio_caching(stream):
+    litellm.cache = Cache(type="local")
+
+    ## CALL 1 - no cache hit
+    completion = await litellm.acompletion(
+        model="gpt-4o-audio-preview",
+        modalities=["text", "audio"],
+        audio={"voice": "alloy", "format": "pcm16"},
+        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+        stream=stream,
+    )
+
+    assert "cache_hit" not in completion._hidden_params
+
+    ## CALL 2 - cache hit
+    completion = await litellm.acompletion(
+        model="gpt-4o-audio-preview",
+        modalities=["text", "audio"],
+        audio={"voice": "alloy", "format": "pcm16"},
+        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+        stream=stream,
+    )
+
+    assert "cache_hit" in completion._hidden_params

@@ -48,7 +48,7 @@ def should_initialize_sync_client(
     return True
 
 
-def set_client(litellm_router_instance: LitellmRouter, model: dict):
+def set_client(litellm_router_instance: LitellmRouter, model: dict):  # noqa: PLR0915
     """
     - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
     - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994

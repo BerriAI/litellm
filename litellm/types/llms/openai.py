@@ -19,6 +19,8 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
+from openai.types.chat.chat_completion_modality import ChatCompletionModality
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
@@ -293,6 +295,13 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+class ChatCompletionAudioDelta(TypedDict, total=False):
+    data: str
+    transcript: str
+    expires_at: int
+    id: str
+
+
 class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
@@ -480,8 +489,13 @@ class ChatCompletionDeltaChunk(TypedDict, total=False):
     role: str
 
 
+ChatCompletionAssistantContentValue = (
+    str  # keep as var, used in stream_chunk_builder as well
+)
+
+
 class ChatCompletionResponseMessage(TypedDict, total=False):
-    content: Optional[str]
+    content: Optional[ChatCompletionAssistantContentValue]
     tool_calls: List[ChatCompletionToolCallChunk]
     role: Literal["assistant"]
     function_call: ChatCompletionToolCallFunctionChunk

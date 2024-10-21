@@ -303,10 +303,25 @@ class OpenAIConfig:
         }
 
     def get_supported_openai_params(self, model: str) -> list:
-        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
-            return litellm.OpenAIO1Config().get_supported_openai_params(model=model)
+        """
+        This function returns the list of supported openai parameters for a given OpenAI Model
+
+        - If O1 model, returns O1 supported params
+        - If gpt-audio model, returns gpt-audio supported params
+        - Else, returns gpt supported params
+
+        Args:
+            model (str): OpenAI model
+
+        Returns:
+            list: List of supported openai parameters
+        """
+        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+            return litellm.openAIO1Config.get_supported_openai_params(model=model)
+        elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
+            return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
-            return litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
+            return litellm.openAIGPTConfig.get_supported_openai_params(model=model)
 
     def _map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
@@ -325,14 +340,22 @@ class OpenAIConfig:
         drop_params: bool,
     ) -> dict:
         """ """
-        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
-            return litellm.OpenAIO1Config().map_openai_params(
+        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+            return litellm.openAIO1Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
             )
-        return litellm.OpenAIGPTConfig().map_openai_params(
+        elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
+            return litellm.openAIGPTAudioConfig.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+
+        return litellm.openAIGPTConfig.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -590,6 +613,7 @@ class OpenAIChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        raw_response = None
         try:
             raw_response = openai_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -602,9 +626,16 @@ class OpenAIChatCompletion(BaseLLM):
             response = raw_response.parse()
             return headers, response
         except Exception as e:
-            raise e
+            if raw_response is not None:
+                raise Exception(
+                    "error - {}, Received response - {}, Type of response - {}".format(
+                        e, raw_response, type(raw_response)
+                    )
+                )
+            else:
+                raise e
 
-    def completion(  # type: ignore
+    def completion(  # type: ignore # noqa: PLR0915
         self,
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],
@@ -658,10 +689,10 @@ class OpenAIChatCompletion(BaseLLM):
                         custom_llm_provider=custom_llm_provider,
                     )
             if (
-                litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model)
+                litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
                 and messages is not None
             ):
-                messages = litellm.OpenAIO1Config().o1_prompt_factory(
+                messages = litellm.openAIO1Config.o1_prompt_factory(
                     messages=messages,
                 )
 

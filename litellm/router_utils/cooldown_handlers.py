@@ -92,7 +92,13 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
-    if litellm_router_instance.allowed_fails_policy is None:
+    if (
+        litellm_router_instance.allowed_fails_policy is None
+        and _is_allowed_fails_set_on_router(
+            litellm_router_instance=litellm_router_instance
+        )
+        is False
+    ):
         num_successes_this_minute = get_deployment_successes_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )
@@ -148,13 +154,17 @@ def _set_cooldown_deployments(
     exception_status: Union[str, int],
     deployment: Optional[str] = None,
     time_to_cooldown: Optional[float] = None,
-):
+) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
 
     or
 
     the exception is not one that should be immediately retried (e.g. 401)
+
+    Returns:
+    - True if the deployment should be put in cooldown
+    - False if the deployment should not be put in cooldown
     """
     if (
         _should_run_cooldown_logic(
@@ -163,7 +173,7 @@ def _set_cooldown_deployments(
         is False
         or deployment is None
     ):
-        return
+        return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
 
@@ -191,6 +201,8 @@ def _set_cooldown_deployments(
                 cooldown_time=cooldown_time,
             )
         )
+        return True
+    return False
 
 
 async def _async_get_cooldown_deployments(
@@ -294,6 +306,23 @@ def should_cooldown_based_on_allowed_fails_policy(
             key=deployment, value=updated_fails, ttl=cooldown_time
         )
 
+    return False
+
+
+def _is_allowed_fails_set_on_router(
+    litellm_router_instance: LitellmRouter,
+) -> bool:
+    """
+    Check if Router.allowed_fails is set or is Non-default Value
+
+    Returns:
+    - True if Router.allowed_fails is set or is Non-default Value
+    - False if Router.allowed_fails is None or is Default Value
+    """
+    if litellm_router_instance.allowed_fails is None:
+        return False
+    if litellm_router_instance.allowed_fails != litellm.allowed_fails:
+        return True
     return False
 
 

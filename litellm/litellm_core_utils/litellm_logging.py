@@ -59,6 +59,7 @@ from litellm.utils import (
 )
 
 from ..integrations.aispend import AISpendLogger
+from ..integrations.argilla import ArgillaLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -86,6 +87,7 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
+from .logging_utils import _assemble_complete_response_from_streaming_chunks
 
 try:
     from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -118,6 +120,7 @@ lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
+s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
 greenscaleLogger = None
@@ -425,7 +428,7 @@ class Logging:
         ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -865,7 +868,7 @@ class Logging:
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(
+    def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
@@ -878,32 +881,24 @@ class Logging:
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
+
             ## BUILD COMPLETE STREAMED RESPONSE
-            complete_streaming_response = None
+            complete_streaming_response: Optional[
+                Union[ModelResponse, TextCompletionResponse]
+            ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
-            if self.stream and isinstance(result, ModelResponse):
-                if (
-                    result.choices[0].finish_reason is not None
-                ):  # if it's the last chunk
-                    self.sync_streaming_chunks.append(result)
-                    # print_verbose(f"final set of received chunks: {self.sync_streaming_chunks}")
-                    try:
-                        complete_streaming_response = litellm.stream_chunk_builder(
-                            self.sync_streaming_chunks,
-                            messages=self.model_call_details.get("messages", None),
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    except Exception as e:
-                        verbose_logger.exception(
-                            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while building complete streaming response in success logging {}".format(
-                                str(e)
-                            )
-                        )
-                        complete_streaming_response = None
-                else:
-                    self.sync_streaming_chunks.append(result)
+            if self.stream:
+                complete_streaming_response: Optional[
+                    Union[ModelResponse, TextCompletionResponse]
+                ] = _assemble_complete_response_from_streaming_chunks(
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    request_kwargs=self.model_call_details,
+                    streaming_chunks=self.sync_streaming_chunks,
+                    is_async=False,
+                )
             _caching_complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = None
@@ -944,19 +939,6 @@ class Logging:
                         callbacks.append(callback)
             else:
                 callbacks = litellm.success_callback
-
-            ## STREAMING CACHING ##
-            if "cache" in callbacks and litellm.cache is not None:
-                # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                print_verbose("success_callback: reaches cache for logging!")
-                kwargs = self.model_call_details
-                if self.stream and _caching_complete_streaming_response is not None:
-                    print_verbose(
-                        "success_callback: reaches cache for logging, there is a complete_streaming_response. Adding to cache"
-                    )
-                    result = _caching_complete_streaming_response
-                    # only add to cache once we have a complete streaming response
-                    litellm.cache.add_cache(result, **kwargs)
 
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
@@ -1348,6 +1330,36 @@ class Logging:
                             user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
+                    if callback == "s3":
+                        global s3Logger
+                        if s3Logger is None:
+                            s3Logger = S3Logger()
+                        if self.stream:
+                            if "complete_streaming_response" in self.model_call_details:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - Completed Stream Response"
+                                )
+                                s3Logger.log_event(
+                                    kwargs=self.model_call_details,
+                                    response_obj=self.model_call_details[
+                                        "complete_streaming_response"
+                                    ],
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    print_verbose=print_verbose,
+                                )
+                            else:
+                                print_verbose(
+                                    "S3Logger Logger: Got Stream Event - No complete stream response as yet"
+                                )
+                        else:
+                            s3Logger.log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                            )
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -1482,7 +1494,7 @@ class Logging:
                 ),
             )
 
-    async def async_success_handler(
+    async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -1495,29 +1507,23 @@ class Logging:
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
         ## BUILD COMPLETE STREAMED RESPONSE
-        complete_streaming_response = None
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
-        if self.stream:
-            if result.choices[0].finish_reason is not None:  # if it's the last chunk
-                self.streaming_chunks.append(result)
-                # verbose_logger.debug(f"final set of received chunks: {self.streaming_chunks}")
-                try:
-                    complete_streaming_response = litellm.stream_chunk_builder(
-                        self.streaming_chunks,
-                        messages=self.model_call_details.get("messages", None),
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(
-                        "Error occurred building stream chunk in success logging: {}".format(
-                            str(e)
-                        )
-                    )
-                    complete_streaming_response = None
-            else:
-                self.streaming_chunks.append(result)
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None
+        if self.stream is True:
+            complete_streaming_response: Optional[
+                Union[ModelResponse, TextCompletionResponse]
+            ] = _assemble_complete_response_from_streaming_chunks(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                request_kwargs=self.model_call_details,
+                streaming_chunks=self.streaming_chunks,
+                is_async=True,
+            )
+
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
 
@@ -1827,7 +1833,7 @@ class Logging:
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(
+    def failure_handler(  # noqa: PLR0915
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -2185,11 +2191,11 @@ class Logging:
         return None
 
 
-def set_callbacks(callback_list, function_id=None):
+def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2263,6 +2269,8 @@ def set_callbacks(callback_list, function_id=None):
                 dataDogLogger = DataDogLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
+            elif callback == "s3":
+                s3Logger = S3Logger()
             elif callback == "wandb":
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "logfire":
@@ -2293,7 +2301,7 @@ def set_callbacks(callback_list, function_id=None):
         raise e
 
 
-def _init_custom_logger_compatible_class(
+def _init_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -2332,6 +2340,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback  # type: ignore
+
+        _argilla_logger = ArgillaLogger()
+        _in_memory_loggers.append(_argilla_logger)
+        return _argilla_logger  # type: ignore
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2356,14 +2372,6 @@ def _init_custom_logger_compatible_class(
         _datadog_logger = DataDogLogger()
         _in_memory_loggers.append(_datadog_logger)
         return _datadog_logger  # type: ignore
-    elif logging_integration == "s3":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, S3Logger):
-                return callback  # type: ignore
-
-        _s3_logger = S3Logger()
-        _in_memory_loggers.append(_s3_logger)
-        return _s3_logger  # type: ignore
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
@@ -2522,6 +2530,10 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
                 return callback
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2529,10 +2541,6 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "prometheus":
         for callback in _in_memory_loggers:
             if isinstance(callback, PrometheusLogger):
-                return callback
-    elif logging_integration == "s3":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, S3Logger):
                 return callback
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
@@ -2621,7 +2629,7 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
-def get_standard_logging_object_payload(
+def get_standard_logging_object_payload(  # noqa: PLR0915
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,

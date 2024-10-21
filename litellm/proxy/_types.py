@@ -335,6 +335,31 @@ class LiteLLMRoutes(enum.Enum):
         "/metrics",
     ]
 
+    ui_routes = [
+        "/sso",
+        "/sso/get/ui_settings",
+        "/login",
+        "/key/generate",
+        "/key/update",
+        "/key/info",
+        "/key/delete",
+        "/config",
+        "/spend",
+        "/user",
+        "/model/info",
+        "/v2/model/info",
+        "/v2/key/info",
+        "/models",
+        "/v1/models",
+        "/global/spend",
+        "/global/spend/logs",
+        "/global/spend/keys",
+        "/global/spend/models",
+        "/global/predict/spend/logs",
+        "/global/activity",
+        "/health/services",
+    ] + info_routes
+
     internal_user_routes = (
         [
             "/key/generate",
@@ -767,6 +792,9 @@ class DeleteUserRequest(LiteLLMBase):
     user_ids: List[str]  # required
 
 
+AllowedModelRegion = Literal["eu", "us"]
+
+
 class NewCustomerRequest(LiteLLMBase):
     """
     Create a new customer, allocate a budget to them
@@ -777,7 +805,7 @@ class NewCustomerRequest(LiteLLMBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[Literal["eu"]] = (
+    allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
     default_model: Optional[str] = (
@@ -804,7 +832,7 @@ class UpdateCustomerRequest(LiteLLMBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[Literal["eu"]] = (
+    allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
     default_model: Optional[str] = (
@@ -1384,7 +1412,7 @@ class UserAPIKeyAuth(
 
     api_key: Optional[str] = None
     user_role: Optional[LitellmUserRoles] = None
-    allowed_model_region: Optional[Literal["eu"]] = None
+    allowed_model_region: Optional[AllowedModelRegion] = None
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
     tpm_limit_per_model: Optional[Dict[str, int]] = None
@@ -1466,7 +1494,7 @@ class LiteLLM_EndUserTable(LiteLLMBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
-    allowed_model_region: Optional[Literal["eu"]] = None
+    allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
@@ -2019,3 +2047,27 @@ class LoggingCallbackStatus(TypedDict, total=False):
 class KeyHealthResponse(TypedDict, total=False):
     key: Literal["healthy", "unhealthy"]
     logging_callbacks: Optional[LoggingCallbackStatus]
+
+
+class SpecialHeaders(enum.Enum):
+    """Used by user_api_key_auth.py to get litellm key"""
+
+    openai_authorization = "Authorization"
+    azure_authorization = "API-Key"
+    anthropic_authorization = "x-api-key"
+
+
+class LitellmDataForBackendLLMCall(TypedDict, total=False):
+    headers: dict
+    organization: str
+
+
+class JWTKeyItem(TypedDict, total=False):
+    kid: str
+
+
+JWKKeyValue = Union[List[JWTKeyItem], JWTKeyItem]
+
+
+class JWKUrlResponse(TypedDict, total=False):
+    keys: JWKKeyValue

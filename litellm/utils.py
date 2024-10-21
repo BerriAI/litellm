@@ -70,6 +70,9 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
 )
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
+from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+    get_response_headers,
+)
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -79,6 +82,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantToolCall,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
@@ -89,11 +93,13 @@ from litellm.types.utils import (
     OPENAI_RESPONSE_HEADERS,
     CallTypes,
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
     Delta,
     Embedding,
     EmbeddingResponse,
+    Function,
     ImageResponse,
     Message,
     ModelInfo,
@@ -172,7 +178,7 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import KeyManagementSystem
+from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
@@ -205,6 +211,7 @@ lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
 dynamoLogger = None
+s3Logger = None
 genericAPILogger = None
 clickHouseLogger = None
 greenscaleLogger = None
@@ -324,7 +331,7 @@ def custom_llm_setup():
             litellm._custom_providers.append(custom_llm["provider"])
 
 
-def function_setup(
+def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
@@ -601,7 +608,7 @@ def function_setup(
         raise e
 
 
-def client(original_function):
+def client(original_function):  # noqa: PLR0915
     global liteDebuggerClient
     rules_obj = Rules()
 
@@ -717,7 +724,7 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -762,12 +769,16 @@ def client(original_function):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
-        logging_obj = kwargs.get("litellm_logging_obj", None)
+        logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
+            "litellm_logging_obj", None
+        )
 
         # only set litellm_call_id if its not in kwargs
         call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
+
+        model: Optional[str] = None
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except Exception:
@@ -784,6 +795,12 @@ def client(original_function):
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
             kwargs["litellm_logging_obj"] = logging_obj
+            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+                original_function=original_function,
+                request_kwargs=kwargs,
+                start_time=start_time,
+            )
+            logging_obj._llm_caching_handler = _llm_caching_handler
 
             # CHECK FOR 'os.environ/' in kwargs
             for k, v in kwargs.items():
@@ -833,116 +850,20 @@ def client(original_function):
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose("INSIDE CHECKING CACHE")
-                if (
-                    litellm.cache is not None
-                    and litellm.cache.supported_call_types is not None
-                    and str(original_function.__name__)
-                    in litellm.cache.supported_call_types
-                ):
-                    print_verbose("Checking Cache")
-                    preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
-                    kwargs["preset_cache_key"] = (
-                        preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+                caching_handler_response: CachingHandlerResponse = (
+                    _llm_caching_handler._sync_get_cache(
+                        model=model or "",
+                        original_function=original_function,
+                        logging_obj=logging_obj,
+                        start_time=start_time,
+                        call_type=call_type,
+                        kwargs=kwargs,
+                        args=args,
                     )
-                    cached_result = litellm.cache.get_cache(*args, **kwargs)
-                    if cached_result is not None:
-                        if "detail" in cached_result:
-                            # implies an error occurred
-                            pass
-                        else:
-                            call_type = original_function.__name__
-                            print_verbose(
-                                f"Cache Response Object routing: call_type - {call_type}; cached_result instace: {type(cached_result)}"
-                            )
-                            if call_type == CallTypes.completion.value and isinstance(
-                                cached_result, dict
-                            ):
-                                cached_result = convert_to_model_response_object(
-                                    response_object=cached_result,
-                                    model_response_object=ModelResponse(),
-                                    stream=kwargs.get("stream", False),
-                                )
+                )
+                if caching_handler_response.cached_result is not None:
+                    return caching_handler_response.cached_result
 
-                                if kwargs.get("stream", False) is True:
-                                    cached_result = CustomStreamWrapper(
-                                        completion_stream=cached_result,
-                                        model=model,
-                                        custom_llm_provider="cached_response",
-                                        logging_obj=logging_obj,
-                                    )
-                            elif call_type == CallTypes.embedding.value and isinstance(
-                                cached_result, dict
-                            ):
-                                cached_result = convert_to_model_response_object(
-                                    response_object=cached_result,
-                                    response_type="embedding",
-                                )
-                            elif call_type == CallTypes.rerank.value and isinstance(
-                                cached_result, dict
-                            ):
-                                cached_result = convert_to_model_response_object(
-                                    response_object=cached_result,
-                                    response_type="rerank",
-                                )
-                            # LOG SUCCESS
-                            cache_hit = True
-                            end_time = datetime.datetime.now()
-                            (
-                                model,
-                                custom_llm_provider,
-                                dynamic_api_key,
-                                api_base,
-                            ) = litellm.get_llm_provider(
-                                model=model or "",
-                                custom_llm_provider=kwargs.get(
-                                    "custom_llm_provider", None
-                                ),
-                                api_base=kwargs.get("api_base", None),
-                                api_key=kwargs.get("api_key", None),
-                            )
-                            print_verbose(
-                                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-                            )
-                            logging_obj.update_environment_variables(
-                                model=model,
-                                user=kwargs.get("user", None),
-                                optional_params={},
-                                litellm_params={
-                                    "logger_fn": kwargs.get("logger_fn", None),
-                                    "acompletion": False,
-                                    "metadata": kwargs.get("metadata", {}),
-                                    "model_info": kwargs.get("model_info", {}),
-                                    "proxy_server_request": kwargs.get(
-                                        "proxy_server_request", None
-                                    ),
-                                    "preset_cache_key": kwargs.get(
-                                        "preset_cache_key", None
-                                    ),
-                                    "stream_response": kwargs.get(
-                                        "stream_response", {}
-                                    ),
-                                },
-                                input=kwargs.get("messages", ""),
-                                api_key=kwargs.get("api_key", None),
-                                original_response=str(cached_result),
-                                additional_args=None,
-                                stream=kwargs.get("stream", False),
-                            )
-                            threading.Thread(
-                                target=logging_obj.success_handler,
-                                args=(cached_result, start_time, end_time, cache_hit),
-                            ).start()
-                            cache_key = kwargs.get("preset_cache_key", None)
-                            if (
-                                isinstance(cached_result, BaseModel)
-                                or isinstance(cached_result, CustomStreamWrapper)
-                            ) and hasattr(cached_result, "_hidden_params"):
-                                cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
-                            return cached_result
-                    else:
-                        print_verbose(
-                            "Cache Miss! on key - {}".format(preset_cache_key)
-                        )
             # CHECK MAX TOKENS
             if (
                 kwargs.get("max_tokens", None) is not None
@@ -1010,12 +931,11 @@ def client(original_function):
             )
 
             # [OPTIONAL] ADD TO CACHE
-            if (
-                litellm.cache is not None
-                and litellm.cache.supported_call_types is not None
-                and call_type in litellm.cache.supported_call_types
-            ) and (kwargs.get("cache", {}).get("no-store", False) is not True):
-                litellm.cache.add_cache(result, *args, **kwargs)
+            _llm_caching_handler.sync_set_cache(
+                result=result,
+                args=args,
+                kwargs=kwargs,
+            )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
@@ -1090,7 +1010,7 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    async def wrapper_async(*args, **kwargs):
+    async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -1210,7 +1130,7 @@ def client(original_function):
             )
 
             ## Add response to cache
-            await _llm_caching_handler._async_set_cache(
+            await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
                 kwargs=kwargs,
@@ -1235,30 +1155,13 @@ def client(original_function):
                 isinstance(result, EmbeddingResponse)
                 and _caching_handler_response.final_embedding_cached_response
                 is not None
-                and _caching_handler_response.final_embedding_cached_response.data
-                is not None
             ):
-                idx = 0
-                final_data_list = []
-                for (
-                    item
-                ) in _caching_handler_response.final_embedding_cached_response.data:
-                    if item is None and result.data is not None:
-                        final_data_list.append(result.data[idx])
-                        idx += 1
-                    else:
-                        final_data_list.append(item)
-
-                _caching_handler_response.final_embedding_cached_response.data = (
-                    final_data_list
+                return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
+                    _caching_handler_response=_caching_handler_response,
+                    embedding_response=result,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
-                _caching_handler_response.final_embedding_cached_response._hidden_params[
-                    "cache_hit"
-                ] = True
-                _caching_handler_response.final_embedding_cached_response._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000
-                return _caching_handler_response.final_embedding_cached_response
 
             return result
         except Exception as e:
@@ -1389,7 +1292,7 @@ def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = 
     return dec
 
 
-def openai_token_counter(
+def openai_token_counter(  # noqa: PLR0915
     messages: Optional[list] = None,
     model="gpt-3.5-turbo-0613",
     text: Optional[str] = None,
@@ -1921,6 +1824,7 @@ def supports_function_calling(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        ## CHECK IF MODEL SUPPORTS FUNCTION CALLING ##
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -1932,6 +1836,54 @@ def supports_function_calling(
         raise Exception(
             f"Model not found or error in checking function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+
+
+def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
+    """
+    Check if the given model supports function calling and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports function calling, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found or there's an error in retrieval.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if model_info.get(key, False) is True:
+            return True
+        return False
+    except Exception as e:
+        raise Exception(
+            f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+
+
+def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """Check if a given model supports audio input in a chat completion call"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input"
+    )
+
+
+def supports_audio_output(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """Check if a given model supports audio output in a chat completion call"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input"
+    )
 
 
 def supports_prompt_caching(
@@ -2030,7 +1982,7 @@ def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     return existing_dict
 
 
-def register_model(model_cost: Union[str, dict]):
+def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2353,7 +2305,7 @@ def get_optional_params_image_gen(
     return optional_params
 
 
-def get_optional_params_embeddings(
+def get_optional_params_embeddings(  # noqa: PLR0915
     # 2 optional params
     model: str,
     user: Optional[str] = None,
@@ -2569,7 +2521,7 @@ def _remove_strict_from_schema(schema):
     return schema
 
 
-def get_optional_params(
+def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
     model: str,
@@ -2583,6 +2535,8 @@ def get_optional_params(
     stop=None,
     max_tokens=None,
     max_completion_tokens=None,
+    modalities=None,
+    audio=None,
     presence_penalty=None,
     frequency_penalty=None,
     logit_bias=None,
@@ -2662,6 +2616,8 @@ def get_optional_params(
         "stop": None,
         "max_tokens": None,
         "max_completion_tokens": None,
+        "modalities": None,
+        "audio": None,
         "presence_penalty": None,
         "frequency_penalty": None,
         "logit_bias": None,
@@ -3940,18 +3896,13 @@ def _get_model_region(
     return litellm_params.region_name
 
 
-def _is_region_eu(litellm_params: LiteLLM_Params) -> bool:
+def _infer_model_region(litellm_params: LiteLLM_Params) -> Optional[AllowedModelRegion]:
     """
-    Return true/false if a deployment is in the EU
-    """
-    if litellm_params.region_name == "eu":
-        return True
+    Infer if a model is in the EU or US region
 
-    ## ELSE ##
-    """
-    - get provider 
-    - get provider regions 
-    - return true if given region (get_provider_region) in eu region (config.get_eu_regions())
+    Returns:
+    - str (region) - "eu" or "us"
+    - None (if region not found)
     """
     model, custom_llm_provider, _, _ = litellm.get_llm_provider(
         model=litellm_params.model, litellm_params=litellm_params
@@ -3962,22 +3913,72 @@ def _is_region_eu(litellm_params: LiteLLM_Params) -> bool:
     )
 
     if model_region is None:
-        return False
+        verbose_logger.debug(
+            "Cannot infer model region for model: {}".format(litellm_params.model)
+        )
+        return None
 
     if custom_llm_provider == "azure":
         eu_regions = litellm.AzureOpenAIConfig().get_eu_regions()
+        us_regions = litellm.AzureOpenAIConfig().get_us_regions()
     elif custom_llm_provider == "vertex_ai":
         eu_regions = litellm.VertexAIConfig().get_eu_regions()
+        us_regions = litellm.VertexAIConfig().get_us_regions()
     elif custom_llm_provider == "bedrock":
         eu_regions = litellm.AmazonBedrockGlobalConfig().get_eu_regions()
+        us_regions = litellm.AmazonBedrockGlobalConfig().get_us_regions()
     elif custom_llm_provider == "watsonx":
         eu_regions = litellm.IBMWatsonXAIConfig().get_eu_regions()
+        us_regions = litellm.IBMWatsonXAIConfig().get_us_regions()
     else:
-        return False
+        eu_regions = []
+        us_regions = []
 
     for region in eu_regions:
         if region in model_region.lower():
-            return True
+            return "eu"
+    for region in us_regions:
+        if region in model_region.lower():
+            return "us"
+    return None
+
+
+def _is_region_eu(litellm_params: LiteLLM_Params) -> bool:
+    """
+    Return true/false if a deployment is in the EU
+    """
+    if litellm_params.region_name == "eu":
+        return True
+
+    ## Else - try and infer from model region
+    model_region = _infer_model_region(litellm_params=litellm_params)
+    if model_region is not None and model_region == "eu":
+        return True
+    return False
+
+
+def _is_region_us(litellm_params: LiteLLM_Params) -> bool:
+    """
+    Return true/false if a deployment is in the US
+    """
+    if litellm_params.region_name == "us":
+        return True
+
+    ## Else - try and infer from model region
+    model_region = _infer_model_region(litellm_params=litellm_params)
+    if model_region is not None and model_region == "us":
+        return True
+    return False
+
+
+def is_region_allowed(
+    litellm_params: LiteLLM_Params, allowed_model_region: str
+) -> bool:
+    """
+    Return true/false if a deployment is in the EU
+    """
+    if litellm_params.region_name == allowed_model_region:
+        return True
     return False
 
 
@@ -4132,7 +4133,7 @@ def get_first_chars_messages(kwargs: dict) -> str:
         return ""
 
 
-def get_supported_openai_params(
+def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
@@ -4628,7 +4629,9 @@ def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
 
-def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
+def get_model_info(  # noqa: PLR0915
+    model: str, custom_llm_provider: Optional[str] = None
+) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
@@ -4650,9 +4653,11 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             ]  # only for vertex ai models
             input_cost_per_query: Optional[float] # only for rerank models
             input_cost_per_image: Optional[float]  # only for vertex ai models
+            input_cost_per_audio_token: Optional[float]
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
             input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
             output_cost_per_token: Required[float]
+            output_cost_per_audio_token: Optional[float]
             output_cost_per_character: Optional[float]  # only for vertex ai models
             output_cost_per_token_above_128k_tokens: Optional[
                 float
@@ -4676,6 +4681,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_vision: Optional[bool]
             supports_function_calling: Optional[bool]
             supports_prompt_caching: Optional[bool]
+            supports_audio_input: Optional[bool]
+            supports_audio_output: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
@@ -4765,6 +4772,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
             )
+        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+            return litellm.OllamaConfig().get_model_info(model)
         else:
             """
             Check if: (in order of specificity)
@@ -4919,7 +4928,13 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_audio_token=_model_info.get(
+                    "input_cost_per_audio_token", None
+                ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_audio_token=_model_info.get(
+                    "output_cost_per_audio_token", None
+                ),
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
                 ),
@@ -4952,8 +4967,12 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_prompt_caching=_model_info.get(
                     "supports_prompt_caching", False
                 ),
+                supports_audio_input=_model_info.get("supports_audio_input", False),
+                supports_audio_output=_model_info.get("supports_audio_output", False),
             )
-    except Exception:
+    except Exception as e:
+        if "OllamaError" in str(e):
+            raise e
         raise Exception(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider
@@ -5171,7 +5190,7 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
-def validate_environment(
+def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None, api_key: Optional[str] = None
 ) -> dict:
     """
@@ -5612,7 +5631,58 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     yield model_response_object
 
 
-def convert_to_model_response_object(
+from collections import defaultdict
+
+
+def _handle_invalid_parallel_tool_calls(
+    tool_calls: List[ChatCompletionMessageToolCall],
+):
+    """
+    Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
+
+    Code modified from: https://github.com/phdowling/openai_multi_tool_use_parallel_patch/blob/main/openai_multi_tool_use_parallel_patch.py
+    """
+
+    if tool_calls is None:
+        return
+    try:
+        replacements: Dict[int, List[ChatCompletionMessageToolCall]] = defaultdict(list)
+        for i, tool_call in enumerate(tool_calls):
+            current_function = tool_call.function.name
+            function_args = json.loads(tool_call.function.arguments)
+            if current_function == "multi_tool_use.parallel":
+                verbose_logger.debug(
+                    "OpenAI did a weird pseudo-multi-tool-use call, fixing call structure.."
+                )
+                for _fake_i, _fake_tool_use in enumerate(function_args["tool_uses"]):
+                    _function_args = _fake_tool_use["parameters"]
+                    _current_function = _fake_tool_use["recipient_name"]
+                    if _current_function.startswith("functions."):
+                        _current_function = _current_function[len("functions.") :]
+
+                    fixed_tc = ChatCompletionMessageToolCall(
+                        id=f"{tool_call.id}_{_fake_i}",
+                        type="function",
+                        function=Function(
+                            name=_current_function, arguments=json.dumps(_function_args)
+                        ),
+                    )
+                    replacements[i].append(fixed_tc)
+
+        shift = 0
+        for i, replacement in replacements.items():
+            tool_calls[:] = (
+                tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
+            )
+            shift += len(replacement)
+
+        return tool_calls
+    except json.JSONDecodeError:
+        # if there is a JSONDecodeError, return the original tool_calls
+        return tool_calls
+
+
+def convert_to_model_response_object(  # noqa: PLR0915
     response_object: Optional[dict] = None,
     model_response_object: Optional[
         Union[
@@ -5637,36 +5707,12 @@ def convert_to_model_response_object(
 ):
     received_args = locals()
 
-    if _response_headers is not None:
-        openai_headers = {}
-        if "x-ratelimit-limit-requests" in _response_headers:
-            openai_headers["x-ratelimit-limit-requests"] = _response_headers[
-                "x-ratelimit-limit-requests"
-            ]
-        if "x-ratelimit-remaining-requests" in _response_headers:
-            openai_headers["x-ratelimit-remaining-requests"] = _response_headers[
-                "x-ratelimit-remaining-requests"
-            ]
-        if "x-ratelimit-limit-tokens" in _response_headers:
-            openai_headers["x-ratelimit-limit-tokens"] = _response_headers[
-                "x-ratelimit-limit-tokens"
-            ]
-        if "x-ratelimit-remaining-tokens" in _response_headers:
-            openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
-                "x-ratelimit-remaining-tokens"
-            ]
-        llm_response_headers = {
-            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
-        }
-        if hidden_params is not None:
-            hidden_params["additional_headers"] = {
-                **llm_response_headers,
-                **openai_headers,
-            }
-        else:
-            hidden_params = {
-                "additional_headers": {**llm_response_headers, **openai_headers}
-            }
+    additional_headers = get_response_headers(_response_headers)
+
+    if hidden_params is None:
+        hidden_params = {}
+    hidden_params["additional_headers"] = additional_headers
+
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     if (
         response_object is not None
@@ -5707,6 +5753,18 @@ def convert_to_model_response_object(
             for idx, choice in enumerate(response_object["choices"]):
                 ## HANDLE JSON MODE - anthropic returns single function call]
                 tool_calls = choice["message"].get("tool_calls", None)
+                if tool_calls is not None:
+                    _openai_tool_calls = []
+                    for _tc in tool_calls:
+                        _openai_tc = ChatCompletionMessageToolCall(**_tc)
+                        _openai_tool_calls.append(_openai_tc)
+                    fixed_tool_calls = _handle_invalid_parallel_tool_calls(
+                        _openai_tool_calls
+                    )
+
+                    if fixed_tool_calls is not None:
+                        tool_calls = fixed_tool_calls
+
                 message: Optional[Message] = None
                 finish_reason: Optional[str] = None
                 if (
@@ -5726,7 +5784,8 @@ def convert_to_model_response_object(
                         content=choice["message"].get("content", None),
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
-                        tool_calls=choice["message"].get("tool_calls", None),
+                        tool_calls=tool_calls,
+                        audio=choice["message"].get("audio", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
@@ -7165,7 +7224,7 @@ class CustomStreamWrapper:
             is_empty = False
         return is_empty
 
-    def chunk_creator(self, chunk):  # type: ignore
+    def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
         response_obj = {}
         try:
@@ -7561,7 +7620,7 @@ class CustomStreamWrapper:
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 self.response_id = original_chunk.id
-                if len(original_chunk.choices) > 0:
+                if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None
@@ -7627,6 +7686,10 @@ class CustomStreamWrapper:
                                 )
                             )
                             model_response.choices[0].delta = Delta()
+                    elif (
+                        delta is not None and getattr(delta, "audio", None) is not None
+                    ):
+                        model_response.choices[0].delta.audio = delta.audio
                     else:
                         try:
                             delta = (
@@ -7793,6 +7856,12 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 return model_response
+            elif (
+                len(model_response.choices) > 0
+                and hasattr(model_response.choices[0].delta, "audio")
+                and model_response.choices[0].delta.audio is not None
+            ):
+                return model_response
             else:
                 if hasattr(model_response, "usage"):
                     self.chunks.append(model_response)
@@ -7823,7 +7892,10 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
-    def run_success_logging_in_thread(self, processed_chunk, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+        """
+        Runs success logging in a thread and adds the response to the cache
+        """
         if litellm.disable_streaming_logging is True:
             """
             [NOT RECOMMENDED]
@@ -7851,6 +7923,12 @@ class CustomStreamWrapper:
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+        ## Sync store in cache
+        if self.logging_obj._llm_caching_handler is not None:
+            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
+                processed_chunk
+            )
+
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
         if self.received_finish_reason is not None:
@@ -7867,7 +7945,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self):
+    def __next__(self):  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -7897,7 +7975,7 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     threading.Thread(
-                        target=self.run_success_logging_in_thread,
+                        target=self.run_success_logging_and_cache_storage,
                         args=(response, cache_hit),
                     ).start()  # log response
                     choice = response.choices[0]
@@ -7965,7 +8043,7 @@ class CustomStreamWrapper:
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
                 threading.Thread(
-                    target=self.run_success_logging_in_thread,
+                    target=self.run_success_logging_and_cache_storage,
                     args=(processed_chunk, cache_hit),
                 ).start()  # log response
                 return processed_chunk
@@ -8002,7 +8080,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self):
+    async def __anext__(self):  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
