@@ -59,7 +59,10 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging,
+    add_custom_logger_compatible_class_to_litellm_callbacks,
+)
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -411,16 +414,8 @@ class ProxyLogging:
                 )
                 if callback is None:
                     continue
-            if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)  # type: ignore
-            if callback not in litellm.success_callback:
-                litellm.success_callback.append(callback)  # type: ignore
-            if callback not in litellm.failure_callback:
-                litellm.failure_callback.append(callback)  # type: ignore
-            if callback not in litellm._async_success_callback:
-                litellm._async_success_callback.append(callback)  # type: ignore
-            if callback not in litellm._async_failure_callback:
-                litellm._async_failure_callback.append(callback)  # type: ignore
+            if isinstance(callback, CustomLogger):
+                add_custom_logger_compatible_class_to_litellm_callbacks(callback)
 
         if (
             len(litellm.input_callback) > 0

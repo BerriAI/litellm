@@ -16,7 +16,7 @@ from litellm._logging import (
     _turn_on_json,
     log_level,
 )
-
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
     KeyManagementSystem,
@@ -35,10 +35,19 @@ if set_verbose == True:
     _turn_on_debug()
 #############################################
 ### Callbacks /Logging / Success / Failure Handlers ###
-input_callback: List[Union[str, Callable]] = []
-success_callback: List[Union[str, Callable]] = []
-failure_callback: List[Union[str, Callable]] = []
-service_callback: List[Union[str, Callable]] = []
+input_callback: List[Union[str, Callable, CustomLogger]] = []
+success_callback: List[Union[str, Callable, CustomLogger]] = []
+failure_callback: List[Union[str, Callable, CustomLogger]] = []
+service_callback: List[Union[str, Callable, CustomLogger]] = []
+_async_input_callback: List[Union[Callable, CustomLogger]] = (
+    []
+)  # internal variable - async custom callbacks are routed here.
+_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
+    []
+)  # internal variable - async custom callbacks are routed here.
+_async_failure_callback: List[Union[Callable, CustomLogger]] = (
+    []
+)  # internal variable - async custom callbacks are routed here.
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -64,15 +73,6 @@ langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 argilla_batch_size: Optional[int] = None
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Callable] = (
-    []
-)  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable]] = (
-    []
-)  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Callable] = (
-    []
-)  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False

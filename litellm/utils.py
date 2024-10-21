@@ -69,6 +69,9 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     _is_non_openai_azure_model,
     get_llm_provider,
 )
+from litellm.litellm_core_utils.litellm_logging import (
+    add_custom_logger_compatible_class_to_litellm_callbacks,
+)
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
@@ -355,21 +358,10 @@ def function_setup(  # noqa: PLR0915
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                         callback, internal_usage_cache=None, llm_router=None
                     )
-                    if callback is None or any(
-                        isinstance(cb, type(callback))
-                        for cb in litellm._async_success_callback
-                    ):  # don't double add a callback
-                        continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)  # type: ignore
-                if callback not in litellm.success_callback:
-                    litellm.success_callback.append(callback)  # type: ignore
-                if callback not in litellm.failure_callback:
-                    litellm.failure_callback.append(callback)  # type: ignore
-                if callback not in litellm._async_success_callback:
-                    litellm._async_success_callback.append(callback)  # type: ignore
-                if callback not in litellm._async_failure_callback:
-                    litellm._async_failure_callback.append(callback)  # type: ignore
+                    if callback is not None:
+                        add_custom_logger_compatible_class_to_litellm_callbacks(
+                            callback
+                        )
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )

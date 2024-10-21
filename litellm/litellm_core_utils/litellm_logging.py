@@ -2606,6 +2606,39 @@ def get_custom_logger_compatible_class(
     return None
 
 
+def add_custom_logger_compatible_class_to_litellm_callbacks(callback: CustomLogger):
+    """
+    Adds a `litellm.CustomLogger` compatible class to the litellm callbacks.
+
+    The CustomLogger needs to be added to:
+    - litellm.input_callback
+    - litellm.success_callback
+    - litellm.failure_callback
+    - litellm._async_success_callback
+    - litellm._async_failure_callback
+
+    Args:
+        callback (CustomLogger): The CustomLogger compatible class to add to the litellm callbacks.
+
+    Returns:
+        None
+    """
+    if callback is None or any(
+        isinstance(cb, type(callback)) for cb in litellm._async_success_callback
+    ):  # don't double add a callback
+        return
+    if callback not in litellm.input_callback:
+        litellm.input_callback.append(callback)
+    if callback not in litellm.success_callback:
+        litellm.success_callback.append(callback)
+    if callback not in litellm.failure_callback:
+        litellm.failure_callback.append(callback)
+    if callback not in litellm._async_success_callback:
+        litellm._async_success_callback.append(callback)
+    if callback not in litellm._async_failure_callback:
+        litellm._async_failure_callback.append(callback)
+
+
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if litellm_params is None:
         return False
