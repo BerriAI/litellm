@@ -1,5 +1,9 @@
 import types
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Tuple, Union
+
+from litellm.secret_managers.main import get_secret_str
+
+from ..embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig
 
 
 class FireworksAIConfig:
@@ -107,3 +111,24 @@ class FireworksAIConfig:
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def _get_openai_compatible_provider_info(
+        self, model: str, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[str, Optional[str], Optional[str]]:
+        if FireworksAIEmbeddingConfig().is_fireworks_embedding_model(model=model):
+            # fireworks embeddings models do not require accounts/fireworks prefix https://docs.fireworks.ai/api-reference/creates-an-embedding-vector-representing-the-input-text
+            pass
+        elif not model.startswith("accounts/"):
+            model = f"accounts/fireworks/models/{model}"
+        api_base = (
+            api_base
+            or get_secret_str("FIREWORKS_API_BASE")
+            or "https://api.fireworks.ai/inference/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or (
+            get_secret_str("FIREWORKS_API_KEY")
+            or get_secret_str("FIREWORKS_AI_API_KEY")
+            or get_secret_str("FIREWORKSAI_API_KEY")
+            or get_secret_str("FIREWORKS_AI_TOKEN")
+        )
+        return model, api_base, dynamic_api_key

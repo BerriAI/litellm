@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
+
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -124,3 +125,38 @@ def test_get_llm_provider_azure_o1():
     )
     assert custom_llm_provider == "azure"
     assert model == "o1-mini"
+
+
+def test_default_api_base():
+    from litellm.litellm_core_utils.get_llm_provider_logic import (
+        _get_openai_compatible_provider_info,
+    )
+
+    # Patch environment variable to remove API base if it's set
+    with patch.dict(os.environ, {}, clear=True):
+        for provider in litellm.openai_compatible_providers:
+            # Get the API base for the given provider
+            _, _, _, api_base = _get_openai_compatible_provider_info(
+                model=f"{provider}/*", api_base=None, api_key=None, dynamic_api_key=None
+            )
+            if api_base is None:
+                continue
+
+            for other_provider in litellm.provider_list:
+                if other_provider != provider and provider != "{}_chat".format(
+                    other_provider.value
+                ):
+                    if provider == "codestral" and other_provider == "mistral":
+                        continue
+                    elif provider == "github" and other_provider == "azure":
+                        continue
+                    assert other_provider.value not in api_base.replace("/openai", "")
+
+
+def test_get_llm_provider_jina_ai():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="jina_ai/jina-embeddings-v3",
+    )
+    assert custom_llm_provider == "openai_like"
+    assert api_base == "https://api.jina.ai/v1"
+    assert model == "jina-embeddings-v3"

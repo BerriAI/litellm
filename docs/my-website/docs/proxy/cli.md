@@ -176,3 +176,11 @@ Cli arguments,  --host, --port, --num_workers
      ```
 
 
+## --log_config
+   - **Default:** `None`
+   - **Type:** `str`
+   - Specify a log configuration file for uvicorn.
+   - **Usage:** 
+     ```shell
+     litellm --log_config path/to/log_config.conf
+     ```

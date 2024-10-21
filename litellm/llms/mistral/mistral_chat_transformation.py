@@ -7,7 +7,9 @@ Docs - https://docs.mistral.ai/api/
 """
 
 import types
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
+
+from litellm.secret_managers.main import get_secret_str
 
 
 class MistralConfig:
@@ -124,3 +126,25 @@ class MistralConfig:
             if param == "response_format":
                 optional_params["response_format"] = value
         return optional_params
+
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
+        api_base = (
+            api_base
+            or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
+            or "https://api.mistral.ai/v1"
+        )  # type: ignore
+
+        # if api_base does not end with /v1 we add it
+        if api_base is not None and not api_base.endswith(
+            "/v1"
+        ):  # Mistral always needs a /v1 at the end
+            api_base = api_base + "/v1"
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
+            or get_secret_str("MISTRAL_API_KEY")
+        )
+        return api_base, dynamic_api_key
