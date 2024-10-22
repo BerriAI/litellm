@@ -84,21 +84,3 @@ model_cost = {
         "output_cost_per_token": 0.000015,
     },
 }
-
-
-class BerriSpendLogger:
-    # Class variables or attributes
-    def __init__(self):
-        # Instance variables
-        self.account_id = os.getenv("BERRISPEND_ACCOUNT_ID")
-
-    def price_calculator(self, model, response_obj, start_time, end_time):
-        return
-
-    def log_event(
-        self, model, messages, response_obj, start_time, end_time, print_verbose
-    ):
-        """
-        This integration is not implemented yet.
-        """
-        return
