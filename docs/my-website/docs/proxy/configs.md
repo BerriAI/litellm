@@ -777,6 +777,7 @@ general_settings:
 | public_routes | List[str] | (Enterprise Feature) Control list of public routes |
 | alert_types | List[str] | Control list of alert types to send to slack (Doc on alert types)[./alerting.md] |
 | enforced_params | List[str] | (Enterprise Feature) List of params that must be included in all requests to the proxy |
+| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
 | service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
