@@ -203,7 +203,7 @@ spec:
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- with .extraContainers }}
+      {{- with .Values.extraContainers }}
         {{- toYaml . | nindent 6 }}
       {{- end }}
       volumes:
