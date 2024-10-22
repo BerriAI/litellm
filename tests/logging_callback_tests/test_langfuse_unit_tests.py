@@ -29,11 +29,23 @@ def dynamic_logging_cache():
     return DynamicLoggingCache()
 
 
-def test_get_langfuse_logger_for_request_with_dynamic_params(dynamic_logging_cache):
+global_langfuse_logger = LangFuseLogger(
+    langfuse_public_key="global_public_key",
+    langfuse_secret="global_secret",
+    langfuse_host="https://global.langfuse.com",
+)
+
+
+@pytest.mark.parametrize("globalLangfuseLogger", [None, global_langfuse_logger])
+def test_get_langfuse_logger_for_request_with_dynamic_params(
+    dynamic_logging_cache, globalLangfuseLogger
+):
     """
     If StandardCallbackDynamicParams contain langfuse credentials the returned Langfuse logger should use the dynamic params
 
     the new Langfuse logger should be cached
+
+    Even if globalLangfuseLogger is provided, it should use dynamic params if they are passed
     """
     standard_params = StandardCallbackDynamicParams(
         langfuse_public_key="test_public_key",
@@ -44,13 +56,16 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(dynamic_logging_cac
     result = get_langfuse_logger_for_request(
         standard_callback_dynamic_params=standard_params,
         in_memory_dynamic_logger_cache=dynamic_logging_cache,
-        globalLangfuseLogger=None,
+        globalLangfuseLogger=globalLangfuseLogger,
     )
 
     assert isinstance(result, LangFuseLogger)
     assert result.public_key == "test_public_key"
     assert result.secret_key == "test_secret"
     assert result.langfuse_host == "https://test.langfuse.com"
+
+    print("langfuse logger=", result)
+    print("vars in langfuse logger=", vars(result))
 
     # Check if the logger is cached
     cached_logger = dynamic_logging_cache.get_cache(
@@ -62,3 +77,29 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(dynamic_logging_cac
         service_name="langfuse",
     )
     assert cached_logger is result
+
+
+@pytest.mark.parametrize("globalLangfuseLogger", [None, global_langfuse_logger])
+def test_get_langfuse_logger_for_request_with_no_dynamic_params(
+    dynamic_logging_cache, globalLangfuseLogger
+):
+    """
+    If StandardCallbackDynamicParams are not provided, the globalLangfuseLogger should be returned
+    """
+    result = get_langfuse_logger_for_request(
+        standard_callback_dynamic_params=StandardCallbackDynamicParams(),
+        in_memory_dynamic_logger_cache=dynamic_logging_cache,
+        globalLangfuseLogger=globalLangfuseLogger,
+    )
+
+    print("langfuse logger=", result)
+    if globalLangfuseLogger is not None:
+        print("vars in langfuse logger=", vars(result))
+
+    assert result is globalLangfuseLogger
+    if globalLangfuseLogger is not None:
+        assert result is not None
+        assert isinstance(result, LangFuseLogger)
+        assert result.public_key == "global_public_key"
+        assert result.secret_key == "global_secret"
+        assert result.langfuse_host == "https://global.langfuse.com"
