@@ -809,12 +809,14 @@ def get_langfuse_logger_for_request(
     standard_callback_dynamic_params: StandardCallbackDynamicParams,
     in_memory_dynamic_logger_cache: DynamicLoggingCache,
     globalLangfuseLogger: Optional[LangFuseLogger] = None,
-) -> Optional[LangFuseLogger]:
+) -> LangFuseLogger:
     temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
     if (
         _dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params)
         is False
     ):
+        if temp_langfuse_logger is None:
+            return LangFuseLogger()
         return temp_langfuse_logger
 
     # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
