@@ -226,7 +226,11 @@ class DeepInfraConfig:
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-        api_base = api_base or get_secret_str("DEEPINFRA_API_BASE")
+        api_base = (
+            api_base
+            or get_secret_str("DEEPINFRA_API_BASE")
+            or "https://api.deepinfra.com/v1/openai"
+        )
         dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
         return api_base, dynamic_api_key
 
