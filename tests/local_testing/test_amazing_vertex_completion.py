@@ -195,6 +195,8 @@ async def test_get_router_response():
 
         print(f"\n\nResponse: {response}\n\n")
 
+    except litellm.ServiceUnavailableError:
+        pass
     except litellm.UnprocessableEntityError as e:
         pass
     except Exception as e:
