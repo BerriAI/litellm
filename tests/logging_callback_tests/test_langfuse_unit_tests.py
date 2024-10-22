@@ -36,9 +36,24 @@ global_langfuse_logger = LangFuseLogger(
 )
 
 
+# IMPORTANT: Test that passing both langfuse_secret_key and langfuse_secret works
+standard_params_1 = StandardCallbackDynamicParams(
+    langfuse_public_key="test_public_key",
+    langfuse_secret="test_secret",
+    langfuse_host="https://test.langfuse.com",
+)
+
+standard_params_2 = StandardCallbackDynamicParams(
+    langfuse_public_key="test_public_key",
+    langfuse_secret_key="test_secret",
+    langfuse_host="https://test.langfuse.com",
+)
+
+
 @pytest.mark.parametrize("globalLangfuseLogger", [None, global_langfuse_logger])
+@pytest.mark.parametrize("standard_params", [standard_params_1, standard_params_2])
 def test_get_langfuse_logger_for_request_with_dynamic_params(
-    dynamic_logging_cache, globalLangfuseLogger
+    dynamic_logging_cache, globalLangfuseLogger, standard_params
 ):
     """
     If StandardCallbackDynamicParams contain langfuse credentials the returned Langfuse logger should use the dynamic params
@@ -47,11 +62,6 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
 
     Even if globalLangfuseLogger is provided, it should use dynamic params if they are passed
     """
-    standard_params = StandardCallbackDynamicParams(
-        langfuse_public_key="test_public_key",
-        langfuse_secret="test_secret",
-        langfuse_host="https://test.langfuse.com",
-    )
 
     result = get_langfuse_logger_for_request(
         standard_callback_dynamic_params=standard_params,
