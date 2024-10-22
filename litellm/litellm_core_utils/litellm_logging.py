@@ -61,9 +61,7 @@ from litellm.utils import (
 from ..integrations.aispend import AISpendLogger
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.athina import AthinaLogger
-from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
-from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -122,13 +120,10 @@ prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
-clickHouseLogger = None
 greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
-berrispendLogger = None
 supabaseClient = None
-liteDebuggerClient = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -191,7 +186,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
+    global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
     stream_options = None
 
@@ -970,22 +965,6 @@ class Logging:
                         ):
                             print_verbose("no-log request, skipping logging")
                             continue
-                    if callback == "lite_debugger" and liteDebuggerClient is not None:
-                        print_verbose("reaches lite_debugger for logging!")
-                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                        print_verbose(
-                            f"liteDebuggerClient details function {self.call_type} and stream set to {self.stream}"
-                        )
-                        liteDebuggerClient.log_event(
-                            end_user=kwargs.get("user", "default"),
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            litellm_call_id=self.litellm_call_id,
-                            print_verbose=print_verbose,
-                            call_type=self.call_type,
-                            stream=self.stream,
-                        )
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
                         promptLayerLogger.log_event(
@@ -1241,37 +1220,6 @@ class Logging:
                         if genericAPILogger is None:
                             genericAPILogger = GenericAPILogger()  # type: ignore
                         genericAPILogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
-                    if callback == "clickhouse":
-                        global clickHouseLogger
-                        verbose_logger.debug("reaches clickhouse for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose(
-                                    "reaches clickhouse for streaming logging!"
-                                )
-                                result = kwargs["complete_streaming_response"]
-                        if clickHouseLogger is None:
-                            clickHouseLogger = ClickhouseLogger()
-                        clickHouseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
@@ -1874,9 +1822,7 @@ class Logging:
             )
             for callback in callbacks:
                 try:
-                    if callback == "lite_debugger" and liteDebuggerClient is not None:
-                        pass
-                    elif callback == "lunary" and lunaryLogger is not None:
+                    if callback == "lunary" and lunaryLogger is not None:
                         print_verbose("reaches lunary for logging error!")
 
                         model = self.model
@@ -2195,7 +2141,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2277,24 +2223,12 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 logfireLogger = LogfireLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
-            elif callback == "berrispend":
-                berrispendLogger = BerriSpendLogger()
             elif callback == "supabase":
                 print_verbose("instantiating supabase")
                 supabaseClient = Supabase()
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
-            elif callback == "lite_debugger":
-                print_verbose("instantiating lite_debugger")
-                if function_id:
-                    liteDebuggerClient = LiteDebugger(email=function_id)
-                elif litellm.token:
-                    liteDebuggerClient = LiteDebugger(email=litellm.token)
-                elif litellm.email:
-                    liteDebuggerClient = LiteDebugger(email=litellm.email)
-                else:
-                    liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
