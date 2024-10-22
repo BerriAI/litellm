@@ -816,7 +816,17 @@ def get_langfuse_logger_for_request(
         is False
     ):
         if temp_langfuse_logger is None:
-            temp_langfuse_logger = LangFuseLogger()
+            temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
+                credentials={}, service_name="langfuse"
+            )
+            if temp_langfuse_logger is None:
+                temp_langfuse_logger = LangFuseLogger()
+                in_memory_dynamic_logger_cache.set_cache(
+                    credentials={},
+                    service_name="langfuse",
+                    logging_obj=temp_langfuse_logger,
+                )
+
         return temp_langfuse_logger
 
     # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
