@@ -60,6 +60,7 @@ from litellm.utils import (
 
 from ..integrations.aispend import AISpendLogger
 from ..integrations.argilla import ArgillaLogger
+from ..integrations.arize_ai import get_arize_opentelemetry_config
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -2389,22 +2390,16 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _in_memory_loggers.append(_opik_logger)
         return _opik_logger  # type: ignore
     elif logging_integration == "arize":
-        if "ARIZE_SPACE_KEY" not in os.environ:
-            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
-        if "ARIZE_API_KEY" not in os.environ:
-            raise ValueError("ARIZE_API_KEY not found in environment variables")
         from litellm.integrations.opentelemetry import (
             OpenTelemetry,
             OpenTelemetryConfig,
         )
 
-        arize_endpoint = (
-            os.environ.get("ARIZE_ENDPOINT", None) or "https://otlp.arize.com/v1"
-        )
-        otel_config = OpenTelemetryConfig(
-            exporter="otlp_grpc",
-            endpoint=arize_endpoint,
-        )
+        otel_config = get_arize_opentelemetry_config()
+        if otel_config is None:
+            raise ValueError(
+                "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
+            )
         os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
             f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
         )
@@ -2417,7 +2412,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
-
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry
 
