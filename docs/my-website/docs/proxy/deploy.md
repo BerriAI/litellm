@@ -125,7 +125,7 @@ WORKDIR /app
 COPY config.yaml .
 
 # Make sure your docker/entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+RUN chmod +x ./docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
@@ -632,7 +632,7 @@ RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
 WORKDIR /app
 
 # Make sure your entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+RUN chmod +x ./docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
