@@ -204,7 +204,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- with .Values.extraContainers }}
-        {{- toYaml . | nindent 6 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
         {{ if .Values.securityContext.readOnlyRootFilesystem }}
