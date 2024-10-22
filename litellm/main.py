@@ -121,6 +121,7 @@ from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
+from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.common_utils import get_completion_messages
 from .llms.prompt_templates.factory import (
@@ -220,6 +221,7 @@ vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
+openai_like_embedding = OpenAILikeEmbeddingHandler()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -3129,6 +3131,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "azure_ai"
             or custom_llm_provider == "together_ai"
+            or custom_llm_provider == "openai_like"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3466,6 +3469,32 @@ def embedding(  # noqa: PLR0915
 
             ## EMBEDDING CALL
             response = databricks_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "openai_like":
+            api_base = (
+                api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
+            )
+
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.openai_like_key
+                or get_secret_str("OPENAI_LIKE_API_KEY")
+            )
+
+            ## EMBEDDING CALL
+            response = openai_like_embedding.embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
