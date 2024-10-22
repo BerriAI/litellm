@@ -126,6 +126,7 @@ except (ImportError, AttributeError):
 os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
     "CUSTOM_TIKTOKEN_CACHE_DIR", filename
 )  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+from tiktoken import Encoding
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from importlib import resources
@@ -1278,7 +1279,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc: The encoded text.
     """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
-    enc = tokenizer_json["tokenizer"].encode(text)
+    if isinstance(tokenizer_json["tokenizer"], Encoding):
+        enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
+    else:
+        enc = tokenizer_json["tokenizer"].encode(text)
     return enc
 
 
