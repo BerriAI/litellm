@@ -214,9 +214,7 @@ clickHouseLogger = None
 greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
-berrispendLogger = None
 supabaseClient = None
-liteDebuggerClient = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -606,7 +604,6 @@ def function_setup(  # noqa: PLR0915
 
 
 def client(original_function):  # noqa: PLR0915
-    global liteDebuggerClient
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
