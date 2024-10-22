@@ -175,6 +175,7 @@ const sidebars = {
         "providers/replicate", 
         "providers/togetherai", 
         "providers/voyage", 
+        "providers/jina_ai", 
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
