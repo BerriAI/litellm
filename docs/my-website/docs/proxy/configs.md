@@ -898,10 +898,6 @@ router_settings:
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
-| CLICKHOUSE_HOST | Host for ClickHouse database
-| CLICKHOUSE_PASSWORD | Password for ClickHouse authentication
-| CLICKHOUSE_PORT | Port for ClickHouse database connection
-| CLICKHOUSE_USERNAME | Username for ClickHouse authentication
 | CONFIG_FILE_PATH | File path for configuration file
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | DATABASE_HOST | Hostname for the database server
