@@ -17,6 +17,7 @@ from typing_extensions import overload, override
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ProviderField
 from litellm.utils import (
     Choices,
@@ -220,6 +221,18 @@ class DeepInfraConfig:
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+        api_base = (
+            api_base
+            or get_secret_str("DEEPINFRA_API_BASE")
+            or "https://api.deepinfra.com/v1/openai"
+        )
+        dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
+        return api_base, dynamic_api_key
 
 
 class OpenAIConfig:
