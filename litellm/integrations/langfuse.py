@@ -811,9 +811,14 @@ def get_langfuse_logger_for_request(
     globalLangfuseLogger: Optional[LangFuseLogger] = None,
 ) -> Optional[LangFuseLogger]:
     temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
+    if (
+        _dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params)
+        is False
+    ):
+        return temp_langfuse_logger
 
     # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
-    _credentials = get_langfuse_logging_config(
+    _credentials = get_dynamic_langfuse_logging_config(
         globalLangfuseLogger=globalLangfuseLogger,
         standard_callback_dynamic_params=standard_callback_dynamic_params,
     )
@@ -840,7 +845,7 @@ def get_langfuse_logger_for_request(
     return temp_langfuse_logger
 
 
-def get_langfuse_logging_config(
+def get_dynamic_langfuse_logging_config(
     standard_callback_dynamic_params: StandardCallbackDynamicParams,
     globalLangfuseLogger: Optional[LangFuseLogger] = None,
 ) -> LangfuseLoggingConfig:
@@ -852,23 +857,11 @@ def get_langfuse_logging_config(
     If no dynamic parameters are provided, it uses the `globalLangfuseLogger` values
     """
     # only use dynamic params if langfuse credentials are passed dynamically
-    if _dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params):
-        return LangfuseLoggingConfig(
-            langfuse_secret=standard_callback_dynamic_params.get("langfuse_secret")
-            or standard_callback_dynamic_params.get("langfuse_secret_key"),
-            langfuse_public_key=standard_callback_dynamic_params.get(
-                "langfuse_public_key"
-            ),
-            langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
-        )
-    elif globalLangfuseLogger is not None:
-        return LangfuseLoggingConfig(
-            langfuse_secret=globalLangfuseLogger.secret_key,
-            langfuse_public_key=globalLangfuseLogger.public_key,
-            langfuse_host=globalLangfuseLogger.langfuse_host,
-        )
-    raise ValueError(
-        "`langfuse` set as a callback but globalLangfuseLogger is not provided and dynamic params are not passed"
+    return LangfuseLoggingConfig(
+        langfuse_secret=standard_callback_dynamic_params.get("langfuse_secret")
+        or standard_callback_dynamic_params.get("langfuse_secret_key"),
+        langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
+        langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
     )
 
 
