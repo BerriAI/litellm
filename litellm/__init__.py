@@ -486,6 +486,7 @@ openai_compatible_endpoints: List = [
     "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
+    "api.x.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -503,6 +504,7 @@ openai_compatible_providers: List = [
     "deepinfra",
     "perplexity",
     "xinference",
+    "xai",
     "together_ai",
     "fireworks_ai",
     "empower",
