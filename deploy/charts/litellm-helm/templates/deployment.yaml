@@ -203,6 +203,9 @@ spec:
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with .extraContainers }}
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
       volumes:
         {{ if .Values.securityContext.readOnlyRootFilesystem }}
         - name: tmp
