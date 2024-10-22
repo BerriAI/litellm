@@ -7,7 +7,7 @@ this file has Arize ai specific helper functions
 import json
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger
 
 from .opentelemetry import OpenTelemetryConfig
 
@@ -20,84 +20,7 @@ else:
 
 import os
 
-from pydantic import BaseModel
-
-
-class ArizeConfig(BaseModel):
-    space_key: str
-    api_key: str
-    grpc_endpoint: Optional[str] = None
-    http_endpoint: Optional[str] = None
-
-
-def get_arize_config() -> ArizeConfig:
-    """
-    Helper function to get Arize configuration.
-
-    Returns:
-        ArizeConfig: A Pydantic model containing Arize configuration.
-
-    Raises:
-        ValueError: If required environment variables are not set.
-    """
-    space_key = os.environ.get("ARIZE_SPACE_KEY")
-    api_key = os.environ.get("ARIZE_API_KEY")
-
-    if not space_key:
-        raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
-    if not api_key:
-        raise ValueError("ARIZE_API_KEY not found in environment variables")
-
-    grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
-    http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
-    return ArizeConfig(
-        space_key=space_key,
-        api_key=api_key,
-        grpc_endpoint=grpc_endpoint,
-        http_endpoint=http_endpoint,
-    )
-
-
-def get_arize_opentelemetry_config() -> Optional[OpenTelemetryConfig]:
-    """
-    Helper function to get OpenTelemetry configuration for Arize.
-
-    Args:
-        arize_config (ArizeConfig): Arize configuration object.
-
-    Returns:
-        OpenTelemetryConfig: Configuration for OpenTelemetry.
-    """
-    arize_config = get_arize_config()
-    if arize_config.grpc_endpoint:
-        return OpenTelemetryConfig(
-            exporter="otlp_grpc",
-            endpoint=arize_config.grpc_endpoint,
-        )
-    elif arize_config.http_endpoint:
-        return OpenTelemetryConfig(
-            exporter="otlp_http",
-            endpoint=arize_config.http_endpoint,
-        )
-
-    raise ValueError(
-        "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
-    )
-
-
-def make_json_serializable(payload: dict) -> dict:
-    for key, value in payload.items():
-        try:
-            if isinstance(value, dict):
-                # recursively sanitize dicts
-                payload[key] = make_json_serializable(value.copy())
-            elif not isinstance(value, (str, int, float, bool, type(None))):
-                # everything else becomes a string
-                payload[key] = str(value)
-        except Exception:
-            # non blocking if it can't cast to a str
-            pass
-    return payload
+from litellm.types.integrations.arize import *
 
 
 def set_arize_ai_attributes(span: Span, kwargs, response_obj):
@@ -206,4 +129,81 @@ def set_arize_ai_attributes(span: Span, kwargs, response_obj):
             )
         pass
     except Exception as e:
-        verbose_proxy_logger.error(f"Error setting arize attributes: {e}")
+        verbose_logger.error(f"Error setting arize attributes: {e}")
+
+
+###################### Helper functions ######################
+
+
+def _get_arize_config() -> ArizeConfig:
+    """
+    Helper function to get Arize configuration.
+
+    Returns:
+        ArizeConfig: A Pydantic model containing Arize configuration.
+
+    Raises:
+        ValueError: If required environment variables are not set.
+    """
+    space_key = os.environ.get("ARIZE_SPACE_KEY")
+    api_key = os.environ.get("ARIZE_API_KEY")
+
+    if not space_key:
+        raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
+    if not api_key:
+        raise ValueError("ARIZE_API_KEY not found in environment variables")
+
+    grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
+    http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
+    if grpc_endpoint is None and http_endpoint is None:
+        # use default arize grpc endpoint
+        verbose_logger.debug(
+            "No ARIZE_ENDPOINT or ARIZE_HTTP_ENDPOINT found, using default endpoint: https://otlp.arize.com/v1"
+        )
+        grpc_endpoint = "https://otlp.arize.com/v1"
+
+    return ArizeConfig(
+        space_key=space_key,
+        api_key=api_key,
+        grpc_endpoint=grpc_endpoint,
+        http_endpoint=http_endpoint,
+    )
+
+
+def get_arize_opentelemetry_config() -> Optional[OpenTelemetryConfig]:
+    """
+    Helper function to get OpenTelemetry configuration for Arize.
+
+    Args:
+        arize_config (ArizeConfig): Arize configuration object.
+
+    Returns:
+        OpenTelemetryConfig: Configuration for OpenTelemetry.
+    """
+    arize_config = _get_arize_config()
+    if arize_config.http_endpoint:
+        return OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint=arize_config.http_endpoint,
+        )
+
+    # use default arize grpc endpoint
+    return OpenTelemetryConfig(
+        exporter="otlp_grpc",
+        endpoint=arize_config.grpc_endpoint,
+    )
+
+
+def make_json_serializable(payload: dict) -> dict:
+    for key, value in payload.items():
+        try:
+            if isinstance(value, dict):
+                # recursively sanitize dicts
+                payload[key] = make_json_serializable(value.copy())
+            elif not isinstance(value, (str, int, float, bool, type(None))):
+                # everything else becomes a string
+                payload[key] = str(value)
+        except Exception:
+            # non blocking if it can't cast to a str
+            pass
+    return payload
