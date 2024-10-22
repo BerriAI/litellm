@@ -102,14 +102,12 @@ def test_get_langfuse_logger_for_request_with_no_dynamic_params(
         globalLangfuseLogger=globalLangfuseLogger,
     )
 
-    print("langfuse logger=", result)
-    if globalLangfuseLogger is not None:
-        print("vars in langfuse logger=", vars(result))
+    assert result is not None
+    assert isinstance(result, LangFuseLogger)
 
-    assert result is globalLangfuseLogger
+    print("langfuse logger=", result)
+
     if globalLangfuseLogger is not None:
-        assert result is not None
-        assert isinstance(result, LangFuseLogger)
         assert result.public_key == "global_public_key"
         assert result.secret_key == "global_secret"
         assert result.langfuse_host == "https://global.langfuse.com"
