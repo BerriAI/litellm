@@ -332,7 +332,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     api_base: Optional[str],
     api_key: Optional[str],
     dynamic_api_key: Optional[str],
-) -> tuple[str, str, Optional[str], Optional[str]]:
+) -> Tuple[str, str, Optional[str], Optional[str]]:
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
 
