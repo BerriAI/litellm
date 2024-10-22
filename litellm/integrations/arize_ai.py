@@ -9,14 +9,16 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
 
-from .opentelemetry import OpenTelemetryConfig
-
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+
     Span = _Span
+    OpenTelemetryConfig = _OpenTelemetryConfig
 else:
     Span = Any
+    OpenTelemetryConfig = Any
 
 import os
 
@@ -180,6 +182,8 @@ def get_arize_opentelemetry_config() -> Optional[OpenTelemetryConfig]:
     Returns:
         OpenTelemetryConfig: Configuration for OpenTelemetry.
     """
+    from .opentelemetry import OpenTelemetryConfig
+
     arize_config = _get_arize_config()
     if arize_config.http_endpoint:
         return OpenTelemetryConfig(
