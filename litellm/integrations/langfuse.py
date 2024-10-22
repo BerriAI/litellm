@@ -11,7 +11,6 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
