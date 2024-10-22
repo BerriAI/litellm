@@ -3049,8 +3049,8 @@ def get_optional_params(  # noqa: PLR0915
         )
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
-    elif (
-        custom_llm_provider == "vertex_ai" and model in litellm.vertex_anthropic_models
+    elif litellm.VertexAIAnthropicConfig.is_supported_model(
+        model=model, custom_llm_provider=custom_llm_provider
     ):
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
