@@ -816,15 +816,15 @@ def get_langfuse_logger_for_request(
         is False
     ):
         if temp_langfuse_logger is None:
+            credentials_dict = {}
             temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
-                credentials={}, service_name="langfuse"
+                credentials=credentials_dict,
+                service_name="langfuse",
             )
             if temp_langfuse_logger is None:
-                temp_langfuse_logger = LangFuseLogger()
-                in_memory_dynamic_logger_cache.set_cache(
-                    credentials={},
-                    service_name="langfuse",
-                    logging_obj=temp_langfuse_logger,
+                temp_langfuse_logger = create_langfuse_logger_from_credentials(
+                    credentials=credentials_dict,
+                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
 
         return temp_langfuse_logger
@@ -843,18 +843,29 @@ def get_langfuse_logger_for_request(
 
     # if not cached, create a new langfuse logger and cache it
     if temp_langfuse_logger is None:
-        temp_langfuse_logger = LangFuseLogger(
-            langfuse_public_key=_credentials["langfuse_public_key"],
-            langfuse_secret=_credentials["langfuse_secret"],
-            langfuse_host=_credentials["langfuse_host"],
-        )
-        in_memory_dynamic_logger_cache.set_cache(
+        temp_langfuse_logger = create_langfuse_logger_from_credentials(
             credentials=credentials_dict,
-            service_name="langfuse",
-            logging_obj=temp_langfuse_logger,
+            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
         )
 
     return temp_langfuse_logger
+
+
+def create_langfuse_logger_from_credentials(
+    credentials: Dict,
+    in_memory_dynamic_logger_cache: DynamicLoggingCache,
+) -> LangFuseLogger:
+    langfuse_logger = LangFuseLogger(
+        langfuse_public_key=credentials.get("langfuse_public_key"),
+        langfuse_secret=credentials.get("langfuse_secret"),
+        langfuse_host=credentials.get("langfuse_host"),
+    )
+    in_memory_dynamic_logger_cache.set_cache(
+        credentials=credentials,
+        service_name="langfuse",
+        logging_obj=langfuse_logger,
+    )
+    return langfuse_logger
 
 
 def get_dynamic_langfuse_logging_config(
