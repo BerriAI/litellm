@@ -71,7 +71,7 @@ from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
-from ..integrations.langfuse import LangFuseLogger
+from ..integrations.langfuse import LangFuseLogger, get_langfuse_logger_for_request
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.litedebugger import LiteDebugger
 from ..integrations.literal_ai import LiteralAILogger
@@ -1136,74 +1136,13 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
 
-                        temp_langfuse_logger = langFuseLogger
-                        if langFuseLogger is None or (
-                            (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                != langFuseLogger.public_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                )
-                                != langFuseLogger.secret_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                != langFuseLogger.langfuse_host
-                            )
-                        ):
-                            credentials = {
-                                "langfuse_public_key": self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                ),
-                                "langfuse_secret": self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                ),
-                                "langfuse_host": self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                ),
-                            }
-                            temp_langfuse_logger = (
-                                in_memory_dynamic_logger_cache.get_cache(
-                                    credentials=credentials, service_name="langfuse"
-                                )
-                            )
-                            if temp_langfuse_logger is None:
-                                temp_langfuse_logger = LangFuseLogger(
-                                    langfuse_public_key=self.standard_callback_dynamic_params.get(
-                                        "langfuse_public_key"
-                                    ),
-                                    langfuse_secret=self.standard_callback_dynamic_params.get(
-                                        "langfuse_secret"
-                                    ),
-                                    langfuse_host=self.standard_callback_dynamic_params.get(
-                                        "langfuse_host"
-                                    ),
-                                )
-                                in_memory_dynamic_logger_cache.set_cache(
-                                    credentials=credentials,
-                                    service_name="langfuse",
-                                    logging_obj=temp_langfuse_logger,
-                                )
-                        if temp_langfuse_logger is not None:
-                            _response = temp_langfuse_logger.log_event(
+                        langfuse_logger_to_use = get_langfuse_logger_for_request(
+                            globalLangfuseLogger=langFuseLogger,
+                            standard_callback_dynamic_params=self.standard_callback_dynamic_params,
+                            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                        )
+                        if langfuse_logger_to_use is not None:
+                            _response = langfuse_logger_to_use.log_event(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,

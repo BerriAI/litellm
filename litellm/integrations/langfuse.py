@@ -4,17 +4,23 @@ import copy
 import inspect
 import os
 import traceback
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from packaging.version import Version
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
+else:
+    DynamicLoggingCache = Any
 
 
 class LangFuseLogger:
@@ -800,15 +806,51 @@ def log_requester_metadata(clean_metadata: dict):
     return returned_metadata
 
 
+def get_langfuse_logger_for_request(
+    standard_callback_dynamic_params: StandardCallbackDynamicParams,
+    in_memory_dynamic_logger_cache: DynamicLoggingCache,
+    globalLangfuseLogger: Optional[LangFuseLogger] = None,
+) -> Optional[LangFuseLogger]:
+    temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
+
+    # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
+    _credentials = get_langfuse_logging_config(
+        globalLangfuseLogger=globalLangfuseLogger,
+        standard_callback_dynamic_params=standard_callback_dynamic_params,
+    )
+    credentials_dict = dict(_credentials)
+
+    # check if langfuse logger is already cached
+    temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
+        credentials=credentials_dict, service_name="langfuse"
+    )
+
+    # if not cached, create a new langfuse logger and cache it
+    if temp_langfuse_logger is None:
+        temp_langfuse_logger = LangFuseLogger(
+            langfuse_public_key=_credentials["langfuse_public_key"],
+            langfuse_secret=_credentials["langfuse_secret"],
+            langfuse_host=_credentials["langfuse_host"],
+        )
+        in_memory_dynamic_logger_cache.set_cache(
+            credentials=credentials_dict,
+            service_name="langfuse",
+            logging_obj=temp_langfuse_logger,
+        )
+
+    return temp_langfuse_logger
+
+
 def get_langfuse_logging_config(
     standard_callback_dynamic_params: StandardCallbackDynamicParams,
     globalLangfuseLogger: Optional[LangFuseLogger] = None,
 ) -> LangfuseLoggingConfig:
     """
-    This function is used to get the Langfuse logging config for the Langfuse Logger.
+    This function is used to get the Langfuse logging config to use for a given request.
+
     It checks if the dynamic parameters are provided in the standard_callback_dynamic_params and uses them to get the Langfuse logging config.
 
-    If no dynamic parameters are provided, it uses the default values.
+    If no dynamic parameters are provided, it uses the `globalLangfuseLogger` values
     """
     # only use dynamic params if langfuse credentials are passed dynamically
     if _dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params):
