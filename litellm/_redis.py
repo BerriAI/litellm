@@ -69,6 +69,8 @@ def _get_redis_cluster_kwargs(client=None):
 
     available_args = [x for x in arg_spec.args if x not in exclude_args]
     available_args.append("password")
+    available_args.append("username")
+    available_args.append("ssl")
 
     return available_args
 
