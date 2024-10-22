@@ -154,6 +154,9 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     pass
 
 
+@pytest.mark.skip(
+    reason="skip flaky test - google context caching is flaky and not reliable."
+)
 @pytest.mark.asyncio
 async def test_vertex_ai_pass_through_endpoint_context_caching():
     import vertexai
@@ -161,7 +164,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
     from vertexai.preview import caching
     import datetime
 
-    load_vertex_ai_credentials()
+    # load_vertex_ai_credentials()
 
     vertexai.init(
         project="adroit-crow-413218",
