@@ -488,7 +488,7 @@ class InitalizeOpenAISDKClient:
                     )  # cache for 1 hr
 
     @staticmethod
-    def _get_client_initialization_params(  # noqa: PLR0915
+    def _get_client_initialization_params(
         model: dict,
         model_name: str,
         custom_llm_provider: str,
@@ -509,8 +509,7 @@ class InitalizeOpenAISDKClient:
         # we do this here because we init clients for Azure, OpenAI and we need to set the right key
         api_key = litellm_params.get("api_key") or default_api_key
         if api_key and isinstance(api_key, str) and api_key.startswith("os.environ/"):
-            api_key_env_name = api_key.replace("os.environ/", "")
-            api_key = get_secret_str(api_key_env_name)
+            api_key = get_secret_str(api_key)
             litellm_params["api_key"] = api_key
 
         api_base = litellm_params.get("api_base")
@@ -519,8 +518,7 @@ class InitalizeOpenAISDKClient:
             api_base or base_url or default_api_base
         )  # allow users to pass in `api_base` or `base_url` for azure
         if api_base and api_base.startswith("os.environ/"):
-            api_base_env_name = api_base.replace("os.environ/", "")
-            api_base = get_secret_str(api_base_env_name)
+            api_base = get_secret_str(api_base)
             litellm_params["api_base"] = api_base
 
         ## AZURE AI STUDIO MISTRAL CHECK ##
@@ -545,38 +543,33 @@ class InitalizeOpenAISDKClient:
 
         api_version = litellm_params.get("api_version")
         if api_version and api_version.startswith("os.environ/"):
-            api_version_env_name = api_version.replace("os.environ/", "")
-            api_version = get_secret_str(api_version_env_name)
+            api_version = get_secret_str(api_version)
             litellm_params["api_version"] = api_version
 
         timeout: Optional[Union[float, str]] = (
             litellm_params.pop("timeout", None) or litellm.request_timeout
         )
         if isinstance(timeout, str) and timeout.startswith("os.environ/"):
-            timeout_env_name = timeout.replace("os.environ/", "")
-            timeout = float(get_secret(timeout_env_name))  # type: ignore
+            timeout = float(get_secret(timeout))  # type: ignore
             litellm_params["timeout"] = timeout
 
         stream_timeout: Optional[float] = litellm_params.pop(
             "stream_timeout", timeout
         )  # if no stream_timeout is set, default to timeout
         if isinstance(stream_timeout, str) and stream_timeout.startswith("os.environ/"):
-            stream_timeout_env_name = stream_timeout.replace("os.environ/", "")
-            stream_timeout = float(get_secret(stream_timeout_env_name))  # type: ignore
+            stream_timeout = float(get_secret(stream_timeout))  # type: ignore
             litellm_params["stream_timeout"] = stream_timeout
 
         max_retries: Optional[int] = litellm_params.pop(
             "max_retries", 0
         )  # router handles retry logic
         if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
-            max_retries_env_name = max_retries.replace("os.environ/", "")
-            max_retries = get_secret(max_retries_env_name)  # type: ignore
+            max_retries = get_secret(max_retries)  # type: ignore
             litellm_params["max_retries"] = max_retries
 
         organization = litellm_params.get("organization", None)
         if isinstance(organization, str) and organization.startswith("os.environ/"):
-            organization_env_name = organization.replace("os.environ/", "")
-            organization = get_secret_str(organization_env_name)
+            organization = get_secret_str(organization)
             litellm_params["organization"] = organization
         azure_ad_token_provider: Optional[Callable[[], str]] = None
         tenant_id = litellm_params.get("tenant_id")
