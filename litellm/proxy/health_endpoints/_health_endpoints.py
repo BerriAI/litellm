@@ -120,7 +120,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             }
 
         if service == "langfuse":
-            from litellm.integrations.langfuse import LangFuseLogger
+            from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger = LangFuseLogger()
             langfuse_logger.Langfuse.auth_check()
