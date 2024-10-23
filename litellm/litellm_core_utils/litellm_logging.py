@@ -60,7 +60,7 @@ from litellm.utils import (
 
 from ..integrations.aispend import AISpendLogger
 from ..integrations.argilla import ArgillaLogger
-from ..integrations.arize_ai import get_arize_opentelemetry_config
+from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
@@ -2395,7 +2395,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             OpenTelemetryConfig,
         )
 
-        otel_config = get_arize_opentelemetry_config()
+        otel_config = ArizeLogger.get_arize_opentelemetry_config()
         if otel_config is None:
             raise ValueError(
                 "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
