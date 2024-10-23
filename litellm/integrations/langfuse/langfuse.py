@@ -4,7 +4,7 @@ import copy
 import inspect
 import os
 import traceback
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -15,6 +15,11 @@ from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
+else:
+    DynamicLoggingCache = Any
 
 
 class LangFuseLogger:
@@ -798,53 +803,3 @@ def log_requester_metadata(clean_metadata: dict):
     returned_metadata.update({"requester_metadata": requester_metadata})
 
     return returned_metadata
-
-
-def get_langfuse_logging_config(
-    standard_callback_dynamic_params: StandardCallbackDynamicParams,
-    globalLangfuseLogger: Optional[LangFuseLogger] = None,
-) -> LangfuseLoggingConfig:
-    """
-    This function is used to get the Langfuse logging config for the Langfuse Logger.
-    It checks if the dynamic parameters are provided in the standard_callback_dynamic_params and uses them to get the Langfuse logging config.
-
-    If no dynamic parameters are provided, it uses the default values.
-    """
-    # only use dynamic params if langfuse credentials are passed dynamically
-    if _dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params):
-        return LangfuseLoggingConfig(
-            langfuse_secret=standard_callback_dynamic_params.get("langfuse_secret")
-            or standard_callback_dynamic_params.get("langfuse_secret_key"),
-            langfuse_public_key=standard_callback_dynamic_params.get(
-                "langfuse_public_key"
-            ),
-            langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
-        )
-    elif globalLangfuseLogger is not None:
-        return LangfuseLoggingConfig(
-            langfuse_secret=globalLangfuseLogger.secret_key,
-            langfuse_public_key=globalLangfuseLogger.public_key,
-            langfuse_host=globalLangfuseLogger.langfuse_host,
-        )
-    raise ValueError(
-        "`langfuse` set as a callback but globalLangfuseLogger is not provided and dynamic params are not passed"
-    )
-
-
-def _dynamic_langfuse_credentials_are_passed(
-    standard_callback_dynamic_params: StandardCallbackDynamicParams,
-) -> bool:
-    """
-    This function is used to check if the dynamic langfuse credentials are passed in standard_callback_dynamic_params
-
-    Returns:
-        bool: True if the dynamic langfuse credentials are passed, False otherwise
-    """
-    if (
-        standard_callback_dynamic_params.get("langfuse_host") is not None
-        or standard_callback_dynamic_params.get("langfuse_public_key") is not None
-        or standard_callback_dynamic_params.get("langfuse_secret") is not None
-        or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
-    ):
-        return True
-    return False
