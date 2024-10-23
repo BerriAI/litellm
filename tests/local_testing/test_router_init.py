@@ -920,7 +920,7 @@ def test_get_client_initialization_params_default_values():
 
     assert result.api_key == "together-api-key"
     assert result.api_base == "https://together.xyz/api.openai.com"
-    assert result.timeout is None
+    assert result.timeout == litellm.request_timeout
     assert result.max_retries == 0
 
 
