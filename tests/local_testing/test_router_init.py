@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm import Router
+from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
 
 load_dotenv()
 
@@ -696,3 +697,81 @@ def test_init_router_with_supported_environments(environment, expected_models):
     assert set(_model_list) == set(expected_models)
 
     os.environ.pop("LITELLM_ENVIRONMENT")
+
+
+def test_should_initialize_sync_client():
+    from litellm.types.router import RouterGeneralSettings
+
+    # Test case 1: Router instance is None
+    assert InitalizeOpenAISDKClient.should_initialize_sync_client(None) is False
+
+    # Test case 2: Router instance without router_general_settings
+    router = Router(model_list=[])
+    assert InitalizeOpenAISDKClient.should_initialize_sync_client(router) is True
+
+    # Test case 3: Router instance with async_only_mode = False
+    router = Router(
+        model_list=[],
+        router_general_settings=RouterGeneralSettings(async_only_mode=False),
+    )
+    assert InitalizeOpenAISDKClient.should_initialize_sync_client(router) is True
+
+    # Test case 4: Router instance with async_only_mode = True
+    router = Router(
+        model_list=[],
+        router_general_settings=RouterGeneralSettings(async_only_mode=True),
+    )
+    assert InitalizeOpenAISDKClient.should_initialize_sync_client(router) is False
+
+    # Test case 5: Router instance with router_general_settings but without async_only_mode
+    router = Router(model_list=[], router_general_settings=RouterGeneralSettings())
+    assert InitalizeOpenAISDKClient.should_initialize_sync_client(router) is True
+
+    print("All test cases passed!")
+
+
+@pytest.mark.parametrize(
+    "model_name, custom_llm_provider, expected_result",
+    [
+        ("gpt-3.5-turbo", None, True),  # OpenAI chat completion model
+        ("text-embedding-ada-002", None, True),  # OpenAI embedding model
+        ("claude-2", None, False),  # Non-OpenAI model
+        ("gpt-3.5-turbo", "azure", True),  # Azure OpenAI
+        ("text-davinci-003", "azure_text", True),  # Azure OpenAI
+        ("gpt-3.5-turbo", "openai", True),  # OpenAI
+        ("custom-model", "custom_openai", True),  # Custom OpenAI compatible
+        ("text-davinci-003", "text-completion-openai", True),  # OpenAI text completion
+        (
+            "ft:gpt-3.5-turbo-0613:my-org:custom-model:7p4lURel",
+            None,
+            True,
+        ),  # Fine-tuned GPT model
+        ("mistral-7b", "huggingface", False),  # Non-OpenAI provider
+        ("custom-model", "anthropic", False),  # Non-OpenAI compatible provider
+    ],
+)
+def test_should_create_openai_sdk_client_for_model(
+    model_name, custom_llm_provider, expected_result
+):
+    result = InitalizeOpenAISDKClient._should_create_openai_sdk_client_for_model(
+        model_name, custom_llm_provider
+    )
+    assert (
+        result == expected_result
+    ), f"Failed for model: {model_name}, provider: {custom_llm_provider}"
+
+
+def test_should_create_openai_sdk_client_for_model_openai_compatible_providers():
+    # Test with a known OpenAI compatible provider
+    assert InitalizeOpenAISDKClient._should_create_openai_sdk_client_for_model(
+        "custom-model", "groq"
+    ), "Should return True for OpenAI compatible provider"
+
+    # Add a new compatible provider and test
+    litellm.openai_compatible_providers.append("new_provider")
+    assert InitalizeOpenAISDKClient._should_create_openai_sdk_client_for_model(
+        "custom-model", "new_provider"
+    ), "Should return True for newly added OpenAI compatible provider"
+
+    # Clean up
+    litellm.openai_compatible_providers.remove("new_provider")
