@@ -775,3 +775,12 @@ def test_hosted_vllm_tool_param():
     )
     assert "tools" not in optional_params
     assert "tool_choice" not in optional_params
+
+
+def test_unmapped_vertex_anthropic_model():
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider="vertex_ai",
+        max_retries=10,
+    )
+    assert "max_retries" not in optional_params

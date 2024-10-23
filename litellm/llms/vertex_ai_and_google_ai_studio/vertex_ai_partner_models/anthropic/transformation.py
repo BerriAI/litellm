@@ -177,3 +177,16 @@ class VertexAIAnthropicConfig:
                 optional_params["json_mode"] = True
 
         return optional_params
+
+    @classmethod
+    def is_supported_model(
+        cls, model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """
+        Check if the model is supported by the VertexAI Anthropic API.
+        """
+        if custom_llm_provider == "vertex_ai" and "claude" in model.lower():
+            return True
+        elif model in litellm.vertex_anthropic_models:
+            return True
+        return False
