@@ -507,6 +507,20 @@ class InitalizeOpenAISDKClient:
         default_api_key: Optional[str],
         default_api_base: Optional[str],
     ) -> OpenAISDKClientInitializationParams:
+        """
+        Returns params to use for initializing OpenAI SDK clients (for OpenAI, Azure OpenAI, OpenAI Compatible Providers)
+
+        Args:
+            model: model dict
+            model_name: model name
+            custom_llm_provider: custom llm provider
+            litellm_params: litellm params
+            default_api_key: default api key
+            default_api_base: default api base
+
+        Returns:
+            OpenAISDKClientInitializationParams
+        """
 
         is_azure_ai_studio_model: bool = False
         if custom_llm_provider == "azure":
