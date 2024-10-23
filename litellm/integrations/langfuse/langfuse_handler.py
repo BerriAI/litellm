@@ -24,6 +24,16 @@ class LangFuseHandler:
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
         globalLangfuseLogger: Optional[LangFuseLogger] = None,
     ) -> LangFuseLogger:
+        """
+        This function is used to get the LangFuseLogger for a given request
+
+        1. If dynamic credentials are passed
+            - check if a LangFuseLogger is cached for the dynamic credentials
+            - if cached LangFuseLogger is not found, create a new LangFuseLogger and cache it
+
+        2. If dynamic credentials are not passed return the globalLangfuseLogger
+
+        """
         temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
         if (
             LangFuseHandler._dynamic_langfuse_credentials_are_passed(
@@ -31,19 +41,10 @@ class LangFuseHandler:
             )
             is False
         ):
-            if temp_langfuse_logger is None:
-                credentials_dict = {}
-                temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
-                    credentials=credentials_dict,
-                    service_name="langfuse",
-                )
-                if temp_langfuse_logger is None:
-                    temp_langfuse_logger = LangFuseHandler.create_langfuse_logger_from_credentials(
-                        credentials=credentials_dict,
-                        in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-                    )
-
-            return temp_langfuse_logger
+            return LangFuseHandler._return_global_langfuse_logger(
+                globalLangfuseLogger=globalLangfuseLogger,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+            )
 
         # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
         _credentials = LangFuseHandler.get_dynamic_langfuse_logging_config(
@@ -60,7 +61,7 @@ class LangFuseHandler:
         # if not cached, create a new langfuse logger and cache it
         if temp_langfuse_logger is None:
             temp_langfuse_logger = (
-                LangFuseHandler.create_langfuse_logger_from_credentials(
+                LangFuseHandler._create_langfuse_logger_from_credentials(
                     credentials=credentials_dict,
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
@@ -69,10 +70,46 @@ class LangFuseHandler:
         return temp_langfuse_logger
 
     @staticmethod
-    def create_langfuse_logger_from_credentials(
+    def _return_global_langfuse_logger(
+        globalLangfuseLogger: Optional[LangFuseLogger],
+        in_memory_dynamic_logger_cache: DynamicLoggingCache,
+    ) -> LangFuseLogger:
+        """
+        Returns the Global LangfuseLogger set on litellm
+
+        (this is the default langfuse logger - used when no dynamic credentials are passed)
+
+        If no Global LangfuseLogger is set, it will check in_memory_dynamic_logger_cache for a cached LangFuseLogger
+        This function is used to return the globalLangfuseLogger if it exists, otherwise it will check in_memory_dynamic_logger_cache for a cached LangFuseLogger
+        """
+        if globalLangfuseLogger is not None:
+            return globalLangfuseLogger
+
+        credentials_dict = {}
+        globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
+            credentials=credentials_dict,
+            service_name="langfuse",
+        )
+        if globalLangfuseLogger is None:
+            globalLangfuseLogger = (
+                LangFuseHandler._create_langfuse_logger_from_credentials(
+                    credentials=credentials_dict,
+                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                )
+            )
+        return globalLangfuseLogger
+
+    @staticmethod
+    def _create_langfuse_logger_from_credentials(
         credentials: Dict,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
+        """
+        This function is used to
+        1. create a LangFuseLogger from the credentials
+        2. cache the LangFuseLogger to prevent re-creating it for the same credentials
+        """
+
         langfuse_logger = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret"),
