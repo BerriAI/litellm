@@ -130,8 +130,8 @@ class InitalizeOpenAISDKClient:
             )
 
             ############### Unpack client initialization params #######################
-            api_key: Optional[str] = client_initialization_params.api_key
-            api_base: Optional[str] = client_initialization_params.api_base
+            api_key = client_initialization_params.api_key
+            api_base = client_initialization_params.api_base
             api_version: Optional[str] = client_initialization_params.api_version
             timeout: Optional[float] = client_initialization_params.timeout
             stream_timeout: Optional[float] = (
@@ -142,10 +142,8 @@ class InitalizeOpenAISDKClient:
             azure_ad_token_provider: Optional[Callable[[], str]] = (
                 client_initialization_params.azure_ad_token_provider
             )
-            custom_llm_provider: Optional[str] = (
-                client_initialization_params.custom_llm_provider
-            )
-            model_name: str = client_initialization_params.model_name
+            custom_llm_provider = client_initialization_params.custom_llm_provider
+            model_name = client_initialization_params.model_name
             ##########################################################################
 
             if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
