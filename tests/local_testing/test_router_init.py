@@ -922,3 +922,61 @@ def test_get_client_initialization_params_default_values():
     assert result.api_base == "https://together.xyz/api.openai.com"
     assert result.timeout is None
     assert result.max_retries == 0
+
+
+def test_get_client_initialization_params_all_env_vars():
+    # Set up environment variables
+    os.environ["TEST_API_KEY"] = "test-api-key"
+    os.environ["TEST_API_BASE"] = "https://test.openai.com"
+    os.environ["TEST_API_VERSION"] = "2023-05-15"
+    os.environ["TEST_TIMEOUT"] = "30"
+    os.environ["TEST_STREAM_TIMEOUT"] = "60"
+    os.environ["TEST_MAX_RETRIES"] = "3"
+    os.environ["TEST_ORGANIZATION"] = "test-org"
+
+    model = {}
+    model_name = "gpt-4"
+    custom_llm_provider = None
+    litellm_params = {
+        "api_key": "os.environ/TEST_API_KEY",
+        "api_base": "os.environ/TEST_API_BASE",
+        "api_version": "os.environ/TEST_API_VERSION",
+        "timeout": "os.environ/TEST_TIMEOUT",
+        "stream_timeout": "os.environ/TEST_STREAM_TIMEOUT",
+        "max_retries": "os.environ/TEST_MAX_RETRIES",
+        "organization": "os.environ/TEST_ORGANIZATION",
+    }
+    default_api_key = None
+    default_api_base = None
+
+    result = InitalizeOpenAISDKClient._get_client_initialization_params(
+        model=model,
+        model_name=model_name,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        default_api_key=default_api_key,
+        default_api_base=default_api_base,
+    )
+
+    assert isinstance(result, OpenAISDKClientInitializationParams)
+    assert result.api_key == "test-api-key"
+    assert result.api_base == "https://test.openai.com"
+    assert result.api_version == "2023-05-15"
+    assert result.timeout == 30.0
+    assert result.stream_timeout == 60.0
+    assert result.max_retries == 3
+    assert result.organization == "test-org"
+    assert result.model_name == "gpt-4"
+    assert result.custom_llm_provider is None
+
+    # Clean up environment variables
+    for key in [
+        "TEST_API_KEY",
+        "TEST_API_BASE",
+        "TEST_API_VERSION",
+        "TEST_TIMEOUT",
+        "TEST_STREAM_TIMEOUT",
+        "TEST_MAX_RETRIES",
+        "TEST_ORGANIZATION",
+    ]:
+        os.environ.pop(key)
