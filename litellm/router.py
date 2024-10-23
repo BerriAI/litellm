@@ -63,10 +63,7 @@ from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
 )
-from litellm.router_utils.client_initalization_utils import (
-    set_client,
-    should_initialize_sync_client,
-)
+from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
@@ -3951,7 +3948,7 @@ class Router:
             raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         # init OpenAI, Azure clients
-        set_client(
+        InitalizeOpenAISDKClient.set_client(
             litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         )
 
@@ -4661,7 +4658,9 @@ class Router:
                     """
                     Re-initialize the client
                     """
-                    set_client(litellm_router_instance=self, model=deployment)
+                    InitalizeOpenAISDKClient.set_client(
+                        litellm_router_instance=self, model=deployment
+                    )
                     client = self.cache.get_cache(key=cache_key, local_only=True)
                 return client
             else:
@@ -4671,7 +4670,9 @@ class Router:
                     """
                     Re-initialize the client
                     """
-                    set_client(litellm_router_instance=self, model=deployment)
+                    InitalizeOpenAISDKClient.set_client(
+                        litellm_router_instance=self, model=deployment
+                    )
                     client = self.cache.get_cache(key=cache_key, local_only=True)
                 return client
         else:
@@ -4682,7 +4683,9 @@ class Router:
                     """
                     Re-initialize the client
                     """
-                    set_client(litellm_router_instance=self, model=deployment)
+                    InitalizeOpenAISDKClient.set_client(
+                        litellm_router_instance=self, model=deployment
+                    )
                     client = self.cache.get_cache(key=cache_key)
                 return client
             else:
@@ -4692,7 +4695,9 @@ class Router:
                     """
                     Re-initialize the client
                     """
-                    set_client(litellm_router_instance=self, model=deployment)
+                    InitalizeOpenAISDKClient.set_client(
+                        litellm_router_instance=self, model=deployment
+                    )
                     client = self.cache.get_cache(key=cache_key)
                 return client
 
