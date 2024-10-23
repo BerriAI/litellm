@@ -1902,50 +1902,12 @@ class Logging:
                             ):  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if langFuseLogger is None or (
-                            (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                != langFuseLogger.public_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                != langFuseLogger.public_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                != langFuseLogger.langfuse_host
-                            )
-                        ):
-                            langFuseLogger = LangFuseLogger(
-                                langfuse_public_key=self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                ),
-                                langfuse_secret=self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                ),
-                                langfuse_host=self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                ),
-                            )
-                        _response = langFuseLogger.log_event(
+                        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+                            globalLangfuseLogger=langFuseLogger,
+                            standard_callback_dynamic_params=self.standard_callback_dynamic_params,
+                            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                        )
+                        _response = langfuse_logger_to_use.log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
