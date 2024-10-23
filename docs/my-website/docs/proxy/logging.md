@@ -1279,7 +1279,8 @@ litellm_settings:
 environment_variables:
     ARIZE_SPACE_KEY: "d0*****"
     ARIZE_API_KEY: "141a****"
-    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize api endpoint
+    ARIZE_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize GRPC api endpoint
+    ARIZE_HTTP_ENDPOINT: "https://otlp.arize.com/v1" # OPTIONAL - your custom arize HTTP api endpoint. Set either this or ARIZE_ENDPOINT
 ```
 
 2. Start Proxy
