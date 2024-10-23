@@ -50,7 +50,7 @@ jobs:
           current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
           version-fragment: 'bug'
 
-      - name: Check that chart is OK
+      - name: Lint helm chart
         run: helm lint deploy/charts/litellm-helm
 
       - uses: ./.github/actions/helm-oci-chart-releaser
