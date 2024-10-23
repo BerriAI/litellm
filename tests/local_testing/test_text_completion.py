@@ -4259,3 +4259,24 @@ def test_completion_fireworks_ai_multiple_choices():
     print(response.choices)
 
     assert len(response.choices) == 4
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_text_completion_with_echo(stream):
+    litellm.set_verbose = True
+    response = litellm.text_completion(
+        model="davinci-002",
+        prompt="hello",
+        max_tokens=1,  # only see the first token
+        stop="\n",  # stop at the first newline
+        logprobs=1,  # return log prob
+        echo=True,  # if True, return the prompt as well
+        stream=stream,
+    )
+    print(response)
+
+    if stream:
+        for chunk in response:
+            print(chunk)
+    else:
+        assert isinstance(response, TextCompletionResponse)
