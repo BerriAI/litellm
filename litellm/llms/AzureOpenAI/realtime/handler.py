@@ -72,5 +72,5 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             await websocket.close(code=e.status_code, reason=str(e))
-        except Exception as e:
-            await websocket.close(code=1011, reason=f"Internal server error: {str(e)}")
+        except Exception:
+            pass
