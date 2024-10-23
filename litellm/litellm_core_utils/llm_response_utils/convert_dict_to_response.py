@@ -6,10 +6,7 @@ import uuid
 from typing import Dict, Iterable, List, Literal, Optional, Union
 
 import litellm
-from litellm.litellm_core_utils.litellm_logging import verbose_logger
-from litellm.litellm_core_utils.llm_response_utils.get_headers import (
-    get_response_headers,
-)
+from litellm._logging import verbose_logger
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -25,6 +22,8 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
+
+from .get_headers import get_response_headers
 
 
 async def convert_to_streaming_response_async(response_object: Optional[dict] = None):
