@@ -235,7 +235,7 @@ def test_all_model_configs():
         optional_params={},
         api_version="2022-12-01",
         drop_params=False,
-    ) == {"max_tokens": 10}
+    ) == {"max_completion_tokens": 10}
 
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
