@@ -1,10 +1,11 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import httpx
 import openai
+from pydantic import BaseModel
 
 import litellm
 from litellm import get_secret, get_secret_str
@@ -21,6 +22,17 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+class OpenAISDKClientInitializationParams(BaseModel):
+    api_key: Optional[str]
+    api_base: Optional[str]
+    api_version: Optional[str]
+    azure_ad_token_provider: Optional[Callable[[], str]]
+    timeout: Optional[float]
+    stream_timeout: Optional[float]
+    max_retries: int
+    organization: Optional[str]
 
 
 class InitalizeOpenAISDKClient:
@@ -102,105 +114,31 @@ class InitalizeOpenAISDKClient:
             model_name=model_name,
             custom_llm_provider=custom_llm_provider,
         ):
-            is_azure_ai_studio_model: bool = False
-            if custom_llm_provider == "azure":
-                if litellm.utils._is_non_openai_azure_model(model_name):
-                    is_azure_ai_studio_model = True
-                    custom_llm_provider = "openai"
-                    # remove azure prefx from model_name
-                    model_name = model_name.replace("azure/", "")
-            # glorified / complicated reading of configs
-            # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
-            # we do this here because we init clients for Azure, OpenAI and we need to set the right key
-            api_key = litellm_params.get("api_key") or default_api_key
-            if (
-                api_key
-                and isinstance(api_key, str)
-                and api_key.startswith("os.environ/")
-            ):
-                api_key_env_name = api_key.replace("os.environ/", "")
-                api_key = get_secret_str(api_key_env_name)
-                litellm_params["api_key"] = api_key
-
-            api_base = litellm_params.get("api_base")
-            base_url: Optional[str] = litellm_params.get("base_url")
-            api_base = (
-                api_base or base_url or default_api_base
-            )  # allow users to pass in `api_base` or `base_url` for azure
-            if api_base and api_base.startswith("os.environ/"):
-                api_base_env_name = api_base.replace("os.environ/", "")
-                api_base = get_secret_str(api_base_env_name)
-                litellm_params["api_base"] = api_base
-
-            ## AZURE AI STUDIO MISTRAL CHECK ##
-            """
-            Make sure api base ends in /v1/
-
-            if not, add it - https://github.com/BerriAI/litellm/issues/2279
-            """
-            if (
-                is_azure_ai_studio_model is True
-                and api_base is not None
-                and isinstance(api_base, str)
-                and not api_base.endswith("/v1/")
-            ):
-                # check if it ends with a trailing slash
-                if api_base.endswith("/"):
-                    api_base += "v1/"
-                elif api_base.endswith("/v1"):
-                    api_base += "/"
-                else:
-                    api_base += "/v1/"
-
-            api_version = litellm_params.get("api_version")
-            if api_version and api_version.startswith("os.environ/"):
-                api_version_env_name = api_version.replace("os.environ/", "")
-                api_version = get_secret_str(api_version_env_name)
-                litellm_params["api_version"] = api_version
-
-            timeout: Optional[float] = (
-                litellm_params.pop("timeout", None) or litellm.request_timeout
+            client_initialization_params = (
+                InitalizeOpenAISDKClient._get_client_initialization_params(
+                    model=model,
+                    model_name=model_name,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    default_api_key=default_api_key,
+                    default_api_base=default_api_base,
+                )
             )
-            if isinstance(timeout, str) and timeout.startswith("os.environ/"):
-                timeout_env_name = timeout.replace("os.environ/", "")
-                timeout = get_secret(timeout_env_name)  # type: ignore
-                litellm_params["timeout"] = timeout
 
-            stream_timeout: Optional[float] = litellm_params.pop(
-                "stream_timeout", timeout
-            )  # if no stream_timeout is set, default to timeout
-            if isinstance(stream_timeout, str) and stream_timeout.startswith(
-                "os.environ/"
-            ):
-                stream_timeout_env_name = stream_timeout.replace("os.environ/", "")
-                stream_timeout = get_secret(stream_timeout_env_name)  # type: ignore
-                litellm_params["stream_timeout"] = stream_timeout
-
-            max_retries: Optional[int] = litellm_params.pop(
-                "max_retries", 0
-            )  # router handles retry logic
-            if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
-                max_retries_env_name = max_retries.replace("os.environ/", "")
-                max_retries = get_secret(max_retries_env_name)  # type: ignore
-                litellm_params["max_retries"] = max_retries
-
-            organization = litellm_params.get("organization", None)
-            if isinstance(organization, str) and organization.startswith("os.environ/"):
-                organization_env_name = organization.replace("os.environ/", "")
-                organization = get_secret_str(organization_env_name)
-                litellm_params["organization"] = organization
-            azure_ad_token_provider: Optional[Callable[[], str]] = None
-            if litellm_params.get("tenant_id"):
-                verbose_router_logger.debug(
-                    "Using Azure AD Token Provider for Azure Auth"
-                )
-                azure_ad_token_provider = (
-                    InitalizeOpenAISDKClient.get_azure_ad_token_from_entrata_id(
-                        tenant_id=litellm_params.get("tenant_id"),
-                        client_id=litellm_params.get("client_id"),
-                        client_secret=litellm_params.get("client_secret"),
-                    )
-                )
+            ############### Unpack client initialization params #######################
+            api_key: Optional[str] = client_initialization_params.api_key
+            api_base: Optional[str] = client_initialization_params.api_base
+            api_version: Optional[str] = client_initialization_params.api_version
+            timeout: Optional[float] = client_initialization_params.timeout
+            stream_timeout: Optional[float] = (
+                client_initialization_params.stream_timeout
+            )
+            max_retries: int = client_initialization_params.max_retries
+            organization: Optional[str] = client_initialization_params.organization
+            azure_ad_token_provider: Optional[Callable[[], str]] = (
+                client_initialization_params.azure_ad_token_provider
+            )
+            ##########################################################################
 
             if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
                 if api_base is None or not isinstance(api_base, str):
@@ -247,8 +185,8 @@ class InitalizeOpenAISDKClient:
                         azure_ad_token_provider=azure_ad_token_provider,
                         base_url=api_base,
                         api_version=api_version,
-                        timeout=timeout,  # type: ignore
-                        max_retries=max_retries,  # type: ignore
+                        timeout=timeout,
+                        max_retries=max_retries,
                         http_client=httpx.AsyncClient(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -273,8 +211,8 @@ class InitalizeOpenAISDKClient:
                             azure_ad_token_provider=azure_ad_token_provider,
                             base_url=api_base,
                             api_version=api_version,
-                            timeout=timeout,  # type: ignore
-                            max_retries=max_retries,  # type: ignore
+                            timeout=timeout,
+                            max_retries=max_retries,
                             http_client=httpx.Client(
                                 limits=httpx.Limits(
                                     max_connections=1000, max_keepalive_connections=100
@@ -296,8 +234,8 @@ class InitalizeOpenAISDKClient:
                         azure_ad_token_provider=azure_ad_token_provider,
                         base_url=api_base,
                         api_version=api_version,
-                        timeout=stream_timeout,  # type: ignore
-                        max_retries=max_retries,  # type: ignore
+                        timeout=stream_timeout,
+                        max_retries=max_retries,
                         http_client=httpx.AsyncClient(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -322,8 +260,8 @@ class InitalizeOpenAISDKClient:
                             azure_ad_token_provider=azure_ad_token_provider,
                             base_url=api_base,
                             api_version=api_version,
-                            timeout=stream_timeout,  # type: ignore
-                            max_retries=max_retries,  # type: ignore
+                            timeout=stream_timeout,
+                            max_retries=max_retries,
                             http_client=httpx.Client(
                                 limits=httpx.Limits(
                                     max_connections=1000, max_keepalive_connections=100
@@ -370,8 +308,8 @@ class InitalizeOpenAISDKClient:
                     cache_key = f"{model_id}_async_client"
                     _client = openai.AsyncAzureOpenAI(  # type: ignore
                         **azure_client_params,
-                        timeout=timeout,  # type: ignore
-                        max_retries=max_retries,  # type: ignore
+                        timeout=timeout,
+                        max_retries=max_retries,
                         http_client=httpx.AsyncClient(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -391,8 +329,8 @@ class InitalizeOpenAISDKClient:
                         cache_key = f"{model_id}_client"
                         _client = openai.AzureOpenAI(  # type: ignore
                             **azure_client_params,
-                            timeout=timeout,  # type: ignore
-                            max_retries=max_retries,  # type: ignore
+                            timeout=timeout,
+                            max_retries=max_retries,
                             http_client=httpx.Client(
                                 limits=httpx.Limits(
                                     max_connections=1000, max_keepalive_connections=100
@@ -411,8 +349,8 @@ class InitalizeOpenAISDKClient:
                     cache_key = f"{model_id}_stream_async_client"
                     _client = openai.AsyncAzureOpenAI(  # type: ignore
                         **azure_client_params,
-                        timeout=stream_timeout,  # type: ignore
-                        max_retries=max_retries,  # type: ignore
+                        timeout=stream_timeout,
+                        max_retries=max_retries,
                         http_client=httpx.AsyncClient(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -433,8 +371,8 @@ class InitalizeOpenAISDKClient:
                         cache_key = f"{model_id}_stream_client"
                         _client = openai.AzureOpenAI(  # type: ignore
                             **azure_client_params,
-                            timeout=stream_timeout,  # type: ignore
-                            max_retries=max_retries,  # type: ignore
+                            timeout=stream_timeout,
+                            max_retries=max_retries,
                             http_client=httpx.Client(
                                 limits=httpx.Limits(
                                     max_connections=1000, max_keepalive_connections=100
@@ -461,8 +399,8 @@ class InitalizeOpenAISDKClient:
                 _client = openai.AsyncOpenAI(  # type: ignore
                     api_key=api_key,
                     base_url=api_base,
-                    timeout=timeout,  # type: ignore
-                    max_retries=max_retries,  # type: ignore
+                    timeout=timeout,
+                    max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
                         limits=httpx.Limits(
@@ -485,8 +423,8 @@ class InitalizeOpenAISDKClient:
                     _client = openai.OpenAI(  # type: ignore
                         api_key=api_key,
                         base_url=api_base,
-                        timeout=timeout,  # type: ignore
-                        max_retries=max_retries,  # type: ignore
+                        timeout=timeout,
+                        max_retries=max_retries,
                         organization=organization,
                         http_client=httpx.Client(
                             limits=httpx.Limits(
@@ -507,8 +445,8 @@ class InitalizeOpenAISDKClient:
                 _client = openai.AsyncOpenAI(  # type: ignore
                     api_key=api_key,
                     base_url=api_base,
-                    timeout=stream_timeout,  # type: ignore
-                    max_retries=max_retries,  # type: ignore
+                    timeout=stream_timeout,
+                    max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
                         limits=httpx.Limits(
@@ -532,8 +470,8 @@ class InitalizeOpenAISDKClient:
                     _client = openai.OpenAI(  # type: ignore
                         api_key=api_key,
                         base_url=api_base,
-                        timeout=stream_timeout,  # type: ignore
-                        max_retries=max_retries,  # type: ignore
+                        timeout=stream_timeout,
+                        max_retries=max_retries,
                         organization=organization,
                         http_client=httpx.Client(
                             limits=httpx.Limits(
@@ -548,6 +486,120 @@ class InitalizeOpenAISDKClient:
                         ttl=client_ttl,
                         local_only=True,
                     )  # cache for 1 hr
+
+    @staticmethod
+    def _get_client_initialization_params(  # noqa: PLR0915
+        model: dict,
+        model_name: str,
+        custom_llm_provider: str,
+        litellm_params: dict,
+        default_api_key: Optional[str],
+        default_api_base: Optional[str],
+    ) -> OpenAISDKClientInitializationParams:
+
+        is_azure_ai_studio_model: bool = False
+        if custom_llm_provider == "azure":
+            if litellm.utils._is_non_openai_azure_model(model_name):
+                is_azure_ai_studio_model = True
+                custom_llm_provider = "openai"
+                # remove azure prefx from model_name
+                model_name = model_name.replace("azure/", "")
+        # glorified / complicated reading of configs
+        # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
+        # we do this here because we init clients for Azure, OpenAI and we need to set the right key
+        api_key = litellm_params.get("api_key") or default_api_key
+        if api_key and isinstance(api_key, str) and api_key.startswith("os.environ/"):
+            api_key_env_name = api_key.replace("os.environ/", "")
+            api_key = get_secret_str(api_key_env_name)
+            litellm_params["api_key"] = api_key
+
+        api_base = litellm_params.get("api_base")
+        base_url: Optional[str] = litellm_params.get("base_url")
+        api_base = (
+            api_base or base_url or default_api_base
+        )  # allow users to pass in `api_base` or `base_url` for azure
+        if api_base and api_base.startswith("os.environ/"):
+            api_base_env_name = api_base.replace("os.environ/", "")
+            api_base = get_secret_str(api_base_env_name)
+            litellm_params["api_base"] = api_base
+
+        ## AZURE AI STUDIO MISTRAL CHECK ##
+        """
+        Make sure api base ends in /v1/
+
+        if not, add it - https://github.com/BerriAI/litellm/issues/2279
+        """
+        if (
+            is_azure_ai_studio_model is True
+            and api_base is not None
+            and isinstance(api_base, str)
+            and not api_base.endswith("/v1/")
+        ):
+            # check if it ends with a trailing slash
+            if api_base.endswith("/"):
+                api_base += "v1/"
+            elif api_base.endswith("/v1"):
+                api_base += "/"
+            else:
+                api_base += "/v1/"
+
+        api_version = litellm_params.get("api_version")
+        if api_version and api_version.startswith("os.environ/"):
+            api_version_env_name = api_version.replace("os.environ/", "")
+            api_version = get_secret_str(api_version_env_name)
+            litellm_params["api_version"] = api_version
+
+        timeout: Optional[Union[float, str]] = (
+            litellm_params.pop("timeout", None) or litellm.request_timeout
+        )
+        if isinstance(timeout, str) and timeout.startswith("os.environ/"):
+            timeout_env_name = timeout.replace("os.environ/", "")
+            timeout = float(get_secret(timeout_env_name))  # type: ignore
+            litellm_params["timeout"] = timeout
+
+        stream_timeout: Optional[float] = litellm_params.pop(
+            "stream_timeout", timeout
+        )  # if no stream_timeout is set, default to timeout
+        if isinstance(stream_timeout, str) and stream_timeout.startswith("os.environ/"):
+            stream_timeout_env_name = stream_timeout.replace("os.environ/", "")
+            stream_timeout = float(get_secret(stream_timeout_env_name))  # type: ignore
+            litellm_params["stream_timeout"] = stream_timeout
+
+        max_retries: Optional[int] = litellm_params.pop(
+            "max_retries", 0
+        )  # router handles retry logic
+        if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
+            max_retries_env_name = max_retries.replace("os.environ/", "")
+            max_retries = get_secret(max_retries_env_name)  # type: ignore
+            litellm_params["max_retries"] = max_retries
+
+        organization = litellm_params.get("organization", None)
+        if isinstance(organization, str) and organization.startswith("os.environ/"):
+            organization_env_name = organization.replace("os.environ/", "")
+            organization = get_secret_str(organization_env_name)
+            litellm_params["organization"] = organization
+        azure_ad_token_provider: Optional[Callable[[], str]] = None
+        tenant_id = litellm_params.get("tenant_id")
+        if tenant_id is not None:
+            verbose_router_logger.debug("Using Azure AD Token Provider for Azure Auth")
+            azure_ad_token_provider = (
+                InitalizeOpenAISDKClient.get_azure_ad_token_from_entrata_id(
+                    tenant_id=tenant_id,
+                    client_id=litellm_params.get("client_id"),
+                    client_secret=litellm_params.get("client_secret"),
+                )
+            )
+
+        return OpenAISDKClientInitializationParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token_provider=azure_ad_token_provider,
+            timeout=timeout,  # type: ignore
+            stream_timeout=stream_timeout,  # type: ignore
+            max_retries=max_retries,  # type: ignore
+            organization=organization,
+        )
 
     @staticmethod
     def _should_create_openai_sdk_client_for_model(
@@ -576,13 +628,18 @@ class InitalizeOpenAISDKClient:
 
     @staticmethod
     def get_azure_ad_token_from_entrata_id(
-        tenant_id: str, client_id: str, client_secret: str
+        tenant_id: str, client_id: Optional[str], client_secret: Optional[str]
     ) -> Callable[[], str]:
         from azure.identity import (
             ClientSecretCredential,
             DefaultAzureCredential,
             get_bearer_token_provider,
         )
+
+        if client_id is None or client_secret is None:
+            raise ValueError(
+                "client_id and client_secret must be provided when using `tenant_id`"
+            )
 
         verbose_router_logger.debug("Getting Azure AD Token from Entrata ID")
 
