@@ -620,7 +620,7 @@ def test_aaalangfuse_existing_trace_id():
     import datetime
 
     import litellm
-    from litellm.integrations.langfuse import LangFuseLogger
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
     langfuse_Logger = LangFuseLogger(
         langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
@@ -1120,7 +1120,7 @@ generation_params = {
 )
 def test_langfuse_prompt_type(prompt):
 
-    from litellm.integrations.langfuse import _add_prompt_to_generation_params
+    from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
 
     clean_metadata = {
         "prompt": {
@@ -1227,7 +1227,7 @@ def test_langfuse_prompt_type(prompt):
 
 
 def test_langfuse_logging_metadata():
-    from litellm.integrations.langfuse import log_requester_metadata
+    from litellm.integrations.langfuse.langfuse import log_requester_metadata
 
     metadata = {"key": "value", "requester_metadata": {"key": "value"}}
 

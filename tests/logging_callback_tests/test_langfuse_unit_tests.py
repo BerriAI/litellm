@@ -14,12 +14,10 @@ import litellm
 import asyncio
 import logging
 from litellm._logging import verbose_logger
-from litellm.integrations.langfuse import (
+from litellm.integrations.langfuse.langfuse import (
     LangFuseLogger,
-    get_langfuse_logger_for_request,
-    get_dynamic_langfuse_logging_config,
-    _dynamic_langfuse_credentials_are_passed,
 )
+from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
 from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 
@@ -63,7 +61,7 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
     Even if globalLangfuseLogger is provided, it should use dynamic params if they are passed
     """
 
-    result = get_langfuse_logger_for_request(
+    result = LangFuseHandler.get_langfuse_logger_for_request(
         standard_callback_dynamic_params=standard_params,
         in_memory_dynamic_logger_cache=dynamic_logging_cache,
         globalLangfuseLogger=globalLangfuseLogger,
@@ -96,7 +94,7 @@ def test_get_langfuse_logger_for_request_with_no_dynamic_params(
     """
     If StandardCallbackDynamicParams are not provided, the globalLangfuseLogger should be returned
     """
-    result = get_langfuse_logger_for_request(
+    result = LangFuseHandler.get_langfuse_logger_for_request(
         standard_callback_dynamic_params=StandardCallbackDynamicParams(),
         in_memory_dynamic_logger_cache=dynamic_logging_cache,
         globalLangfuseLogger=globalLangfuseLogger,

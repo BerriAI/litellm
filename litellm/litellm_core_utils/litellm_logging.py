@@ -71,7 +71,8 @@ from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
-from ..integrations.langfuse import LangFuseLogger, get_langfuse_logger_for_request
+from ..integrations.langfuse.langfuse import LangFuseLogger
+from ..integrations.langfuse.langfuse_handler import LangFuseHandler
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.litedebugger import LiteDebugger
 from ..integrations.literal_ai import LiteralAILogger
@@ -1136,7 +1137,7 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
 
-                        langfuse_logger_to_use = get_langfuse_logger_for_request(
+                        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
                             globalLangfuseLogger=langFuseLogger,
                             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
