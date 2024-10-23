@@ -36,7 +36,6 @@ class OpenAISDKClientInitializationParams(BaseModel):
 
     # Internal LiteLLM specific params
     custom_llm_provider: Optional[str]
-    is_azure_ai_studio_model: bool
     model_name: str
 
 
@@ -142,9 +141,6 @@ class InitalizeOpenAISDKClient:
             organization: Optional[str] = client_initialization_params.organization
             azure_ad_token_provider: Optional[Callable[[], str]] = (
                 client_initialization_params.azure_ad_token_provider
-            )
-            is_azure_ai_studio_model: bool = (
-                client_initialization_params.is_azure_ai_studio_model
             )
             custom_llm_provider: Optional[str] = (
                 client_initialization_params.custom_llm_provider
@@ -605,7 +601,6 @@ class InitalizeOpenAISDKClient:
             max_retries=max_retries,  # type: ignore
             organization=organization,
             custom_llm_provider=custom_llm_provider,
-            is_azure_ai_studio_model=is_azure_ai_studio_model,
             model_name=model_name,
         )
 
