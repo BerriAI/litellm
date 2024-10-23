@@ -499,7 +499,7 @@ class InitalizeOpenAISDKClient:
     def _get_client_initialization_params(
         model: dict,
         model_name: str,
-        custom_llm_provider: str,
+        custom_llm_provider: Optional[str],
         litellm_params: dict,
         default_api_key: Optional[str],
         default_api_base: Optional[str],

@@ -17,7 +17,10 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm import Router
-from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
+from litellm.router_utils.client_initalization_utils import (
+    InitalizeOpenAISDKClient,
+    OpenAISDKClientInitializationParams,
+)
 
 load_dotenv()
 
@@ -775,3 +778,147 @@ def test_should_create_openai_sdk_client_for_model_openai_compatible_providers()
 
     # Clean up
     litellm.openai_compatible_providers.remove("new_provider")
+
+
+def test_get_client_initialization_params_openai():
+    """Test basic OpenAI configuration with direct parameter passing."""
+    model = {}
+    model_name = "gpt-3.5-turbo"
+    custom_llm_provider = None
+    litellm_params = {"api_key": "sk-openai-key", "timeout": 30, "max_retries": 3}
+    default_api_key = None
+    default_api_base = None
+
+    result = InitalizeOpenAISDKClient._get_client_initialization_params(
+        model=model,
+        model_name=model_name,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        default_api_key=default_api_key,
+        default_api_base=default_api_base,
+    )
+
+    assert isinstance(result, OpenAISDKClientInitializationParams)
+    assert result.api_key == "sk-openai-key"
+    assert result.timeout == 30
+    assert result.max_retries == 3
+    assert result.model_name == "gpt-3.5-turbo"
+
+
+def test_get_client_initialization_params_azure():
+    """Test Azure OpenAI configuration with specific Azure parameters."""
+    model = {}
+    model_name = "azure/gpt-4"
+    custom_llm_provider = "azure"
+    litellm_params = {
+        "api_key": "azure-key",
+        "api_base": "https://example.azure.openai.com",
+        "api_version": "2023-05-15",
+    }
+    default_api_key = None
+    default_api_base = None
+
+    result = InitalizeOpenAISDKClient._get_client_initialization_params(
+        model=model,
+        model_name=model_name,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        default_api_key=default_api_key,
+        default_api_base=default_api_base,
+    )
+
+    assert result.api_key == "azure-key"
+    assert result.api_base == "https://example.azure.openai.com"
+    assert result.api_version == "2023-05-15"
+    assert result.custom_llm_provider == "azure"
+
+
+def test_get_client_initialization_params_environment_variable_parsing():
+    """Test parsing of environment variables for configuration."""
+    os.environ["UNIQUE_OPENAI_API_KEY"] = "env-openai-key"
+    os.environ["UNIQUE_TIMEOUT"] = "45"
+
+    model = {}
+    model_name = "gpt-4"
+    custom_llm_provider = None
+    litellm_params = {
+        "api_key": "os.environ/UNIQUE_OPENAI_API_KEY",
+        "timeout": "os.environ/UNIQUE_TIMEOUT",
+        "organization": "os.environ/UNIQUE_ORG_ID",
+    }
+    default_api_key = None
+    default_api_base = None
+
+    result = InitalizeOpenAISDKClient._get_client_initialization_params(
+        model=model,
+        model_name=model_name,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        default_api_key=default_api_key,
+        default_api_base=default_api_base,
+    )
+
+    assert result.api_key == "env-openai-key"
+    assert result.timeout == 45.0
+    assert result.organization is None  # Since ORG_ID is not set in the environment
+
+
+def test_get_client_initialization_params_azure_ai_studio_mistral():
+    """
+    Test configuration for Azure AI Studio Mistral model.
+
+    - /v1/ is added to the api_base if it is not present
+    - custom_llm_provider is set to openai (Azure AI Studio Mistral models need to use OpenAI route)
+    """
+
+    model = {}
+    model_name = "azure/mistral-large"
+    custom_llm_provider = "azure"
+    litellm_params = {
+        "api_key": "azure-key",
+        "api_base": "https://example.azure.openai.com",
+    }
+    default_api_key = None
+    default_api_base = None
+
+    result = InitalizeOpenAISDKClient._get_client_initialization_params(
+        model,
+        model_name,
+        custom_llm_provider,
+        litellm_params,
+        default_api_key,
+        default_api_base,
+    )
+
+    assert result.custom_llm_provider == "openai"
+    assert result.model_name == "mistral-large"
+    assert result.api_base == "https://example.azure.openai.com/v1/"
+
+
+def test_get_client_initialization_params_default_values():
+    """
+    Test use of default values when specific parameters are not provided.
+
+    This is used typically for OpenAI compatible providers - example Together AI
+
+    """
+    model = {}
+    model_name = "together/meta-llama-3.1-8b-instruct"
+    custom_llm_provider = None
+    litellm_params = {}
+    default_api_key = "together-api-key"
+    default_api_base = "https://together.xyz/api.openai.com"
+
+    result = InitalizeOpenAISDKClient._get_client_initialization_params(
+        model=model,
+        model_name=model_name,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        default_api_key=default_api_key,
+        default_api_base=default_api_base,
+    )
+
+    assert result.api_key == "together-api-key"
+    assert result.api_base == "https://together.xyz/api.openai.com"
+    assert result.timeout is None
+    assert result.max_retries == 0
