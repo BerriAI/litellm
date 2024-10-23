@@ -17,11 +17,14 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
+    from httpx import Timeout as httpxTimeout
+
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+    httpxTimeout = Any
 
 
 class OpenAISDKClientInitializationParams(BaseModel):
@@ -29,8 +32,8 @@ class OpenAISDKClientInitializationParams(BaseModel):
     api_base: Optional[str]
     api_version: Optional[str]
     azure_ad_token_provider: Optional[Callable[[], str]]
-    timeout: Optional[float]
-    stream_timeout: Optional[float]
+    timeout: Optional[Union[float, httpxTimeout]]
+    stream_timeout: Optional[Union[float, httpxTimeout]]
     max_retries: int
     organization: Optional[str]
 
@@ -133,8 +136,10 @@ class InitalizeOpenAISDKClient:
             api_key = client_initialization_params.api_key
             api_base = client_initialization_params.api_base
             api_version: Optional[str] = client_initialization_params.api_version
-            timeout: Optional[float] = client_initialization_params.timeout
-            stream_timeout: Optional[float] = (
+            timeout: Optional[Union[float, httpxTimeout]] = (
+                client_initialization_params.timeout
+            )
+            stream_timeout: Optional[Union[float, httpxTimeout]] = (
                 client_initialization_params.stream_timeout
             )
             max_retries: int = client_initialization_params.max_retries
@@ -552,14 +557,14 @@ class InitalizeOpenAISDKClient:
             api_version = get_secret_str(api_version)
             litellm_params["api_version"] = api_version
 
-        timeout: Optional[Union[float, str]] = (
+        timeout: Optional[Union[float, str, httpxTimeout]] = (
             litellm_params.pop("timeout", None) or litellm.request_timeout
         )
         if isinstance(timeout, str) and timeout.startswith("os.environ/"):
             timeout = float(get_secret(timeout))  # type: ignore
             litellm_params["timeout"] = timeout
 
-        stream_timeout: Optional[float] = litellm_params.pop(
+        stream_timeout: Optional[Union[float, str, httpxTimeout]] = litellm_params.pop(
             "stream_timeout", timeout
         )  # if no stream_timeout is set, default to timeout
         if isinstance(stream_timeout, str) and stream_timeout.startswith("os.environ/"):
