@@ -183,7 +183,7 @@ def test_add_headers_to_request(litellm_key_header_name):
     import json
     from litellm.proxy.litellm_pre_call_utils import (
         clean_headers,
-        get_forwardable_headers,
+        LiteLLMProxyRequestSetup,
     )
 
     headers = {
@@ -195,7 +195,9 @@ def test_add_headers_to_request(litellm_key_header_name):
     request._url = URL(url="/chat/completions")
     request._body = json.dumps({"model": "gpt-3.5-turbo"}).encode("utf-8")
     request_headers = clean_headers(headers, litellm_key_header_name)
-    forwarded_headers = get_forwardable_headers(request_headers)
+    forwarded_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(
+        request_headers
+    )
     assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
 
 
