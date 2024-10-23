@@ -84,3 +84,20 @@ ws.on("error", function handleError(error) {
     console.error("Error: ", error);
 });
 ```
+
+## Logging 
+
+To prevent requests from being dropped, by default LiteLLM just logs these event types:
+
+- `session.created`
+- `response.create`
+- `response.done`
+
+You can override this by setting the `logged_real_time_event_types` parameter in the config. For example:
+
+```yaml
+litellm_settings:
+  logged_real_time_event_types: "*" # Log all events
+  ## OR ## 
+  logged_real_time_event_types: ["session.created", "response.create", "response.done"] # Log only these event types
+```
