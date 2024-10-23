@@ -872,7 +872,7 @@ def test_get_client_initialization_params_azure_ai_studio_mistral():
     """
 
     model = {}
-    model_name = "azure/mistral-large"
+    model_name = "azure/mistral-large-latest"
     custom_llm_provider = "azure"
     litellm_params = {
         "api_key": "azure-key",
@@ -891,7 +891,7 @@ def test_get_client_initialization_params_azure_ai_studio_mistral():
     )
 
     assert result.custom_llm_provider == "openai"
-    assert result.model_name == "mistral-large"
+    assert result.model_name == "mistral-large-latest"
     assert result.api_base == "https://example.azure.openai.com/v1/"
 
 
