@@ -56,9 +56,9 @@ class InitalizeOpenAISDKClient:
         return True
 
     @staticmethod
-    def set_client(
+    def set_client(  # noqa: PLR0915
         litellm_router_instance: LitellmRouter, model: dict
-    ):  # noqa: PLR0915
+    ):
         """
         - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
         - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
@@ -98,16 +98,9 @@ class InitalizeOpenAISDKClient:
             default_api_base = api_base
             default_api_key = api_key
 
-        if (
-            model_name in litellm.open_ai_chat_completion_models
-            or custom_llm_provider in litellm.openai_compatible_providers
-            or custom_llm_provider == "azure"
-            or custom_llm_provider == "azure_text"
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "openai"
-            or custom_llm_provider == "text-completion-openai"
-            or "ft:gpt-3.5-turbo" in model_name
-            or model_name in litellm.open_ai_embedding_models
+        if InitalizeOpenAISDKClient._should_create_openai_sdk_client_for_model(
+            model_name=model_name,
+            custom_llm_provider=custom_llm_provider,
         ):
             is_azure_ai_studio_model: bool = False
             if custom_llm_provider == "azure":
@@ -555,6 +548,31 @@ class InitalizeOpenAISDKClient:
                         ttl=client_ttl,
                         local_only=True,
                     )  # cache for 1 hr
+
+    @staticmethod
+    def _should_create_openai_sdk_client_for_model(
+        model_name: str,
+        custom_llm_provider: str,
+    ) -> bool:
+        """
+        Returns True if a OpenAI SDK client should be created for a given model
+
+        We need a OpenAI SDK client for models that are callsed using OpenAI Python SDK
+        Azure OpenAI, OpenAI, OpenAI Compatible Providers, OpenAI Embedding Models
+        """
+        if (
+            model_name in litellm.open_ai_chat_completion_models
+            or custom_llm_provider in litellm.openai_compatible_providers
+            or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_text"
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "openai"
+            or custom_llm_provider == "text-completion-openai"
+            or "ft:gpt-3.5-turbo" in model_name
+            or model_name in litellm.open_ai_embedding_models
+        ):
+            return True
+        return False
 
     @staticmethod
     def get_azure_ad_token_from_entrata_id(
