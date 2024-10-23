@@ -6,14 +6,16 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from litellm.litellm_core_utils.litellm_logging import (
-    DynamicLoggingCache,
-    StandardCallbackDynamicParams,
-)
+from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
 
 from .langfuse import LangFuseLogger, LangfuseLoggingConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
+else:
+    DynamicLoggingCache = Any
 
 
 class LangFuseHandler:
