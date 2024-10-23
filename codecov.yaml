@@ -25,8 +25,8 @@ coverage:
     project:
       default:
         target: auto
-        threshold: 1 # at maximum allow coverage to drop by 1%
+        threshold: 1% # at maximum allow project coverage to drop by 1%
     patch:
       default:
         target: auto
-        threshold: 80% # at minimum patch coverage should be 80%
+        threshold: 0% # patch coverage should be 100%
