@@ -10,11 +10,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-from litellm.integrations.arize_ai import (
-    _get_arize_config,
-    get_arize_opentelemetry_config,
-    ArizeConfig,
-)
+from litellm.integrations.arize_ai import ArizeConfig, ArizeLogger
 
 load_dotenv()
 
@@ -48,7 +44,7 @@ def test_get_arize_config(mock_env_vars):
     """
     Use Arize default endpoint when no endpoints are provided
     """
-    config = _get_arize_config()
+    config = ArizeLogger._get_arize_config()
     assert isinstance(config, ArizeConfig)
     assert config.space_key == "test_space_key"
     assert config.api_key == "test_api_key"
@@ -63,7 +59,7 @@ def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
     monkeypatch.setenv("ARIZE_ENDPOINT", "grpc://test.endpoint")
     monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://test.endpoint")
 
-    config = _get_arize_config()
+    config = ArizeLogger._get_arize_config()
     assert config.grpc_endpoint == "grpc://test.endpoint"
     assert config.http_endpoint == "http://test.endpoint"
 
@@ -74,7 +70,7 @@ def test_get_arize_opentelemetry_config_grpc(mock_env_vars, monkeypatch):
     """
     monkeypatch.setenv("ARIZE_ENDPOINT", "grpc://test.endpoint")
 
-    config = get_arize_opentelemetry_config()
+    config = ArizeLogger.get_arize_opentelemetry_config()
     assert isinstance(config, OpenTelemetryConfig)
     assert config.exporter == "otlp_grpc"
     assert config.endpoint == "grpc://test.endpoint"
@@ -86,7 +82,7 @@ def test_get_arize_opentelemetry_config_http(mock_env_vars, monkeypatch):
     """
     monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://test.endpoint")
 
-    config = get_arize_opentelemetry_config()
+    config = ArizeLogger.get_arize_opentelemetry_config()
     assert isinstance(config, OpenTelemetryConfig)
     assert config.exporter == "otlp_http"
     assert config.endpoint == "http://test.endpoint"
