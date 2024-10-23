@@ -951,6 +951,12 @@ def test_replace_model_in_jsonl(model_list):
             "openai/fo::*:static::*",
             "openai/fo::hi:static::hello",
         ),
+        (
+            "fo::hi::static::hello",
+            "fo::*::static::*",
+            "openai/gpt-3.5-turbo",
+            "openai/gpt-3.5-turbo",
+        ),
     ],
 )
 def test_pattern_match_deployment_set_model_name(
