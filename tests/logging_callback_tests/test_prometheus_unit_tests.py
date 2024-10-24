@@ -161,3 +161,178 @@ async def test_async_log_success_event():
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_called()
     prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called()
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called()
+
+
+def test_increment_token_metrics():
+    """
+    Test the increment_token_metrics method
+
+    input, output, and total tokens metrics are incremented by the values in the standard logging payload
+    """
+    prometheus_logger.litellm_tokens_metric = MagicMock()
+    prometheus_logger.litellm_input_tokens_metric = MagicMock()
+    prometheus_logger.litellm_output_tokens_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
+    standard_logging_payload["prompt_tokens"] = 50
+    standard_logging_payload["completion_tokens"] = 50
+
+    prometheus_logger._increment_token_metrics(
+        standard_logging_payload,
+        end_user_id="user1",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        model="gpt-3.5-turbo",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        user_id="user1",
+    )
+
+    prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
+        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+    )
+    prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
+
+    prometheus_logger.litellm_input_tokens_metric.labels.assert_called_once_with(
+        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+    )
+    prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
+        50
+    )
+
+    prometheus_logger.litellm_output_tokens_metric.labels.assert_called_once_with(
+        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+    )
+    prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
+        50
+    )
+
+
+def test_increment_remaining_budget_metrics():
+    """
+    Test the increment_remaining_budget_metrics method
+
+    team and api key budget metrics are set to the difference between max budget and spend
+    """
+    prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+    prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key_team_spend": 50,
+            "user_api_key_team_max_budget": 100,
+            "user_api_key_spend": 25,
+            "user_api_key_max_budget": 75,
+        }
+    }
+
+    prometheus_logger._increment_remaining_budget_metrics(
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        litellm_params=litellm_params,
+    )
+
+    prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
+        "team1", "team_alias1"
+    )
+    prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
+        50
+    )
+
+    prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once_with(
+        "key1", "alias1"
+    )
+    prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.assert_called_once_with(
+        50
+    )
+
+
+def test_set_latency_metrics():
+    """
+    Test the set_latency_metrics method
+
+    time to first token, llm api latency, and request total latency metrics are set to the values in the standard logging payload
+    """
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_parameters"] = {"stream": True}
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
+    prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
+    prometheus_logger.litellm_request_total_latency_metric = MagicMock()
+
+    now = datetime.now()
+    kwargs = {
+        "end_time": now,  # when the request ends
+        "start_time": now - timedelta(seconds=2),  # when the request starts
+        "api_call_start_time": now - timedelta(seconds=1.5),  # when the api call starts
+        "completion_start_time": now
+        - timedelta(seconds=1),  # when the completion starts
+    }
+
+    prometheus_logger._set_latency_metrics(
+        kwargs=kwargs,
+        model="gpt-3.5-turbo",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        standard_logging_payload=standard_logging_payload,
+    )
+
+    # completion_start_time - api_call_start_time
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_called_once_with(
+        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+    )
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
+        0.5
+    )
+
+    # end_time - api_call_start_time
+    prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once_with(
+        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+    )
+    prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
+        1.5
+    )
+
+    # total latency for the request
+    prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once_with(
+        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+    )
+    prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
+        2.0
+    )
+
+
+def test_increment_top_level_request_and_spend_metrics():
+    """
+    Test the increment_top_level_request_and_spend_metrics method
+
+    - litellm_requests_metric is incremented by 1
+    - litellm_spend_metric is incremented by the response cost in the standard logging payload
+    """
+    prometheus_logger.litellm_requests_metric = MagicMock()
+    prometheus_logger.litellm_spend_metric = MagicMock()
+
+    prometheus_logger._increment_top_level_request_and_spend_metrics(
+        end_user_id="user1",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        model="gpt-3.5-turbo",
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        user_id="user1",
+        response_cost=0.1,
+    )
+
+    prometheus_logger.litellm_requests_metric.labels.assert_called_once_with(
+        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+    )
+    prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
+
+    prometheus_logger.litellm_spend_metric.labels.assert_called_once_with(
+        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+    )
+    prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
