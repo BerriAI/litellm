@@ -14,14 +14,25 @@ import inspect
 import json
 import time
 from datetime import timedelta
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+    from redis.asyncio.client import Pipeline
+
+    pipeline = Pipeline
+    async_redis_client = Redis
+else:
+    pipeline = Any
+    async_redis_client = Any
 
 
 class RedisCache(BaseCache):
@@ -104,6 +115,11 @@ class RedisCache(BaseCache):
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
 
+        if litellm.default_redis_ttl is not None:
+            super().__init__(default_ttl=int(litellm.default_redis_ttl))
+        else:
+            super().__init__()  # defaults to 60s
+
     def init_async_client(self):
         from .._redis import get_redis_async_client
 
@@ -121,7 +137,7 @@ class RedisCache(BaseCache):
         return key
 
     def set_cache(self, key, value, **kwargs):
-        ttl = kwargs.get("ttl", None)
+        ttl = self.get_ttl(**kwargs)
         print_verbose(
             f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
         )
@@ -139,15 +155,16 @@ class RedisCache(BaseCache):
     ) -> int:
         _redis_client = self.redis_client
         start_time = time.time()
+        set_ttl = self.get_ttl(ttl=ttl)
         try:
             result: int = _redis_client.incr(name=key, amount=value)  # type: ignore
 
-            if ttl is not None:
+            if set_ttl is not None:
                 # check if key already has ttl, if not -> set ttl
                 current_ttl = _redis_client.ttl(key)
                 if current_ttl == -1:
                     # Key has no expiration
-                    _redis_client.expire(key, ttl)  # type: ignore
+                    _redis_client.expire(key, set_ttl)  # type: ignore
             return result
         except Exception as e:
             ## LOGGING ##
@@ -236,7 +253,7 @@ class RedisCache(BaseCache):
 
         key = self.check_and_fix_namespace(key=key)
         async with _redis_client as redis_client:
-            ttl = kwargs.get("ttl", None)
+            ttl = self.get_ttl(**kwargs)
             print_verbose(
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
@@ -284,6 +301,26 @@ class RedisCache(BaseCache):
                     value,
                 )
 
+    async def _pipeline_helper(
+        self, pipe: pipeline, cache_list: List[Tuple[Any, Any]], ttl: Optional[float]
+    ) -> List:
+        ttl = self.get_ttl(ttl=ttl)
+        # Iterate through each key-value pair in the cache_list and set them in the pipeline.
+        for cache_key, cache_value in cache_list:
+            cache_key = self.check_and_fix_namespace(key=cache_key)
+            print_verbose(
+                f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
+            )
+            json_cache_value = json.dumps(cache_value)
+            # Set the value with a TTL if it's provided.
+            _td: Optional[timedelta] = None
+            if ttl is not None:
+                _td = timedelta(seconds=ttl)
+            pipe.set(cache_key, json_cache_value, ex=_td)
+        # Execute the pipeline and return the results.
+        results = await pipe.execute()
+        return results
+
     async def async_set_cache_pipeline(
         self, cache_list: List[Tuple[Any, Any]], ttl: Optional[float] = None, **kwargs
     ):
@@ -298,8 +335,6 @@ class RedisCache(BaseCache):
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
 
-        ttl = ttl or kwargs.get("ttl", None)
-
         print_verbose(
             f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}"
         )
@@ -307,20 +342,7 @@ class RedisCache(BaseCache):
         try:
             async with _redis_client as redis_client:
                 async with redis_client.pipeline(transaction=True) as pipe:
-                    # Iterate through each key-value pair in the cache_list and set them in the pipeline.
-                    for cache_key, cache_value in cache_list:
-                        cache_key = self.check_and_fix_namespace(key=cache_key)
-                        print_verbose(
-                            f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
-                        )
-                        json_cache_value = json.dumps(cache_value)
-                        # Set the value with a TTL if it's provided.
-                        _td: Optional[timedelta] = None
-                        if ttl is not None:
-                            _td = timedelta(seconds=ttl)
-                        pipe.set(cache_key, json_cache_value, ex=_td)
-                    # Execute the pipeline and return the results.
-                    results = await pipe.execute()
+                    results = await self._pipeline_helper(pipe, cache_list, ttl)
 
             print_verbose(f"pipeline results: {results}")
             # Optionally, you could process 'results' to make sure that all set operations were successful.
@@ -360,6 +382,23 @@ class RedisCache(BaseCache):
                 cache_value,
             )
 
+    async def _set_cache_sadd_helper(
+        self,
+        redis_client: async_redis_client,
+        key: str,
+        value: List,
+        ttl: Optional[float],
+    ) -> None:
+        """Helper function for async_set_cache_sadd. Separated for testing."""
+        ttl = self.get_ttl(ttl=ttl)
+        try:
+            await redis_client.sadd(key, *value)  # type: ignore
+            if ttl is not None:
+                _td = timedelta(seconds=ttl)
+                await redis_client.expire(key, _td)
+        except Exception:
+            raise
+
     async def async_set_cache_sadd(
         self, key, value: List, ttl: Optional[float], **kwargs
     ):
@@ -396,10 +435,9 @@ class RedisCache(BaseCache):
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
             try:
-                await redis_client.sadd(key, *value)  # type: ignore
-                if ttl is not None:
-                    _td = timedelta(seconds=ttl)
-                    await redis_client.expire(key, _td)
+                await self._set_cache_sadd_helper(
+                    redis_client=redis_client, key=key, value=value, ttl=ttl
+                )
                 print_verbose(
                     f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}"
                 )
@@ -452,16 +490,17 @@ class RedisCache(BaseCache):
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
         start_time = time.time()
+        _used_ttl = self.get_ttl(ttl=ttl)
         try:
             async with _redis_client as redis_client:
                 result = await redis_client.incrbyfloat(name=key, amount=value)
 
-                if ttl is not None:
+                if _used_ttl is not None:
                     # check if key already has ttl, if not -> set ttl
                     current_ttl = await redis_client.ttl(key)
                     if current_ttl == -1:
                         # Key has no expiration
-                        await redis_client.expire(key, ttl)
+                        await redis_client.expire(key, _used_ttl)
 
                 ## LOGGING ##
                 end_time = time.time()

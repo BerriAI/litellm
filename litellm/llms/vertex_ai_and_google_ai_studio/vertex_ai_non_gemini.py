@@ -131,7 +131,7 @@ def _process_gemini_image(image_url: str) -> PartType:
         raise e
 
 
-def _gemini_convert_messages_with_history(
+def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
 ) -> List[ContentType]:
     """
@@ -279,7 +279,7 @@ def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
     litellm.in_memory_llm_clients_cache[client_cache_key] = vertex_llm_model
 
 
-def completion(
+def completion(  # noqa: PLR0915
     model: str,
     messages: list,
     model_response: ModelResponse,
@@ -770,7 +770,7 @@ def completion(
         )
 
 
-async def async_completion(
+async def async_completion(  # noqa: PLR0915
     llm_model,
     mode: str,
     prompt: str,
@@ -1010,7 +1010,7 @@ async def async_completion(
         raise VertexAIError(status_code=500, message=str(e))
 
 
-async def async_streaming(
+async def async_streaming(  # noqa: PLR0915
     llm_model,
     mode: str,
     prompt: str,

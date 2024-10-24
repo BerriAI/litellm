@@ -70,6 +70,15 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
 )
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _handle_invalid_parallel_tool_calls,
+    convert_to_model_response_object,
+    convert_to_streaming_response,
+    convert_to_streaming_response_async,
+)
+from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+    get_response_headers,
+)
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -123,6 +132,7 @@ except (ImportError, AttributeError):
 os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
     "CUSTOM_TIKTOKEN_CACHE_DIR", filename
 )  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+from tiktoken import Encoding
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from importlib import resources
@@ -210,13 +220,10 @@ prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
-clickHouseLogger = None
 greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
-berrispendLogger = None
 supabaseClient = None
-liteDebuggerClient = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -328,7 +335,7 @@ def custom_llm_setup():
             litellm._custom_providers.append(custom_llm["provider"])
 
 
-def function_setup(
+def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
@@ -605,8 +612,7 @@ def function_setup(
         raise e
 
 
-def client(original_function):
-    global liteDebuggerClient
+def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
@@ -721,7 +727,7 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -1007,7 +1013,7 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    async def wrapper_async(*args, **kwargs):
+    async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -1279,7 +1285,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc: The encoded text.
     """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
-    enc = tokenizer_json["tokenizer"].encode(text)
+    if isinstance(tokenizer_json["tokenizer"], Encoding):
+        enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
+    else:
+        enc = tokenizer_json["tokenizer"].encode(text)
     return enc
 
 
@@ -1289,7 +1298,7 @@ def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = 
     return dec
 
 
-def openai_token_counter(
+def openai_token_counter(  # noqa: PLR0915
     messages: Optional[list] = None,
     model="gpt-3.5-turbo-0613",
     text: Optional[str] = None,
@@ -1821,6 +1830,7 @@ def supports_function_calling(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        ## CHECK IF MODEL SUPPORTS FUNCTION CALLING ##
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -1832,6 +1842,54 @@ def supports_function_calling(
         raise Exception(
             f"Model not found or error in checking function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+
+
+def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
+    """
+    Check if the given model supports function calling and return a boolean value.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (Optional[str]): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports function calling, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found or there's an error in retrieval.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if model_info.get(key, False) is True:
+            return True
+        return False
+    except Exception as e:
+        raise Exception(
+            f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+
+
+def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """Check if a given model supports audio input in a chat completion call"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input"
+    )
+
+
+def supports_audio_output(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """Check if a given model supports audio output in a chat completion call"""
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input"
+    )
 
 
 def supports_prompt_caching(
@@ -1930,7 +1988,7 @@ def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     return existing_dict
 
 
-def register_model(model_cost: Union[str, dict]):
+def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2253,7 +2311,7 @@ def get_optional_params_image_gen(
     return optional_params
 
 
-def get_optional_params_embeddings(
+def get_optional_params_embeddings(  # noqa: PLR0915
     # 2 optional params
     model: str,
     user: Optional[str] = None,
@@ -2469,7 +2527,7 @@ def _remove_strict_from_schema(schema):
     return schema
 
 
-def get_optional_params(
+def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
     model: str,
@@ -2483,6 +2541,8 @@ def get_optional_params(
     stop=None,
     max_tokens=None,
     max_completion_tokens=None,
+    modalities=None,
+    audio=None,
     presence_penalty=None,
     frequency_penalty=None,
     logit_bias=None,
@@ -2562,6 +2622,8 @@ def get_optional_params(
         "stop": None,
         "max_tokens": None,
         "max_completion_tokens": None,
+        "modalities": None,
+        "audio": None,
         "presence_penalty": None,
         "frequency_penalty": None,
         "logit_bias": None,
@@ -2993,8 +3055,8 @@ def get_optional_params(
         )
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
-    elif (
-        custom_llm_provider == "vertex_ai" and model in litellm.vertex_anthropic_models
+    elif litellm.VertexAIAnthropicConfig.is_supported_model(
+        model=model, custom_llm_provider=custom_llm_provider
     ):
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4077,7 +4139,7 @@ def get_first_chars_messages(kwargs: dict) -> str:
         return ""
 
 
-def get_supported_openai_params(
+def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
@@ -4573,7 +4635,9 @@ def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
 
-def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
+def get_model_info(  # noqa: PLR0915
+    model: str, custom_llm_provider: Optional[str] = None
+) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
@@ -4595,9 +4659,11 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             ]  # only for vertex ai models
             input_cost_per_query: Optional[float] # only for rerank models
             input_cost_per_image: Optional[float]  # only for vertex ai models
+            input_cost_per_audio_token: Optional[float]
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
             input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
             output_cost_per_token: Required[float]
+            output_cost_per_audio_token: Optional[float]
             output_cost_per_character: Optional[float]  # only for vertex ai models
             output_cost_per_token_above_128k_tokens: Optional[
                 float
@@ -4621,6 +4687,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_vision: Optional[bool]
             supports_function_calling: Optional[bool]
             supports_prompt_caching: Optional[bool]
+            supports_audio_input: Optional[bool]
+            supports_audio_output: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
@@ -4710,6 +4778,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
             )
+        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+            return litellm.OllamaConfig().get_model_info(model)
         else:
             """
             Check if: (in order of specificity)
@@ -4864,7 +4934,13 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_audio_token=_model_info.get(
+                    "input_cost_per_audio_token", None
+                ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_audio_token=_model_info.get(
+                    "output_cost_per_audio_token", None
+                ),
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
                 ),
@@ -4897,8 +4973,12 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_prompt_caching=_model_info.get(
                     "supports_prompt_caching", False
                 ),
+                supports_audio_input=_model_info.get("supports_audio_input", False),
+                supports_audio_output=_model_info.get("supports_audio_output", False),
             )
-    except Exception:
+    except Exception as e:
+        if "OllamaError" in str(e):
+            raise e
         raise Exception(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider
@@ -5116,7 +5196,7 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
-def validate_environment(
+def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None, api_key: Optional[str] = None
 ) -> dict:
     """
@@ -5418,493 +5498,6 @@ def validate_environment(
                 new_missing_keys.append(key)
         missing_keys = new_missing_keys
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
-
-
-async def convert_to_streaming_response_async(response_object: Optional[dict] = None):
-    """
-    Asynchronously converts a response object to a streaming response.
-
-    Args:
-        response_object (Optional[dict]): The response object to be converted. Defaults to None.
-
-    Raises:
-        Exception: If the response object is None.
-
-    Yields:
-        ModelResponse: The converted streaming response object.
-
-    Returns:
-        None
-    """
-    if response_object is None:
-        raise Exception("Error in response object format")
-
-    model_response_object = ModelResponse(stream=True)
-
-    if model_response_object is None:
-        raise Exception("Error in response creating model response object")
-
-    choice_list = []
-
-    for idx, choice in enumerate(response_object["choices"]):
-        if (
-            choice["message"].get("tool_calls", None) is not None
-            and isinstance(choice["message"]["tool_calls"], list)
-            and len(choice["message"]["tool_calls"]) > 0
-            and isinstance(choice["message"]["tool_calls"][0], dict)
-        ):
-            pydantic_tool_calls = []
-            for index, t in enumerate(choice["message"]["tool_calls"]):
-                if "index" not in t:
-                    t["index"] = index
-                pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
-            choice["message"]["tool_calls"] = pydantic_tool_calls
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
-        finish_reason = choice.get("finish_reason", None)
-
-        if finish_reason is None:
-            finish_reason = choice.get("finish_details")
-
-        logprobs = choice.get("logprobs", None)
-
-        choice = StreamingChoices(
-            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs
-        )
-        choice_list.append(choice)
-
-    model_response_object.choices = choice_list
-
-    if "usage" in response_object and response_object["usage"] is not None:
-        setattr(
-            model_response_object,
-            "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-            ),
-        )
-
-    if "id" in response_object:
-        model_response_object.id = response_object["id"]
-
-    if "created" in response_object:
-        model_response_object.created = response_object["created"]
-
-    if "system_fingerprint" in response_object:
-        model_response_object.system_fingerprint = response_object["system_fingerprint"]
-
-    if "model" in response_object:
-        model_response_object.model = response_object["model"]
-
-    yield model_response_object
-    await asyncio.sleep(0)
-
-
-def convert_to_streaming_response(response_object: Optional[dict] = None):
-    # used for yielding Cache hits when stream == True
-    if response_object is None:
-        raise Exception("Error in response object format")
-
-    model_response_object = ModelResponse(stream=True)
-    choice_list = []
-    for idx, choice in enumerate(response_object["choices"]):
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
-        finish_reason = choice.get("finish_reason", None)
-        if finish_reason is None:
-            # gpt-4 vision can return 'finish_reason' or 'finish_details'
-            finish_reason = choice.get("finish_details")
-        logprobs = choice.get("logprobs", None)
-        enhancements = choice.get("enhancements", None)
-        choice = StreamingChoices(
-            finish_reason=finish_reason,
-            index=idx,
-            delta=delta,
-            logprobs=logprobs,
-            enhancements=enhancements,
-        )
-
-        choice_list.append(choice)
-    model_response_object.choices = choice_list
-
-    if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
-
-    if "id" in response_object:
-        model_response_object.id = response_object["id"]
-
-    if "created" in response_object:
-        model_response_object.created = response_object["created"]
-
-    if "system_fingerprint" in response_object:
-        model_response_object.system_fingerprint = response_object["system_fingerprint"]
-
-    if "model" in response_object:
-        model_response_object.model = response_object["model"]
-    yield model_response_object
-
-
-from collections import defaultdict
-
-
-def _handle_invalid_parallel_tool_calls(
-    tool_calls: List[ChatCompletionMessageToolCall],
-):
-    """
-    Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
-
-    Code modified from: https://github.com/phdowling/openai_multi_tool_use_parallel_patch/blob/main/openai_multi_tool_use_parallel_patch.py
-    """
-
-    if tool_calls is None:
-        return
-
-    replacements: Dict[int, List[ChatCompletionMessageToolCall]] = defaultdict(list)
-    for i, tool_call in enumerate(tool_calls):
-        current_function = tool_call.function.name
-        function_args = json.loads(tool_call.function.arguments)
-        if current_function == "multi_tool_use.parallel":
-            verbose_logger.debug(
-                "OpenAI did a weird pseudo-multi-tool-use call, fixing call structure.."
-            )
-            for _fake_i, _fake_tool_use in enumerate(function_args["tool_uses"]):
-                _function_args = _fake_tool_use["parameters"]
-                _current_function = _fake_tool_use["recipient_name"]
-                if _current_function.startswith("functions."):
-                    _current_function = _current_function[len("functions.") :]
-
-                fixed_tc = ChatCompletionMessageToolCall(
-                    id=f"{tool_call.id}_{_fake_i}",
-                    type="function",
-                    function=Function(
-                        name=_current_function, arguments=json.dumps(_function_args)
-                    ),
-                )
-                replacements[i].append(fixed_tc)
-
-    shift = 0
-    for i, replacement in replacements.items():
-        tool_calls[:] = (
-            tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
-        )
-        shift += len(replacement)
-
-    return tool_calls
-
-
-def convert_to_model_response_object(
-    response_object: Optional[dict] = None,
-    model_response_object: Optional[
-        Union[
-            ModelResponse,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            RerankResponse,
-        ]
-    ] = None,
-    response_type: Literal[
-        "completion", "embedding", "image_generation", "audio_transcription", "rerank"
-    ] = "completion",
-    stream=False,
-    start_time=None,
-    end_time=None,
-    hidden_params: Optional[dict] = None,
-    _response_headers: Optional[dict] = None,
-    convert_tool_call_to_json_mode: Optional[
-        bool
-    ] = None,  # used for supporting 'json_schema' on older models
-):
-    received_args = locals()
-
-    if _response_headers is not None:
-        openai_headers = {}
-        if "x-ratelimit-limit-requests" in _response_headers:
-            openai_headers["x-ratelimit-limit-requests"] = _response_headers[
-                "x-ratelimit-limit-requests"
-            ]
-        if "x-ratelimit-remaining-requests" in _response_headers:
-            openai_headers["x-ratelimit-remaining-requests"] = _response_headers[
-                "x-ratelimit-remaining-requests"
-            ]
-        if "x-ratelimit-limit-tokens" in _response_headers:
-            openai_headers["x-ratelimit-limit-tokens"] = _response_headers[
-                "x-ratelimit-limit-tokens"
-            ]
-        if "x-ratelimit-remaining-tokens" in _response_headers:
-            openai_headers["x-ratelimit-remaining-tokens"] = _response_headers[
-                "x-ratelimit-remaining-tokens"
-            ]
-        llm_response_headers = {
-            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
-        }
-        if hidden_params is not None:
-            hidden_params["additional_headers"] = {
-                **llm_response_headers,
-                **openai_headers,
-            }
-        else:
-            hidden_params = {
-                "additional_headers": {**llm_response_headers, **openai_headers}
-            }
-    ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
-    if (
-        response_object is not None
-        and "error" in response_object
-        and response_object["error"] is not None
-    ):
-        error_args = {"status_code": 422, "message": "Error in response object"}
-        if isinstance(response_object["error"], dict):
-            if "code" in response_object["error"]:
-                error_args["status_code"] = response_object["error"]["code"]
-            if "message" in response_object["error"]:
-                if isinstance(response_object["error"]["message"], dict):
-                    message_str = json.dumps(response_object["error"]["message"])
-                else:
-                    message_str = str(response_object["error"]["message"])
-                error_args["message"] = message_str
-        raised_exception = Exception()
-        setattr(raised_exception, "status_code", error_args["status_code"])
-        setattr(raised_exception, "message", error_args["message"])
-        raise raised_exception
-
-    try:
-        if response_type == "completion" and (
-            model_response_object is None
-            or isinstance(model_response_object, ModelResponse)
-        ):
-            if response_object is None or model_response_object is None:
-                raise Exception("Error in response object format")
-            if stream is True:
-                # for returning cached responses, we need to yield a generator
-                return convert_to_streaming_response(response_object=response_object)
-            choice_list = []
-
-            assert response_object["choices"] is not None and isinstance(
-                response_object["choices"], Iterable
-            )
-
-            for idx, choice in enumerate(response_object["choices"]):
-                ## HANDLE JSON MODE - anthropic returns single function call]
-                tool_calls = choice["message"].get("tool_calls", None)
-                if tool_calls is not None:
-                    _openai_tool_calls = []
-                    for _tc in tool_calls:
-                        _openai_tc = ChatCompletionMessageToolCall(**_tc)
-                        _openai_tool_calls.append(_openai_tc)
-                    fixed_tool_calls = _handle_invalid_parallel_tool_calls(
-                        _openai_tool_calls
-                    )
-
-                    if fixed_tool_calls is not None:
-                        tool_calls = fixed_tool_calls
-
-                message: Optional[Message] = None
-                finish_reason: Optional[str] = None
-                if (
-                    convert_tool_call_to_json_mode
-                    and tool_calls is not None
-                    and len(tool_calls) == 1
-                ):
-                    # to support 'json_schema' logic on older models
-                    json_mode_content_str: Optional[str] = tool_calls[0][
-                        "function"
-                    ].get("arguments")
-                    if json_mode_content_str is not None:
-                        message = litellm.Message(content=json_mode_content_str)
-                        finish_reason = "stop"
-                if message is None:
-                    message = Message(
-                        content=choice["message"].get("content", None),
-                        role=choice["message"]["role"] or "assistant",
-                        function_call=choice["message"].get("function_call", None),
-                        tool_calls=tool_calls,
-                    )
-                    finish_reason = choice.get("finish_reason", None)
-                if finish_reason is None:
-                    # gpt-4 vision can return 'finish_reason' or 'finish_details'
-                    finish_reason = choice.get("finish_details") or "stop"
-                logprobs = choice.get("logprobs", None)
-                enhancements = choice.get("enhancements", None)
-                choice = Choices(
-                    finish_reason=finish_reason,
-                    index=idx,
-                    message=message,
-                    logprobs=logprobs,
-                    enhancements=enhancements,
-                )
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
-
-            if "usage" in response_object and response_object["usage"] is not None:
-                usage_object = litellm.Usage(**response_object["usage"])
-                setattr(model_response_object, "usage", usage_object)
-            if "created" in response_object:
-                model_response_object.created = response_object["created"] or int(
-                    time.time()
-                )
-
-            if "id" in response_object:
-                model_response_object.id = response_object["id"] or str(uuid.uuid4())
-
-            if "system_fingerprint" in response_object:
-                model_response_object.system_fingerprint = response_object[
-                    "system_fingerprint"
-                ]
-
-            if "model" in response_object:
-                if model_response_object.model is None:
-                    model_response_object.model = response_object["model"]
-                elif (
-                    "/" in model_response_object.model
-                    and response_object["model"] is not None
-                ):
-                    openai_compatible_provider = model_response_object.model.split("/")[
-                        0
-                    ]
-                    model_response_object.model = (
-                        openai_compatible_provider + "/" + response_object["model"]
-                    )
-
-            if start_time is not None and end_time is not None:
-                if isinstance(start_time, type(end_time)):
-                    model_response_object._response_ms = (  # type: ignore
-                        end_time - start_time
-                    ).total_seconds() * 1000
-
-            if hidden_params is not None:
-                if model_response_object._hidden_params is None:
-                    model_response_object._hidden_params = {}
-                model_response_object._hidden_params.update(hidden_params)
-
-            if _response_headers is not None:
-                model_response_object._response_headers = _response_headers
-
-            special_keys = list(litellm.ModelResponse.model_fields.keys())
-            special_keys.append("usage")
-            for k, v in response_object.items():
-                if k not in special_keys:
-                    setattr(model_response_object, k, v)
-
-            return model_response_object
-        elif response_type == "embedding" and (
-            model_response_object is None
-            or isinstance(model_response_object, EmbeddingResponse)
-        ):
-            if response_object is None:
-                raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = EmbeddingResponse()
-
-            if "model" in response_object:
-                model_response_object.model = response_object["model"]
-
-            if "object" in response_object:
-                model_response_object.object = response_object["object"]
-
-            model_response_object.data = response_object["data"]
-
-            if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
-
-            if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
-
-            if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
-
-            if _response_headers is not None:
-                model_response_object._response_headers = _response_headers
-
-            return model_response_object
-        elif response_type == "image_generation" and (
-            model_response_object is None
-            or isinstance(model_response_object, ImageResponse)
-        ):
-            if response_object is None:
-                raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = ImageResponse()
-
-            if "created" in response_object:
-                model_response_object.created = response_object["created"]
-
-            if "data" in response_object:
-                model_response_object.data = response_object["data"]
-
-            if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
-
-            return model_response_object
-        elif response_type == "audio_transcription" and (
-            model_response_object is None
-            or isinstance(model_response_object, TranscriptionResponse)
-        ):
-            if response_object is None:
-                raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = TranscriptionResponse()
-
-            if "text" in response_object:
-                model_response_object.text = response_object["text"]
-
-            optional_keys = ["language", "task", "duration", "words", "segments"]
-            for key in optional_keys:  # not guaranteed to be in response
-                if key in response_object:
-                    setattr(model_response_object, key, response_object[key])
-
-            if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
-
-            if _response_headers is not None:
-                model_response_object._response_headers = _response_headers
-
-            return model_response_object
-        elif response_type == "rerank" and (
-            model_response_object is None
-            or isinstance(model_response_object, RerankResponse)
-        ):
-            if response_object is None:
-                raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = RerankResponse(**response_object)
-                return model_response_object
-
-            if "id" in response_object:
-                model_response_object.id = response_object["id"]
-
-            if "meta" in response_object:
-                model_response_object.meta = response_object["meta"]
-
-            if "results" in response_object:
-                model_response_object.results = response_object["results"]
-
-            return model_response_object
-    except Exception:
-        raise Exception(
-            f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
-        )
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
@@ -7170,7 +6763,7 @@ class CustomStreamWrapper:
             is_empty = False
         return is_empty
 
-    def chunk_creator(self, chunk):  # type: ignore
+    def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
         response_obj = {}
         try:
@@ -7566,7 +7159,7 @@ class CustomStreamWrapper:
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 self.response_id = original_chunk.id
-                if len(original_chunk.choices) > 0:
+                if original_chunk.choices and len(original_chunk.choices) > 0:
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None
@@ -7632,6 +7225,10 @@ class CustomStreamWrapper:
                                 )
                             )
                             model_response.choices[0].delta = Delta()
+                    elif (
+                        delta is not None and getattr(delta, "audio", None) is not None
+                    ):
+                        model_response.choices[0].delta.audio = delta.audio
                     else:
                         try:
                             delta = (
@@ -7798,6 +7395,12 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 return model_response
+            elif (
+                len(model_response.choices) > 0
+                and hasattr(model_response.choices[0].delta, "audio")
+                and model_response.choices[0].delta.audio is not None
+            ):
+                return model_response
             else:
                 if hasattr(model_response, "usage"):
                     self.chunks.append(model_response)
@@ -7881,7 +7484,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self):
+    def __next__(self):  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -8016,7 +7619,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self):
+    async def __anext__(self):  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None

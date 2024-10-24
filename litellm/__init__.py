@@ -54,13 +54,17 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langtrace",
     "gcs_bucket",
     "opik",
+    "argilla",
 ]
+logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
+argilla_batch_size: Optional[int] = None
+argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -95,6 +99,7 @@ api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
 databricks_key: Optional[str] = None
+openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
@@ -707,6 +712,8 @@ model_list = (
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"  # embedding only
+    JINA_AI = "jina_ai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -984,9 +991,18 @@ from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.OpenAI.chat.o1_transformation import (
     OpenAIO1Config,
 )
+
+openAIO1Config = OpenAIO1Config()
 from .llms.OpenAI.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+
+openAIGPTConfig = OpenAIGPTConfig()
+from .llms.OpenAI.chat.gpt_audio_transformation import (
+    OpenAIGPTAudioConfig,
+)
+
+openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
 from .llms.nvidia_nim.chat import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
@@ -1001,6 +1017,7 @@ from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfi
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
+from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (
@@ -1010,6 +1027,7 @@ from .llms.AzureOpenAI.azure import (
 
 from .llms.AzureOpenAI.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.AzureOpenAI.chat.o1_transformation import AzureOpenAIO1Config
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore

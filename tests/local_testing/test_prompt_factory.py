@@ -22,9 +22,13 @@ from litellm.llms.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
+from litellm.llms.prompt_templates.common_utils import (
+    get_completion_messages,
+)
 from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
     _gemini_convert_messages_with_history,
 )
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def test_llama_3_prompt():
@@ -457,3 +461,217 @@ def test_azure_tool_call_invoke_helper():
             "function_call": {"name": "get_weather", "arguments": ""},
         },
     ]
+
+
+@pytest.mark.parametrize(
+    "messages, expected_messages, user_continue_message, assistant_continue_message",
+    [
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Hello! How can I assist you today?"},
+                {"role": "user", "content": "What is Databricks?"},
+                {"role": "user", "content": "What is Azure?"},
+                {"role": "assistant", "content": "I don't know anyything, do you?"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                {"role": "user", "content": "What is Databricks?"},
+                {
+                    "role": "assistant",
+                    "content": "Please continue.",
+                },
+                {"role": "user", "content": "What is Azure?"},
+                {
+                    "role": "assistant",
+                    "content": "I don't know anyything, do you?",
+                },
+                {
+                    "role": "user",
+                    "content": "Please continue.",
+                },
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "user", "content": "What is Databricks?"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "What is Databricks?"},
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "user", "content": "What is Databricks?"},
+                {"role": "user", "content": "What is Azure?"},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Please continue."},
+                {"role": "user", "content": "What is Databricks?"},
+                {
+                    "role": "assistant",
+                    "content": "Please continue.",
+                },
+                {"role": "user", "content": "What is Azure?"},
+            ],
+            None,
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "Hello!"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                {"role": "user", "content": "What is Databricks?"},
+                {"role": "user", "content": "What is Azure?"},
+                {"role": "assistant", "content": "I don't know anyything, do you?"},
+                {"role": "assistant", "content": "I can't repeat sentences."},
+            ],
+            [
+                {"role": "user", "content": "Hello!"},
+                {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                {"role": "user", "content": "What is Databricks?"},
+                {
+                    "role": "assistant",
+                    "content": "Please continue",
+                },
+                {"role": "user", "content": "What is Azure?"},
+                {
+                    "role": "assistant",
+                    "content": "I don't know anyything, do you?",
+                },
+                {
+                    "role": "user",
+                    "content": "Ok",
+                },
+                {
+                    "role": "assistant",
+                    "content": "I can't repeat sentences.",
+                },
+                {"role": "user", "content": "Ok"},
+            ],
+            {
+                "role": "user",
+                "content": "Ok",
+            },
+            {
+                "role": "assistant",
+                "content": "Please continue",
+            },
+        ),
+    ],
+)
+def test_ensure_alternating_roles(
+    messages, expected_messages, user_continue_message, assistant_continue_message
+):
+
+    messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=assistant_continue_message,
+        user_continue_message=user_continue_message,
+        ensure_alternating_roles=True,
+    )
+
+    print(messages)
+
+    assert messages == expected_messages
+
+
+def test_alternating_roles_e2e():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import json
+
+    litellm.set_verbose = True
+    http_handler = HTTPHandler()
+
+    with patch.object(http_handler, "post", new=MagicMock()) as mock_post:
+        response = litellm.completion(
+            **{
+                "model": "databricks/databricks-meta-llama-3-1-70b-instruct",
+                "messages": [
+                    {"role": "user", "content": "Hello!"},
+                    {
+                        "role": "assistant",
+                        "content": "Hello! How can I assist you today?",
+                    },
+                    {"role": "user", "content": "What is Databricks?"},
+                    {"role": "user", "content": "What is Azure?"},
+                    {"role": "assistant", "content": "I don't know anyything, do you?"},
+                    {"role": "assistant", "content": "I can't repeat sentences."},
+                ],
+                "user_continue_message": {
+                    "role": "user",
+                    "content": "Ok",
+                },
+                "assistant_continue_message": {
+                    "role": "assistant",
+                    "content": "Please continue",
+                },
+                "ensure_alternating_roles": True,
+            },
+            client=http_handler,
+        )
+        print(f"response: {response}")
+        assert mock_post.call_args.kwargs["data"] == json.dumps(
+            {
+                "model": "databricks-meta-llama-3-1-70b-instruct",
+                "messages": [
+                    {"role": "user", "content": "Hello!"},
+                    {
+                        "role": "assistant",
+                        "content": "Hello! How can I assist you today?",
+                    },
+                    {"role": "user", "content": "What is Databricks?"},
+                    {
+                        "role": "assistant",
+                        "content": "Please continue",
+                    },
+                    {"role": "user", "content": "What is Azure?"},
+                    {
+                        "role": "assistant",
+                        "content": "I don't know anyything, do you?",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Ok",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "I can't repeat sentences.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Ok",
+                    },
+                ],
+                "stream": False,
+            }
+        )

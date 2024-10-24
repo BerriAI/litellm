@@ -97,6 +97,19 @@ class PrometheusLogger(CustomLogger):
                 buckets=LATENCY_BUCKETS,
             )
 
+            self.litellm_llm_api_time_to_first_token_metric = Histogram(
+                "litellm_llm_api_time_to_first_token_metric",
+                "Time to first token for a models LLM API call",
+                labelnames=[
+                    "model",
+                    "hashed_api_key",
+                    "api_key_alias",
+                    "team",
+                    "team_alias",
+                ],
+                buckets=LATENCY_BUCKETS,
+            )
+
             # Counter for spend
             self.litellm_spend_metric = Counter(
                 "litellm_spend_metric",
@@ -321,7 +334,9 @@ class PrometheusLogger(CustomLogger):
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         # Define prometheus client
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -333,14 +348,17 @@ class PrometheusLogger(CustomLogger):
         )
 
         # unpack kwargs
-        standard_logging_payload: StandardLoggingPayload = kwargs.get(
-            "standard_logging_object", {}
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
         )
+        if standard_logging_payload is None:
+            raise ValueError("standard_logging_object is required")
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        model_parameters: dict = standard_logging_payload["model_parameters"]
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -466,6 +484,28 @@ class PrometheusLogger(CustomLogger):
         total_time_seconds = total_time.total_seconds()
         api_call_start_time = kwargs.get("api_call_start_time", None)
 
+        completion_start_time = kwargs.get("completion_start_time", None)
+
+        if (
+            completion_start_time is not None
+            and isinstance(completion_start_time, datetime)
+            and model_parameters.get("stream")
+            is True  # only emit for streaming requests
+        ):
+            time_to_first_token_seconds = (
+                completion_start_time - api_call_start_time
+            ).total_seconds()
+            self.litellm_llm_api_time_to_first_token_metric.labels(
+                model,
+                user_api_key,
+                user_api_key_alias,
+                user_api_team,
+                user_api_team_alias,
+            ).observe(time_to_first_token_seconds)
+        else:
+            verbose_logger.debug(
+                "Time to first token metric not emitted, stream option in model_parameters is not True"
+            )
         if api_call_start_time is not None and isinstance(
             api_call_start_time, datetime
         ):
@@ -510,6 +550,7 @@ class PrometheusLogger(CustomLogger):
             "standard_logging_object", {}
         )
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
+
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]

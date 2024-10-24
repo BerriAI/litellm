@@ -59,10 +59,10 @@ from litellm.utils import (
 )
 
 from ..integrations.aispend import AISpendLogger
+from ..integrations.argilla import ArgillaLogger
+from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
-from ..integrations.berrispend import BerriSpendLogger
 from ..integrations.braintrust_logging import BraintrustLogger
-from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -70,7 +70,8 @@ from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
-from ..integrations.langfuse import LangFuseLogger
+from ..integrations.langfuse.langfuse import LangFuseLogger
+from ..integrations.langfuse.langfuse_handler import LangFuseHandler
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.litedebugger import LiteDebugger
 from ..integrations.literal_ai import LiteralAILogger
@@ -121,13 +122,10 @@ prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
 genericAPILogger = None
-clickHouseLogger = None
 greenscaleLogger = None
 lunaryLogger = None
 aispendLogger = None
-berrispendLogger = None
 supabaseClient = None
-liteDebuggerClient = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -190,7 +188,7 @@ in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
+    global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
     stream_options = None
 
@@ -427,7 +425,7 @@ class Logging:
         ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
 
-    def pre_call(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
         try:
@@ -867,7 +865,7 @@ class Logging:
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(
+    def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
@@ -969,22 +967,6 @@ class Logging:
                         ):
                             print_verbose("no-log request, skipping logging")
                             continue
-                    if callback == "lite_debugger" and liteDebuggerClient is not None:
-                        print_verbose("reaches lite_debugger for logging!")
-                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                        print_verbose(
-                            f"liteDebuggerClient details function {self.call_type} and stream set to {self.stream}"
-                        )
-                        liteDebuggerClient.log_event(
-                            end_user=kwargs.get("user", "default"),
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            litellm_call_id=self.litellm_call_id,
-                            print_verbose=print_verbose,
-                            call_type=self.call_type,
-                            stream=self.stream,
-                        )
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
                         promptLayerLogger.log_event(
@@ -1135,74 +1117,13 @@ class Logging:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
 
-                        temp_langfuse_logger = langFuseLogger
-                        if langFuseLogger is None or (
-                            (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                != langFuseLogger.public_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                )
-                                != langFuseLogger.secret_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                != langFuseLogger.langfuse_host
-                            )
-                        ):
-                            credentials = {
-                                "langfuse_public_key": self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                ),
-                                "langfuse_secret": self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                ),
-                                "langfuse_host": self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                ),
-                            }
-                            temp_langfuse_logger = (
-                                in_memory_dynamic_logger_cache.get_cache(
-                                    credentials=credentials, service_name="langfuse"
-                                )
-                            )
-                            if temp_langfuse_logger is None:
-                                temp_langfuse_logger = LangFuseLogger(
-                                    langfuse_public_key=self.standard_callback_dynamic_params.get(
-                                        "langfuse_public_key"
-                                    ),
-                                    langfuse_secret=self.standard_callback_dynamic_params.get(
-                                        "langfuse_secret"
-                                    ),
-                                    langfuse_host=self.standard_callback_dynamic_params.get(
-                                        "langfuse_host"
-                                    ),
-                                )
-                                in_memory_dynamic_logger_cache.set_cache(
-                                    credentials=credentials,
-                                    service_name="langfuse",
-                                    logging_obj=temp_langfuse_logger,
-                                )
-                        if temp_langfuse_logger is not None:
-                            _response = temp_langfuse_logger.log_event(
+                        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+                            globalLangfuseLogger=langFuseLogger,
+                            standard_callback_dynamic_params=self.standard_callback_dynamic_params,
+                            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                        )
+                        if langfuse_logger_to_use is not None:
+                            _response = langfuse_logger_to_use.log_event(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,
@@ -1240,37 +1161,6 @@ class Logging:
                         if genericAPILogger is None:
                             genericAPILogger = GenericAPILogger()  # type: ignore
                         genericAPILogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
-                    if callback == "clickhouse":
-                        global clickHouseLogger
-                        verbose_logger.debug("reaches clickhouse for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose(
-                                    "reaches clickhouse for streaming logging!"
-                                )
-                                result = kwargs["complete_streaming_response"]
-                        if clickHouseLogger is None:
-                            clickHouseLogger = ClickhouseLogger()
-                        clickHouseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
@@ -1493,7 +1383,7 @@ class Logging:
                 ),
             )
 
-    async def async_success_handler(
+    async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         """
@@ -1832,7 +1722,7 @@ class Logging:
                     kwargs=self.model_call_details,
                 )  # type: ignore
 
-    def failure_handler(
+    def failure_handler(  # noqa: PLR0915
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
         verbose_logger.debug(
@@ -1873,9 +1763,7 @@ class Logging:
             )
             for callback in callbacks:
                 try:
-                    if callback == "lite_debugger" and liteDebuggerClient is not None:
-                        pass
-                    elif callback == "lunary" and lunaryLogger is not None:
+                    if callback == "lunary" and lunaryLogger is not None:
                         print_verbose("reaches lunary for logging error!")
 
                         model = self.model
@@ -1961,50 +1849,12 @@ class Logging:
                             ):  # copy.deepcopy raises errors as this could be a coroutine
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if langFuseLogger is None or (
-                            (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                != langFuseLogger.public_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                )
-                                != langFuseLogger.public_key
-                            )
-                            or (
-                                self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                is not None
-                                and self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                )
-                                != langFuseLogger.langfuse_host
-                            )
-                        ):
-                            langFuseLogger = LangFuseLogger(
-                                langfuse_public_key=self.standard_callback_dynamic_params.get(
-                                    "langfuse_public_key"
-                                ),
-                                langfuse_secret=self.standard_callback_dynamic_params.get(
-                                    "langfuse_secret"
-                                ),
-                                langfuse_host=self.standard_callback_dynamic_params.get(
-                                    "langfuse_host"
-                                ),
-                            )
-                        _response = langFuseLogger.log_event(
+                        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+                            globalLangfuseLogger=langFuseLogger,
+                            standard_callback_dynamic_params=self.standard_callback_dynamic_params,
+                            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+                        )
+                        _response = langfuse_logger_to_use.log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
@@ -2190,11 +2040,11 @@ class Logging:
         return None
 
 
-def set_callbacks(callback_list, function_id=None):
+def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2276,31 +2126,19 @@ def set_callbacks(callback_list, function_id=None):
                 logfireLogger = LogfireLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
-            elif callback == "berrispend":
-                berrispendLogger = BerriSpendLogger()
             elif callback == "supabase":
                 print_verbose("instantiating supabase")
                 supabaseClient = Supabase()
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
-            elif callback == "lite_debugger":
-                print_verbose("instantiating lite_debugger")
-                if function_id:
-                    liteDebuggerClient = LiteDebugger(email=function_id)
-                elif litellm.token:
-                    liteDebuggerClient = LiteDebugger(email=litellm.token)
-                elif litellm.email:
-                    liteDebuggerClient = LiteDebugger(email=litellm.email)
-                else:
-                    liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
         raise e
 
 
-def _init_custom_logger_compatible_class(
+def _init_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
@@ -2339,6 +2177,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback  # type: ignore
+
+        _argilla_logger = ArgillaLogger()
+        _in_memory_loggers.append(_argilla_logger)
+        return _argilla_logger  # type: ignore
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2380,22 +2226,16 @@ def _init_custom_logger_compatible_class(
         _in_memory_loggers.append(_opik_logger)
         return _opik_logger  # type: ignore
     elif logging_integration == "arize":
-        if "ARIZE_SPACE_KEY" not in os.environ:
-            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
-        if "ARIZE_API_KEY" not in os.environ:
-            raise ValueError("ARIZE_API_KEY not found in environment variables")
         from litellm.integrations.opentelemetry import (
             OpenTelemetry,
             OpenTelemetryConfig,
         )
 
-        arize_endpoint = (
-            os.environ.get("ARIZE_ENDPOINT", None) or "https://otlp.arize.com/v1"
-        )
-        otel_config = OpenTelemetryConfig(
-            exporter="otlp_grpc",
-            endpoint=arize_endpoint,
-        )
+        otel_config = ArizeLogger.get_arize_opentelemetry_config()
+        if otel_config is None:
+            raise ValueError(
+                "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
+            )
         os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
             f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
         )
@@ -2408,7 +2248,6 @@ def _init_custom_logger_compatible_class(
         _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
-
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -2521,6 +2360,10 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
                 return callback
+    elif logging_integration == "argilla":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, ArgillaLogger):
+                return callback
     elif logging_integration == "literalai":
         for callback in _in_memory_loggers:
             if isinstance(callback, LiteralAILogger):
@@ -2616,7 +2459,7 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
-def get_standard_logging_object_payload(
+def get_standard_logging_object_payload(  # noqa: PLR0915
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,

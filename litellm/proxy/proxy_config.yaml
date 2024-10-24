@@ -1,15 +1,20 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwaz.app/
-  - model_name: db-openai-endpoint
-    litellm_params:
-      model: openai/gpt-5
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwxaz.app/
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      tpm: 1000000
+      rpm: 10000
+
+
+general_settings:
+  # master key is set via env var
+  # master_key: #######
+  proxy_batch_write_at: 60 # Batch write spend updates every 60s
 
 litellm_settings:
-  callbacks: ["arize"]
+  success_callback: ["langfuse"]
 
+  # https://docs.litellm.ai/docs/proxy/reliability#default-fallbacks
+  default_fallbacks: ["gpt-4o-2024-08-06", "claude-3-5-sonnet-20240620"]
+  fallbacks: [{"gpt-4o-2024-08-06": ["claude-3-5-sonnet-20240620"]}, {"gpt-4o-2024-05-13": ["claude-3-5-sonnet-20240620"]}]

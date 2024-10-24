@@ -240,7 +240,7 @@ class PredibaseChatCompletion(BaseLLM):
                 generated_text = generated_text[::-1].replace(token[::-1], "", 1)[::-1]
         return generated_text
 
-    def process_response(
+    def process_response(  # noqa: PLR0915
         self,
         model: str,
         response: Union[requests.Response, httpx.Response],

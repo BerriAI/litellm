@@ -1088,6 +1088,7 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="backend api unavailable")
 @pytest.mark.asyncio
 async def test_completion_codestral_chat_api():
     try:
@@ -4568,6 +4569,13 @@ def test_completion_response_ratelimit_headers(model, stream):
         assert v != "None" and v is not None
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers
+
+    if model == "azure/chatgpt-v-2":
+        # Azure OpenAI header
+        assert "llm_provider-azureml-model-session" in additional_headers
+    if model == "claude-3-sonnet-20240229":
+        # anthropic header
+        assert "llm_provider-anthropic-ratelimit-requests-reset" in additional_headers
 
 
 def _openai_hallucinated_tool_call_mock_response(

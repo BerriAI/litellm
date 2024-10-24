@@ -11,6 +11,7 @@ import pytest
 
 import litellm
 from litellm import get_model_info
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def test_get_model_info_simple_model_name():
@@ -74,3 +75,25 @@ def test_get_model_info_gemini_pro():
     info = litellm.get_model_info("gemini-1.5-pro-002")
     print("info", info)
     assert info["key"] == "gemini-1.5-pro-002"
+
+
+def test_get_model_info_ollama_chat():
+    from litellm.llms.ollama import OllamaConfig
+
+    with patch.object(
+        litellm.module_level_client,
+        "post",
+        return_value=MagicMock(
+            json=lambda: {
+                "model_info": {"llama.context_length": 32768},
+                "template": "tools",
+            }
+        ),
+    ):
+        info = OllamaConfig().get_model_info("mistral")
+        print("info", info)
+        assert info["supports_function_calling"] is True
+
+        info = get_model_info("ollama/mistral")
+        print("info", info)
+        assert info["supports_function_calling"] is True

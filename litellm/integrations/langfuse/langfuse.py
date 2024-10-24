@@ -4,7 +4,7 @@ import copy
 import inspect
 import os
 import traceback
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -13,7 +13,13 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.integrations.langfuse import *
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
+else:
+    DynamicLoggingCache = Any
 
 
 class LangFuseLogger:
@@ -143,7 +149,7 @@ class LangFuseLogger:
     #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
     #         status_message='error' # can be any string (e.g. stringified stack trace or error body)
     #     )
-    def log_event(
+    def log_event(  # noqa: PLR0915
         self,
         kwargs,
         response_obj,
@@ -349,7 +355,7 @@ class LangFuseLogger:
             )
         )
 
-    def _log_langfuse_v2(
+    def _log_langfuse_v2(  # noqa: PLR0915
         self,
         user_id,
         metadata,
@@ -664,10 +670,10 @@ class LangFuseLogger:
             if "cache_key" in litellm.langfuse_default_tags:
                 _hidden_params = metadata.get("hidden_params", {}) or {}
                 _cache_key = _hidden_params.get("cache_key", None)
-                if _cache_key is None:
+                if _cache_key is None and litellm.cache is not None:
                     # fallback to using "preset_cache_key"
-                    _preset_cache_key = kwargs.get("litellm_params", {}).get(
-                        "preset_cache_key", None
+                    _preset_cache_key = litellm.cache._get_preset_cache_key_from_kwargs(
+                        **kwargs
                     )
                     _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")

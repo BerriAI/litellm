@@ -198,9 +198,6 @@ class AzureOpenAIConfig:
                     optional_params["json_mode"] = True
                 else:
                     optional_params["response_format"] = value
-            elif param == "max_completion_tokens":
-                # TODO - Azure OpenAI will probably add support for this, we should pass it through when Azure adds support
-                optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 optional_params[param] = value
 

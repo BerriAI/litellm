@@ -625,6 +625,7 @@ litellm_settings:
   redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
   langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"] # default tags for Langfuse Logging
   
+  request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   
   set_verbose: boolean # sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION
   json_logs: boolean # if true, logs will be in json format
@@ -721,6 +722,7 @@ general_settings:
 | set_verbose | boolean | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION |
 | json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
 | default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
+| request_timeout | integer | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py) |
 | content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
 | context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
 | cache | boolean | If true, enables caching. [Further docs](./caching) |
@@ -873,6 +875,11 @@ router_settings:
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
+| ARGILLA_BATCH_SIZE | Batch size for Argilla logging
+| ARGILLA_API_KEY | API key for Argilla platform
+| ARGILLA_SAMPLING_RATE | Sampling rate for Argilla logging
+| ARGILLA_DATASET_NAME | Dataset name for Argilla logging
+| ARGILLA_BASE_URL | Base URL for Argilla service
 | ATHINA_API_KEY | API key for Athina service
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
@@ -893,10 +900,6 @@ router_settings:
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
-| CLICKHOUSE_HOST | Host for ClickHouse database
-| CLICKHOUSE_PASSWORD | Password for ClickHouse authentication
-| CLICKHOUSE_PORT | Port for ClickHouse database connection
-| CLICKHOUSE_USERNAME | Username for ClickHouse authentication
 | CONFIG_FILE_PATH | File path for configuration file
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | DATABASE_HOST | Hostname for the database server

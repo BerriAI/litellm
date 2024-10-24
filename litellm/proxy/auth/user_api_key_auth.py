@@ -105,7 +105,89 @@ def _get_bearer_token(
     return api_key
 
 
-async def user_api_key_auth(
+def _is_ui_route_allowed(
+    route: str,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w ui token check and normal token check
+    """
+    # this token is only used for managing the ui
+    allowed_routes = LiteLLMRoutes.ui_routes.value
+    # check if the current route startswith any of the allowed routes
+    if (
+        route is not None
+        and isinstance(route, str)
+        and any(route.startswith(allowed_route) for allowed_route in allowed_routes)
+    ):
+        # Do something if the current route starts with any of the allowed routes
+        return True
+    else:
+        if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
+            return True
+        elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
+            return True
+        else:
+            raise Exception(
+                f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
+            )
+
+
+def _is_api_route_allowed(
+    route: str,
+    request: Request,
+    request_data: dict,
+    api_key: str,
+    valid_token: Optional[UserAPIKeyAuth],
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w api token check and normal token check
+    """
+    _user_role = _get_user_role(user_obj=user_obj)
+
+    if valid_token is None:
+        raise Exception("Invalid proxy server token passed")
+
+    if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
+        non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=_user_role,
+            route=route,
+            request=request,
+            request_data=request_data,
+            api_key=api_key,
+            valid_token=valid_token,
+        )
+    return True
+
+
+def _is_allowed_route(
+    route: str,
+    token_type: Literal["ui", "api"],
+    request: Request,
+    request_data: dict,
+    api_key: str,
+    valid_token: Optional[UserAPIKeyAuth],
+    user_obj: Optional[LiteLLM_UserTable] = None,
+) -> bool:
+    """
+    - Route b/w ui token check and normal token check
+    """
+    if token_type == "ui":
+        return _is_ui_route_allowed(route=route, user_obj=user_obj)
+    else:
+        return _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data=request_data,
+            api_key=api_key,
+            valid_token=valid_token,
+            user_obj=user_obj,
+        )
+
+
+async def user_api_key_auth(  # noqa: PLR0915
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
     azure_api_key_header: str = fastapi.Security(azure_api_key_header),
@@ -1041,81 +1123,27 @@ async def user_api_key_auth(
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
 
-            _user_role = _get_user_role(user_obj=user_obj)
-
-            if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
-                non_proxy_admin_allowed_routes_check(
-                    user_obj=user_obj,
-                    _user_role=_user_role,
-                    route=route,
-                    request=request,
-                    request_data=request_data,
-                    api_key=api_key,
-                    valid_token=valid_token,
-                )
-
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
         # this will never be allowed to call /chat/completions
         token_team = getattr(valid_token, "team_id", None)
+        token_type: Literal["ui", "api"] = (
+            "ui"
+            if token_team is not None and token_team == "litellm-dashboard"
+            else "api"
+        )
+        _is_route_allowed = _is_allowed_route(
+            route=route,
+            token_type=token_type,
+            user_obj=user_obj,
+            request=request,
+            request_data=request_data,
+            api_key=api_key,
+            valid_token=valid_token,
+        )
+        if not _is_route_allowed:
+            raise HTTPException(401, detail="Invalid route for UI token")
 
-        if token_team is not None and token_team == "litellm-dashboard":
-            # this token is only used for managing the ui
-            allowed_routes = [
-                "/sso",
-                "/sso/get/ui_settings",
-                "/login",
-                "/key/generate",
-                "/key/update",
-                "/key/info",
-                "/config",
-                "/spend",
-                "/user",
-                "/model/info",
-                "/v2/model/info",
-                "/v2/key/info",
-                "/models",
-                "/v1/models",
-                "/global/spend",
-                "/global/spend/logs",
-                "/global/spend/keys",
-                "/global/spend/models",
-                "/global/predict/spend/logs",
-                "/global/activity",
-                "/health/services",
-            ] + LiteLLMRoutes.info_routes.value  # type: ignore
-            # check if the current route startswith any of the allowed routes
-            if (
-                route is not None
-                and isinstance(route, str)
-                and any(
-                    route.startswith(allowed_route) for allowed_route in allowed_routes
-                )
-            ):
-                # Do something if the current route starts with any of the allowed routes
-                pass
-            else:
-                if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
-                    return UserAPIKeyAuth(
-                        api_key=api_key,
-                        user_role=LitellmUserRoles.PROXY_ADMIN,
-                        parent_otel_span=parent_otel_span,
-                        **valid_token_dict,
-                    )
-                elif (
-                    _has_user_setup_sso()
-                    and route in LiteLLMRoutes.sso_only_routes.value
-                ):
-                    return UserAPIKeyAuth(
-                        api_key=api_key,
-                        user_role=_user_role,  # type: ignore
-                        parent_otel_span=parent_otel_span,
-                        **valid_token_dict,
-                    )
-                else:
-                    raise Exception(
-                        f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
-                    )
         if valid_token is None:
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")

@@ -742,7 +742,7 @@ class VertexLLM(VertexBase):
     def __init__(self) -> None:
         super().__init__()
 
-    def _process_response(
+    def _process_response(  # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
@@ -887,10 +887,16 @@ class VertexLLM(VertexBase):
 
                     if "citationMetadata" in candidate:
                         citation_metadata.append(candidate["citationMetadata"])
-                    if "text" in candidate["content"]["parts"][0]:
+                    if (
+                        "parts" in candidate["content"]
+                        and "text" in candidate["content"]["parts"][0]
+                    ):
                         content_str = candidate["content"]["parts"][0]["text"]
 
-                    if "functionCall" in candidate["content"]["parts"][0]:
+                    if (
+                        "parts" in candidate["content"]
+                        and "functionCall" in candidate["content"]["parts"][0]
+                    ):
                         _function_chunk = ChatCompletionToolCallFunctionChunk(
                             name=candidate["content"]["parts"][0]["functionCall"][
                                 "name"
@@ -1358,7 +1364,11 @@ class ModelResponseIterator:
             if _candidates and len(_candidates) > 0:
                 gemini_chunk = _candidates[0]
 
-            if gemini_chunk and "content" in gemini_chunk:
+            if (
+                gemini_chunk
+                and "content" in gemini_chunk
+                and "parts" in gemini_chunk["content"]
+            ):
                 if "text" in gemini_chunk["content"]["parts"][0]:
                     text = gemini_chunk["content"]["parts"][0]["text"]
                 elif "functionCall" in gemini_chunk["content"]["parts"][0]:

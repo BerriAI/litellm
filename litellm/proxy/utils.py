@@ -1124,6 +1124,7 @@ class PrismaClient:
                 "MonthlyGlobalSpendPerKey",
                 "MonthlyGlobalSpendPerUserPerKey",
                 "Last30dTopEndUsersSpend",
+                "DailyTagSpend",
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
@@ -1425,7 +1426,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     @log_to_opentelemetry
-    async def get_data(
+    async def get_data(  # noqa: PLR0915
         self,
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
@@ -1779,7 +1780,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(
+    async def insert_data(  # noqa: PLR0915
         self,
         data: dict,
         table_name: Literal[
@@ -1927,7 +1928,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def update_data(
+    async def update_data(  # noqa: PLR0915
         self,
         token: Optional[str] = None,
         data: dict = {},
@@ -2616,7 +2617,7 @@ async def reset_budget(prisma_client: PrismaClient):
             )
 
 
-async def update_spend(
+async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
     db_writer_client: Optional[HTTPHandler],
     proxy_logging_obj: ProxyLogging,

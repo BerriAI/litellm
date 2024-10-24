@@ -84,13 +84,41 @@ def test_bedrock_optional_params_embeddings():
     ],
 )
 def test_bedrock_optional_params_completions(model):
-    litellm.drop_params = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "structure_output",
+                "description": "Send structured output back to the user",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {"type": "string"},
+                        "sentiment": {"type": "string"},
+                    },
+                    "required": ["reasoning", "sentiment"],
+                    "additionalProperties": False,
+                },
+                "additionalProperties": False,
+            },
+        }
+    ]
     optional_params = get_optional_params(
-        model=model, max_tokens=10, temperature=0.1, custom_llm_provider="bedrock"
+        model=model,
+        max_tokens=10,
+        temperature=0.1,
+        tools=tools,
+        custom_llm_provider="bedrock",
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 3
-    assert optional_params == {"maxTokens": 10, "stream": False, "temperature": 0.1}
+    assert len(optional_params) == 4
+    assert optional_params == {
+        "maxTokens": 10,
+        "stream": False,
+        "temperature": 0.1,
+        "tools": tools,
+    }
 
 
 @pytest.mark.parametrize(
@@ -747,3 +775,12 @@ def test_hosted_vllm_tool_param():
     )
     assert "tools" not in optional_params
     assert "tool_choice" not in optional_params
+
+
+def test_unmapped_vertex_anthropic_model():
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider="vertex_ai",
+        max_retries=10,
+    )
+    assert "max_retries" not in optional_params
