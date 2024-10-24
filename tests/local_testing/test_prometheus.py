@@ -25,7 +25,7 @@ from litellm.types.utils import (
 import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
-from litellm.integrations.prometheus import PrometheusLogger, safe_get_remaining_budget
+from litellm.integrations.prometheus import PrometheusLogger
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -221,7 +221,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         messages=[{"role": "user", "content": "Hello, world!"}],
         response={"choices": [{"message": {"content": "Hi there!"}}]},
         error_str=None,
-        model_parameters={},
+        model_parameters={"stream": True},
         hidden_params=StandardLoggingHiddenParams(
             model_id="model-123",
             cache_key=None,
@@ -232,11 +232,11 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
     )
 
 
-def test_safe_get_remaining_budget():
-    assert safe_get_remaining_budget(100, 30) == 70
-    assert safe_get_remaining_budget(100, None) == 100
-    assert safe_get_remaining_budget(None, 30) == float("inf")
-    assert safe_get_remaining_budget(None, None) == float("inf")
+def test_safe_get_remaining_budget(prometheus_logger):
+    assert prometheus_logger._safe_get_remaining_budget(100, 30) == 70
+    assert prometheus_logger._safe_get_remaining_budget(100, None) == 100
+    assert prometheus_logger._safe_get_remaining_budget(None, 30) == float("inf")
+    assert prometheus_logger._safe_get_remaining_budget(None, None) == float("inf")
 
 
 @pytest.mark.asyncio
@@ -252,15 +252,36 @@ async def test_async_log_success_event(prometheus_logger):
             }
         },
         "start_time": datetime.now(),
+        "completion_start_time": datetime.now(),
+        "api_call_start_time": datetime.now(),
         "end_time": datetime.now() + timedelta(seconds=1),
         "standard_logging_object": standard_logging_object,
     }
     response_obj = MagicMock()
 
     # Mock the prometheus client methods
+
+    # High Level Metrics - request/spend
     prometheus_logger.litellm_requests_metric = MagicMock()
     prometheus_logger.litellm_spend_metric = MagicMock()
+
+    # Token Metrics
     prometheus_logger.litellm_tokens_metric = MagicMock()
+    prometheus_logger.litellm_input_tokens_metric = MagicMock()
+    prometheus_logger.litellm_output_tokens_metric = MagicMock()
+
+    # Remaining Budget Metrics
+    prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+    prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
+
+    # Virtual Key Rate limit Metrics
+    prometheus_logger.litellm_remaining_api_key_requests_for_model = MagicMock()
+    prometheus_logger.litellm_remaining_api_key_tokens_for_model = MagicMock()
+
+    # Latency Metrics
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
+    prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
+    prometheus_logger.litellm_request_total_latency_metric = MagicMock()
 
     await prometheus_logger.async_log_success_event(
         kwargs, response_obj, kwargs["start_time"], kwargs["end_time"]
@@ -269,4 +290,21 @@ async def test_async_log_success_event(prometheus_logger):
     # Assert that the metrics were incremented
     prometheus_logger.litellm_requests_metric.labels.assert_called()
     prometheus_logger.litellm_spend_metric.labels.assert_called()
+
+    # Token Metrics
     prometheus_logger.litellm_tokens_metric.labels.assert_called()
+    prometheus_logger.litellm_input_tokens_metric.labels.assert_called()
+    prometheus_logger.litellm_output_tokens_metric.labels.assert_called()
+
+    # Remaining Budget Metrics
+    prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called()
+    prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called()
+
+    # Virtual Key Rate limit Metrics
+    prometheus_logger.litellm_remaining_api_key_requests_for_model.labels.assert_called()
+    prometheus_logger.litellm_remaining_api_key_tokens_for_model.labels.assert_called()
+
+    # Latency Metrics
+    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_called()
+    prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called()
+    prometheus_logger.litellm_request_total_latency_metric.labels.assert_called()

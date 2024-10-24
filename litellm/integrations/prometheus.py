@@ -375,7 +375,7 @@ class PrometheusLogger(CustomLogger):
         _team_max_budget = litellm_params.get("metadata", {}).get(
             "user_api_key_team_max_budget", None
         )
-        _remaining_team_budget = safe_get_remaining_budget(
+        _remaining_team_budget = self._safe_get_remaining_budget(
             max_budget=_team_max_budget, spend=_team_spend
         )
 
@@ -385,7 +385,7 @@ class PrometheusLogger(CustomLogger):
         _api_key_max_budget = litellm_params.get("metadata", {}).get(
             "user_api_key_max_budget", None
         )
-        _remaining_api_key_budget = safe_get_remaining_budget(
+        _remaining_api_key_budget = self._safe_get_remaining_budget(
             max_budget=_api_key_max_budget, spend=_api_key_spend
         )
 
@@ -420,6 +420,8 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias,
             user_id,
         ).inc(response_cost)
+
+        # token metrics
         self.litellm_tokens_metric.labels(
             end_user_id,
             user_api_key,
@@ -450,6 +452,7 @@ class PrometheusLogger(CustomLogger):
             user_id,
         ).inc(standard_logging_payload["completion_tokens"])
 
+        # Remaining Budget Metrics
         self.litellm_remaining_team_budget_metric.labels(
             user_api_team, user_api_team_alias
         ).set(_remaining_team_budget)
@@ -1007,14 +1010,13 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name, model_id, api_base, api_provider, exception_status
         ).inc()
 
+    def _safe_get_remaining_budget(
+        self, max_budget: Optional[float], spend: Optional[float]
+    ) -> float:
+        if max_budget is None:
+            return float("inf")
 
-def safe_get_remaining_budget(
-    max_budget: Optional[float], spend: Optional[float]
-) -> float:
-    if max_budget is None:
-        return float("inf")
+        if spend is None:
+            return max_budget
 
-    if spend is None:
-        return max_budget
-
-    return max_budget - spend
+        return max_budget - spend
