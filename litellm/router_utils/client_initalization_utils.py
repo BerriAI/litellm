@@ -51,9 +51,9 @@ class InitalizeOpenAISDKClient:
         return True
 
     @staticmethod
-    def set_client(
+    def set_client(  # noqa: PLR0915
         litellm_router_instance: LitellmRouter, model: dict
-    ):  # noqa: PLR0915
+    ):
         """
         - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
         - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
