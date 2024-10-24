@@ -422,35 +422,16 @@ class PrometheusLogger(CustomLogger):
         ).inc(response_cost)
 
         # token metrics
-        self.litellm_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["total_tokens"])
-
-        self.litellm_input_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["prompt_tokens"])
-
-        self.litellm_output_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["completion_tokens"])
+        self._increment_token_metrics(
+            standard_logging_payload=standard_logging_payload,
+            end_user_id=end_user_id,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            model=model,
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_id=user_id,
+        )
 
         # Remaining Budget Metrics
         self.litellm_remaining_team_budget_metric.labels(
@@ -538,6 +519,48 @@ class PrometheusLogger(CustomLogger):
             kwargs, start_time, end_time, output_tokens
         )
         pass
+
+    def _increment_token_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        end_user_id: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        model: Optional[str],
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_id: Optional[str],
+    ):
+        # token metrics
+        self.litellm_tokens_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(standard_logging_payload["total_tokens"])
+
+        self.litellm_input_tokens_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(standard_logging_payload["prompt_tokens"])
+
+        self.litellm_output_tokens_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(standard_logging_payload["completion_tokens"])
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
