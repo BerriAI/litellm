@@ -28,6 +28,9 @@
     <a href="https://discord.gg/wuPM9dRgDw">
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
     </a>
+    <a href="https://gurubase.io/g/litellm">
+        <img src="https://img.shields.io/badge/Gurubase-Ask%20LiteLLM%20Guru-006BFF?style=flat-square" alt="Gurubase">
+    </a>
 </h4>
 
 LiteLLM manages:
