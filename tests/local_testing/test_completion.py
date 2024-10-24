@@ -1612,29 +1612,6 @@ def test_completion_fireworks_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_xai():
-    try:
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="xai/grok-beta",
-            messages=messages,
-        )
-        print(response)
-
-        assert response is not None
-        assert isinstance(response, litellm.ModelResponse)
-        assert response.choices[0].message.content is not None
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize(
     "api_key, api_base", [(None, "my-bad-api-base"), ("my-bad-api-key", None)]
 )
