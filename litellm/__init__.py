@@ -487,6 +487,7 @@ openai_compatible_endpoints: List = [
     "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
+    "api.x.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -504,6 +505,7 @@ openai_compatible_providers: List = [
     "deepinfra",
     "perplexity",
     "xinference",
+    "xai",
     "together_ai",
     "fireworks_ai",
     "empower",
@@ -714,6 +716,7 @@ class LlmProviders(str, Enum):
     OPENAI = "openai"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
+    XAI = "xai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -1018,6 +1021,7 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from .llms.xai.chat.xai_transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (
