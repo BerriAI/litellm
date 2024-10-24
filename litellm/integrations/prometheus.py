@@ -383,24 +383,17 @@ class PrometheusLogger(CustomLogger):
 
             user_api_key = hash_token(user_api_key)
 
-        self.litellm_requests_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc()
-        self.litellm_spend_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(response_cost)
+        # increment total LLM requests and spend metric
+        self._increment_top_level_request_and_spend_metrics(
+            end_user_id=end_user_id,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            model=model,
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_id=user_id,
+            response_cost=response_cost,
+        )
 
         # input, output, total token metrics
         self._increment_token_metrics(
@@ -578,6 +571,36 @@ class PrometheusLogger(CustomLogger):
         self.litellm_remaining_api_key_budget_metric.labels(
             user_api_key, user_api_key_alias
         ).set(_remaining_api_key_budget)
+
+    def _increment_top_level_request_and_spend_metrics(
+        self,
+        end_user_id: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        model: Optional[str],
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_id: Optional[str],
+        response_cost: float,
+    ):
+        self.litellm_requests_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc()
+        self.litellm_spend_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(response_cost)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
