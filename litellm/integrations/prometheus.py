@@ -334,9 +334,7 @@ class PrometheusLogger(CustomLogger):
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
-    async def async_log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
         from litellm.types.utils import StandardLoggingPayload
 
