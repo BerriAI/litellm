@@ -7,15 +7,10 @@ replicaCount: 1
 image:
   # Use "ghcr.io/berriai/litellm-database" for optimized image with database
   repository: ghcr.io/berriai/litellm-database
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "main-latest"
   tag: ""
-
-  # Image and tag used for the init container to check and wait for the
-  #  readiness of the postgres database.
-  dbReadyImage: docker.io/bitnami/postgresql
-  dbReadyTag: ""
 
 imagePullSecrets: []
 nameOverride: "litellm"
