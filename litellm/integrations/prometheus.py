@@ -402,7 +402,7 @@ class PrometheusLogger(CustomLogger):
             user_id,
         ).inc(response_cost)
 
-        # token metrics
+        # input, output, total token metrics
         self._increment_token_metrics(
             standard_logging_payload=standard_logging_payload,
             end_user_id=end_user_id,
@@ -412,6 +412,15 @@ class PrometheusLogger(CustomLogger):
             user_api_team=user_api_team,
             user_api_team_alias=user_api_team_alias,
             user_id=user_id,
+        )
+
+        # remaining budget metrics
+        self._increment_remaining_budget_metrics(
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            litellm_params=litellm_params,
         )
 
         # Set remaining rpm/tpm for API Key + model
