@@ -44,36 +44,6 @@ class CohereError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-def _process_embedding_response(
-    embeddings: list,
-    model_response: litellm.EmbeddingResponse,
-    model: str,
-    encoding: Any,
-    input: list,
-) -> litellm.EmbeddingResponse:
-    output_data = []
-    for idx, embedding in enumerate(embeddings):
-        output_data.append(
-            {"object": "embedding", "index": idx, "embedding": embedding}
-        )
-    model_response.object = "list"
-    model_response.data = output_data
-    model_response.model = model
-    input_tokens = 0
-    for text in input:
-        input_tokens += len(encoding.encode(text))
-
-    setattr(
-        model_response,
-        "usage",
-        Usage(
-            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
-        ),
-    )
-
-    return model_response
-
-
 async def async_embedding(
     model: str,
     data: Union[dict, CohereEmbeddingRequest],
@@ -124,19 +94,12 @@ async def async_embedding(
         )
         raise e
 
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": data},
-        original_response=response.text,
-    )
-
-    embeddings = response.json()["embeddings"]
-
     ## PROCESS RESPONSE ##
-    return _process_embedding_response(
-        embeddings=embeddings,
+    return CohereEmbeddingConfig()._transform_response(
+        response=response,
+        api_key=api_key,
+        logging_obj=logging_obj,
+        data=data,
         model_response=model_response,
         model=model,
         encoding=encoding,
@@ -195,30 +158,12 @@ def embedding(
         client = HTTPHandler(concurrent_limit=1)
 
     response = client.post(embed_url, headers=headers, data=json.dumps(data))
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": data},
-        original_response=response,
-    )
-    """
-        response 
-        {
-            'object': "list",
-            'data': [
-            
-            ]
-            'model', 
-            'usage'
-        }
-    """
-    if response.status_code != 200:
-        raise CohereError(message=response.text, status_code=response.status_code)
-    embeddings = response.json()["embeddings"]
 
-    return _process_embedding_response(
-        embeddings=embeddings,
+    return CohereEmbeddingConfig()._transform_response(
+        response=response,
+        api_key=api_key,
+        logging_obj=logging_obj,
+        data=data,
         model_response=model_response,
         model=model,
         encoding=encoding,
