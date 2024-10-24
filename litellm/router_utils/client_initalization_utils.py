@@ -26,6 +26,11 @@ else:
     LitellmRouter = Any
     httpxTimeout = Any
 
+# OpenAI SDK requires this param
+# litellm Router sets max retries in router.py init() to openai.DEFAULT_MAX_RETRIES
+# this is intentionally set to 0 since retries occur at the router level
+DEFAULT_MAX_RETRIES = 0
+
 
 class OpenAISDKClientInitializationParams(BaseModel):
     api_key: Optional[str]
@@ -546,25 +551,9 @@ class InitalizeOpenAISDKClient:
             api_base = get_secret_str(api_base)
             litellm_params["api_base"] = api_base
 
-        ## AZURE AI STUDIO MISTRAL CHECK ##
-        """
-        Make sure api base ends in /v1/
-
-        if not, add it - https://github.com/BerriAI/litellm/issues/2279
-        """
-        if (
-            is_azure_ai_studio_model is True
-            and api_base is not None
-            and isinstance(api_base, str)
-            and not api_base.endswith("/v1/")
-        ):
-            # check if it ends with a trailing slash
-            if api_base.endswith("/"):
-                api_base += "v1/"
-            elif api_base.endswith("/v1"):
-                api_base += "/"
-            else:
-                api_base += "/v1/"
+        api_base = InitalizeOpenAISDKClient._handle_azure_ai_studio_api_base(
+            is_azure_ai_studio_model=is_azure_ai_studio_model, api_base=api_base
+        )
 
         api_version = litellm_params.get("api_version")
         if api_version and api_version.startswith("os.environ/"):
@@ -575,22 +564,35 @@ class InitalizeOpenAISDKClient:
             litellm_params.pop("timeout", None) or litellm.request_timeout
         )
         if isinstance(timeout, str) and timeout.startswith("os.environ/"):
-            timeout = float(get_secret(timeout))  # type: ignore
-            litellm_params["timeout"] = timeout
+            timeout = InitalizeOpenAISDKClient._get_env_var_as_float(
+                variable_name=timeout
+            )
+        elif isinstance(timeout, str):
+            timeout = float(timeout)
+        litellm_params["timeout"] = timeout
 
         stream_timeout: Optional[Union[float, str, httpxTimeout]] = litellm_params.pop(
             "stream_timeout", timeout
         )  # if no stream_timeout is set, default to timeout
         if isinstance(stream_timeout, str) and stream_timeout.startswith("os.environ/"):
-            stream_timeout = float(get_secret(stream_timeout))  # type: ignore
-            litellm_params["stream_timeout"] = stream_timeout
+            stream_timeout = InitalizeOpenAISDKClient._get_env_var_as_float(
+                variable_name=stream_timeout
+            )
+        elif isinstance(stream_timeout, str):
+            stream_timeout = float(stream_timeout)
+        litellm_params["stream_timeout"] = stream_timeout
 
         max_retries: Optional[int] = litellm_params.pop(
-            "max_retries", 0
+            "max_retries"
         )  # router handles retry logic
         if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
-            max_retries = get_secret(max_retries)  # type: ignore
-            litellm_params["max_retries"] = max_retries
+            max_retries = InitalizeOpenAISDKClient._get_env_var_as_int(
+                variable_name=max_retries
+            )
+        elif isinstance(max_retries, str):
+            max_retries = int(max_retries)
+        max_retries = max_retries or DEFAULT_MAX_RETRIES
+        litellm_params["max_retries"] = max_retries
 
         organization = litellm_params.get("organization", None)
         if isinstance(organization, str) and organization.startswith("os.environ/"):
@@ -613,13 +615,40 @@ class InitalizeOpenAISDKClient:
             api_base=api_base,
             api_version=api_version,
             azure_ad_token_provider=azure_ad_token_provider,
-            timeout=timeout,  # type: ignore
-            stream_timeout=stream_timeout,  # type: ignore
-            max_retries=max_retries,  # type: ignore
+            timeout=timeout,
+            stream_timeout=stream_timeout,
+            max_retries=max_retries,
             organization=organization,
             custom_llm_provider=custom_llm_provider,
             model_name=model_name,
         )
+
+    @staticmethod
+    def _handle_azure_ai_studio_api_base(
+        is_azure_ai_studio_model: bool, api_base: Optional[str]
+    ) -> Optional[str]:
+
+        ## AZURE AI STUDIO MISTRAL CHECK ##
+        """
+        Make sure api base ends in /v1/
+
+        if not, add it - https://github.com/BerriAI/litellm/issues/2279
+        """
+        if (
+            is_azure_ai_studio_model is True
+            and api_base is not None
+            and isinstance(api_base, str)
+            and not api_base.endswith("/v1/")
+        ):
+            # check if it ends with a trailing slash
+            if api_base.endswith("/"):
+                api_base += "v1/"
+            elif api_base.endswith("/v1"):
+                api_base += "/"
+            else:
+                api_base += "/v1/"
+
+        return api_base
 
     @staticmethod
     def _should_create_openai_sdk_client_for_model(
@@ -697,3 +726,19 @@ class InitalizeOpenAISDKClient:
         verbose_router_logger.debug("token_provider %s", token_provider)
 
         return token_provider
+
+    @staticmethod
+    def _get_env_var_as_float(variable_name: str) -> Optional[float]:
+        value = get_secret(variable_name)
+        if value:
+            return float(value)
+
+        return None
+
+    @staticmethod
+    def _get_env_var_as_int(variable_name: str) -> Optional[int]:
+        value = get_secret(variable_name)
+        if value:
+            return int(value)
+
+        return None
