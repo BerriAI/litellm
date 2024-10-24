@@ -85,6 +85,7 @@ class AzureOpenAIConfig:
             "stream_options",
             "stop",
             "max_tokens",
+            "max_retries",
             "max_completion_tokens",
             "tools",
             "tool_choice",
