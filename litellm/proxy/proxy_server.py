@@ -3194,11 +3194,11 @@ async def chat_completion(  # noqa: PLR0915
 
         # handle workday gateway
         if data.get("model", "") == "workday_gateway":
-            from litellm.proxy.external.workday_gateway import call_workday_gateway
+            from litellm.proxy.raga.workday_gateway import call_workday_gateway
             return await call_workday_gateway(data)
 
         # add api keys to request based on model and user_id
-        from litellm.proxy.raga_utils import modify_user_request
+        from litellm.proxy.raga.raga_utils import modify_user_request
         data = modify_user_request(data)
 
         data = await add_litellm_data_to_request(
