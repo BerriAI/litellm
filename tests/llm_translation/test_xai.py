@@ -48,6 +48,71 @@ def test_xai_chat_config_get_openai_compatible_provider_info():
         assert api_key == "env_api_key"
 
 
+def test_xai_chat_config_map_openai_params():
+    """
+    XAI is OpenAI compatible*
+
+    Does not support all OpenAI parameters:
+    - max_completion_tokens -> max_tokens
+
+    """
+    config = XAIChatConfig()
+
+    # Test mapping of parameters
+    non_default_params = {
+        "max_completion_tokens": 100,
+        "frequency_penalty": 0.5,
+        "logit_bias": {"50256": -100},
+        "logprobs": 5,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "model": "xai/grok-beta",
+        "n": 2,
+        "presence_penalty": 0.2,
+        "response_format": {"type": "json_object"},
+        "seed": 42,
+        "stop": ["END"],
+        "stream": True,
+        "stream_options": {},
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+        "top_logprobs": 3,
+        "top_p": 0.9,
+        "user": "test_user",
+        "unsupported_param": "value",
+    }
+    optional_params = {}
+    model = "xai/grok-beta"
+
+    result = config.map_openai_params(non_default_params, optional_params, model)
+
+    # Assert all supported parameters are present in the result
+    assert result["max_tokens"] == 100  # max_completion_tokens -> max_tokens
+    assert result["frequency_penalty"] == 0.5
+    assert result["logit_bias"] == {"50256": -100}
+    assert result["logprobs"] == 5
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+    assert result["model"] == "xai/grok-beta"
+    assert result["n"] == 2
+    assert result["presence_penalty"] == 0.2
+    assert result["response_format"] == {"type": "json_object"}
+    assert result["seed"] == 42
+    assert result["stop"] == ["END"]
+    assert result["stream"] is True
+    assert result["stream_options"] == {}
+    assert result["temperature"] == 0.7
+    assert result["tool_choice"] == "auto"
+    assert result["tools"] == [
+        {"type": "function", "function": {"name": "get_weather"}}
+    ]
+    assert result["top_logprobs"] == 3
+    assert result["top_p"] == 0.9
+    assert result["user"] == "test_user"
+
+    # Assert unsupported parameter is not in the result
+    assert "unsupported_param" not in result
+
+
 def test_completion_xai():
     try:
         litellm.set_verbose = True
