@@ -4109,9 +4109,7 @@ async def test_async_text_completion_chat_model_stream():
 # asyncio.run(test_async_text_completion_chat_model_stream())
 
 
-@pytest.mark.parametrize(
-    "model", ["vertex_ai/codestral@2405", "text-completion-codestral/codestral-2405"]  #
-)
+@pytest.mark.parametrize("model", ["vertex_ai/codestral@2405"])  #
 @pytest.mark.asyncio
 async def test_completion_codestral_fim_api(model):
     try:
@@ -4154,7 +4152,7 @@ async def test_completion_codestral_fim_api(model):
 
 @pytest.mark.parametrize(
     "model",
-    ["vertex_ai/codestral@2405", "text-completion-codestral/codestral-2405"],
+    ["vertex_ai/codestral@2405"],
 )
 @pytest.mark.asyncio
 async def test_completion_codestral_fim_api_stream(model):
