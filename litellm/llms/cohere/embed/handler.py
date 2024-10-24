@@ -12,7 +12,10 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.bedrock import CohereEmbeddingRequest
 from litellm.utils import Choices, Message, ModelResponse, Usage
+
+from .transformation import CohereEmbeddingConfig
 
 
 def validate_environment(api_key, headers: dict):
@@ -73,7 +76,7 @@ def _process_embedding_response(
 
 async def async_embedding(
     model: str,
-    data: dict,
+    data: Union[dict, CohereEmbeddingRequest],
     input: list,
     model_response: litellm.utils.EmbeddingResponse,
     timeout: Optional[Union[float, httpx.Timeout]],
@@ -149,7 +152,7 @@ def embedding(
     optional_params: dict,
     headers: dict,
     encoding: Any,
-    data: Optional[dict] = None,
+    data: Optional[Union[dict, CohereEmbeddingRequest]] = None,
     complete_api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     aembedding: Optional[bool] = None,
@@ -159,11 +162,10 @@ def embedding(
     headers = validate_environment(api_key, headers=headers)
     embed_url = complete_api_base or "https://api.cohere.ai/v1/embed"
     model = model
-    data = data or {"model": model, "texts": input, **optional_params}
 
-    if "3" in model and "input_type" not in data:
-        # cohere v3 embedding models require input_type, if no input_type is provided, default to "search_document"
-        data["input_type"] = "search_document"
+    data = data or CohereEmbeddingConfig()._transform_request(
+        model=model, input=input, inference_params=optional_params
+    )
 
     ## ROUTING
     if aembedding is True:
