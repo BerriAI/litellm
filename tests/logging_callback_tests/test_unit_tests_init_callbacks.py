@@ -118,6 +118,11 @@ async def use_callback_in_llm_call(
     elif callback == "openmeter":
         # it's currently handled in jank way, TODO: fix openmete and then actually run it's test
         return
+    elif callback == "prometheus":
+        # pytest teardown - clear existing prometheus collectors
+        collectors = list(REGISTRY._collector_to_names.keys())
+        for collector in collectors:
+            REGISTRY.unregister(collector)
 
     # Mock the httpx call for Argilla dataset retrieval
     if callback == "argilla":
