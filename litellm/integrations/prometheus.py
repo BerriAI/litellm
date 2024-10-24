@@ -369,25 +369,6 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
-        _team_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_spend", None
-        )
-        _team_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_max_budget", None
-        )
-        _remaining_team_budget = self._safe_get_remaining_budget(
-            max_budget=_team_max_budget, spend=_team_spend
-        )
-
-        _api_key_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_spend", None
-        )
-        _api_key_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_max_budget", None
-        )
-        _remaining_api_key_budget = self._safe_get_remaining_budget(
-            max_budget=_api_key_max_budget, spend=_api_key_spend
-        )
 
         print_verbose(
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
@@ -432,15 +413,6 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias=user_api_team_alias,
             user_id=user_id,
         )
-
-        # Remaining Budget Metrics
-        self.litellm_remaining_team_budget_metric.labels(
-            user_api_team, user_api_team_alias
-        ).set(_remaining_team_budget)
-
-        self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key, user_api_key_alias
-        ).set(_remaining_api_key_budget)
 
         # Set remaining rpm/tpm for API Key + model
         # see parallel_request_limiter.py - variables are set there
@@ -561,6 +533,42 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias,
             user_id,
         ).inc(standard_logging_payload["completion_tokens"])
+
+    def _increment_remaining_budget_metrics(
+        self,
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        litellm_params: dict,
+    ):
+        _team_spend = litellm_params.get("metadata", {}).get(
+            "user_api_key_team_spend", None
+        )
+        _team_max_budget = litellm_params.get("metadata", {}).get(
+            "user_api_key_team_max_budget", None
+        )
+        _remaining_team_budget = self._safe_get_remaining_budget(
+            max_budget=_team_max_budget, spend=_team_spend
+        )
+
+        _api_key_spend = litellm_params.get("metadata", {}).get(
+            "user_api_key_spend", None
+        )
+        _api_key_max_budget = litellm_params.get("metadata", {}).get(
+            "user_api_key_max_budget", None
+        )
+        _remaining_api_key_budget = self._safe_get_remaining_budget(
+            max_budget=_api_key_max_budget, spend=_api_key_spend
+        )
+        # Remaining Budget Metrics
+        self.litellm_remaining_team_budget_metric.labels(
+            user_api_team, user_api_team_alias
+        ).set(_remaining_team_budget)
+
+        self.litellm_remaining_api_key_budget_metric.labels(
+            user_api_key, user_api_key_alias
+        ).set(_remaining_api_key_budget)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
