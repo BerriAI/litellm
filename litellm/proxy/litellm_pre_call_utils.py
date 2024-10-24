@@ -202,9 +202,13 @@ def add_litellm_data_for_backend_llm_call(
     - Adds org id
     """
     data = LitellmDataForBackendLLMCall()
-    _headers = get_forwardable_headers(headers)
-    if _headers != {}:
-        data["headers"] = _headers
+    if (
+        general_settings
+        and general_settings.get("forward_client_headers_to_llm_api") is True
+    ):
+        _headers = get_forwardable_headers(headers)
+        if _headers != {}:
+            data["headers"] = _headers
     _organization = get_openai_org_id_from_headers(headers, general_settings)
     if _organization is not None:
         data["organization"] = _organization
