@@ -2,6 +2,8 @@ import asyncio
 import traceback
 from typing import TYPE_CHECKING, Any
 
+from litellm.types.integrations.slack_alerting import AlertType
+
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
@@ -17,7 +19,8 @@ async def send_llm_exception_alert(
     original_exception,
 ):
     """
-    Sends a Slack / MS Teams alert for the LLM API call failure.
+    Only runs if router.slack_alerting_logger is set
+    Sends a Slack / MS Teams alert for the LLM API call failure. Only if router.slack_alerting_logger is set.
 
     Parameters:
         litellm_router_instance (_Router): The LitellmRouter instance.
@@ -49,5 +52,6 @@ async def send_llm_exception_alert(
     await litellm_router_instance.slack_alerting_logger.send_alert(
         message=f"LLM API call failed: `{exception_str}`",
         level="High",
-        alert_type="llm_exceptions",
+        alert_type=AlertType.llm_exceptions,
+        alerting_metadata={},
     )

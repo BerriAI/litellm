@@ -1,9 +1,22 @@
 # Secret Manager
-LiteLLM supports reading secrets from Azure Key Vault and Infisical
+LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
 
-- AWS Key Managemenet Service
+:::info
+
+✨ **This is an Enterprise Feature**
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+## Supported Secret Managers
+
+- AWS Key Management Service
 - AWS Secret Manager
 - [Azure Key Vault](#azure-key-vault)
+- [Google Secret Manager](#google-secret-manager)
 - Google Key Management Service
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
@@ -61,7 +74,7 @@ litellm --config /path/to/config.yaml
 ```
 
 ## Azure Key Vault
-
+<!-- 
 ### Quick Start
 
 ```python 
@@ -88,9 +101,9 @@ import litellm
 litellm.secret_manager = client
 
 litellm.get_secret("your-test-key")
-```
+``` -->
 
-### Usage with OpenAI Proxy Server
+### Usage with LiteLLM Proxy Server
 
 1. Install Proxy dependencies 
 ```bash
@@ -125,11 +138,50 @@ litellm --config /path/to/config.yaml
 
 [Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
 
+## Google Secret Manager
+
+Support for [Google Secret Manager](https://cloud.google.com/security/products/secret-manager)
+
+
+1. Save Google Secret Manager details in your environment
+
+```shell 
+GOOGLE_SECRET_MANAGER_PROJECT_ID="your-project-id-on-gcp" # example: adroit-crow-413218
+```
+
+Optional Params
+
+```shell
+export GOOGLE_SECRET_MANAGER_REFRESH_INTERVAL = ""            # (int) defaults to 86400
+export GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER = ""  # (str) set to "true" if you want to always read from google secret manager without using in memory caching. NOT RECOMMENDED in PROD
+```
+
+2. Add to proxy config.yaml 
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_key: os.environ/OPENAI_API_KEY # this will be read from Google Secret Manager
+
+general_settings:
+  key_management_system: "google_secret_manager"
+```
+
+You can now test this by starting your proxy: 
+```bash
+litellm --config /path/to/config.yaml
+```
+
+[Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
+
+
 ## Google Key Management Service 
 
 Use encrypted keys from Google KMS on the proxy
 
-### Usage with OpenAI Proxy Server
+### Usage with LiteLLM Proxy Server
 
 ## Step 1. Add keys to env 
 ```
@@ -160,29 +212,6 @@ $ litellm --test
 
 [Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
 
-
-## Infisical Secret Manager
-Integrates with [Infisical's Secret Manager](https://infisical.com/) for secure storage and retrieval of API keys and sensitive data.
-
-### Usage
-liteLLM manages reading in your LLM API secrets/env variables from Infisical for you
-
-```python
-import litellm
-from infisical import InfisicalClient
-
-litellm.secret_manager = InfisicalClient(token="your-token")
-
-messages = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "What's the weather like today?"},
-]
-
-response = litellm.completion(model="gpt-3.5-turbo", messages=messages)
-
-print(response)
-```
-
-
+<!-- 
 ## .env Files
-If no secret manager client is specified, Litellm automatically uses the `.env` file to manage sensitive data.
+If no secret manager client is specified, Litellm automatically uses the `.env` file to manage sensitive data. -->

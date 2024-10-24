@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 
 def show_missing_vars_in_env():
@@ -165,3 +166,76 @@ def missing_keys_form(missing_key_names: str):
         </html>
     """
     return missing_keys_html_form.format(missing_keys=missing_key_names)
+
+
+def admin_ui_disabled():
+    from fastapi.responses import HTMLResponse
+
+    ui_disabled_html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    background-color: #f4f4f9;
+                    color: #333;
+                    margin: 20px;
+                    line-height: 1.6;
+                }}
+                .container {{
+                    max-width: 800px;
+                    margin: auto;
+                    padding: 20px;
+                    background: #fff;
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
+                    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                }}
+                h1 {{
+                    font-size: 24px;
+                    margin-bottom: 20px;
+                }}
+                pre {{
+                    background: #f8f8f8;
+                    padding: 1px;
+                    border: 1px solid #ccc;
+                    border-radius: 4px;
+                    overflow-x: auto;
+                    font-size: 14px;
+                }}
+                .env-var {{
+                    font-weight: normal;
+                }}
+                .comment {{
+                    font-weight: normal;
+                    color: #777;
+                }}
+            </style>
+            <title>Admin UI Disabled</title>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Admin UI is Disabled</h1>
+                <p>The Admin UI has been disabled by the administrator. To re-enable it, please update the following environment variable:</p>
+                <pre>
+    <span class="env-var">DISABLE_ADMIN_UI="False"</span> <span class="comment"># Set this to "False" to enable the Admin UI.</span>
+                </pre>
+                <p>After making this change, restart the application for it to take effect.</p>
+            </div>
+
+            <div class="container">
+            <h1>Need Help? Support</h1>
+            <p>Discord: <a href="https://discord.com/invite/wuPM9dRgDw" target="_blank">https://discord.com/invite/wuPM9dRgDw</a></p>
+            <p>Docs: <a href="https://docs.litellm.ai/docs/" target="_blank">https://docs.litellm.ai/docs/</a></p>
+            </div>
+        </body>
+        </html>
+    """
+
+    return HTMLResponse(
+        content=ui_disabled_html,
+        status_code=200,
+    )

@@ -9,7 +9,7 @@
 
 from typing import Optional, Literal
 import litellm
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
@@ -82,10 +82,15 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            verbose_proxy_logger.error(traceback.format_exc())
+            verbose_proxy_logger.exception(
+                "litellm.enterprise.enterprise_hooks.banned_keywords::async_pre_call_hook - Exception occurred - {}".format(
+                    str(e)
+                )
+            )
 
     async def async_post_call_success_hook(
         self,
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):

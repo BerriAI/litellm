@@ -1,7 +1,6 @@
-from typing import List, Optional, Union, Iterable
+from typing import Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, validator
-
 from typing_extensions import Literal, Required, TypedDict
 
 
@@ -94,7 +93,7 @@ class Function(TypedDict, total=False):
 
 
 class ChatCompletionToolMessageParam(TypedDict, total=False):
-    content: Required[str]
+    content: Required[Union[str, Iterable[ChatCompletionContentPartParam]]]
     """The contents of the tool message."""
 
     role: Required[Literal["tool"]]
@@ -105,7 +104,7 @@ class ChatCompletionToolMessageParam(TypedDict, total=False):
 
 
 class ChatCompletionFunctionMessageParam(TypedDict, total=False):
-    content: Required[Optional[str]]
+    content: Required[Union[str, Iterable[ChatCompletionContentPartParam]]]
     """The contents of the function message."""
 
     name: Required[str]

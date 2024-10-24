@@ -7,9 +7,11 @@ import subprocess
 import sys
 import traceback
 import uuid
+from typing import Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.types.utils import StandardLoggingPayload
 
 
 class S3Logger:
@@ -99,12 +101,6 @@ class S3Logger:
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
-            messages = kwargs.get("messages")
-            optional_params = kwargs.get("optional_params", {})
-            call_type = kwargs.get("call_type", "litellm.completion")
-            cache_hit = kwargs.get("cache_hit", False)
-            usage = response_obj["usage"]
-            id = response_obj.get("id", str(uuid.uuid4()))
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -123,29 +119,13 @@ class S3Logger:
                     else:
                         clean_metadata[key] = value
 
-            # Build the initial payload
-            payload = {
-                "id": id,
-                "call_type": call_type,
-                "cache_hit": cache_hit,
-                "startTime": start_time,
-                "endTime": end_time,
-                "model": kwargs.get("model", ""),
-                "user": kwargs.get("user", ""),
-                "modelParameters": optional_params,
-                "messages": messages,
-                "response": response_obj,
-                "usage": usage,
-                "metadata": clean_metadata,
-            }
-
             # Ensure everything in the payload is converted to str
-            for key, value in payload.items():
-                try:
-                    payload[key] = str(value)
-                except:
-                    # non blocking if it can't cast to a str
-                    pass
+            payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
+
+            if payload is None:
+                return
 
             s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
             s3_object_key = (
@@ -166,14 +146,14 @@ class S3Logger:
 
             import json
 
-            payload = json.dumps(payload)
+            payload_str = json.dumps(payload)
 
-            print_verbose(f"\ns3 Logger - Logging payload = {payload}")
+            print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
             response = self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_object_key,
-                Body=payload,
+                Body=payload_str,
                 ContentType="application/json",
                 ContentLanguage="en",
                 ContentDisposition=f'inline; filename="{s3_object_download_filename}"',
@@ -185,5 +165,5 @@ class S3Logger:
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
         except Exception as e:
-            verbose_logger.debug(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass

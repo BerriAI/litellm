@@ -3,15 +3,18 @@ import TabItem from '@theme/TabItem';
 
 # Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
 
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm.caching.caching.py)
 
 :::info
 
-Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+- For Proxy Server? Doc here: [Caching Proxy Server](https://docs.litellm.ai/docs/proxy/caching)
+
+- For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
 
 :::
 
-## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache
+## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache, Qdrant Semantic
 
 
 <Tabs>
@@ -28,7 +31,7 @@ For the hosted version you can setup your own Redis DB here: https://app.redisla
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password>)
 
@@ -65,7 +68,7 @@ AWS_SECRET_ACCESS_KEY = "WOl*****"
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 # pass s3-bucket name
 litellm.cache = Cache(type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2")
@@ -98,7 +101,7 @@ For the hosted version you can setup your own Redis DB here: https://app.redisla
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 random_number = random.randint(
     1, 100000
@@ -144,7 +147,61 @@ assert response1.id == response2.id
 
 </TabItem>
 
+<TabItem value="qdrant-sem" label="qdrant-semantic cache">
 
+You can set up your own cloud Qdrant cluster by following this: https://qdrant.tech/documentation/quickstart-cloud/
+
+To set up a Qdrant cluster locally follow: https://qdrant.tech/documentation/quickstart/
+```python
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
+
+random_number = random.randint(
+    1, 100000
+)  # add a random number to ensure it's always adding / reading from cache
+
+print("testing semantic caching")
+litellm.cache = Cache(
+    type="qdrant-semantic",
+    qdrant_api_base=os.environ["QDRANT_API_BASE"], 
+    qdrant_api_key=os.environ["QDRANT_API_KEY"],
+    qdrant_collection_name="your_collection_name", # any name of your collection
+    similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
+    qdrant_quantization_config ="binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
+    qdrant_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+)
+
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": f"write a one sentence poem about: {random_number}",
+        }
+    ],
+    max_tokens=20,
+)
+print(f"response1: {response1}")
+
+random_number = random.randint(1, 100000)
+
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": f"write a one sentence poem about: {random_number}",
+        }
+    ],
+    max_tokens=20,
+)
+print(f"response2: {response2}")
+assert response1.id == response2.id
+# response1 == response2, response 1 is cached
+```
+
+</TabItem>
 
 <TabItem value="in-mem" label="in memory cache">
 
@@ -153,7 +210,7 @@ assert response1.id == response2.id
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache()
 
 # Make completion calls
@@ -189,7 +246,7 @@ Then you can use the disk cache as follows.
 ```python
 import litellm
 from litellm import completion
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 litellm.cache = Cache(type="disk")
 
 # Make completion calls
@@ -365,7 +422,7 @@ def custom_get_cache_key(*args, **kwargs):
 
 Set your function as litellm.cache.get_cache_key
 ```python
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 
 cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
 
@@ -377,7 +434,7 @@ litellm.cache = cache # set litellm.cache to your cache
 ## How to write custom add/get cache functions 
 ### 1. Init Cache 
 ```python
-from litellm.caching import Cache
+from litellm.caching.caching import Cache
 cache = Cache()
 ``` 
 
@@ -434,6 +491,13 @@ def __init__(
 
     # disk cache params
     disk_cache_dir=None,
+
+    # qdrant cache params
+    qdrant_api_base: Optional[str] = None,
+    qdrant_api_key: Optional[str] = None,
+    qdrant_collection_name: Optional[str] = None,
+    qdrant_quantization_config: Optional[str] = None,
+    qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
 
     **kwargs
 ):

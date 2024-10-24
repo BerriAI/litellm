@@ -17,9 +17,8 @@ def _generic_cost_per_character(
     custom_completion_cost: Optional[float],
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Generic function to help calculate cost per character.
-    """
-    """
+    Calculates cost per character for aspeech/speech calls.
+
     Calculates the cost per character for a given model, input messages, and response object.
 
     Input:
@@ -29,7 +28,7 @@ def _generic_cost_per_character(
         - completion_characters: float, the number of output characters
 
     Returns:
-        Tuple[Optional[float], Optional[float]] - prompt_cost_in_usd, completion_cost_in_usd. 
+        Tuple[Optional[float], Optional[float]] - prompt_cost_in_usd, completion_cost_in_usd.
         - returns None if not able to calculate cost.
 
     Raises:
@@ -54,9 +53,9 @@ def _generic_cost_per_character(
 
         prompt_cost = prompt_characters * custom_prompt_cost
     except Exception as e:
-        verbose_logger.error(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\n{}\nDefaulting to None".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
+                str(e)
             )
         )
 
@@ -74,9 +73,9 @@ def _generic_cost_per_character(
             custom_completion_cost = model_info["output_cost_per_character"]
         completion_cost = completion_characters * custom_completion_cost
     except Exception as e:
-        verbose_logger.error(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\n{}\nDefaulting to None".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
+                str(e)
             )
         )
 

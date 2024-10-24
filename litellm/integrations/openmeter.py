@@ -1,12 +1,23 @@
 # What is this?
 ## On Success events log cost to OpenMeter - https://github.com/BerriAI/litellm/issues/1268
 
-import dotenv, os, json
-import litellm
+import json
+import os
 import traceback
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 import uuid
+
+import dotenv
+import httpx
+
+import litellm
+from litellm import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 
 def get_utc_datetime():
@@ -23,7 +34,9 @@ class OpenMeterLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.validate_environment()
-        self.async_http_handler = AsyncHTTPHandler()
+        self.async_http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.sync_http_handler = HTTPHandler()
 
     def validate_environment(self):
@@ -87,16 +100,14 @@ class OpenMeterLogger(CustomLogger):
         }
 
         try:
-            response = self.sync_http_handler.post(
+            self.sync_http_handler.post(
                 url=_url,
                 data=json.dumps(_data),
                 headers=_headers,
             )
-
-            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"OpenMeter logging error: {e.response.text}")
         except Exception as e:
-            if hasattr(response, "text"):
-                litellm.print_verbose(f"\nError Message: {response.text}")
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -115,14 +126,12 @@ class OpenMeterLogger(CustomLogger):
         }
 
         try:
-            response = await self.async_http_handler.post(
+            await self.async_http_handler.post(
                 url=_url,
                 data=json.dumps(_data),
                 headers=_headers,
             )
-
-            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"OpenMeter logging error: {e.response.text}")
         except Exception as e:
-            if hasattr(response, "text"):
-                litellm.print_verbose(f"\nError Message: {response.text}")
             raise e

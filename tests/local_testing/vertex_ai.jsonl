@@ -1,0 +1,22 @@
+[
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": "You should classify the text into one of the following classes:[business, entertainment]"
+        },
+        { "role": "user", "content": "Diversify your investment portfolio" },
+        { "role": "model", "content": "business" }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": "You should classify the text into one of the following classes:[business, entertainment]"
+        },
+        { "role": "user", "content": "Watch a live concert" },
+        { "role": "model", "content": "entertainment" }
+      ]
+    }
+]

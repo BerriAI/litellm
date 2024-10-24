@@ -17,6 +17,7 @@ import requests  # type: ignore
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
@@ -61,8 +62,11 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
 ):
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    response = await client.post(
+        api_base, headers=headers, data=data, stream=True, timeout=timeout
+    )
 
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
@@ -150,6 +154,7 @@ class PredibaseConfig:
         return [
             "stream",
             "temperature",
+            "max_completion_tokens",
             "max_tokens",
             "top_p",
             "stop",
@@ -177,7 +182,7 @@ class PredibaseConfig:
                 optional_params["stream"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" or param == "max_completion_tokens":
                 # HF TGI raises the following exception when max_new_tokens==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
                 if value == 0:
@@ -235,7 +240,7 @@ class PredibaseChatCompletion(BaseLLM):
                 generated_text = generated_text[::-1].replace(token[::-1], "", 1)[::-1]
         return generated_text
 
-    def process_response(
+    def process_response(  # noqa: PLR0915
         self,
         model: str,
         response: Union[requests.Response, httpx.Response],
@@ -260,7 +265,7 @@ class PredibaseChatCompletion(BaseLLM):
         ## RESPONSE OBJECT
         try:
             completion_response = response.json()
-        except:
+        except Exception:
             raise PredibaseError(message=response.text, status_code=422)
         if "error" in completion_response:
             raise PredibaseError(
@@ -343,7 +348,7 @@ class PredibaseChatCompletion(BaseLLM):
                         model_response["choices"][0]["message"].get("content", "")
                     )
                 )  ##[TODO] use a model-specific tokenizer
-            except:
+            except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
         else:
@@ -359,6 +364,16 @@ class PredibaseChatCompletion(BaseLLM):
             total_tokens=total_tokens,
         )
         model_response.usage = usage  # type: ignore
+
+        ## RESPONSE HEADERS
+        predibase_headers = response.headers
+        response_headers = {}
+        for k, v in predibase_headers.items():
+            if k.startswith("x-"):
+                response_headers["llm_provider-{}".format(k)] = v
+
+        model_response._hidden_params["additional_headers"] = response_headers
+
         return model_response
 
     def completion(
@@ -484,6 +499,7 @@ class PredibaseChatCompletion(BaseLLM):
                 headers=headers,
                 data=json.dumps(data),
                 stream=stream,
+                timeout=timeout,  # type: ignore
             )
             _response = CustomStreamWrapper(
                 response.iter_lines(),
@@ -498,6 +514,7 @@ class PredibaseChatCompletion(BaseLLM):
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),
+                timeout=timeout,  # type: ignore
             )
         return self.process_response(
             model=model,
@@ -545,9 +562,12 @@ class PredibaseChatCompletion(BaseLLM):
                 ),
             )
         except Exception as e:
+            for exception in litellm.LITELLM_EXCEPTION_TYPES:
+                if isinstance(e, exception):
+                    raise e
             raise PredibaseError(
-                status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
-            )
+                status_code=500, message="{}".format(str(e))
+            )  # don't use verbose_logger.exception, if exception is raised
         return self.process_response(
             model=model,
             response=response,
@@ -591,6 +611,7 @@ class PredibaseChatCompletion(BaseLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="predibase",

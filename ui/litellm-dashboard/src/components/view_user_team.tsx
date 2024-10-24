@@ -21,7 +21,11 @@ import {
 } from "@tremor/react";
 import { Statistic } from "antd"
 import { modelAvailableCall }  from "./networking";
-
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
+}
 
 interface ViewUserTeamProps {
     userID: string | null;
@@ -69,6 +73,11 @@ const ViewUserTeam: React.FC<ViewUserTeamProps> = ({ userID, userRole, selectedT
         <>
         <div className="mb-5">
         <p className="text-3xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">{selectedTeam?.team_alias}</p>
+        {
+          selectedTeam?.team_id && (
+            <p className="text-xs text-gray-400 dark:text-gray-400 font-semibold">Team ID: {selectedTeam?.team_id}</p>
+          )
+        }
         </div>
     </>
     )

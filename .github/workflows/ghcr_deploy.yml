@@ -21,6 +21,14 @@ env:
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
+  # print commit hash, tag, and release type
+  print:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Commit hash: ${{ github.event.inputs.commit_hash }}"
+          echo "Tag: ${{ github.event.inputs.tag }}"
+          echo "Release type: ${{ github.event.inputs.release_type }}"
   docker-hub-deploy:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
@@ -55,7 +63,7 @@ jobs:
         with:
           context: .
           push: true
-          file: Dockerfile.database
+          file: ./docker/Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
       -
         name: Build and push litellm-spend-logs image
@@ -141,10 +149,49 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          file: Dockerfile.database
+          file: ./docker/Dockerfile.database
           push: true
           tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
           labels: ${{ steps.meta-database.outputs.labels }} 
+          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+            
+  build-and-push-image-non_root:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for non_root Dockerfile
+        id: meta-non_root
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-non_root
+      # Configure multi platform Docker builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
+
+      - name: Build and push non_root Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: ./docker/Dockerfile.non_root
+          push: true
+          tags: ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }} 
+          labels: ${{ steps.meta-non_root.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
   build-and-push-image-spend-logs:
@@ -186,12 +233,14 @@ jobs:
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:
+    if: github.event.inputs.release_type  != 'dev'
+    needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.commit_hash }}
+          fetch-depth: 0
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -203,9 +252,17 @@ jobs:
       - name: lowercase github.repository_owner
         run: |
           echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
+    
       - name: Get LiteLLM Latest Tag
         id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+        shell: bash
+        run: |
+          LATEST_TAG=$(git describe --tags --exclude "*dev*" --abbrev=0)
+          if [ -z "${LATEST_TAG}" ]; then
+            echo "latest_tag=latest" | tee -a $GITHUB_OUTPUT
+          else
+            echo "latest_tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
+          fi
 
       - name: Get last published chart version
         id: current_version
@@ -233,7 +290,7 @@ jobs:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
           tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
-          app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
+          app_version: ${{ steps.current_app_tag.outputs.latest_tag }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
           registry_username: ${{ github.actor }}

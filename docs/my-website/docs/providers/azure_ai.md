@@ -307,8 +307,94 @@ LiteLLM supports **ALL** azure ai models. Here's a few examples:
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Cohere command-r-plus | `completion(model="azure/command-r-plus", messages)` | 
-| Cohere command-r | `completion(model="azure/command-r", messages)` | 
-| mistral-large-latest | `completion(model="azure/mistral-large-latest", messages)` | 
+| Cohere command-r-plus | `completion(model="azure_ai/command-r-plus", messages)` | 
+| Cohere command-r | `completion(model="azure_ai/command-r", messages)` | 
+| mistral-large-latest | `completion(model="azure_ai/mistral-large-latest", messages)` | 
+| AI21-Jamba-Instruct | `completion(model="azure_ai/ai21-jamba-instruct", messages)` | 
 
 
+
+## Rerank Endpoint
+
+### Usage
+
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK Usage">
+
+```python
+from litellm import rerank
+import os
+
+os.environ["AZURE_AI_API_KEY"] = "sk-.."
+os.environ["AZURE_AI_API_BASE"] = "https://.."
+
+query = "What is the capital of the United States?"
+documents = [
+    "Carson City is the capital city of the American state of Nevada.",
+    "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+    "Washington, D.C. is the capital of the United States.",
+    "Capital punishment has existed in the United States since before it was a country.",
+]
+
+response = rerank(
+    model="azure_ai/rerank-english-v3.0",
+    query=query,
+    documents=documents,
+    top_n=3,
+)
+print(response)
+```
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM Proxy Usage">
+
+LiteLLM provides an cohere api compatible `/rerank` endpoint for Rerank calls.
+
+**Setup**
+
+Add this to your litellm proxy config.yaml
+
+```yaml
+model_list:
+  - model_name: Salesforce/Llama-Rank-V1
+    litellm_params:
+      model: together_ai/Salesforce/Llama-Rank-V1
+      api_key: os.environ/TOGETHERAI_API_KEY
+  - model_name: rerank-english-v3.0
+    litellm_params:
+      model: azure_ai/rerank-english-v3.0
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+```
+
+Start litellm
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+Test request
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rerank-english-v3.0",
+    "query": "What is the capital of the United States?",
+    "documents": [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country."
+    ],
+    "top_n": 3
+  }'
+```
+
+</TabItem>
+</Tabs>

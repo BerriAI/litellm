@@ -9,7 +9,7 @@ import time
 sys.path.insert(
     0, os.path.abspath("./")
 )  # Adds the parent directory to the system path
-from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
+from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
 if os.getenv("USE_AWS_KMS", None) is not None and os.getenv("USE_AWS_KMS") == "True":
     ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
@@ -47,9 +47,18 @@ retry_count = 0
 max_retries = 3
 exit_code = 1
 
+disable_schema_update = os.getenv("DISABLE_SCHEMA_UPDATE")
+if disable_schema_update is not None and disable_schema_update == "True":
+    print("Skipping schema update...")  # noqa
+    exit(0)
+
 while retry_count < max_retries and exit_code != 0:
     retry_count += 1
     print(f"Attempt {retry_count}...")  # noqa
+
+    # run prisma generate
+    result = subprocess.run(["prisma", "generate"], capture_output=True)
+    exit_code = result.returncode
 
     # Run the Prisma db push command
     result = subprocess.run(

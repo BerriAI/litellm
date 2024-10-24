@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔥 Load Balancing, Fallbacks, Retries, Timeouts
+# Fallbacks, Load Balancing, Retries
 
 - Quick Start [load balancing](#test---load-balancing)
 - Quick Start [client side fallbacks](#test---client-side-fallbacks)
@@ -31,7 +31,20 @@ model_list:
       api_base: https://openai-france-1234.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 1440
+
+router_settings:
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  num_retries: 2
+  timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
+  redis_password: <your redis password>
+  redis_port: 1992
 ```
+
+:::info
+Detailed information about [routing strategies can be found here](../routing)
+:::
 
 #### Step 2: Start Proxy with config
 
@@ -39,7 +52,7 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-### Test - Load Balancing
+### Test - Simple Call
 
 Here requests with model=gpt-3.5-turbo will be routed across multiple instances of azure/gpt-3.5-turbo
 
@@ -73,8 +86,6 @@ print(response)
 </TabItem>
 
 <TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -126,6 +137,27 @@ print(response)
 
 </Tabs>
 
+
+### Test - Loadbalancing
+
+In this request, the following will occur:
+1. A rate limit exception will be raised 
+2. LiteLLM proxy will retry the request on the model group (default is 3).
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+        {"role": "user", "content": "Hi there!"}
+    ],
+    "mock_testing_rate_limit_error": true
+}'
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/6b8806b45f970cb2446654d2c379f8dcaa93ce3c/litellm/router.py#L2535)
 
 ### Test - Client Side Fallbacks
 In this request the following will occur:
@@ -242,6 +274,15 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## Advanced
 ### Fallbacks + Retries + Timeouts + Cooldowns
 
+To set fallbacks, just do: 
+
+```
+litellm_settings:
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] 
+```
+
+**Covers all errors (429, 500, etc.)**
+
 **Set via config**
 ```yaml
 model_list:
@@ -270,10 +311,70 @@ litellm_settings:
   num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
   request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
-  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
   cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
+
+### Test Fallbacks! 
+
+Check if your fallbacks are working as expected. 
+
+#### **Regular Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Content Policy Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_content_policy_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Context Window Fallbacks**
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_context_window_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+
 ### Context Window Fallbacks (Pre-Call Checks + Fallbacks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
@@ -461,65 +562,6 @@ This will default to claude-opus in case any model fails.
 
 A model-specific fallbacks (e.g. {"gpt-3.5-turbo-small": ["claude-opus"]}) overrides default fallback.
 
-### Test Fallbacks! 
-
-Check if your fallbacks are working as expected. 
-
-#### **Regular Fallbacks**
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "my-bad-model",
-  "messages": [
-    {
-      "role": "user",
-      "content": "ping"
-    }
-  ],
-  "mock_testing_fallbacks": true # 👈 KEY CHANGE
-}
-'
-```
-
-#### **Content Policy Fallbacks**
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "my-bad-model",
-  "messages": [
-    {
-      "role": "user",
-      "content": "ping"
-    }
-  ],
-  "mock_testing_content_policy_fallbacks": true # 👈 KEY CHANGE
-}
-'
-```
-
-#### **Context Window Fallbacks**
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "my-bad-model",
-  "messages": [
-    {
-      "role": "user",
-      "content": "ping"
-    }
-  ],
-  "mock_testing_context_window_fallbacks": true # 👈 KEY CHANGE
-}
-'
-```
-
 ### EU-Region Filtering (Pre-Call Checks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
@@ -657,3 +699,53 @@ print(response)
 ```
 </TabItem>
 </Tabs>
+
+### Setting Fallbacks for Wildcard Models
+
+You can set fallbacks for wildcard models (e.g. `azure/*`) in your config file.
+
+1. Setup config
+```yaml
+model_list:
+  - model_name: "gpt-4o"
+    litellm_params:
+      model: "openai/gpt-4o"
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "azure/*"
+    litellm_params:
+      model: "azure/*"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+
+litellm_settings:
+  fallbacks: [{"gpt-4o": ["azure/gpt-4o"]}]
+```
+
+2. Start Proxy
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": [    
+          {
+            "type": "text",
+            "text": "what color is red"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "mock_testing_fallbacks": true
+}'
+```

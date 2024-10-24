@@ -163,9 +163,12 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| o1-mini | `response = completion(model="o1-mini", messages=messages)` |
+| o1-preview | `response = completion(model="o1-preview", messages=messages)` |
 | gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |
 | gpt-4o-mini-2024-07-18   | `response = completion(model="gpt-4o-mini-2024-07-18", messages=messages)` |
 | gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
+| gpt-4o-2024-08-06   | `response = completion(model="gpt-4o-2024-08-06", messages=messages)` |
 | gpt-4o-2024-05-13   | `response = completion(model="gpt-4o-2024-05-13", messages=messages)` |
 | gpt-4-turbo   | `response = completion(model="gpt-4-turbo", messages=messages)` |
 | gpt-4-turbo-preview   | `response = completion(model="gpt-4-0125-preview", messages=messages)` |
@@ -490,3 +493,48 @@ response = completion("openai/your-model-name", messages)
 If you need to set api_base dynamically, just pass it in completions instead - `completions(...,api_base="your-proxy-api-base")`
 
 For more check out [setting API Base/Keys](../set_keys.md)
+
+### Forwarding Org ID for Proxy requests
+
+Forward openai Org ID's from the client to OpenAI with `forward_openai_org_id` param. 
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "gpt-3.5-turbo"
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+    forward_openai_org_id: true # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```bash
+litellm --config config.yaml --detailed_debug
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Make OpenAI call
+
+```python
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234",
+    organization="my-special-org",
+    base_url="http://0.0.0.0:4000"
+)
+
+client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
+```
+
+In your logs you should see the forwarded org id
+
+```bash
+LiteLLM:DEBUG: utils.py:255 - Request to litellm:
+LiteLLM:DEBUG: utils.py:255 - litellm.acompletion(... organization='my-special-org',)
+```

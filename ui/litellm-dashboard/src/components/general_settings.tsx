@@ -76,6 +76,9 @@ async function testFallbackModelResponse(
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal != true) {
+    console.log = function() {};
+  }
   console.log("isLocal:", isLocal);
   const proxyBaseUrl = isLocal
     ? "http://localhost:4000"
@@ -594,7 +597,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {generalSettings.map((value, index) => (
+                  {generalSettings.filter((value) => value.field_type !== "TypedDictionary").map((value, index) => (
                     <TableRow key={index}>
                       <TableCell>
                         <Text>{value.field_name}</Text>

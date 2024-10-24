@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 OpenAI Proxy Server
+# 💥 LiteLLM Proxy Server
 
 LiteLLM Server manages:
 
@@ -1312,7 +1312,7 @@ LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw Open
      ```
 
 #### --request_timeout
-   - **Default:** `600`
+   - **Default:** `6000`
    - **Type:** `int`
    - Set the timeout in seconds for completion calls.
    - **Usage:** 

@@ -1,9 +1,9 @@
 repos:
 -   repo: local
     hooks:
-    -   id: mypy
-        name: mypy
-        entry: python3 -m mypy --ignore-missing-imports
+    -   id: pyright
+        name: pyright
+        entry: pyright
         language: system
         types: [python]
         files: ^litellm/
@@ -25,6 +25,11 @@ repos:
        exclude: ^litellm/tests/|^litellm/proxy/tests/
        additional_dependencies: [flake8-print]
        files: litellm/.*\.py
+    # -  id: flake8
+    #    name: flake8 (router.py function length)
+    #    files: ^litellm/router\.py$
+    #    args: [--max-function-length=40]
+    # #    additional_dependencies: [flake8-functions]
 -   repo: https://github.com/python-poetry/poetry
     rev: 1.8.0
     hooks:

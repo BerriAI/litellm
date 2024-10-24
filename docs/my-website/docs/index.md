@@ -5,19 +5,46 @@ import TabItem from '@theme/TabItem';
 
 https://github.com/BerriAI/litellm
 
-## **Call 100+ LLMs using the same Input/Output Format**
+## **Call 100+ LLMs using the OpenAI Input/Output Format**
 
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
-- Track spend & set budgets per project [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
+- Track spend & set budgets per project [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 ## How to use LiteLLM
 You can use litellm through either:
-1. [OpenAI proxy Server](#openai-proxy) - Server to call 100+ LLMs, load balance, cost tracking across projects
+1. [LiteLLM Proxy Server](#litellm-proxy-server-llm-gateway) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
 2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
-## LiteLLM Python SDK
+### **When to use LiteLLM Proxy Server (LLM Gateway)**
+
+:::tip
+
+Use LiteLLM Proxy Server if you want a **central service (LLM Gateway) to access multiple LLMs**
+
+Typically used by Gen AI Enablement /  ML PLatform Teams
+
+:::
+
+  - LiteLLM Proxy gives you a unified interface to access multiple LLMs (100+ LLMs)
+  - Track LLM Usage and setup guardrails
+  - Customize Logging, Guardrails, Caching per project
+
+### **When to use LiteLLM Python SDK**
+
+:::tip
+
+  Use LiteLLM Python SDK if you want to use LiteLLM in your **python code**
+
+Typically used by developers building llm projects
+
+:::
+
+  - LiteLLM SDK gives you a unified interface to access multiple LLMs (100+ LLMs) 
+  - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
+
+## **LiteLLM Python SDK**
 
 ### Basic usage 
 
@@ -357,7 +384,7 @@ response = completion(
 )
 ```
 
-## OpenAI Proxy
+## **LiteLLM Proxy Server (LLM Gateway)**
 
 Track spend across multiple projects/people
 
@@ -372,6 +399,8 @@ The proxy provides:
 
 ### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
+Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/docker_quick_start.md)
+
 ### Quick Start Proxy - CLI
 
 ```shell
@@ -380,11 +409,50 @@ pip install 'litellm[proxy]'
 
 #### Step 1: Start litellm proxy
 
+<Tabs>
+
+<TabItem label="pip package" value="pip">
+
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
 #INFO: Proxy running on http://0.0.0.0:4000
 ```
+
+</TabItem>
+
+<TabItem label="Docker container" value="docker">
+
+
+Step 1. CREATE config.yaml 
+
+Example `litellm_config.yaml` 
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-azure-model-deployment>
+      api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
+      api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
+      api_version: "2023-07-01-preview"
+```
+
+Step 2. RUN Docker Image
+
+```shell
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e AZURE_API_KEY=d6*********** \
+    -e AZURE_API_BASE=https://openai-***********/ \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+```
+
+</TabItem>
+
+</Tabs>
 
 #### Step 2: Make ChatCompletions Request to Proxy
 
@@ -406,4 +474,5 @@ print(response)
 
 - [exception mapping](./exception_mapping.md)
 - [retries + model fallbacks for completion()](./completion/reliable_completions.md)
-- [proxy virtual keys & spend management](./tutorials/fallbacks.md)
+- [proxy virtual keys & spend management](./proxy/virtual_keys.md)
+- [E2E Tutorial for LiteLLM Proxy Server](./proxy/docker_quick_start.md)

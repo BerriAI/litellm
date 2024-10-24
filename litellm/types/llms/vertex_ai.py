@@ -1,6 +1,6 @@
 import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
 from typing_extensions import (
     Protocol,
@@ -65,7 +65,7 @@ class HttpxPartType(TypedDict, total=False):
 
 class HttpxContentType(TypedDict, total=False):
     role: Literal["user", "model"]
-    parts: Required[List[HttpxPartType]]
+    parts: List[HttpxPartType]
 
 
 class ContentType(TypedDict, total=False):
@@ -90,7 +90,7 @@ class Schema(TypedDict, total=False):
 class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
-    parameters: Schema
+    parameters: Union[Schema, dict]
     response: Schema
 
 
@@ -153,6 +153,7 @@ class GenerationConfig(TypedDict, total=False):
     presence_penalty: float
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
+    response_schema: dict
     seed: int
 
 
@@ -171,9 +172,26 @@ class TTL(TypedDict, total=False):
     nano: float
 
 
+class UsageMetadata(TypedDict, total=False):
+    promptTokenCount: int
+    totalTokenCount: int
+    candidatesTokenCount: int
+
+
 class CachedContent(TypedDict, total=False):
     ttl: TTL
     expire_time: str
+    contents: List[ContentType]
+    tools: List[Tools]
+    createTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    updateTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    usageMetadata: UsageMetadata
+    expireTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    name: str
+    displayName: str
+    model: str
+    systemInstruction: ContentType
+    toolConfig: ToolConfig
 
 
 class RequestBody(TypedDict, total=False):
@@ -184,6 +202,21 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+
+
+class CachedContentRequestBody(TypedDict, total=False):
+    contents: Required[List[ContentType]]
+    system_instruction: SystemInstructions
+    tools: Tools
+    toolConfig: ToolConfig
+    model: Required[str]  # Format: models/{model}
+    ttl: str  # ending in 's' - Example: "3.5s".
+    displayName: str
+
+
+class CachedContentListAllResponseBody(TypedDict, total=False):
+    cachedContents: List[CachedContent]
+    nextPageToken: str
 
 
 class SafetyRatings(TypedDict):
@@ -250,13 +283,132 @@ class PromptFeedback(TypedDict):
     blockReasonMessage: str
 
 
-class UsageMetadata(TypedDict, total=False):
-    promptTokenCount: int
-    totalTokenCount: int
-    candidatesTokenCount: int
-
-
 class GenerateContentResponseBody(TypedDict, total=False):
-    candidates: Required[List[Candidates]]
+    candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
+
+
+class FineTunesupervisedTuningSpec(TypedDict, total=False):
+    training_dataset_uri: str
+    validation_dataset: Optional[str]
+    epoch_count: Optional[int]
+    learning_rate_multiplier: Optional[float]
+    tuned_model_display_name: Optional[str]
+    adapter_size: Optional[
+        Literal[
+            "ADAPTER_SIZE_UNSPECIFIED",
+            "ADAPTER_SIZE_ONE",
+            "ADAPTER_SIZE_FOUR",
+            "ADAPTER_SIZE_EIGHT",
+            "ADAPTER_SIZE_SIXTEEN",
+        ]
+    ]
+
+
+class FineTuneJobCreate(TypedDict, total=False):
+    baseModel: str
+    supervisedTuningSpec: FineTunesupervisedTuningSpec
+    tunedModelDisplayName: Optional[str]
+
+
+class ResponseSupervisedTuningSpec(TypedDict):
+    trainingDatasetUri: Optional[str]
+
+
+class ResponseTuningJob(TypedDict):
+    name: Optional[str]
+    tunedModelDisplayName: Optional[str]
+    baseModel: Optional[str]
+    supervisedTuningSpec: Optional[ResponseSupervisedTuningSpec]
+    state: Optional[
+        Literal[
+            "JOB_STATE_PENDING",
+            "JOB_STATE_RUNNING",
+            "JOB_STATE_SUCCEEDED",
+            "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED",
+        ]
+    ]
+    createTime: Optional[str]
+    updateTime: Optional[str]
+
+
+class InstanceVideo(TypedDict, total=False):
+    gcsUri: str
+    videoSegmentConfig: Tuple[float, float, float]
+
+
+class InstanceImage(TypedDict, total=False):
+    gcsUri: Optional[str]
+    bytesBase64Encoded: Optional[str]
+    mimeType: Optional[str]
+
+
+class Instance(TypedDict, total=False):
+    text: str
+    image: InstanceImage
+    video: InstanceVideo
+
+
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: List[Instance]
+
+
+class VideoEmbedding(TypedDict):
+    startOffsetSec: int
+    endOffsetSec: int
+    embedding: List[float]
+
+
+class MultimodalPrediction(TypedDict, total=False):
+    textEmbedding: List[float]
+    imageEmbedding: List[float]
+    videoEmbeddings: List[VideoEmbedding]
+
+
+class MultimodalPredictions(TypedDict, total=False):
+    predictions: List[MultimodalPrediction]
+
+
+class VertexAICachedContentResponseObject(TypedDict):
+    name: str
+    model: str
+
+
+class TaskTypeEnum(Enum):
+    TASK_TYPE_UNSPECIFIED = "TASK_TYPE_UNSPECIFIED"
+    RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
+    RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT"
+    SEMANTIC_SIMILARITY = "SEMANTIC_SIMILARITY"
+    CLASSIFICATION = "CLASSIFICATION"
+    CLUSTERING = "CLUSTERING"
+    QUESTION_ANSWERING = "QUESTION_ANSWERING"
+    FACT_VERIFICATION = "FACT_VERIFICATION"
+
+
+class VertexAITextEmbeddingsRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class ContentEmbeddings(TypedDict):
+    values: List[int]
+
+
+class VertexAITextEmbeddingsResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
+class EmbedContentRequest(VertexAITextEmbeddingsRequestBody):
+    model: Required[str]
+
+
+class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
+    requests: List[EmbedContentRequest]
+
+
+class VertexAIBatchEmbeddingsResponseObject(TypedDict):
+    embeddings: List[ContentEmbeddings]

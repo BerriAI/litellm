@@ -26,15 +26,87 @@ from fastapi import (
 )
 
 import litellm
-from litellm import CreateFileRequest, FileContentRequest
+from litellm import CreateFileRequest, FileContentRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import FileObject
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.router import Router
 
 router = APIRouter()
 
+files_config = None
 
+
+def set_files_config(config):
+    global files_config
+    if config is None:
+        return
+
+    if not isinstance(config, list):
+        raise ValueError("invalid files config, expected a list is not a list")
+
+    for element in config:
+        if isinstance(element, dict):
+            for key, value in element.items():
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    element[key] = get_secret_str(value)
+
+    files_config = config
+
+
+def get_files_provider_config(
+    custom_llm_provider: str,
+):
+    global files_config
+    if files_config is None:
+        raise ValueError("files_config is not set, set it on your config.yaml file.")
+    for setting in files_config:
+        if setting.get("custom_llm_provider") == custom_llm_provider:
+            return setting
+    return None
+
+
+def get_first_json_object(file_content_bytes: bytes) -> Optional[dict]:
+    try:
+        # Decode the bytes to a string and split into lines
+        file_content = file_content_bytes.decode("utf-8")
+        first_line = file_content.splitlines()[0].strip()
+
+        # Parse the JSON object from the first line
+        json_object = json.loads(first_line)
+        return json_object
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def get_model_from_json_obj(json_object: dict) -> Optional[str]:
+    body = json_object.get("body", {}) or {}
+    model = body.get("model")
+
+    return model
+
+
+def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
+    """
+    Returns True if the model is in the llm_router model names
+    """
+    if model is None or llm_router is None:
+        return False
+    model_names = llm_router.get_model_names()
+
+    is_in_list = False
+    if model in model_names:
+        is_in_list = True
+
+    return is_in_list
+
+
+@router.post(
+    "/{provider}/v1/files",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
 @router.post(
     "/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -49,6 +121,8 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
+    provider: Optional[str] = None,
+    custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -71,6 +145,7 @@ async def create_file(
         add_litellm_data_to_request,
         general_settings,
         get_custom_headers,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -78,6 +153,8 @@ async def create_file(
 
     data: Dict = {}
     try:
+        if provider is not None:
+            custom_llm_provider = provider
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         # Read the file content
         file_content = await file.read()
@@ -98,12 +175,46 @@ async def create_file(
         # Prepare the file data according to FileTypes
         file_data = (file.filename, file_content, file.content_type)
 
+        ## check if model is a loadbalanced model
+        router_model: Optional[str] = None
+        is_router_model = False
+        if litellm.enable_loadbalancing_on_batch_endpoints is True:
+            json_obj = get_first_json_object(file_content_bytes=file_content)
+            if json_obj:
+                router_model = get_model_from_json_obj(json_object=json_obj)
+                is_router_model = is_known_model(
+                    model=router_model, llm_router=llm_router
+                )
+
         _create_file_request = CreateFileRequest(file=file_data, **data)
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(
-            custom_llm_provider="openai", **_create_file_request
-        )
+        if (
+            litellm.enable_loadbalancing_on_batch_endpoints is True
+            and is_router_model
+            and router_model is not None
+        ):
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LLM Router not initialized. Ensure models added to proxy."
+                    },
+                )
+
+            response = await llm_router.acreate_file(
+                model=router_model, **_create_file_request
+            )
+        else:
+            # get configs for custom_llm_provider
+            llm_provider_config = get_files_provider_config(
+                custom_llm_provider=custom_llm_provider
+            )
+            if llm_provider_config is not None:
+                # add llm_provider_config to data
+                _create_file_request.update(llm_provider_config)
+
+            # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+            response = await litellm.acreate_file(**_create_file_request)  # type: ignore
 
         ### ALERTING ###
         asyncio.create_task(
@@ -158,6 +269,11 @@ async def create_file(
 
 
 @router.get(
+    "/{provider}/v1/files/{file_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
     "/v1/files/{file_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -171,6 +287,7 @@ async def get_file(
     request: Request,
     fastapi_response: Response,
     file_id: str,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -208,9 +325,10 @@ async def get_file(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:  # default to openai
+            provider = "openai"
         response = await litellm.afile_retrieve(
-            custom_llm_provider="openai", file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -266,6 +384,11 @@ async def get_file(
 
 
 @router.delete(
+    "/{provider}/v1/files/{file_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.delete(
     "/v1/files/{file_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -279,6 +402,7 @@ async def delete_file(
     request: Request,
     fastapi_response: Response,
     file_id: str,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -317,9 +441,10 @@ async def delete_file(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:  # default to openai
+            provider = "openai"
         response = await litellm.afile_delete(
-            custom_llm_provider="openai", file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -375,6 +500,11 @@ async def delete_file(
 
 
 @router.get(
+    "/{provider}/v1/files",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
     "/v1/files",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -388,6 +518,7 @@ async def list_files(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    provider: Optional[str] = None,
     purpose: Optional[str] = None,
 ):
     """
@@ -425,9 +556,10 @@ async def list_files(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.afile_list(
-            custom_llm_provider="openai", purpose=purpose, **data
+            custom_llm_provider=provider, purpose=purpose, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -483,6 +615,11 @@ async def list_files(
 
 
 @router.get(
+    "/{provider}/v1/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
     "/v1/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -496,6 +633,7 @@ async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -533,9 +671,10 @@ async def get_file_content(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.afile_content(
-            custom_llm_provider="openai", file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###

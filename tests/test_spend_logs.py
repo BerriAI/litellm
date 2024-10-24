@@ -219,7 +219,7 @@ async def test_spend_logs_high_traffic():
             print(f"len responses: {len(response)}")
             assert len(response) == n
             print(n, time.time() - start, len(response))
-        except:
+        except Exception:
             print(n, time.time() - start, 0)
         raise Exception("it worked!")
 

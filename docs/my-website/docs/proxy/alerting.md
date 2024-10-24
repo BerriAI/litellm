@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # 🚨 Alerting / Webhooks
 
@@ -45,6 +47,7 @@ export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/<>/<>/<>"
 general_settings: 
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
+    spend_report_frequency: "1d" # [Optional] set as 1d, 2d, 30d .... Specifiy how often you want a Spend Report to be sent
 ```
 
 Start proxy 
@@ -61,7 +64,9 @@ curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
 -H 'Authorization: Bearer sk-1234'
 ```
 
-## Advanced - Redacting Messages from Alerts
+## Advanced
+
+### Redacting Messages from Alerts
 
 By default alerts show the `messages/input` passed to the LLM. If you want to redact this from slack alerting set the following setting on your config
 
@@ -76,7 +81,7 @@ litellm_settings:
 ```
 
 
-## Advanced - Add Metadata to alerts 
+### Add Metadata to alerts 
 
 Add alerting metadata to proxy calls for debugging. 
 
@@ -105,36 +110,127 @@ response = client.chat.completions.create(
 
 <Image img={require('../../img/alerting_metadata.png')}/>
 
-## Advanced - Opting into specific alert types
+### Opting into specific alert types
 
-Set `alert_types` if you want to Opt into only specific alert types
+Set `alert_types` if you want to Opt into only specific alert types. When alert_types is not set, all Default Alert Types are enabled.
+
+👉 [**See all alert types here**](#all-possible-alert-types)
 
 ```shell
 general_settings:
   alerting: ["slack"]
-  alert_types: ["spend_reports"] 
-```
-
-All Possible Alert Types
-
-```python
-AlertType = Literal[
+  alert_types: [
     "llm_exceptions",
     "llm_too_slow",
     "llm_requests_hanging",
     "budget_alerts",
+    "spend_reports",
     "db_exceptions",
     "daily_reports",
-    "spend_reports",
     "cooldown_deployment",
     "new_model_added",
-    "outage_alerts",
-]
+  ] 
+```
 
+### Set specific slack channels per alert type
+
+Use this if you want to set specific channels per alert type
+
+**This allows you to do the following**
+```
+llm_exceptions -> go to slack channel #llm-exceptions
+spend_reports -> go to slack channel #llm-spend-reports
+```
+
+Set `alert_to_webhook_url` on your config.yaml
+
+<Tabs>
+
+<TabItem label="1 channel per alert" value="1">
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings: 
+  master_key: sk-1234
+  alerting: ["slack"]
+  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
+  alert_to_webhook_url: {
+    "llm_exceptions": "https://hooks.slack.com/services/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",
+    "llm_too_slow": "https://hooks.slack.com/services/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",
+    "llm_requests_hanging": "https://hooks.slack.com/services/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",
+    "budget_alerts": "https://hooks.slack.com/services/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",
+    "db_exceptions": "https://hooks.slack.com/services/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",
+    "daily_reports": "https://hooks.slack.com/services/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",
+    "spend_reports": "https://hooks.slack.com/services/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",
+    "cooldown_deployment": "https://hooks.slack.com/services/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",
+    "new_model_added": "https://hooks.slack.com/services/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",
+    "outage_alerts": "https://hooks.slack.com/services/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",
+  }
+
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+</TabItem>
+
+<TabItem label="multiple channels per alert" value="2">
+
+Provide multiple slack channels for a given alert type
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings: 
+  master_key: sk-1234
+  alerting: ["slack"]
+  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
+  alert_to_webhook_url: {
+    "llm_exceptions": ["os.environ/SLACK_WEBHOOK_URL", "os.environ/SLACK_WEBHOOK_URL_2"],
+    "llm_too_slow": ["https://webhook.site/7843a980-a494-4967-80fb-d502dbc16886", "https://webhook.site/28cfb179-f4fb-4408-8129-729ff55cf213"],
+    "llm_requests_hanging": ["os.environ/SLACK_WEBHOOK_URL_5", "os.environ/SLACK_WEBHOOK_URL_6"],
+    "budget_alerts": ["os.environ/SLACK_WEBHOOK_URL_7", "os.environ/SLACK_WEBHOOK_URL_8"],
+    "db_exceptions": ["os.environ/SLACK_WEBHOOK_URL_9", "os.environ/SLACK_WEBHOOK_URL_10"],
+    "daily_reports": ["os.environ/SLACK_WEBHOOK_URL_11", "os.environ/SLACK_WEBHOOK_URL_12"],
+    "spend_reports": ["os.environ/SLACK_WEBHOOK_URL_13", "os.environ/SLACK_WEBHOOK_URL_14"],
+    "cooldown_deployment": ["os.environ/SLACK_WEBHOOK_URL_15", "os.environ/SLACK_WEBHOOK_URL_16"],
+    "new_model_added": ["os.environ/SLACK_WEBHOOK_URL_17", "os.environ/SLACK_WEBHOOK_URL_18"],
+    "outage_alerts": ["os.environ/SLACK_WEBHOOK_URL_19", "os.environ/SLACK_WEBHOOK_URL_20"],
+  }
+
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+
+</TabItem>
+
+</Tabs>
+
+Test it - send a valid llm request - expect to see a `llm_too_slow` alert in it's own slack channel
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ]
+}'
 ```
 
 
-## Advanced - Using MS Teams Webhooks
+### Using MS Teams Webhooks
 
 MS Teams provides a slack compatible webhook url that you can use for alerting
 
@@ -176,7 +272,7 @@ curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
 
 <Image img={require('../../img/ms_teams_alerting.png')}/>
 
-## Advanced - Using Discord Webhooks
+### Using Discord Webhooks
 
 Discord provides a slack compatible webhook url that you can use for alerting
 
@@ -208,7 +304,7 @@ environment_variables:
 ```
 
 
-## Advanced - [BETA] Webhooks for Budget Alerts
+##  [BETA] Webhooks for Budget Alerts
 
 **Note**: This is a beta feature, so the spec might change.
 
@@ -262,7 +358,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 }
 ```
 
-## **API Spec for Webhook Event**
+### API Spec for Webhook Event
 
 - `spend` *float*: The current spend amount for the 'event_group'.
 - `max_budget` *float or null*: The maximum allowed budget for the 'event_group'. null if not set. 
@@ -288,7 +384,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 
 - `event_message` *str*: A human-readable description of the event.
 
-## Advanced - Region-outage alerting (✨ Enterprise feature)
+## Region-outage alerting (✨ Enterprise feature)
 
 :::info
 [Get a free 2-week license](https://forms.gle/P518LXsAZ7PhXpDn8)
@@ -315,3 +411,49 @@ general_settings:
         minor_outage_alert_threshold: 5 # number of errors to trigger a minor alert
         major_outage_alert_threshold: 10 # number of errors to trigger a major alert
 ```
+
+## **All Possible Alert Types**
+
+👉 [**Here is how you can set specific alert types**](#opting-into-specific-alert-types)
+
+LLM-related Alerts
+
+| Alert Type | Description | Default On |
+|------------|-------------|---------|
+| `llm_exceptions` | Alerts for LLM API exceptions | ✅ |
+| `llm_too_slow` | Notifications for LLM responses slower than the set threshold | ✅ |
+| `llm_requests_hanging` | Alerts for LLM requests that are not completing | ✅ |
+| `cooldown_deployment` | Alerts when a deployment is put into cooldown | ✅ |
+| `new_model_added` | Notifications when a new model is added to litellm proxy through /model/new| ✅ |
+| `outage_alerts` | Alerts when a specific LLM deployment is facing an outage | ✅ |
+| `region_outage_alerts` | Alerts when a specfic LLM region is facing an outage. Example us-east-1 | ✅ |
+
+Budget and Spend Alerts
+
+| Alert Type | Description | Default On|
+|------------|-------------|---------|
+| `budget_alerts` | Notifications related to budget limits or thresholds | ✅ |
+| `spend_reports` | Periodic reports on spending across teams or tags | ✅ |
+| `failed_tracking_spend` | Alerts when spend tracking fails | ✅ |
+| `daily_reports` | Daily Spend reports | ✅ |
+| `fallback_reports` | Weekly Reports on LLM fallback occurrences | ✅ |
+
+Database Alerts
+
+| Alert Type | Description | Default On |
+|------------|-------------|---------|
+| `db_exceptions` | Notifications for database-related exceptions | ✅ |
+
+Management Endpoint Alerts - Virtual Key, Team, Internal User
+
+| Alert Type | Description | Default On |
+|------------|-------------|---------|
+| `new_virtual_key_created` | Notifications when a new virtual key is created | ❌ |
+| `virtual_key_updated` | Alerts when a virtual key is modified | ❌ |
+| `virtual_key_deleted` | Notifications when a virtual key is removed | ❌ |
+| `new_team_created` | Alerts for the creation of a new team | ❌ |
+| `team_updated` | Notifications when team details are modified | ❌ |
+| `team_deleted` | Alerts when a team is deleted | ❌ |
+| `new_internal_user_created` | Notifications for new internal user accounts | ❌ |
+| `internal_user_updated` | Alerts when an internal user's details are changed | ❌ |
+| `internal_user_deleted` | Notifications when an internal user account is removed | ❌ |

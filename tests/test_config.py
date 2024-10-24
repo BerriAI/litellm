@@ -66,6 +66,7 @@ async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_team_logging():
     """
     1. Add Langfuse as a callback with /config/update

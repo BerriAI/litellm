@@ -1,5 +1,11 @@
 # PaLM API - Google
 
+:::warning
+
+Warning: [The PaLM API is decomissioned by Google](https://ai.google.dev/palm_docs/deprecation) The PaLM API is scheduled to be decomissioned in October 2024. Please upgrade to the Gemini API or Vertex AI API
+
+:::
+
 ## Pre-requisites
 * `pip install -q google-generativeai`
 

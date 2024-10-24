@@ -80,8 +80,8 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    optional_params: dict,
     custom_prompt_dict={},
-    optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -97,7 +97,7 @@ def completion(
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
-        prompt = custom_prompt(
+        custom_prompt(
             role_dict=model_prompt_details.get("roles", {}),
             initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
@@ -126,7 +126,7 @@ def completion(
     )
 
     ## COMPLETION CALL
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         response = requests.post(
             api_base,
             headers=headers,

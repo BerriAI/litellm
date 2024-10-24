@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🤗 UI - Self-Serve
+# Internal User Self-Serve
 
 ## Allow users to create their own keys on [Proxy UI](./ui.md).
 
@@ -173,3 +173,48 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 <Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
 
 
+### Set max budget for internal users 
+
+Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
+
+```yaml
+litellm_settings:
+  max_internal_user_budget: 10
+  internal_user_budget_duration: "1mo" # reset every month
+```
+
+This sets a max budget of $10 USD for internal users when they sign up. 
+
+This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
+
+<Image img={require('../../img/max_budget_for_internal_users.png')}  style={{ width: '500px', height: 'auto' }} />
+
+This budget does not apply to keys created under non-default teams.
+
+
+### Set max budget for teams
+
+[**Go Here**](./team_budgets.md)
+
+## **All Settings for Self Serve / SSO Flow**
+
+```yaml
+litellm_settings:
+  max_internal_user_budget: 10        # max budget for internal users
+  internal_user_budget_duration: "1mo" # reset every month
+
+  default_internal_user_params:    # Default Params used when a new user signs in Via SSO
+    user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer". New SSO users not in litellm will be created as this user
+    max_budget: 100                # Optional[float], optional): $100 budget for a new SSO sign in user
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for a new SSO sign in user
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by a new SSO sign in user
+
+
+  upperbound_key_generate_params:    # Upperbound for /key/generate requests when self-serve flow is on
+    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
+    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
+    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
+    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
+    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
+```

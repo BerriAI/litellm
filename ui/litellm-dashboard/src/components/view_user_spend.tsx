@@ -23,7 +23,11 @@ import {
 } from "@tremor/react";
 import { Statistic } from "antd"
 import { spendUsersCall, modelAvailableCall }  from "./networking";
-
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
+}
 
 // Define the props type
 interface UserSpendData {
@@ -36,36 +40,55 @@ interface ViewUserSpendProps {
     userRole: string | null;
     accessToken: string | null;
     userSpend: number | null;  
+    userMaxBudget: number | null;  
     selectedTeam: any | null;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, selectedTeam }) => {
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, userMaxBudget, selectedTeam }) => {
     console.log(`userSpend: ${userSpend}`)
     let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
-    const [maxBudget, setMaxBudget] = useState(0.0);
+    const [maxBudget, setMaxBudget] = useState(selectedTeam ? selectedTeam.max_budget : null);
+    useEffect(() => {
+      if (selectedTeam) {
+          if (selectedTeam.team_alias === "Default Team") {
+              setMaxBudget(userMaxBudget);
+          } else {
+            let setMaxBudgetFlag = false;
+            if (selectedTeam.team_memberships) {
+              /**
+               * What 'team_memberships' looks like:
+               * "team_memberships": [
+               *  {
+               *      "user_id": "2c315de3-e7ce-4269-b73e-b039a06187b1",
+               *      "team_id": "test-team_515e6f42-ded2-4f0d-8919-0a1f43c5a45f",
+               *      "budget_id": "0880769f-716a-4149-ab19-7f7651ad4db5",
+               *      "litellm_budget_table": {
+                  "soft_budget": null,
+                  "max_budget": 20.0,
+                  "max_parallel_requests": null,
+                  "tpm_limit": null,
+                  "rpm_limit": null,
+                  "model_max_budget": null,
+                  "budget_duration": null
+              }
+               */
+              for (const member of selectedTeam.team_memberships) {
+                if (member.user_id === userID && "max_budget" in member.litellm_budget_table && member.litellm_budget_table.max_budget !== null) {
+                  setMaxBudget(member.litellm_budget_table.max_budget);
+                  setMaxBudgetFlag = true;
+                }
+              }
+            }
+            if (!setMaxBudgetFlag) {
+              setMaxBudget(selectedTeam.max_budget);
+            }
+          }
+      }
+  }, [selectedTeam, userMaxBudget]);
     const [userModels, setUserModels] = useState([]);
     useEffect(() => {
       const fetchData = async () => {
         if (!accessToken || !userID || !userRole) {
           return;
-        }
-        if (userRole === "Admin" && userSpend == null) {
-          try {
-            const globalSpend = await getTotalSpendCall(accessToken);
-            if (globalSpend) {
-              if (globalSpend.spend) {
-                setSpend(globalSpend.spend);
-              } else {
-                setSpend(0.0);
-              }
-              if (globalSpend.max_budget) {
-                setMaxBudget(globalSpend.max_budget);
-              } else {
-                setMaxBudget(0.0);
-              }
-            }
-          } catch (error) {
-            console.error("Error fetching global spend data:", error);
-          }
         }
       };
       const fetchUserModels = async () => {
@@ -123,14 +146,24 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
     console.log(`spend in view user spend: ${spend}`)
     return (
       <div className="flex items-center">
+       <div className="flex justify-between gap-x-6">
         <div>
           <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
-            Total Spend{" "}
+            Total Spend
           </p>
           <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
             ${roundedSpend}
           </p>
         </div>
+        <div>
+          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
+            Max Budget
+          </p>
+          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
+            {displayMaxBudget}
+          </p>
+        </div>
+      </div>
         {/* <div className="ml-auto">
           <Accordion>
             <AccordionHeader><Text>Team Models</Text></AccordionHeader>

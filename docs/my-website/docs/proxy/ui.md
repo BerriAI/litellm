@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] UI - Admin 
+# Quick Start
 
 Create keys, track spend, add models without worrying about the config / CRUD endpoints.
 
@@ -53,6 +53,12 @@ UI_PASSWORD=langchain        # password to sign in on UI
 
 On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
+## Invite-other users 
+
+Allow others to create/delete their own keys. 
+
+[**Go Here**](./self_serve.md)
+
 ## ✨ Enterprise Features
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
@@ -66,8 +72,13 @@ Control the upperbound that users can use for `max_budget`, `budget_duration` or
 ```yaml
 litellm_settings:
   upperbound_key_generate_params:
-    max_budget: 100 # upperbound of $100, for all /key/generate requests
-    duration: "30d" # upperbound of 30 days for all /key/generate requests
+    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
+    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
+    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
+    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
+    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
+    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
+
 ```
 
 ** Expected Behavior **
@@ -76,6 +87,13 @@ litellm_settings:
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
 #### Step 2: Setup Oauth Client
+
+:::tip
+
+Looking for how to use Oauth 2.0 for /chat, /completions API requests to the proxy? [Follow this doc](oauth2)
+
+:::
+
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
 
@@ -87,6 +105,7 @@ GENERIC_CLIENT_SECRET = "<your-okta-client-secret>"
 GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/authorize
 GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
 GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
+GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
 ```
 
 You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
@@ -161,6 +180,7 @@ GENERIC_USER_DISPLAY_NAME_ATTRIBUTE = "display_name"
 GENERIC_USER_FIRST_NAME_ATTRIBUTE = "first_name"
 GENERIC_USER_LAST_NAME_ATTRIBUTE = "last_name"
 GENERIC_USER_ROLE_ATTRIBUTE = "given_role"
+GENERIC_USER_PROVIDER_ATTRIBUTE = "provider"
 GENERIC_CLIENT_STATE = "some-state" # if the provider needs a state parameter
 GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id is not in the body
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
@@ -186,6 +206,16 @@ PROXY_BASE_URL=https://litellm-api.up.railway.app/
 #### Step 4. Test flow
 <Image img={require('../../img/litellm_ui_3.gif')} />
 
+### Restrict Email Subdomains w/ SSO
+
+If you're using SSO and want to only allow users with a specific subdomain - e.g. (@berri.ai email accounts) to access the UI, do this:
+
+```bash
+export ALLOWED_EMAIL_DOMAINS="berri.ai"
+```
+
+This will check if the user email we receive from SSO contains this domain, before allowing access.
+
 ### Set Admin view w/ SSO 
 
 You just need to set Proxy Admin ID
@@ -209,6 +239,26 @@ export PROXY_ADMIN_ID="116544810872468347480"
 If you don't see all your keys this could be due to a cached token. So just re-login and it should work.
 
 :::
+
+### Disable `Default Team` on Admin UI
+
+Use this if you want to hide the Default Team on the Admin UI
+
+The following logic will apply
+- If team assigned don't show `Default Team`
+- If no team assigned then they should see `Default Team`
+
+Set `default_team_disabled: true` on your litellm config.yaml
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  default_team_disabled: true # OR you can set env var PROXY_DEFAULT_TEAM_DISABLED="true"
+```
+
+### Sign in with Username, Password when SSO is on
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
 
 ### Restrict UI Access
 
@@ -268,3 +318,14 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 - Deploy LiteLLM Proxy Server
 
 
+
+## Disable Admin UI
+
+Set `DISABLE_ADMIN_UI="True"` in your environment to disable the Admin UI. 
+
+Useful, if your security team has additional restrictions on UI usage. 
+
+
+**Expected Response**
+
+<Image img={require('../../img/admin_ui_disabled.png')}/>

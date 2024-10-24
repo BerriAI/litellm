@@ -37,6 +37,12 @@ import {
   adminGlobalActivityPerModel,
 } from "./networking";
 import { start } from "repl";
+console.log("process.env.NODE_ENV", process.env.NODE_ENV);
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal !== true) {
+  console.log = function() {};
+}
 
 interface UsagePageProps {
   accessToken: string | null;
@@ -124,6 +130,13 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
 }
 type DataDict = { [key: string]: unknown };
 type UserData = { user_id: string; spend: number };
+
+
+const isAdminOrAdminViewer = (role: string | null): boolean => {
+  if (role === null) return false;
+  return role === 'Admin' || role === 'Admin Viewer';
+};
+
 
 
 const UsagePage: React.FC<UsagePageProps> = ({
@@ -250,125 +263,144 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const valueFormatter = (number: number) =>
     `$ ${new Intl.NumberFormat("us").format(number).toString()}`;
 
+  const fetchAndSetData = async (
+    fetchFunction: () => Promise<any>,
+    setStateFunction: React.Dispatch<React.SetStateAction<any>>,
+    errorMessage: string
+  ) => {
+    try {
+      const data = await fetchFunction();
+      setStateFunction(data);
+    } catch (error) {
+      console.error(errorMessage, error);
+      // Optionally, update UI to reflect error state for this specific data
+    }
+  };
+
+  const fetchOverallSpend = () => fetchAndSetData(
+    () => accessToken ? adminSpendLogsCall(accessToken) : Promise.reject("No access token"),
+    setKeySpendData,
+    "Error fetching overall spend"
+  );
+
+  const fetchProviderSpend = () => fetchAndSetData(
+    () => accessToken && token ? adminspendByProvider(accessToken, token, startTime, endTime) : Promise.reject("No access token or token"),
+    setSpendByProvider,
+    "Error fetching provider spend"
+  );
+
+  const fetchTopKeys = async () => {
+    if (!accessToken) return;
+    await fetchAndSetData(
+      async () => {
+        const top_keys = await adminTopKeysCall(accessToken);
+        return top_keys.map((k: any) => ({
+          key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(0, 10),
+          spend: k["total_spend"],
+        }));
+      },
+      setTopKeys,
+      "Error fetching top keys"
+    );
+  };
+
+  const fetchTopModels = async () => {
+    if (!accessToken) return;
+    await fetchAndSetData(
+      async () => {
+        const top_models = await adminTopModelsCall(accessToken);
+        return top_models.map((k: any) => ({
+          key: k["model"],
+          spend: k["total_spend"],
+        }));
+      },
+      setTopModels,
+      "Error fetching top models"
+    );
+  };
+
+  const fetchTeamSpend = async () => {
+    if (!accessToken) return;
+    await fetchAndSetData(
+      async () => {
+        const teamSpend = await teamSpendLogsCall(accessToken);
+        setTeamSpendData(teamSpend.daily_spend);
+        setUniqueTeamIds(teamSpend.teams);
+        return teamSpend.total_spend_per_team.map((tspt: any) => ({
+          name: tspt["team_id"] || "",
+          value: (tspt["total_spend"] || 0).toFixed(2),
+        }));
+      },
+      setTotalSpendPerTeam,
+      "Error fetching team spend"
+    );
+  };
+
+  const fetchTagNames = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      async () => {
+        const all_tag_names = await allTagNamesCall(accessToken);
+        return all_tag_names.tag_names;
+      },
+      setAllTagNames,
+      "Error fetching tag names"
+    );
+  };
+
+  const fetchTopTags = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString(), undefined),
+      (data) => setTopTagsData(data.spend_per_tag),
+      "Error fetching top tags"
+    );
+  };
+
+  const fetchTopEndUsers = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => adminTopEndUsersCall(accessToken, null, undefined, undefined),
+      setTopUsers,
+      "Error fetching top end users"
+    );
+  };
+
+  const fetchGlobalActivity = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => adminGlobalActivity(accessToken, startTime, endTime),
+      setGlobalActivity,
+      "Error fetching global activity"
+    );
+  };
+
+  const fetchGlobalActivityPerModel = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => adminGlobalActivityPerModel(accessToken, startTime, endTime),
+      setGlobalActivityPerModel,
+      "Error fetching global activity per model"
+    );
+  };
+
   useEffect(() => {
     if (accessToken && token && userRole && userID) {
-      const fetchData = async () => {
-        try {
-          /**
-           * If user is Admin - query the global views endpoints
-           * If user is App Owner - use the normal spend logs call
-           */
-          console.log(`user role: ${userRole}`);
-          if (userRole == "Admin" || userRole == "Admin Viewer") {
-            const overall_spend = await adminSpendLogsCall(accessToken);
-            setKeySpendData(overall_spend);
-
-            const provider_spend = await adminspendByProvider(accessToken, token, startTime, endTime);
-            console.log("provider_spend", provider_spend);
-            setSpendByProvider(provider_spend);
 
 
-            const top_keys = await adminTopKeysCall(accessToken);
-            const filtered_keys = top_keys.map((k: any) => ({
-              key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(
-                0,
-                10
-              ),
-              spend: k["total_spend"],
-            }));
-            setTopKeys(filtered_keys);
-            const top_models = await adminTopModelsCall(accessToken);
-            const filtered_models = top_models.map((k: any) => ({
-              key: k["model"],
-              spend: k["total_spend"],
-            }));
-            setTopModels(filtered_models);
+      fetchOverallSpend();
+      fetchProviderSpend();
+      fetchTopKeys();
+      fetchTopModels();
+      fetchGlobalActivity();
+      fetchGlobalActivityPerModel();
 
-            const teamSpend = await teamSpendLogsCall(accessToken);
-            console.log("teamSpend", teamSpend);
-            setTeamSpendData(teamSpend.daily_spend);
-            setUniqueTeamIds(teamSpend.teams)
-
-            let total_spend_per_team = teamSpend.total_spend_per_team;
-            // in total_spend_per_team, replace null team_id with "" and replace null total_spend with 0
-
-            total_spend_per_team = total_spend_per_team.map((tspt: any) => {
-              tspt["name"] = tspt["team_id"] || "";
-              tspt["value"] = tspt["total_spend"] || 0;
-              // round the value to 2 decimal places
-
-              tspt["value"] = tspt["value"].toFixed(2);
-              
-
-              return tspt;
-            })
-
-            setTotalSpendPerTeam(total_spend_per_team);
-
-            // all_tag_names -> used for dropdown
-            const all_tag_names = await allTagNamesCall(accessToken);
-            setAllTagNames(all_tag_names.tag_names);
-
-            //get top tags
-            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString(), undefined);
-            setTopTagsData(top_tags.spend_per_tag);
-
-
-            // get spend per end-user
-            let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
-            setTopUsers(spend_user_call);
-
-            console.log("spend/user result", spend_user_call);
-
-            let global_activity_response = await adminGlobalActivity(accessToken, startTime, endTime);
-            setGlobalActivity(global_activity_response)
-
-            let global_activity_per_model = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
-            console.log("global activity per model", global_activity_per_model);
-            setGlobalActivityPerModel(global_activity_per_model)
-
-
-          } else if (userRole == "App Owner") {
-            await userSpendLogsCall(
-              accessToken,
-              token,
-              userRole,
-              userID,
-              startTime,
-              endTime
-            ).then(async (response) => {
-              console.log("result from spend logs call", response);
-              if ("daily_spend" in response) {
-                // this is from clickhouse analytics
-                //
-                let daily_spend = response["daily_spend"];
-                console.log("daily spend", daily_spend);
-                setKeySpendData(daily_spend);
-                let topApiKeys = response.top_api_keys;
-                setTopKeys(topApiKeys);
-              } else {
-                const topKeysResponse = await keyInfoCall(
-                  accessToken,
-                  getTopKeys(response)
-                );
-                const filtered_keys = topKeysResponse["info"].map((k: any) => ({
-                  key: (
-                    k["key_name"] ||
-                    k["key_alias"]
-                  ).substring(0, 10),
-                  spend: k["spend"],
-                }));
-                setTopKeys(filtered_keys);
-                setKeySpendData(response);
-              }
-            });
-          }
-        } catch (error) {
-          console.error("There was an error fetching the data", error);
-          // Optionally, update your UI to reflect the error state here as well
-        }
-      };
-      fetchData();
+      if (isAdminOrAdminViewer(userRole)) {
+        fetchTeamSpend();
+        fetchTagNames();
+        fetchTopTags();
+        fetchTopEndUsers();
+      }
     }
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
@@ -379,9 +411,17 @@ const UsagePage: React.FC<UsagePageProps> = ({
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
-          <Tab>Team Based Usage</Tab>
-          <Tab>Customer Usage</Tab>
-           <Tab>Tag Based Usage</Tab>
+          
+          {isAdminOrAdminViewer(userRole) ? (
+            <>
+              <Tab>Team Based Usage</Tab>
+              <Tab>Customer Usage</Tab>
+              <Tab>Tag Based Usage</Tab>
+            </>
+          ) : (
+            <><div></div>
+            </>
+          )}
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -400,6 +440,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             accessToken={accessToken}
             userSpend={null}
             selectedTeam={null}
+            userMaxBudget={null}
           />
               <Col numColSpan={2}>
                 <Card>

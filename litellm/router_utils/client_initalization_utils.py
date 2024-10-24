@@ -1,14 +1,18 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx
 import openai
 
 import litellm
+from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_router_logger
-from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
@@ -44,7 +48,7 @@ def should_initialize_sync_client(
     return True
 
 
-def set_client(litellm_router_instance: LitellmRouter, model: dict):
+def set_client(litellm_router_instance: LitellmRouter, model: dict):  # noqa: PLR0915
     """
     - Initializes Azure/OpenAI clients. Stores them in cache, b/c of this - https://github.com/BerriAI/litellm/issues/1278
     - Initializes Semaphore for client w/ rpm. Stores them in cache. b/c of this - https://github.com/BerriAI/litellm/issues/2994
@@ -108,17 +112,17 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
         api_key = litellm_params.get("api_key") or default_api_key
         if api_key and isinstance(api_key, str) and api_key.startswith("os.environ/"):
             api_key_env_name = api_key.replace("os.environ/", "")
-            api_key = litellm.get_secret(api_key_env_name)
+            api_key = get_secret_str(api_key_env_name)
             litellm_params["api_key"] = api_key
 
         api_base = litellm_params.get("api_base")
-        base_url = litellm_params.get("base_url")
+        base_url: Optional[str] = litellm_params.get("base_url")
         api_base = (
             api_base or base_url or default_api_base
         )  # allow users to pass in `api_base` or `base_url` for azure
         if api_base and api_base.startswith("os.environ/"):
             api_base_env_name = api_base.replace("os.environ/", "")
-            api_base = litellm.get_secret(api_base_env_name)
+            api_base = get_secret_str(api_base_env_name)
             litellm_params["api_base"] = api_base
 
         ## AZURE AI STUDIO MISTRAL CHECK ##
@@ -144,34 +148,46 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
         api_version = litellm_params.get("api_version")
         if api_version and api_version.startswith("os.environ/"):
             api_version_env_name = api_version.replace("os.environ/", "")
-            api_version = litellm.get_secret(api_version_env_name)
+            api_version = get_secret_str(api_version_env_name)
             litellm_params["api_version"] = api_version
 
-        timeout = litellm_params.pop("timeout", None) or litellm.request_timeout
+        timeout: Optional[float] = (
+            litellm_params.pop("timeout", None) or litellm.request_timeout
+        )
         if isinstance(timeout, str) and timeout.startswith("os.environ/"):
             timeout_env_name = timeout.replace("os.environ/", "")
-            timeout = litellm.get_secret(timeout_env_name)
+            timeout = get_secret(timeout_env_name)  # type: ignore
             litellm_params["timeout"] = timeout
 
-        stream_timeout = litellm_params.pop(
+        stream_timeout: Optional[float] = litellm_params.pop(
             "stream_timeout", timeout
         )  # if no stream_timeout is set, default to timeout
         if isinstance(stream_timeout, str) and stream_timeout.startswith("os.environ/"):
             stream_timeout_env_name = stream_timeout.replace("os.environ/", "")
-            stream_timeout = litellm.get_secret(stream_timeout_env_name)
+            stream_timeout = get_secret(stream_timeout_env_name)  # type: ignore
             litellm_params["stream_timeout"] = stream_timeout
 
-        max_retries = litellm_params.pop("max_retries", 0)  # router handles retry logic
+        max_retries: Optional[int] = litellm_params.pop(
+            "max_retries", 0
+        )  # router handles retry logic
         if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
             max_retries_env_name = max_retries.replace("os.environ/", "")
-            max_retries = litellm.get_secret(max_retries_env_name)
+            max_retries = get_secret(max_retries_env_name)  # type: ignore
             litellm_params["max_retries"] = max_retries
 
         organization = litellm_params.get("organization", None)
         if isinstance(organization, str) and organization.startswith("os.environ/"):
             organization_env_name = organization.replace("os.environ/", "")
-            organization = litellm.get_secret(organization_env_name)
+            organization = get_secret_str(organization_env_name)
             litellm_params["organization"] = organization
+        azure_ad_token_provider: Optional[Callable[[], str]] = None
+        if litellm_params.get("tenant_id"):
+            verbose_router_logger.debug("Using Azure AD Token Provider for Azure Auth")
+            azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
+                tenant_id=litellm_params.get("tenant_id"),
+                client_id=litellm_params.get("client_id"),
+                client_secret=litellm_params.get("client_secret"),
+            )
 
         if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
             if api_base is None or not isinstance(api_base, str):
@@ -189,8 +205,20 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             if azure_ad_token is not None:
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+            elif (
+                azure_ad_token_provider is None
+                and litellm.enable_azure_ad_token_refresh is True
+            ):
+                try:
+                    azure_ad_token_provider = get_azure_ad_token_provider()
+                except ValueError:
+                    verbose_router_logger.debug(
+                        "Azure AD Token Provider could not be used."
+                    )
             if api_version is None:
-                api_version = litellm.AZURE_DEFAULT_API_VERSION
+                api_version = os.getenv(
+                    "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
+                )
 
             if "gateway.ai.cloudflare.com" in api_base:
                 if not api_base.endswith("/"):
@@ -201,10 +229,11 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 _client = openai.AsyncAzureOpenAI(
                     api_key=api_key,
                     azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                     base_url=api_base,
                     api_version=api_version,
-                    timeout=timeout,
-                    max_retries=max_retries,
+                    timeout=timeout,  # type: ignore
+                    max_retries=max_retries,  # type: ignore
                     http_client=httpx.AsyncClient(
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
@@ -226,10 +255,11 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     _client = openai.AzureOpenAI(  # type: ignore
                         api_key=api_key,
                         azure_ad_token=azure_ad_token,
+                        azure_ad_token_provider=azure_ad_token_provider,
                         base_url=api_base,
                         api_version=api_version,
-                        timeout=timeout,
-                        max_retries=max_retries,
+                        timeout=timeout,  # type: ignore
+                        max_retries=max_retries,  # type: ignore
                         http_client=httpx.Client(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -248,10 +278,11 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 _client = openai.AsyncAzureOpenAI(  # type: ignore
                     api_key=api_key,
                     azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                     base_url=api_base,
                     api_version=api_version,
-                    timeout=stream_timeout,
-                    max_retries=max_retries,
+                    timeout=stream_timeout,  # type: ignore
+                    max_retries=max_retries,  # type: ignore
                     http_client=httpx.AsyncClient(
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
@@ -273,10 +304,11 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     _client = openai.AzureOpenAI(  # type: ignore
                         api_key=api_key,
                         azure_ad_token=azure_ad_token,
+                        azure_ad_token_provider=azure_ad_token_provider,
                         base_url=api_base,
                         api_version=api_version,
-                        timeout=stream_timeout,
-                        max_retries=max_retries,
+                        timeout=stream_timeout,  # type: ignore
+                        max_retries=max_retries,  # type: ignore
                         http_client=httpx.Client(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -303,8 +335,16 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     "azure_endpoint": api_base,
                     "api_version": api_version,
                     "azure_ad_token": azure_ad_token,
+                    "azure_ad_token_provider": azure_ad_token_provider,
                 }
-                from litellm.llms.azure import select_azure_base_url_or_endpoint
+
+                if azure_ad_token_provider is not None:
+                    azure_client_params["azure_ad_token_provider"] = (
+                        azure_ad_token_provider
+                    )
+                from litellm.llms.AzureOpenAI.azure import (
+                    select_azure_base_url_or_endpoint,
+                )
 
                 # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
                 # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
@@ -315,8 +355,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 cache_key = f"{model_id}_async_client"
                 _client = openai.AsyncAzureOpenAI(  # type: ignore
                     **azure_client_params,
-                    timeout=timeout,
-                    max_retries=max_retries,
+                    timeout=timeout,  # type: ignore
+                    max_retries=max_retries,  # type: ignore
                     http_client=httpx.AsyncClient(
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
@@ -336,8 +376,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     cache_key = f"{model_id}_client"
                     _client = openai.AzureOpenAI(  # type: ignore
                         **azure_client_params,
-                        timeout=timeout,
-                        max_retries=max_retries,
+                        timeout=timeout,  # type: ignore
+                        max_retries=max_retries,  # type: ignore
                         http_client=httpx.Client(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -356,8 +396,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 cache_key = f"{model_id}_stream_async_client"
                 _client = openai.AsyncAzureOpenAI(  # type: ignore
                     **azure_client_params,
-                    timeout=stream_timeout,
-                    max_retries=max_retries,
+                    timeout=stream_timeout,  # type: ignore
+                    max_retries=max_retries,  # type: ignore
                     http_client=httpx.AsyncClient(
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
@@ -378,8 +418,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     cache_key = f"{model_id}_stream_client"
                     _client = openai.AzureOpenAI(  # type: ignore
                         **azure_client_params,
-                        timeout=stream_timeout,
-                        max_retries=max_retries,
+                        timeout=stream_timeout,  # type: ignore
+                        max_retries=max_retries,  # type: ignore
                         http_client=httpx.Client(
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -406,8 +446,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             _client = openai.AsyncOpenAI(  # type: ignore
                 api_key=api_key,
                 base_url=api_base,
-                timeout=timeout,
-                max_retries=max_retries,
+                timeout=timeout,  # type: ignore
+                max_retries=max_retries,  # type: ignore
                 organization=organization,
                 http_client=httpx.AsyncClient(
                     limits=httpx.Limits(
@@ -430,8 +470,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 _client = openai.OpenAI(  # type: ignore
                     api_key=api_key,
                     base_url=api_base,
-                    timeout=timeout,
-                    max_retries=max_retries,
+                    timeout=timeout,  # type: ignore
+                    max_retries=max_retries,  # type: ignore
                     organization=organization,
                     http_client=httpx.Client(
                         limits=httpx.Limits(
@@ -452,8 +492,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             _client = openai.AsyncOpenAI(  # type: ignore
                 api_key=api_key,
                 base_url=api_base,
-                timeout=stream_timeout,
-                max_retries=max_retries,
+                timeout=stream_timeout,  # type: ignore
+                max_retries=max_retries,  # type: ignore
                 organization=organization,
                 http_client=httpx.AsyncClient(
                     limits=httpx.Limits(
@@ -477,8 +517,8 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 _client = openai.OpenAI(  # type: ignore
                     api_key=api_key,
                     base_url=api_base,
-                    timeout=stream_timeout,
-                    max_retries=max_retries,
+                    timeout=stream_timeout,  # type: ignore
+                    max_retries=max_retries,  # type: ignore
                     organization=organization,
                     http_client=httpx.Client(
                         limits=httpx.Limits(
@@ -493,3 +533,50 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     ttl=client_ttl,
                     local_only=True,
                 )  # cache for 1 hr
+
+
+def get_azure_ad_token_from_entrata_id(
+    tenant_id: str, client_id: str, client_secret: str
+) -> Callable[[], str]:
+    from azure.identity import (
+        ClientSecretCredential,
+        DefaultAzureCredential,
+        get_bearer_token_provider,
+    )
+
+    verbose_router_logger.debug("Getting Azure AD Token from Entrata ID")
+
+    if tenant_id.startswith("os.environ/"):
+        _tenant_id = get_secret_str(tenant_id)
+    else:
+        _tenant_id = tenant_id
+
+    if client_id.startswith("os.environ/"):
+        _client_id = get_secret_str(client_id)
+    else:
+        _client_id = client_id
+
+    if client_secret.startswith("os.environ/"):
+        _client_secret = get_secret_str(client_secret)
+    else:
+        _client_secret = client_secret
+
+    verbose_router_logger.debug(
+        "tenant_id %s, client_id %s, client_secret %s",
+        _tenant_id,
+        _client_id,
+        _client_secret,
+    )
+    if _tenant_id is None or _client_id is None or _client_secret is None:
+        raise ValueError("tenant_id, client_id, and client_secret must be provided")
+    credential = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
+
+    verbose_router_logger.debug("credential %s", credential)
+
+    token_provider = get_bearer_token_provider(
+        credential, "https://cognitiveservices.azure.com/.default"
+    )
+
+    verbose_router_logger.debug("token_provider %s", token_provider)
+
+    return token_provider

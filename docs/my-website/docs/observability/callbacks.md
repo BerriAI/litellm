@@ -8,6 +8,7 @@ liteLLM supports:
 
 - [Custom Callback Functions](https://docs.litellm.ai/docs/observability/custom_callback)
 - [Langfuse](https://langfuse.com/docs)
+- [LangSmith](https://www.langchain.com/langsmith)
 - [Helicone](https://docs.helicone.ai/introduction)
 - [Traceloop](https://traceloop.com/docs)
 - [Lunary](https://lunary.ai/docs)

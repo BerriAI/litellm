@@ -26,7 +26,6 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
-
   plugins: [
     [
       '@docusaurus/plugin-ideal-image',
@@ -116,6 +115,11 @@ const config = {
             position: 'left',
             label: '🚀 Hosted',
             to: "docs/hosted"
+          },
+          {
+            href: 'https://models.litellm.ai/',
+            label: '💸 LLM Model Cost Map',
+            position: 'right',
           },
           {
             href: 'https://github.com/BerriAI/litellm',

@@ -17,6 +17,7 @@ import {
   userCreateCall,
   modelAvailableCall,
   invitationCreateCall,
+  getProxyBaseUrlAndLogoutUrl,
 } from "./networking";
 const { Option } = Select;
 
@@ -27,12 +28,21 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
 }
 
+// Define an interface for the UI settings
+interface UISettings {
+  PROXY_BASE_URL: string | null;
+  PROXY_LOGOUT_URL: string | null;
+  DEFAULT_TEAM_DISABLED: boolean;
+  SSO_ENABLED: boolean;
+}
+
 const Createuser: React.FC<CreateuserProps> = ({
   userID,
   accessToken,
   teams,
   possibleUIRoles,
 }) => {
+  const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<string | null>(null);
@@ -43,6 +53,9 @@ const Createuser: React.FC<CreateuserProps> = ({
     useState<InvitationLink | null>(null);
   const router = useRouter();
   const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal != true) {
+    console.log = function() {};
+  }
   const [baseUrl, setBaseUrl] = useState(
     isLocal ? "http://localhost:4000" : ""
   );
@@ -67,10 +80,18 @@ const Createuser: React.FC<CreateuserProps> = ({
 
         // Assuming modelDataResponse.data contains an array of model names
         setUserModels(availableModels);
+
+        // get ui settings 
+        const uiSettingsResponse = await getProxyBaseUrlAndLogoutUrl(accessToken);
+        console.log("uiSettingsResponse:", uiSettingsResponse);
+        
+        setUISettings(uiSettingsResponse);
       } catch (error) {
         console.error("Error fetching model data:", error);
       }
     };
+
+    
 
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
@@ -102,10 +123,33 @@ const Createuser: React.FC<CreateuserProps> = ({
       console.log("user create Response:", response);
       setApiuser(response["key"]);
       const user_id = response.data?.user_id || response.user_id;
-      invitationCreateCall(accessToken, user_id).then((data) => {
-        setInvitationLinkData(data);
+      
+      // only do invite link flow if sso is not enabled
+      if (!uiSettings?.SSO_ENABLED) {
+        invitationCreateCall(accessToken, user_id).then((data) => {
+          data.has_user_setup_sso = false;
+          setInvitationLinkData(data);
+          setIsInvitationLinkModalVisible(true);
+        });
+      } else {
+        // create an InvitationLink Object for this user for the SSO flow 
+        // for SSO the invite link is the proxy base url since the User just needs to login
+        const invitationLink: InvitationLink = {
+          id: crypto.randomUUID(), // Generate a unique ID
+          user_id: user_id,
+          is_accepted: false,
+          accepted_at: null,
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Set expiry to 7 days from now
+          created_at: new Date(),
+          created_by: userID, // Assuming userID is the current user creating the invitation
+          updated_at: new Date(),
+          updated_by: userID,
+          has_user_setup_sso: true,
+        };
+        setInvitationLinkData(invitationLink);
         setIsInvitationLinkModalVisible(true);
-      });
+      }
+
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);

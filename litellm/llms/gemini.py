@@ -136,7 +136,7 @@ class GeminiConfig:
 # ):
 #     try:
 #         import google.generativeai as genai  # type: ignore
-#     except:
+#     except Exception:
 #         raise Exception(
 #             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
 #         )
@@ -274,7 +274,6 @@ class GeminiConfig:
 #         model_response.choices = choices_list
 #     except Exception as e:
 #         verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
-#         verbose_logger.debug(traceback.format_exc())
 #         raise GeminiError(
 #             message=traceback.format_exc(), status_code=response.status_code
 #         )
@@ -283,7 +282,7 @@ class GeminiConfig:
 #         completion_response = model_response["choices"][0]["message"].get("content")
 #         if completion_response is None:
 #             raise Exception
-#     except:
+#     except Exception:
 #         original_response = f"response: {response}"
 #         if hasattr(response, "candidates"):
 #             original_response = f"response: {response.candidates}"
@@ -367,7 +366,6 @@ class GeminiConfig:
 #         model_response["choices"] = choices_list
 #     except Exception as e:
 #         verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
-#         verbose_logger.debug(traceback.format_exc())
 #         raise GeminiError(
 #             message=traceback.format_exc(), status_code=response.status_code
 #         )
@@ -376,7 +374,7 @@ class GeminiConfig:
 #         completion_response = model_response["choices"][0]["message"].get("content")
 #         if completion_response is None:
 #             raise Exception
-#     except:
+#     except Exception:
 #         original_response = f"response: {response}"
 #         if hasattr(response, "candidates"):
 #             original_response = f"response: {response.candidates}"

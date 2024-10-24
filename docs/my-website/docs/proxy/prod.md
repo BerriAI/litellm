@@ -18,8 +18,10 @@ general_settings:
   master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
   alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
+  database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
 
 litellm_settings:
+  request_timeout: 600    # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
   set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
   json_logs: true         # Get debug logs in json format
 ```
@@ -84,6 +86,20 @@ Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
+## 5. Set LiteLLM Salt Key 
+
+If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
+
+Do not change this after adding a model. It is used to encrypt / decrypt your LLM API Key credentials
+
+We recommned - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
+
+```bash
+export LITELLM_SALT_KEY="sk-1234"
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
+
 ## Extras
 ### Expected Performance in Production
 
@@ -93,9 +109,9 @@ This disables the load_dotenv() functionality, which will automatically load you
 |--------------|-------|
 | Avg latency | `50ms` |
 | Median latency | `51ms` |
-| `/chat/completions` Requests/second | `35` |
-| `/chat/completions` Requests/minute | `2100` |
-| `/chat/completions` Requests/hour | `126K` |
+| `/chat/completions` Requests/second | `100` |
+| `/chat/completions` Requests/minute | `6000` |
+| `/chat/completions` Requests/hour | `360K` |
 
 
 ### Verifying Debugging logs are off

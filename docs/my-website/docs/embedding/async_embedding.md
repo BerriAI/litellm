@@ -1,4 +1,4 @@
-# Async Embedding
+# litellm.aembedding()
 
 LiteLLM provides an asynchronous version of the `embedding` function called `aembedding`
 ### Usage

@@ -1,0 +1,21 @@
+component_management:
+  individual_components:
+    - component_id: "Router"
+      paths:
+        - "router"
+    - component_id: "LLMs"
+      paths:
+        - "*/llms/*"
+    - component_id: "Caching"
+      paths:
+        - "*/caching/*"
+        - ".*redis.*"
+    - component_id: "litellm_logging"
+      paths:
+        - "*/integrations/*"
+        - ".*litellm_logging.*"
+    - component_id: "Proxy_Authentication"
+      paths:
+        - "*/proxy/auth/**"
+comment:
+  layout: "header, diff, flags, components"  # show component info in the PR comment

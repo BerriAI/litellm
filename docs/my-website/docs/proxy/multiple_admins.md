@@ -1,4 +1,4 @@
-# ✨ Attribute Management changes to Users
+# Attribute Management changes to Users
 
 Call management endpoints on behalf of a user. (Useful when connecting proxy to your development platform).
 

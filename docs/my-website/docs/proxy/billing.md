@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💵 Billing
+# Billing
 
 Bill internal teams, external customers for their usage
 
@@ -23,7 +23,7 @@ Bill internal teams for their usage
 Set 'lago' as a callback on your proxy config.yaml
 
 ```yaml
-model_name:
+model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
