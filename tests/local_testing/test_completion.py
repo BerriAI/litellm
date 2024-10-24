@@ -1088,6 +1088,7 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="unreachable backend")
 @pytest.mark.asyncio
 async def test_completion_codestral_chat_api():
     try:
