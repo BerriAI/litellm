@@ -16,6 +16,16 @@ from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingMetadata,
+    StandardLoggingHiddenParams,
+    StandardLoggingModelInformation,
+)
+import pytest
+from unittest.mock import MagicMock, patch
+from datetime import datetime, timedelta
+from litellm.integrations.prometheus import PrometheusLogger, safe_get_remaining_budget
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -165,3 +175,98 @@ async def test_async_prometheus_success_logging_with_callbacks():
         - initial_metrics.get("litellm_deployment_latency_per_output_token_bucket", 0)
         == 1.0
     )
+
+
+@pytest.fixture
+def prometheus_logger():
+    return PrometheusLogger()
+
+
+def create_standard_logging_payload() -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id="test_id",
+        call_type="completion",
+        response_cost=0.1,
+        response_cost_failure_debug_info=None,
+        status="success",
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=1234567890.5,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response={"choices": [{"message": {"content": "Hi there!"}}]},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.1",
+            additional_headers=None,
+        ),
+    )
+
+
+def test_safe_get_remaining_budget():
+    assert safe_get_remaining_budget(100, 30) == 70
+    assert safe_get_remaining_budget(100, None) == 100
+    assert safe_get_remaining_budget(None, 30) == float("inf")
+    assert safe_get_remaining_budget(None, None) == float("inf")
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event(prometheus_logger):
+    standard_logging_object = create_standard_logging_payload()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test_key",
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+            }
+        },
+        "start_time": datetime.now(),
+        "end_time": datetime.now() + timedelta(seconds=1),
+        "standard_logging_object": standard_logging_object,
+    }
+    response_obj = MagicMock()
+
+    # Mock the prometheus client methods
+    prometheus_logger.litellm_requests_metric = MagicMock()
+    prometheus_logger.litellm_spend_metric = MagicMock()
+    prometheus_logger.litellm_tokens_metric = MagicMock()
+
+    await prometheus_logger.async_log_success_event(
+        kwargs, response_obj, kwargs["start_time"], kwargs["end_time"]
+    )
+
+    # Assert that the metrics were incremented
+    prometheus_logger.litellm_requests_metric.labels.assert_called()
+    prometheus_logger.litellm_spend_metric.labels.assert_called()
+    prometheus_logger.litellm_tokens_metric.labels.assert_called()
