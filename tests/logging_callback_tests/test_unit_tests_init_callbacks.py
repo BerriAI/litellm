@@ -17,6 +17,7 @@ import litellm
 import asyncio
 import logging
 from litellm._logging import verbose_logger
+from prometheus_client import REGISTRY, CollectorRegistry
 
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.openmeter import OpenMeterLogger
@@ -32,6 +33,12 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
+
+# clear prometheus collectors / registry
+collectors = list(REGISTRY._collector_to_names.keys())
+for collector in collectors:
+    REGISTRY.unregister(collector)
+######################################
 
 callback_class_str_to_classType = {
     "lago": LagoLogger,
@@ -111,6 +118,11 @@ async def use_callback_in_llm_call(
     elif callback == "openmeter":
         # it's currently handled in jank way, TODO: fix openmete and then actually run it's test
         return
+    elif callback == "prometheus":
+        # pytest teardown - clear existing prometheus collectors
+        collectors = list(REGISTRY._collector_to_names.keys())
+        for collector in collectors:
+            REGISTRY.unregister(collector)
 
     # Mock the httpx call for Argilla dataset retrieval
     if callback == "argilla":
