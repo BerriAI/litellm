@@ -22,10 +22,8 @@ from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingModelInformation,
 )
-import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
-from litellm.integrations.prometheus import PrometheusLogger
 
 verbose_logger.setLevel(logging.DEBUG)
 
