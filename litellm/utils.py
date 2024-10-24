@@ -5197,7 +5197,9 @@ def create_proxy_transport_and_mounts():
 
 
 def validate_environment(  # noqa: PLR0915
-    model: Optional[str] = None, api_key: Optional[str] = None
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
 ) -> dict:
     """
     Checks if the environment variables are valid for the given model.
@@ -5224,11 +5226,6 @@ def validate_environment(  # noqa: PLR0915
         _, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         custom_llm_provider = None
-    # # check if llm provider part of model name
-    # if model.split("/",1)[0] in litellm.provider_list:
-    #     custom_llm_provider = model.split("/", 1)[0]
-    #     model = model.split("/", 1)[1]
-    #     custom_llm_provider_passed_in = True
 
     if custom_llm_provider:
         if custom_llm_provider == "openai":
@@ -5497,6 +5494,17 @@ def validate_environment(  # noqa: PLR0915
             if "api_key" not in key.lower():
                 new_missing_keys.append(key)
         missing_keys = new_missing_keys
+
+    if api_base is not None:
+        new_missing_keys = []
+        for key in missing_keys:
+            if "api_base" not in key.lower():
+                new_missing_keys.append(key)
+        missing_keys = new_missing_keys
+
+    if len(missing_keys) == 0:  # no missing keys
+        keys_in_environment = True
+
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
