@@ -88,7 +88,7 @@ class PatternMatchRouter:
 
     @staticmethod
     def set_deployment_model_name(
-        matched_pattern: Match[str],
+        matched_pattern: Match,
         litellm_deployment_litellm_model: str,
     ) -> str:
         """
