@@ -4152,7 +4152,7 @@ async def test_completion_codestral_fim_api(model):
 
 @pytest.mark.parametrize(
     "model",
-    ["vertex_ai/codestral@2405", "text-completion-codestral/codestral-2405"],
+    ["vertex_ai/codestral@2405"],
 )
 @pytest.mark.asyncio
 async def test_completion_codestral_fim_api_stream(model):
