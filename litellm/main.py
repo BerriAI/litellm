@@ -4986,7 +4986,6 @@ def speech(
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
     kwargs.pop("tags", [])
 
