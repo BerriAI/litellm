@@ -969,6 +969,14 @@ def test_get_client_initialization_params_all_env_vars():
     assert result.model_name == "gpt-4"
     assert result.custom_llm_provider is None
 
+    assert litellm_params["api_key"] == "test-api-key"
+    assert litellm_params["api_base"] == "https://test.openai.com"
+    assert litellm_params["api_version"] == "2023-05-15"
+    assert litellm_params["timeout"] == 30.0
+    assert litellm_params["stream_timeout"] == 60.0
+    assert litellm_params["max_retries"] == 3
+    assert litellm_params["organization"] == "test-org"
+
     # Clean up environment variables
     for key in [
         "TEST_API_KEY",
