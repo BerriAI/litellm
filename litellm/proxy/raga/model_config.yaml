@@ -17,3 +17,18 @@ model_list:
     litellm_params:
       model: gemini/*
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: "claude*"
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "mistral*"
+    litellm_params:
+      model: mistral/*
+      api_key: os.environ/MISTRAL_API_KEY
+  - model_name: "command*"
+    litellm_params:
+      model: cohere/*
+      api_key: os.environ/COHERE_API_KEY
+
+
+

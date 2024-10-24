@@ -21,7 +21,7 @@ RUN pip install --upgrade pip && \
 COPY . .
 
 # Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -44,10 +44,13 @@ RUN pip uninstall PyJWT -y
 RUN pip install PyJWT --no-cache-dir
 
 # Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE as runtime
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
+
+# Update dependencies and clean up - handles debian security issue
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -63,9 +66,7 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 
 # Generate prisma client
 RUN prisma generate
-RUN chmod +x entrypoint.sh
-
-EXPOSE 4000/tcp
+RUN chmod +x docker/entrypoint.sh
 
 ENV OPENAI_API_KEY="abcd"
 ENV AZURE_API_KEY="abcd"
@@ -73,6 +74,12 @@ ENV AZURE_API_BASE="abcd"
 ENV AZURE_API_VERSION="abcd"
 ENV GROQ_API_KEY="abcd"
 ENV GEMINI_API_KEY="abcd"
+ENV ANTHROPIC_API_KEY="abcd"
+ENV MISTRAL_API_KEY="abcd"
+ENV COHERE_API_KEY="abcd"
+ENV HUGGINGFACE_API_KEY="abcd"
+ENV PERPLEXITY_API_KEY="abcd"
 
+EXPOSE 4000/tcp
 ENTRYPOINT ["litellm"]
-CMD ["--config", "./litellm/proxy/raga_litellm_config.yaml", "--port", "4000"]
+CMD ["--config", "./litellm/proxy/raga/model_config.yaml", "--port", "4000"]

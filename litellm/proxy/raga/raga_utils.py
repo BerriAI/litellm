@@ -4,7 +4,7 @@ def modify_user_request(data):
     # set user api keys from vault
     if "user_id" in data:
         print(f"getting api keys for user: {data['user_id']}")
-        import litellm.proxy.vault as vault
+        import litellm.proxy.raga.vault as vault
         vault_secrets = vault.get_api_keys(data['user_id'])
         if data["model"].startswith("gpt"):
             data["api_key"] = vault_secrets.get("OPENAI_API_KEY", "abcd")
