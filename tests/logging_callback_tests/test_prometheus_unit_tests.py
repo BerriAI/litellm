@@ -32,7 +32,13 @@ verbose_logger.setLevel(logging.DEBUG)
 litellm.set_verbose = True
 import time
 
-prometheus_logger = PrometheusLogger()
+
+@pytest.fixture
+def prometheus_logger():
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        REGISTRY.unregister(collector)
+    return PrometheusLogger()
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -85,7 +91,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
     )
 
 
-def test_safe_get_remaining_budget():
+def test_safe_get_remaining_budget(prometheus_logger):
     assert prometheus_logger._safe_get_remaining_budget(100, 30) == 70
     assert prometheus_logger._safe_get_remaining_budget(100, None) == 100
     assert prometheus_logger._safe_get_remaining_budget(None, 30) == float("inf")
@@ -93,7 +99,7 @@ def test_safe_get_remaining_budget():
 
 
 @pytest.mark.asyncio
-async def test_async_log_success_event():
+async def test_async_log_success_event(prometheus_logger):
     standard_logging_object = create_standard_logging_payload()
     kwargs = {
         "model": "gpt-3.5-turbo",
@@ -163,7 +169,7 @@ async def test_async_log_success_event():
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called()
 
 
-def test_increment_token_metrics():
+def test_increment_token_metrics(prometheus_logger):
     """
     Test the increment_token_metrics method
 
@@ -209,7 +215,7 @@ def test_increment_token_metrics():
     )
 
 
-def test_increment_remaining_budget_metrics():
+def test_increment_remaining_budget_metrics(prometheus_logger):
     """
     Test the increment_remaining_budget_metrics method
 
@@ -250,7 +256,7 @@ def test_increment_remaining_budget_metrics():
     )
 
 
-def test_set_latency_metrics():
+def test_set_latency_metrics(prometheus_logger):
     """
     Test the set_latency_metrics method
 
@@ -306,7 +312,7 @@ def test_set_latency_metrics():
     )
 
 
-def test_increment_top_level_request_and_spend_metrics():
+def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     """
     Test the increment_top_level_request_and_spend_metrics method
 
