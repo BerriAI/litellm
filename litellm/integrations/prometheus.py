@@ -346,12 +346,14 @@ class PrometheusLogger(CustomLogger):
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
         )
+
         if standard_logging_payload is None or not isinstance(
             standard_logging_payload, dict
         ):
             raise ValueError(
                 f"standard_logging_object is required, got={standard_logging_payload}"
             )
+
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
