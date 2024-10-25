@@ -1349,7 +1349,7 @@ class OpenAIChatCompletion(BaseLLM):
             if aimg_generation is True:
                 return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
 
-            openai_client = self._get_openai_client(
+            openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
                 api_key=api_key,
                 api_base=api_base,
@@ -1371,8 +1371,9 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             ## COMPLETION CALL
-            response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
-            response = response.model_dump()  # type: ignore
+            _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+
+            response = _response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1380,7 +1381,6 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-            # return response
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
 

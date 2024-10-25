@@ -4,6 +4,7 @@ Class to handle llm wildcard routing and regex pattern matching
 
 import copy
 import re
+from re import Match
 from typing import Dict, List, Optional
 
 from litellm import get_llm_provider
@@ -53,11 +54,12 @@ class PatternMatchRouter:
         Returns:
             str: regex pattern
         """
-        # Replace '*' with '.*' for regex matching
-        regex = pattern.replace("*", ".*")
-        # Escape other special characters
-        regex = re.escape(regex).replace(r"\.\*", ".*")
-        return f"^{regex}$"
+        # # Replace '*' with '.*' for regex matching
+        # regex = pattern.replace("*", ".*")
+        # # Escape other special characters
+        # regex = re.escape(regex).replace(r"\.\*", ".*")
+        # return f"^{regex}$"
+        return re.escape(pattern).replace(r"\*", "(.*)")
 
     def route(self, request: Optional[str]) -> Optional[List[Dict]]:
         """
@@ -83,6 +85,44 @@ class PatternMatchRouter:
             verbose_router_logger.debug(f"Error in PatternMatchRouter.route: {str(e)}")
 
         return None  # No matching pattern found
+
+    @staticmethod
+    def set_deployment_model_name(
+        matched_pattern: Match,
+        litellm_deployment_litellm_model: str,
+    ) -> str:
+        """
+        Set the model name for the matched pattern llm deployment
+
+        E.g.:
+
+        model_name: llmengine/* (can be any regex pattern or wildcard pattern)
+        litellm_params:
+            model: openai/*
+
+        if model_name = "llmengine/foo" -> model = "openai/foo"
+        """
+        ## BASE CASE: if the deployment model name does not contain a wildcard, return the deployment model name
+        if "*" not in litellm_deployment_litellm_model:
+            return litellm_deployment_litellm_model
+
+        wildcard_count = litellm_deployment_litellm_model.count("*")
+
+        # Extract all dynamic segments from the request
+        dynamic_segments = matched_pattern.groups()
+
+        if len(dynamic_segments) > wildcard_count:
+            raise ValueError(
+                f"More wildcards in the deployment model name than the pattern. Wildcard count: {wildcard_count}, dynamic segments count: {len(dynamic_segments)}"
+            )
+
+        # Replace the corresponding wildcards in the litellm model pattern with extracted segments
+        for segment in dynamic_segments:
+            litellm_deployment_litellm_model = litellm_deployment_litellm_model.replace(
+                "*", segment, 1
+            )
+
+        return litellm_deployment_litellm_model
 
     def get_pattern(
         self, model: str, custom_llm_provider: Optional[str] = None
