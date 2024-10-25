@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT
@@ -32,7 +32,7 @@ class AsyncHTTPHandler:
     def __init__(
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        event_hooks: Optional[Mapping[str, list[Callable[..., Any]]]] = None,
+        event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
     ):
         self.timeout = timeout
@@ -120,7 +120,9 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks)
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -178,7 +180,9 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks)
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -235,7 +239,9 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks)
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
