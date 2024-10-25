@@ -56,6 +56,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "opik",
     "argilla",
 ]
+logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
@@ -161,9 +162,6 @@ enable_caching_on_provider_specific_optional_params: bool = (
 )
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-always_read_redis: bool = (
-    True  # always use redis for rate limiting logic on litellm proxy
 )
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648

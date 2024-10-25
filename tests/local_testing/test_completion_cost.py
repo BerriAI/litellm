@@ -2587,3 +2587,50 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     total_output_cost = output_audio_cost + output_text_cost
 
     assert round(cost, 2) == round(total_input_cost + total_output_cost, 2)
+
+
+def test_completion_cost_azure_ai_meta():
+    """
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6310
+    """
+    from litellm import ModelResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.set_verbose = True
+    response = {
+        "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "logprobs": None,
+                "message": {
+                    "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
+                    "refusal": None,
+                    "role": "assistant",
+                    "audio": None,
+                    "function_call": None,
+                    "tool_calls": [],
+                },
+            }
+        ],
+        "created": 1729243714,
+        "model": "azure_ai/Meta-Llama-3.1-70B-Instruct",
+        "object": "chat.completion",
+        "service_tier": None,
+        "system_fingerprint": None,
+        "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 16,
+            "total_tokens": 48,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+    model_response = ModelResponse(**response)
+    cost = completion_cost(model_response, custom_llm_provider="azure_ai")
+
+    assert cost > 0
