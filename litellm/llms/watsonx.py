@@ -425,7 +425,7 @@ class IBMWatsonXAI(BaseLLM):
         )
         if json_resp.get("created_at"):
             model_response.created = int(
-                datetime.fromisoformat(json_resp["created_at"]).timestamp()
+                datetime.strptime(json_resp["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ").timestamp()
             )
         else:
             model_response.created = int(time.time())
