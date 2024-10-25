@@ -371,12 +371,12 @@ def test_is_request_body_safe_model_enabled(
 
 
 def test_reading_openai_org_id_from_headers():
-    from litellm.proxy.litellm_pre_call_utils import get_openai_org_id_from_headers
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
     headers = {
         "OpenAI-Organization": "test_org_id",
     }
-    org_id = get_openai_org_id_from_headers(headers)
+    org_id = LiteLLMProxyRequestSetup.get_openai_org_id_from_headers(headers)
     assert org_id == "test_org_id"
 
 
@@ -399,11 +399,44 @@ def test_reading_openai_org_id_from_headers():
 )
 def test_add_litellm_data_for_backend_llm_call(headers, expected_data):
     import json
-    from litellm.proxy.litellm_pre_call_utils import (
-        add_litellm_data_for_backend_llm_call,
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
     )
 
-    data = add_litellm_data_for_backend_llm_call(headers)
+    data = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers=headers,
+        user_api_key_dict=user_api_key_dict,
+        general_settings=None,
+    )
+
+    assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
+
+
+def test_foward_litellm_user_info_to_backend_llm_call():
+    import json
+
+    litellm.add_user_information_to_llm_headers = True
+
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+    )
+
+    data = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+        headers={},
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    expected_data = {
+        "x-litellm-user_api_key_user_id": "test_user_id",
+        "x-litellm-user_api_key_org_id": "test_org_id",
+        "x-litellm-user_api_key_hash": "test_api_key",
+    }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
 
