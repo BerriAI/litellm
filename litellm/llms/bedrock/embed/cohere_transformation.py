@@ -42,6 +42,6 @@ class BedrockCohereEmbeddingConfig:
         )
         for k in CohereEmbeddingRequest.__annotations__.keys():
             if k in transformed_request:
-                new_transformed_request[k] = transformed_request[k]
+                new_transformed_request[k] = transformed_request[k]  # type: ignore
 
         return new_transformed_request
