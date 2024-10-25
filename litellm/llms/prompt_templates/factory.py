@@ -1224,6 +1224,10 @@ def convert_to_anthropic_tool_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
+
+    anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
+    ## PROMPT CACHING CHECK ##
+    cache_control = message.get("cache_control", None)
     if message["role"] == "tool":
         tool_message: ChatCompletionToolMessage = message
         tool_call_id: str = tool_message["tool_call_id"]
@@ -1233,7 +1237,7 @@ def convert_to_anthropic_tool_result(
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
-        return anthropic_tool_result
+
     if message["role"] == "function":
         function_message: ChatCompletionFunctionMessage = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
@@ -1241,13 +1245,11 @@ def convert_to_anthropic_tool_result(
             type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
 
-        return anthropic_tool_result
-    else:
-        raise Exception(
-            "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
-                message.get("content")
-            )
-        )
+    if anthropic_tool_result is None:
+        raise Exception(f"Unable to parse anthropic tool result for message: {message}")
+    if cache_control is not None:
+        anthropic_tool_result["cache_control"] = cache_control  # type: ignore
+    return anthropic_tool_result
 
 
 def convert_function_to_anthropic_tool_invoke(

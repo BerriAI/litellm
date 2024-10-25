@@ -65,6 +65,7 @@ def validate_environment(
 
     if AnthropicConfig().is_cache_control_set(messages=messages):
         cache_headers = AnthropicConfig().get_cache_control_headers()
+
     headers = {
         "accept": "application/json",
         "anthropic-version": "2023-06-01",

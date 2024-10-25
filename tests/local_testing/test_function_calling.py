@@ -520,12 +520,12 @@ def test_passing_tool_result_as_list():
                 {
                     "type": "text",
                     "text": 'OBSERVATION:\nOn branch master\r\n\r\nNo commits yet\r\n\r\nChanges to be committed:\r\n  (use "git rm --cached <file>..." to unstage)\r\n\tnew file:   hello.py\r\n\r\n\r\n[Python Interpreter: /openhands/poetry/openhands-ai-5O4_aCHf-py3.12/bin/python]\nroot@openhands-workspace:/workspace # \n[Command finished with exit code 0]',
-                    "cache_control": {"type": "ephemeral"},
                 }
             ],
             "role": "tool",
             "tool_call_id": "toolu_01V1paXrun4CVetdAGiQaZG5",
             "name": "execute_bash",
+            "cache_control": {"type": "ephemeral"},
         },
     ]
     tools = [
@@ -609,3 +609,5 @@ def test_passing_tool_result_as_list():
     ]
     resp = completion(model=model, messages=messages, tools=tools)
     print(resp)
+
+    assert resp.usage.prompt_tokens_details.cached_tokens > 0
