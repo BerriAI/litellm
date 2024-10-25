@@ -340,6 +340,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
         "/login",
         "/key/generate",
+        "/key/{token_id}/regenerate",
         "/key/update",
         "/key/info",
         "/key/delete",
