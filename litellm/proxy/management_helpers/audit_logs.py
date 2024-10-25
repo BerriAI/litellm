@@ -28,7 +28,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     if isinstance(request_data.before_value, dict):
         request_data.before_value = json.dumps(request_data.before_value)
 
-    _request_data = request_data.dict(exclude_none=True)
+    _request_data = request_data.model_dump(exclude_none=True)
 
     try:
         await prisma_client.db.litellm_auditlog.create(
