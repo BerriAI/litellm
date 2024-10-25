@@ -6399,11 +6399,7 @@ async def list_end_user(
         --header 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
