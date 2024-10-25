@@ -69,7 +69,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
-from litellm.proxy.auth.route_checks import non_proxy_admin_allowed_routes_check
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
@@ -150,7 +150,7 @@ def _is_api_route_allowed(
         raise Exception("Invalid proxy server token passed")
 
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
-        non_proxy_admin_allowed_routes_check(
+        RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=_user_role,
             route=route,
