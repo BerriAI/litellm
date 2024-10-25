@@ -4749,3 +4749,19 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
     else:
         assert len(response) == 1
         assert response[0].function.name == function_name
+
+
+def test_gemini_code_execution():
+    litellm.set_verbose = True
+    tools = [{"code_execution": {}}]
+    resp = litellm.completion(
+        model="gemini/gemini-1.5-pro",
+        messages=[
+            {
+                "role": "user",
+                "content": "What is the sum of the first 50 prime numbers? Generate and run code for the calculation, and make sure you get all 50.",
+            }
+        ],
+        tools=tools,
+    )
+    print(resp)
