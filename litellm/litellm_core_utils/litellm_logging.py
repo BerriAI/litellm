@@ -2598,9 +2598,7 @@ class StandardLoggingPayloadSetup:
         elif isinstance(completion_start_time, float):
             completion_start_time_float = completion_start_time
         else:
-            raise ValueError(
-                f"completion_start_time is required, got={completion_start_time} of type {type(completion_start_time)}"
-            )
+            completion_start_time_float = end_time_float
 
         return start_time_float, end_time_float, completion_start_time_float
 
