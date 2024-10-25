@@ -260,6 +260,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
     ] = None,  # used for supporting 'json_schema' on older models
 ):
     received_args = locals()
+
     additional_headers = get_response_headers(_response_headers)
 
     if hidden_params is None:
@@ -448,11 +449,13 @@ def convert_to_model_response_object(  # noqa: PLR0915
         ):
             if response_object is None:
                 raise Exception("Error in response object format")
+
             return LiteLLMResponseObjectHandler.convert_to_image_response(
                 response_object=response_object,
                 model_response_object=model_response_object,
                 hidden_params=hidden_params,
             )
+
         elif response_type == "audio_transcription" and (
             model_response_object is None
             or isinstance(model_response_object, TranscriptionResponse)
