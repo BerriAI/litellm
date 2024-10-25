@@ -45,7 +45,7 @@ class AsyncHTTPHandler:
         self,
         timeout: Optional[Union[float, httpx.Timeout]],
         concurrent_limit: int,
-        event_hooks: Optional[Mapping[str, list[Callable[..., Any]]]],
+        event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
     ) -> httpx.AsyncClient:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
