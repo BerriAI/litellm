@@ -22,7 +22,7 @@ from starlette.datastructures import URL, Headers, QueryParams
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.auth.auth_utils import get_request_route
-from litellm.proxy.auth.route_checks import is_llm_api_route
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.proxy_server import app
 
 # Configure logging
@@ -84,7 +84,7 @@ def test_routes_on_litellm_proxy():
     ],
 )
 def test_is_llm_api_route(route: str, expected: bool):
-    assert is_llm_api_route(route) == expected
+    assert RouteChecks.is_llm_api_route(route) == expected
 
 
 # Test-case for routes that are similar but should return False
@@ -98,12 +98,12 @@ def test_is_llm_api_route(route: str, expected: bool):
     ],
 )
 def test_is_llm_api_route_similar_but_false(route: str):
-    assert is_llm_api_route(route) == False
+    assert RouteChecks.is_llm_api_route(route) is False
 
 
 def test_anthropic_api_routes():
     # allow non proxy admins to call anthropic api routes
-    assert is_llm_api_route(route="/v1/messages") is True
+    assert RouteChecks.is_llm_api_route(route="/v1/messages") is True
 
 
 def create_request(path: str, base_url: str = "http://testserver") -> Request:
