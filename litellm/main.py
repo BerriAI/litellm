@@ -113,7 +113,7 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
-from .llms.cohere import embed as cohere_embed
+from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.groq.chat.handler import GroqChatCompletion

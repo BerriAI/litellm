@@ -3364,53 +3364,55 @@
         "litellm_provider": "cohere",
         "mode": "rerank"
     },
-    "embed-english-v3.0": {
-        "max_tokens": 512, 
-        "max_input_tokens": 512,
-        "input_cost_per_token": 0.00000010,
-        "output_cost_per_token": 0.00000,
-        "litellm_provider": "cohere",
-        "mode": "embedding"
-    },
     "embed-english-light-v3.0": {
-        "max_tokens": 512, 
-        "max_input_tokens": 512,
+        "max_tokens": 1024, 
+        "max_input_tokens": 1024,
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
         "mode": "embedding"
     },
     "embed-multilingual-v3.0": {
-        "max_tokens": 512, 
-        "max_input_tokens": 512,
+        "max_tokens": 1024, 
+        "max_input_tokens": 1024,
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
         "mode": "embedding"
     },
     "embed-english-v2.0": {
-        "max_tokens": 512, 
-        "max_input_tokens": 512,
+        "max_tokens": 4096, 
+        "max_input_tokens": 4096,
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
         "mode": "embedding"
     },
     "embed-english-light-v2.0": {
-        "max_tokens": 512, 
-        "max_input_tokens": 512,
+        "max_tokens": 1024, 
+        "max_input_tokens": 1024,
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
         "mode": "embedding"
     },
     "embed-multilingual-v2.0": {
-        "max_tokens": 256, 
-        "max_input_tokens": 256,
+        "max_tokens": 768, 
+        "max_input_tokens": 768,
         "input_cost_per_token": 0.00000010,
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
         "mode": "embedding"
+    },
+    "embed-english-v3.0": {
+        "max_tokens": 1024, 
+        "max_input_tokens": 1024,
+        "input_cost_per_token": 0.00000010,
+        "input_cost_per_image": 0.0001,
+        "output_cost_per_token": 0.00000,
+        "litellm_provider": "cohere",
+        "mode": "embedding",
+        "supports_image_input": true
     },
     "replicate/meta/llama-2-13b": {
         "max_tokens": 4096,

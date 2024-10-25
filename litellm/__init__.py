@@ -8,6 +8,7 @@ import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -136,7 +137,7 @@ enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
