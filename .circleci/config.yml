@@ -416,15 +416,17 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             pip install ruff
-            pip install pylint  
+            pip install pylint
             pip install pyright
             pip install .
+            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
       - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/documentation_tests/test_env_keys.py
-    
+      - run: helm lint ./deploy/charts/litellm-helm
+
   db_migration_disable_update_check:
     machine:
       image: ubuntu-2204:2023.10.1
