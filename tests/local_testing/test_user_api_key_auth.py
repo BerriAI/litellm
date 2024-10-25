@@ -293,26 +293,50 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
     setattr(proxy_server, "general_settings", initial_general_settings)
 
 
-@pytest.mark.parametrize("route", ["/global/spend/logs", "/key/delete"])
-def test_is_ui_route_allowed(route):
+@pytest.mark.parametrize(
+    "route, user_role, expected_result",
+    [
+        # Proxy Admin checks
+        ("/global/spend/logs", "proxy_admin", True),
+        ("/key/delete", "proxy_admin", True),
+        ("/key/generate", "proxy_admin", True),
+        ("/key/regenerate", "proxy_admin", True),
+        # Internal User checks - allowed routes
+        ("/global/spend/logs", "internal_user", True),
+        ("/key/delete", "internal_user", True),
+        ("/key/generate", "internal_user", True),
+        ("/key/82akk800000000jjsk/regenerate", "internal_user", True),
+        # Internal User checks - disallowed routes
+        ("/organization/member_add", "internal_user", False),
+    ],
+)
+def test_is_ui_route_allowed(route, user_role, expected_result):
     from litellm.proxy.auth.user_api_key_auth import _is_ui_route_allowed
     from litellm.proxy._types import LiteLLM_UserTable
 
+    user_obj = LiteLLM_UserTable(
+        user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+        max_budget=None,
+        spend=0.0,
+        model_max_budget={},
+        model_spend={},
+        user_email="my-test-email@1234.com",
+        models=[],
+        tpm_limit=None,
+        rpm_limit=None,
+        user_role=user_role,
+        organization_memberships=[],
+    )
+
     received_args: dict = {
         "route": route,
-        "user_obj": LiteLLM_UserTable(
-            user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
-            max_budget=None,
-            spend=0.0,
-            model_max_budget={},
-            model_spend={},
-            user_email="my-test-email@1234.com",
-            models=[],
-            tpm_limit=None,
-            rpm_limit=None,
-            user_role="internal_user",
-            organization_memberships=[],
-        ),
+        "user_obj": user_obj,
     }
-
-    assert _is_ui_route_allowed(**received_args)
+    try:
+        assert _is_ui_route_allowed(**received_args) == expected_result
+    except Exception as e:
+        # If expected result is False, we expect an error
+        if expected_result is False:
+            pass
+        else:
+            raise e
