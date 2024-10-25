@@ -11,7 +11,7 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 import httpx
 
 import litellm
-from litellm.llms.cohere.embed import embedding as cohere_embedding
+from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -369,7 +369,7 @@ class BedrockEmbedding(BaseAWSLLM):
         batch_data: Optional[List] = None
         if provider == "cohere":
             data = BedrockCohereEmbeddingConfig()._transform_request(
-                input=input, inference_params=inference_params
+                model=model, input=input, inference_params=inference_params
             )
         elif provider == "amazon" and model in [
             "amazon.titan-embed-image-v1",

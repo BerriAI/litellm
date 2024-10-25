@@ -210,13 +210,21 @@ class ServerSentEvent:
         return f"ServerSentEvent(event={self.event}, data={self.data}, id={self.id}, retry={self.retry})"
 
 
+COHERE_EMBEDDING_INPUT_TYPES = Literal[
+    "search_document", "search_query", "classification", "clustering", "image"
+]
+
+
 class CohereEmbeddingRequest(TypedDict, total=False):
-    texts: Required[List[str]]
-    input_type: Required[
-        Literal["search_document", "search_query", "classification", "clustering"]
-    ]
+    texts: List[str]
+    images: List[str]
+    input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+
+
+class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
+    model: Required[str]
 
 
 class CohereEmbeddingResponse(TypedDict):
