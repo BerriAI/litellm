@@ -214,6 +214,28 @@ def _handle_invalid_parallel_tool_calls(
         return tool_calls
 
 
+class LiteLLMResponseObjectHandler:
+
+    @staticmethod
+    def convert_to_image_response(
+        response_object: dict,
+        model_response_object: Optional[ImageResponse] = None,
+        hidden_params: Optional[dict] = None,
+    ) -> ImageResponse:
+
+        response_object.update({"hidden_params": hidden_params})
+
+        if model_response_object is None:
+            model_response_object = ImageResponse(**response_object)
+            return model_response_object
+        else:
+            model_response_dict = model_response_object.model_dump()
+
+            model_response_dict.update(response_object)
+            model_response_object = ImageResponse(**model_response_dict)
+            return model_response_object
+
+
 def convert_to_model_response_object(  # noqa: PLR0915
     response_object: Optional[dict] = None,
     model_response_object: Optional[
@@ -238,7 +260,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
     ] = None,  # used for supporting 'json_schema' on older models
 ):
     received_args = locals()
-
     additional_headers = get_response_headers(_response_headers)
 
     if hidden_params is None:
@@ -427,20 +448,11 @@ def convert_to_model_response_object(  # noqa: PLR0915
         ):
             if response_object is None:
                 raise Exception("Error in response object format")
-
-            if model_response_object is None:
-                model_response_object = ImageResponse()
-
-            if "created" in response_object:
-                model_response_object.created = response_object["created"]
-
-            if "data" in response_object:
-                model_response_object.data = response_object["data"]
-
-            if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
-
-            return model_response_object
+            return LiteLLMResponseObjectHandler.convert_to_image_response(
+                response_object=response_object,
+                model_response_object=model_response_object,
+                hidden_params=hidden_params,
+            )
         elif response_type == "audio_transcription" and (
             model_response_object is None
             or isinstance(model_response_object, TranscriptionResponse)
