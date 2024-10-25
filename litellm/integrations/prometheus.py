@@ -346,8 +346,14 @@ class PrometheusLogger(CustomLogger):
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
         )
-        if standard_logging_payload is None:
-            raise ValueError("standard_logging_object is required")
+
+        if standard_logging_payload is None or not isinstance(
+            standard_logging_payload, dict
+        ):
+            raise ValueError(
+                f"standard_logging_object is required, got={standard_logging_payload}"
+            )
+
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
@@ -991,7 +997,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingMetadata,
-            get_standard_logging_metadata,
+            StandardLoggingPayloadSetup,
         )
 
         verbose_logger.debug(
@@ -1000,8 +1006,10 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _metadata = kwargs.get("metadata", {})
-        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
-            metadata=_metadata
+        standard_metadata: StandardLoggingMetadata = (
+            StandardLoggingPayloadSetup.get_standard_logging_metadata(
+                metadata=_metadata
+            )
         )
         _new_model = kwargs.get("model")
         self.litellm_deployment_successful_fallbacks.labels(
@@ -1023,7 +1031,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingMetadata,
-            get_standard_logging_metadata,
+            StandardLoggingPayloadSetup,
         )
 
         verbose_logger.debug(
@@ -1033,8 +1041,10 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         _metadata = kwargs.get("metadata", {})
-        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
-            metadata=_metadata
+        standard_metadata: StandardLoggingMetadata = (
+            StandardLoggingPayloadSetup.get_standard_logging_metadata(
+                metadata=_metadata
+            )
         )
         self.litellm_deployment_failed_fallbacks.labels(
             requested_model=original_model_group,
