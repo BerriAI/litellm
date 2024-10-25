@@ -13,7 +13,7 @@ general_settings:
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
 
 litellm_settings:
-  success_callback: ["langfuse"]
+  store_audit_logs: true
 
   # https://docs.litellm.ai/docs/proxy/reliability#default-fallbacks
   default_fallbacks: ["gpt-4o-2024-08-06", "claude-3-5-sonnet-20240620"]
