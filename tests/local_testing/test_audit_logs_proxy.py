@@ -50,6 +50,7 @@ from starlette.datastructures import URL
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
 from litellm.caching.caching import DualCache
+from unittest.mock import patch, AsyncMock
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 import json
