@@ -238,11 +238,15 @@ class LiteLLMProxyRequestSetup:
         - Adds org id
         """
         data = LitellmDataForBackendLLMCall()
-        _headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
-            headers, user_api_key_dict
-        )
-        if _headers != {}:
-            data["headers"] = _headers
+        if (
+            general_settings
+            and general_settings.get("forward_client_headers_to_llm_api") is True
+        ):
+            _headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+                headers, user_api_key_dict
+            )
+            if _headers != {}:
+                data["headers"] = _headers
         _organization = LiteLLMProxyRequestSetup.get_openai_org_id_from_headers(
             headers, general_settings
         )

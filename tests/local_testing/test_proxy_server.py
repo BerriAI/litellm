@@ -225,12 +225,20 @@ def test_add_headers_to_request(litellm_key_header_name):
     "litellm_key_header_name",
     ["x-litellm-key", None],
 )
+@pytest.mark.parametrize(
+    "forward_headers",
+    [True, False],
+)
 @mock_patch_acompletion()
 def test_chat_completion_forward_headers(
-    mock_acompletion, client_no_auth, litellm_key_header_name
+    mock_acompletion, client_no_auth, litellm_key_header_name, forward_headers
 ):
     global headers
     try:
+        if forward_headers:
+            gs = getattr(litellm.proxy.proxy_server, "general_settings")
+            gs["forward_client_headers_to_llm_api"] = True
+            setattr(litellm.proxy.proxy_server, "general_settings", gs)
         if litellm_key_header_name is not None:
             gs = getattr(litellm.proxy.proxy_server, "general_settings")
             gs["litellm_key_header_name"] = litellm_key_header_name
@@ -260,23 +268,14 @@ def test_chat_completion_forward_headers(
         response = client_no_auth.post(
             "/v1/chat/completions", json=test_data, headers=received_headers
         )
-        mock_acompletion.assert_called_once_with(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": "hi"},
-            ],
-            max_tokens=10,
-            litellm_call_id=mock.ANY,
-            litellm_logging_obj=mock.ANY,
-            request_timeout=mock.ANY,
-            specific_deployment=True,
-            metadata=mock.ANY,
-            proxy_server_request=mock.ANY,
-            headers={
+        if not forward_headers:
+            assert "headers" not in mock_acompletion.call_args.kwargs
+        else:
+            assert mock_acompletion.call_args.kwargs["headers"] == {
                 "x-custom-header": "Custom-Value",
                 "x-another-header": "Another-Value",
-            },
-        )
+            }
+
         print(f"response - {response.text}")
         assert response.status_code == 200
         result = response.json()

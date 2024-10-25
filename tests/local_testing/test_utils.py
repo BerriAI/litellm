@@ -331,6 +331,13 @@ def test_validate_environment_api_key():
     ), f"Missing keys={response_obj['missing_keys']}"
 
 
+def test_validate_environment_api_base_dynamic():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider + "/mistral", api_base="https://example.com")
+        assert kv["keys_in_environment"]
+        assert kv["missing_keys"] == []
+
+
 @mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
 def test_validate_environment_ollama():
     for provider in ["ollama", "ollama_chat"]:
