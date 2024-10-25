@@ -171,7 +171,7 @@ class OpenTelemetry(CustomLogger):
                         try:
                             value = str(value)
                         except Exception:
-                            value = "litllm logging error - could_not_json_serialize"
+                            value = "litellm logging error - could_not_json_serialize"
                     self.safe_set_attribute(
                         span=service_logging_span,
                         key=key,
