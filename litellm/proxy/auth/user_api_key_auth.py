@@ -122,6 +122,11 @@ def _is_ui_route_allowed(
     ):
         # Do something if the current route starts with any of the allowed routes
         return True
+    elif any(
+        RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
+        for allowed_route in allowed_routes
+    ):
+        return True
     else:
         if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
             return True
