@@ -1182,74 +1182,6 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-def convert_to_anthropic_tool_result(
-    message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
-) -> AnthropicMessagesToolResultParam:
-    """
-    OpenAI message with a tool result looks like:
-    {
-        "tool_call_id": "tool_1",
-        "role": "tool",
-        "name": "get_current_weather",
-        "content": "function result goes here",
-    },
-
-    OpenAI message with a function call result looks like:
-    {
-        "role": "function",
-        "name": "get_current_weather",
-        "content": "function result goes here",
-    }
-    """
-
-    """
-    Anthropic tool_results look like:
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "tool_result",
-                "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
-                "content": "ConnectionError: the weather service API is not available (HTTP 500)",
-                # "is_error": true
-            }
-        ]
-    }
-    """
-    content_str: str = ""
-    if isinstance(message["content"], str):
-        content_str = message["content"]
-    elif isinstance(message["content"], List):
-        content_list = message["content"]
-        for content in content_list:
-            if content["type"] == "text":
-                content_str += content["text"]
-    if message["role"] == "tool":
-        tool_message: ChatCompletionToolMessage = message
-        tool_call_id: str = tool_message["tool_call_id"]
-
-        # We can't determine from openai message format whether it's a successful or
-        # error call result so default to the successful result template
-        anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content_str
-        )
-        return anthropic_tool_result
-    if message["role"] == "function":
-        function_message: ChatCompletionFunctionMessage = message
-        tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
-        anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content_str
-        )
-
-        return anthropic_tool_result
-    else:
-        raise Exception(
-            "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
-                message.get("content")
-            )
-        )
-
-
 def convert_function_to_anthropic_tool_invoke(
     function_call: Union[dict, ChatCompletionToolCallFunctionChunk],
 ) -> List[AnthropicMessagesToolUseParam]:
@@ -1433,14 +1365,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         )
 
                         user_content.append(_content_element)
-            elif (
-                user_message_types_block["role"] == "tool"
-                or user_message_types_block["role"] == "function"
-            ):
-                # OpenAI's tool message content will always be a string
-                user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block)
-                )
             elif isinstance(user_message_types_block["content"], str):
                 _anthropic_content_text_element: AnthropicMessagesTextParam = {
                     "type": "text",
@@ -1460,7 +1384,31 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
 
-        if user_content:
+        if user_content and user_message_types_block["role"] in {"tool", "function"}:
+            print("user_content", user_content)
+            if user_message_types_block["role"] == "tool":
+                tool_message: ChatCompletionToolMessage = user_message_types_block
+                tool_call_id: str = tool_message["tool_call_id"]
+
+                # We can't determine from openai message format whether it's a successful or
+                # error call result so default to the successful result template
+                anthropic_tool_result = AnthropicMessagesToolResultParam(
+                    type="tool_result", tool_use_id=tool_call_id, content=user_content
+                )
+            elif user_message_types_block["role"] == "function":
+                function_message: ChatCompletionFunctionMessage = user_message_types_block
+                tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
+                anthropic_tool_result = AnthropicMessagesToolResultParam(
+                    type="tool_result", tool_use_id=tool_call_id, content=user_content
+                )
+            else:
+                raise Exception(
+                    "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
+                        user_message_types_block["role"]
+                    )
+                )
+            new_messages.append({"role": "user", "content": [anthropic_tool_result]})
+        elif user_content:
             new_messages.append({"role": "user", "content": user_content})
 
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
