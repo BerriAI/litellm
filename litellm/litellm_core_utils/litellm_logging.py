@@ -2517,6 +2517,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_team_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
+            user_api_key_org_id=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
