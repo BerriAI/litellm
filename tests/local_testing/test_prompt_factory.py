@@ -675,3 +675,15 @@ def test_alternating_roles_e2e():
                 "stream": False,
             }
         )
+
+
+def test_just_system_message():
+    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+
+    with pytest.raises(litellm.BadRequestError) as e:
+        _bedrock_converse_messages_pt(
+            messages=[],
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+        assert "bedrock requires at least one non-system message" in str(e.value)

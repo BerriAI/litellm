@@ -12,7 +12,10 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.bedrock import CohereEmbeddingRequest
 from litellm.utils import Choices, Message, ModelResponse, Usage
+
+from .transformation import CohereEmbeddingConfig
 
 
 def validate_environment(api_key, headers: dict):
@@ -41,39 +44,9 @@ class CohereError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-def _process_embedding_response(
-    embeddings: list,
-    model_response: litellm.EmbeddingResponse,
-    model: str,
-    encoding: Any,
-    input: list,
-) -> litellm.EmbeddingResponse:
-    output_data = []
-    for idx, embedding in enumerate(embeddings):
-        output_data.append(
-            {"object": "embedding", "index": idx, "embedding": embedding}
-        )
-    model_response.object = "list"
-    model_response.data = output_data
-    model_response.model = model
-    input_tokens = 0
-    for text in input:
-        input_tokens += len(encoding.encode(text))
-
-    setattr(
-        model_response,
-        "usage",
-        Usage(
-            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
-        ),
-    )
-
-    return model_response
-
-
 async def async_embedding(
     model: str,
-    data: dict,
+    data: Union[dict, CohereEmbeddingRequest],
     input: list,
     model_response: litellm.utils.EmbeddingResponse,
     timeout: Optional[Union[float, httpx.Timeout]],
@@ -121,19 +94,12 @@ async def async_embedding(
         )
         raise e
 
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": data},
-        original_response=response.text,
-    )
-
-    embeddings = response.json()["embeddings"]
-
     ## PROCESS RESPONSE ##
-    return _process_embedding_response(
-        embeddings=embeddings,
+    return CohereEmbeddingConfig()._transform_response(
+        response=response,
+        api_key=api_key,
+        logging_obj=logging_obj,
+        data=data,
         model_response=model_response,
         model=model,
         encoding=encoding,
@@ -149,7 +115,7 @@ def embedding(
     optional_params: dict,
     headers: dict,
     encoding: Any,
-    data: Optional[dict] = None,
+    data: Optional[Union[dict, CohereEmbeddingRequest]] = None,
     complete_api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     aembedding: Optional[bool] = None,
@@ -159,11 +125,10 @@ def embedding(
     headers = validate_environment(api_key, headers=headers)
     embed_url = complete_api_base or "https://api.cohere.ai/v1/embed"
     model = model
-    data = data or {"model": model, "texts": input, **optional_params}
 
-    if "3" in model and "input_type" not in data:
-        # cohere v3 embedding models require input_type, if no input_type is provided, default to "search_document"
-        data["input_type"] = "search_document"
+    data = data or CohereEmbeddingConfig()._transform_request(
+        model=model, input=input, inference_params=optional_params
+    )
 
     ## ROUTING
     if aembedding is True:
@@ -193,30 +158,12 @@ def embedding(
         client = HTTPHandler(concurrent_limit=1)
 
     response = client.post(embed_url, headers=headers, data=json.dumps(data))
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": data},
-        original_response=response,
-    )
-    """
-        response 
-        {
-            'object': "list",
-            'data': [
-            
-            ]
-            'model', 
-            'usage'
-        }
-    """
-    if response.status_code != 200:
-        raise CohereError(message=response.text, status_code=response.status_code)
-    embeddings = response.json()["embeddings"]
 
-    return _process_embedding_response(
-        embeddings=embeddings,
+    return CohereEmbeddingConfig()._transform_response(
+        response=response,
+        api_key=api_key,
+        logging_obj=logging_obj,
+        data=data,
         model_response=model_response,
         model=model,
         encoding=encoding,

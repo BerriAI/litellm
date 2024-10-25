@@ -2429,6 +2429,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
     contents: List[BedrockMessageBlock] = []
     msg_i = 0
 
+    ## BASE CASE ##
+    if len(messages) == 0:
+        raise litellm.BadRequestError(
+            message=BAD_MESSAGE_ERROR_STR
+            + "bedrock requires at least one non-system message",
+            model=model,
+            llm_provider=llm_provider,
+        )
+
     # if initial message is assistant message
     if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
         if user_continue_message is not None:

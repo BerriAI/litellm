@@ -814,6 +814,7 @@ general_settings:
 | pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
+| forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers) to the backend LLM call |
 
 ### router_settings - Reference
 

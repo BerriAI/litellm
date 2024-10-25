@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 from typing import List
 
 import litellm
+from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 from litellm.types.llms.bedrock import CohereEmbeddingRequest, CohereEmbeddingResponse
 from litellm.types.utils import Embedding, EmbeddingResponse
 
@@ -26,15 +27,21 @@ class BedrockCohereEmbeddingConfig:
                 optional_params["embedding_types"] = v
         return optional_params
 
+    def _is_v3_model(self, model: str) -> bool:
+        return "3" in model
+
     def _transform_request(
-        self, input: List[str], inference_params: dict
+        self, model: str, input: List[str], inference_params: dict
     ) -> CohereEmbeddingRequest:
-        transformed_request = CohereEmbeddingRequest(
-            texts=input,
-            input_type=litellm.COHERE_DEFAULT_EMBEDDING_INPUT_TYPE,  # type: ignore
+        transformed_request = CohereEmbeddingConfig()._transform_request(
+            model, input, inference_params
         )
 
-        for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+        new_transformed_request = CohereEmbeddingRequest(
+            input_type=transformed_request["input_type"],
+        )
+        for k in CohereEmbeddingRequest.__annotations__.keys():
+            if k in transformed_request:
+                new_transformed_request[k] = transformed_request[k]  # type: ignore
 
-        return transformed_request
+        return new_transformed_request

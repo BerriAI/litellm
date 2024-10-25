@@ -398,6 +398,8 @@ class AnthropicChatCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
+            if error_response and hasattr(error_response, "text"):
+                error_text = getattr(error_response, "text", error_text)
             raise AnthropicError(
                 message=error_text,
                 status_code=status_code,
