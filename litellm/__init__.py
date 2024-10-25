@@ -80,6 +80,9 @@ turn_off_message_logging: Optional[bool] = False
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+add_user_information_to_llm_headers: Optional[bool] = (
+    None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
+)
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 
