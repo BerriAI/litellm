@@ -174,10 +174,9 @@ class RouteChecks:
             # Replace placeholders with regex pattern
             # placeholders are written as "/threads/{thread_id}"
             if "{" in openai_route:
-                pattern = re.sub(r"\{[^}]+\}", r"[^/]+", openai_route)
-                # Anchor the pattern to match the entire string
-                pattern = f"^{pattern}$"
-                if re.match(pattern, route):
+                if RouteChecks._route_matches_pattern(
+                    route=route, pattern=openai_route
+                ):
                     return True
 
         # Pass through Bedrock, VertexAI, and Cohere Routes
@@ -190,5 +189,27 @@ class RouteChecks:
         if "/cohere/" in route:
             return True
         if "/langfuse/" in route:
+            return True
+        return False
+
+    @staticmethod
+    def _route_matches_pattern(route: str, pattern: str) -> bool:
+        """
+        Check if route matches the pattern placed in proxy/_types.py
+
+        Example:
+        - pattern: "/threads/{thread_id}"
+        - route: "/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
+        - returns: True
+
+
+        - pattern: "/key/{token_id}/regenerate"
+        - route: "/key/regenerate/82akk800000000jjsk"
+        - returns: False, pattern is "/key/{token_id}/regenerate"
+        """
+        pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
+        # Anchor the pattern to match the entire string
+        pattern = f"^{pattern}$"
+        if re.match(pattern, route):
             return True
         return False
