@@ -169,9 +169,3 @@ def test_get_llm_provider_hosted_vllm():
     assert custom_llm_provider == "hosted_vllm"
     assert model == "llama-3.1-70b-instruct"
     assert dynamic_api_key == ""
-
-    response = litellm.completion(
-        model="hosted_vllm/neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
-        api_base="http://0.0.0.0:8000/v1",
-        messages=[{"content": "Hello there!", "role": "user"}],
-    )
