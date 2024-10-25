@@ -94,3 +94,37 @@ def test_process_azure_headers_with_dict_input():
 
     result = process_azure_headers(input_headers)
     assert result == expected_output, "Unexpected output for dict input"
+
+
+@pytest.mark.parametrize(
+    "api_base, model, expected_endpoint",
+    [
+        (
+            "https://my-endpoint-sweden-berri992.openai.azure.com",
+            "dall-e-3-test",
+            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/dall-e-3-test/images/generations?api-version=2023-12-01-preview",
+        ),
+        (
+            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/my-custom-deployment",
+            "dall-e-3",
+            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/my-custom-deployment/images/generations?api-version=2023-12-01-preview",
+        ),
+    ],
+)
+def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
+    from litellm.llms.AzureOpenAI.azure import AzureChatCompletion
+
+    azure_chat_completion = AzureChatCompletion()
+    input_args = {
+        "azure_client_params": {
+            "api_version": "2023-12-01-preview",
+            "azure_endpoint": api_base,
+            "azure_deployment": model,
+            "max_retries": 2,
+            "timeout": 600,
+            "api_key": "f28ab7b695af4154bc53498e5bdccb07",
+        },
+        "model": model,
+    }
+    result = azure_chat_completion.create_azure_base_url(**input_args)
+    assert result == expected_endpoint, "Unexpected endpoint"
