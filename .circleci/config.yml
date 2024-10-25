@@ -119,7 +119,7 @@ jobs:
           paths:
             - local_testing_coverage.xml
             - local_testing_coverage
-  ui_endpoint_testing:
+  auth_ui_unit_tests:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -161,8 +161,8 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml ui_endpoint_testing_coverage.xml
-            mv .coverage ui_endpoint_testing_coverage
+            mv coverage.xml auth_ui_unit_tests_coverage.xml
+            mv .coverage auth_ui_unit_tests_coverage
 
       # Store test results
       - store_test_results:
@@ -171,8 +171,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - ui_endpoint_testing_coverage.xml
-            - ui_endpoint_testing_coverage
+            - auth_ui_unit_tests_coverage.xml
+            - auth_ui_unit_tests_coverage
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
         - image: cimg/python:3.11
@@ -813,7 +813,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage ui_endpoint_testing_coverage
+            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -1013,7 +1013,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - ui_endpoint_testing:
+      - auth_ui_unit_tests:
           filters:
             branches:
               only:
@@ -1062,7 +1062,7 @@ workflows:
             - litellm_router_testing
             - local_testing
             - litellm_assistants_api_testing
-            - ui_endpoint_testing
+            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           filters:
             branches:
@@ -1090,7 +1090,7 @@ workflows:
             - logging_testing
             - litellm_router_testing
             - litellm_assistants_api_testing
-            - ui_endpoint_testing
+            - auth_ui_unit_tests
             - db_migration_disable_update_check
             - e2e_ui_testing
             - installing_litellm_on_python
