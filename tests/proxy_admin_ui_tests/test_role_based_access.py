@@ -38,6 +38,14 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     regenerate_key_fn,
     update_key_fn,
 )
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    LiteLLM_OrganizationMembershipTable,
+)
+from litellm.proxy.auth.auth_checks_organization import (
+    OrganizationRoleBasedAccessChecks,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.organization_endpoints import (
     new_organization,
@@ -437,3 +445,132 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
             "You do not have the required role to call" in e.message
             and org2_id in e.message
         )
+
+
+def create_user_object(user_id, user_role, org_memberships=None):
+    return LiteLLM_UserTable(
+        user_id=user_id,
+        user_role=user_role,
+        organization_memberships=org_memberships,
+        max_budget=None,
+        user_email=None,
+    )
+
+
+def test_user_is_admin_in_org():
+    user_id = f"user-{uuid.uuid4()}"
+    user = create_user_object(
+        user_id,
+        LitellmUserRoles.INTERNAL_USER.value,
+        [
+            LiteLLM_OrganizationMembershipTable(
+                organization_id="org1",
+                user_role=LitellmUserRoles.ORG_ADMIN.value,
+                user_id=user_id,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+            LiteLLM_OrganizationMembershipTable(
+                organization_id="org2",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+                user_id=user_id,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    assert OrganizationRoleBasedAccessChecks._user_is_admin_in_org(user, "org1") == True
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_admin_in_org(user, "org2") == False
+    )
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_admin_in_org(user, "org3") == False
+    )
+
+    # Test with None user_object
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_admin_in_org(None, "org1") == False
+    )
+
+    # Test with user having no organization memberships
+    user_no_orgs = create_user_object(
+        "user_no_orgs", LitellmUserRoles.INTERNAL_USER.value
+    )
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_admin_in_org(user_no_orgs, "org1")
+        == False
+    )
+
+
+def test_user_is_org_admin_in_requested_org():
+    user_id = f"user-{uuid.uuid4()}"
+    user = create_user_object(
+        user_id,
+        LitellmUserRoles.INTERNAL_USER.value,
+        [
+            LiteLLM_OrganizationMembershipTable(
+                organization_id="org1",
+                user_role=LitellmUserRoles.ORG_ADMIN.value,
+                user_id=user_id,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+            LiteLLM_OrganizationMembershipTable(
+                organization_id="org2",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+                user_id=user_id,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            ),
+        ],
+    )
+
+    # Test when user is an admin in the requested org
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_org_admin_in_requested_org(
+            {"organization_id": "org1"}, user
+        )
+        == True
+    )
+
+    # Test when user is not an admin in the requested org
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_org_admin_in_requested_org(
+            {"organization_id": "org2"}, user
+        )
+        == False
+    )
+
+    # Test when requested org is not in user's memberships
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_org_admin_in_requested_org(
+            {"organization_id": "org3"}, user
+        )
+        == False
+    )
+
+    # Test when organization_id is not in the request data
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_org_admin_in_requested_org({}, user)
+        == False
+    )
+
+    # Test with None user_object
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_org_admin_in_requested_org(
+            {"organization_id": "org1"}, None
+        )
+        == False
+    )
+
+    # Test with user having no organization memberships
+    user_no_orgs = create_user_object(
+        "user_no_orgs", LitellmUserRoles.INTERNAL_USER.value
+    )
+    assert (
+        OrganizationRoleBasedAccessChecks._user_is_org_admin_in_requested_org(
+            {"organization_id": "org1"}, user_no_orgs
+        )
+        == False
+    )
