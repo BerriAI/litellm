@@ -32,7 +32,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
-from .auth_checks_organization import organization_role_based_access_check
+from .auth_checks_organization import OrganizationRoleBasedAccessChecks
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -208,7 +208,7 @@ def common_checks(  # noqa: PLR0915
             )
 
     # 10 [OPTIONAL] Organization RBAC checks
-    organization_role_based_access_check(
+    OrganizationRoleBasedAccessChecks.organization_role_based_access_check(
         user_object=user_object, route=route, request_body=request_body
     )
 
