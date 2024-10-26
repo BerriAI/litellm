@@ -54,11 +54,19 @@ def test_completion_pydantic_obj_2():
                                     "type": "array",
                                 },
                             },
+                            "required": [
+                                "name",
+                                "date",
+                                "participants",
+                            ],
                             "type": "object",
                         },
                         "type": "array",
                     }
                 },
+                "required": [
+                    "events",
+                ],
                 "type": "object",
             },
         },
