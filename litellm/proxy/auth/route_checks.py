@@ -248,20 +248,13 @@ class RouteChecks:
             return True
 
         # Check if Org Admin can access info for user_id
-        if prisma_client is not None:
-            # Org Admins can access info for users in their org
-            _queried_user_info = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}, include={"organization_memberships": True}
+        if (
+            await RouteChecks._is_org_admin_for_user_id(
+                user_id=user_id, user_obj=user_obj
             )
-
-            if _queried_user_info is not None:
-
-                for _membership in _queried_user_info.organization_memberships:
-                    if OrganizationRoleBasedAccessChecks._user_is_admin_in_org(
-                        user_object=user_obj,
-                        organization_id=_membership.organization_id,
-                    ):
-                        return True
+            is True
+        ):
+            return True
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -269,3 +262,37 @@ class RouteChecks:
                 user_id, valid_token.user_id
             ),
         )
+
+    @staticmethod
+    async def _is_org_admin_for_user_id(
+        user_id: str, user_obj: Optional[LiteLLM_UserTable]
+    ) -> bool:
+        """
+        Returns True if the user_obj is an admin in any organization that the user_id belongs to.
+
+        When this is true, the user_obj is allowed to access /user/info for user_id
+
+        Args:
+            user_id (str): The user_id to check if the user_obj is an admin for
+            user_obj (LiteLLM_UserTable): The user object containing organization memberships
+
+        Returns:
+            bool: True if user_obj is an admin in any organization that the user_id belongs to, False otherwise
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is not None:
+
+            _queried_user_info = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}, include={"organization_memberships": True}
+            )
+
+            if _queried_user_info is not None:
+                for _membership in _queried_user_info.organization_memberships:
+                    if OrganizationRoleBasedAccessChecks._user_is_admin_in_org(
+                        user_object=user_obj,
+                        organization_id=_membership.organization_id,
+                    ):
+                        return True
+
+        return False
