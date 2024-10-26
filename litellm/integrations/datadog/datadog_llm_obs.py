@@ -1,3 +1,11 @@
+"""
+Implements logging integration with Datadog's LLM Observability Service
+
+
+API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=example#api-standards
+
+"""
+
 import asyncio
 import os
 import traceback
@@ -24,21 +32,22 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
             if os.getenv("DD_API_KEY", None) is None:
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
+            if os.getenv("DD_SITE", None) is None:
+                raise Exception(
+                    "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
+                )
 
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
             self.DD_API_KEY = os.getenv("DD_API_KEY")
+            self.DD_SITE = os.getenv("DD_SITE")
             self.intake_url = (
-                "https://api.us5.datadoghq.com/api/intake/llm-obs/v1/trace/spans"
+                f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
             )
 
-            # Optional - only used for testing
-            dd_base_url = (
-                os.getenv("_DATADOG_BASE_URL")
-                or os.getenv("DATADOG_BASE_URL")
-                or os.getenv("DD_BASE_URL")
-            )
+            # testing base url
+            dd_base_url = os.getenv("DD_BASE_URL")
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
 
