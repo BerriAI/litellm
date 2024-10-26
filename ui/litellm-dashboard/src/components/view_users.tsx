@@ -363,6 +363,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <p className="text-sm text-gray-500">
                         Are you sure you want to delete this user?
                       </p>
+                      <p className="text-sm font-medium text-gray-900 mt-2">
+                        User ID: {userToDelete}
+                      </p>
                     </div>
                   </div>
                 </div>
