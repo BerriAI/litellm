@@ -22,7 +22,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import asyncio
 import logging
-
+from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException, Request
 import pytest
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -111,12 +111,13 @@ def route_checks():
     return RouteChecks()
 
 
-def test_llm_api_route(route_checks):
+@pytest.mark.asyncio
+async def test_llm_api_route(route_checks):
     """
     Internal User is allowed to access all LLM API routes
     """
     assert (
-        route_checks.non_proxy_admin_allowed_routes_check(
+        await route_checks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
             route="/v1/chat/completions",
@@ -129,12 +130,13 @@ def test_llm_api_route(route_checks):
     )
 
 
-def test_key_info_route_allowed(route_checks):
+@pytest.mark.asyncio
+async def test_key_info_route_allowed(route_checks):
     """
     Internal User is allowed to access /key/info route
     """
     assert (
-        route_checks.non_proxy_admin_allowed_routes_check(
+        await route_checks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
             route="/key/info",
@@ -147,12 +149,13 @@ def test_key_info_route_allowed(route_checks):
     )
 
 
-def test_key_info_route_forbidden(route_checks):
+@pytest.mark.asyncio
+async def test_key_info_route_forbidden(route_checks):
     """
     Internal User is not allowed to access /key/info route for a key they're not using in Authenticated API Key
     """
     with pytest.raises(HTTPException) as exc_info:
-        route_checks.non_proxy_admin_allowed_routes_check(
+        await route_checks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
             route="/key/info",
@@ -164,12 +167,13 @@ def test_key_info_route_forbidden(route_checks):
     assert exc_info.value.status_code == 403
 
 
-def test_user_info_route_allowed(route_checks):
+@pytest.mark.asyncio
+async def test_user_info_route_allowed(route_checks):
     """
     Internal User is allowed to access /user/info route for their own user_id
     """
     assert (
-        route_checks.non_proxy_admin_allowed_routes_check(
+        await route_checks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
             route="/user/info",
@@ -182,12 +186,13 @@ def test_user_info_route_allowed(route_checks):
     )
 
 
-def test_user_info_route_forbidden(route_checks):
+@pytest.mark.asyncio
+async def test_user_info_route_forbidden(route_checks):
     """
     Internal User is not allowed to access /user/info route for a different user_id
     """
     with pytest.raises(HTTPException) as exc_info:
-        route_checks.non_proxy_admin_allowed_routes_check(
+        await route_checks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
             route="/user/info",
@@ -197,3 +202,83 @@ def test_user_info_route_forbidden(route_checks):
             request_data={},
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_can_user_access_user_info_own_id():
+    valid_token = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    result = await RouteChecks._can_user_access_user_info(
+        valid_token, user_id="test_user"
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_user_access_user_info_different_id():
+    valid_token = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    with pytest.raises(HTTPException) as exc_info:
+        await RouteChecks._can_user_access_user_info(valid_token, user_id="other_user")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_can_user_access_user_info_org_admin():
+    valid_token = UserAPIKeyAuth(api_key="test_key", user_id="admin_user")
+    user_obj = LiteLLM_UserTable(user_id="admin_user", max_budget=None, user_email=None)
+
+    with patch.object(
+        RouteChecks, "_is_org_admin_for_user_id", new_callable=AsyncMock
+    ) as mock_is_admin:
+        mock_is_admin.return_value = True
+        result = await RouteChecks._can_user_access_user_info(
+            valid_token, user_id="other_user", user_obj=user_obj
+        )
+        assert result is True
+
+
+@pytest.mark.asyncio
+async def test_is_org_admin_for_user_id():
+    user_id = "test_user"
+    admin_user_obj = LiteLLM_UserTable(
+        user_id="admin_user", max_budget=None, user_email=None
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = AsyncMock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_usertable.find_unique.return_value = AsyncMock(
+            organization_memberships=[AsyncMock(organization_id="org1")]
+        )
+
+        with patch(
+            "litellm.proxy.auth.route_checks.OrganizationRoleBasedAccessChecks._user_is_admin_in_org",
+            return_value=True,
+        ):
+            result = await RouteChecks._is_org_admin_for_user_id(
+                user_id, admin_user_obj
+            )
+            assert result is True
+
+
+@pytest.mark.asyncio
+async def test_is_org_admin_for_user_id_not_admin():
+    user_id = "test_user"
+    non_admin_user_obj = LiteLLM_UserTable(
+        user_id="non_admin_user", max_budget=None, user_email=None
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = AsyncMock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_usertable.find_unique.return_value = AsyncMock(
+            organization_memberships=[AsyncMock(organization_id="org1")]
+        )
+
+        with patch(
+            "litellm.proxy.auth.route_checks.OrganizationRoleBasedAccessChecks._user_is_admin_in_org",
+            return_value=False,
+        ):
+            result = await RouteChecks._is_org_admin_for_user_id(
+                user_id, non_admin_user_obj
+            )
+            assert result is False
