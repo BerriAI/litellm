@@ -49,6 +49,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langsmith",
     "prometheus",
     "datadog",
+    "datadog_llm_observability",
     "galileo",
     "braintrust",
     "arize",

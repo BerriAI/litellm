@@ -64,6 +64,7 @@ from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.datadog.datadog import DataDogLogger
+from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
@@ -2205,6 +2206,10 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _datadog_logger = DataDogLogger()
         _in_memory_loggers.append(_datadog_logger)
         return _datadog_logger  # type: ignore
+    elif logging_integration == "datadog_llm_observability":
+        _datadog_llm_obs_logger = DataDogLLMObsLogger()
+        _in_memory_loggers.append(_datadog_llm_obs_logger)
+        return _datadog_llm_obs_logger  # type: ignore
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
@@ -2371,6 +2376,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):
+                return callback
+    elif logging_integration == "datadog_llm_observability":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, DataDogLLMObsLogger):
                 return callback
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
