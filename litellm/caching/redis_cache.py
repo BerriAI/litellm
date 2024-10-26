@@ -143,7 +143,17 @@ class RedisCache(BaseCache):
         )
         key = self.check_and_fix_namespace(key=key)
         try:
+            start_time = time.time()
             self.redis_client.set(name=key, value=str(value), ex=ttl)
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type="set_cache",
+                start_time=start_time,
+                end_time=end_time,
+            )
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             print_verbose(
@@ -157,14 +167,44 @@ class RedisCache(BaseCache):
         start_time = time.time()
         set_ttl = self.get_ttl(ttl=ttl)
         try:
+            start_time = time.time()
             result: int = _redis_client.incr(name=key, amount=value)  # type: ignore
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type="increment_cache",
+                start_time=start_time,
+                end_time=end_time,
+            )
 
             if set_ttl is not None:
                 # check if key already has ttl, if not -> set ttl
+                start_time = time.time()
                 current_ttl = _redis_client.ttl(key)
+                end_time = time.time()
+                _duration = end_time - start_time
+                self.service_logger_obj.service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    call_type="increment_cache_ttl",
+                    start_time=start_time,
+                    end_time=end_time,
+                )
                 if current_ttl == -1:
                     # Key has no expiration
+                    start_time = time.time()
                     _redis_client.expire(key, set_ttl)  # type: ignore
+                    end_time = time.time()
+                    _duration = end_time - start_time
+                    self.service_logger_obj.service_success_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="increment_cache_expire",
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
             return result
         except Exception as e:
             ## LOGGING ##
@@ -565,7 +605,17 @@ class RedisCache(BaseCache):
         try:
             key = self.check_and_fix_namespace(key=key)
             print_verbose(f"Get Redis Cache: key: {key}")
+            start_time = time.time()
             cached_response = self.redis_client.get(key)
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type="get_cache",
+                start_time=start_time,
+                end_time=end_time,
+            )
             print_verbose(
                 f"Got Redis Cache: key: {key}, cached_response {cached_response}"
             )
@@ -586,7 +636,17 @@ class RedisCache(BaseCache):
             for cache_key in key_list:
                 cache_key = self.check_and_fix_namespace(key=cache_key)
                 _keys.append(cache_key)
+            start_time = time.time()
             results: List = self.redis_client.mget(keys=_keys)  # type: ignore
+            end_time = time.time()
+            _duration = end_time - start_time
+            self.service_logger_obj.service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=_duration,
+                call_type="batch_get_cache",
+                start_time=start_time,
+                end_time=end_time,
+            )
 
             # Associate the results back with their keys.
             # 'results' is a list of values corresponding to the order of keys in 'key_list'.
@@ -725,6 +785,8 @@ class RedisCache(BaseCache):
                 service=ServiceTypes.REDIS,
                 duration=_duration,
                 call_type="sync_ping",
+                start_time=start_time,
+                end_time=end_time,
             )
             return response
         except Exception as e:
