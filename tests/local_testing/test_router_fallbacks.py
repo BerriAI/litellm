@@ -1351,6 +1351,8 @@ def test_router_fallbacks_with_custom_model_costs():
             "litellm_params": {
                 "model": "claude-3-5-sonnet-20240620",
                 "api_key": os.environ["ANTHROPIC_API_KEY"],
+                "input_cost_per_token": 30,
+                "output_cost_per_token": 60,
             },
         },
         {
@@ -1377,4 +1379,22 @@ def test_router_fallbacks_with_custom_model_costs():
 
     model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
 
+    print(f"key: {model_info['key']}")
+
     assert model_info["litellm_provider"] == "anthropic"
+
+    response = router.completion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    print(f"response_cost: {response._hidden_params['response_cost']}")
+
+    assert response._hidden_params["response_cost"] > 10
+
+    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+
+    print(f"key: {model_info['key']}")
+
+    assert model_info["input_cost_per_token"] == 30
+    assert model_info["output_cost_per_token"] == 60
