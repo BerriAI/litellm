@@ -2,6 +2,10 @@
 
 LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 
+All exceptions can be imported from `litellm` - e.g. `from litellm import BadRequestError`
+
+## LiteLLM Exceptions
+
 | Status Code | Error Type               | Inherits from | Description |
 |-------------|--------------------------|---------------|-------------|
 | 400         | BadRequestError          | openai.BadRequestError |
@@ -16,12 +20,11 @@ LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 | 422         | UnprocessableEntityError | openai.UnprocessableEntityError |
 | 429         | RateLimitError           | openai.RateLimitError |
 | 500         | APIConnectionError       | openai.APIConnectionError | If any unmapped error is returned, we return this error |
-| 500         | APIError (deprecated error, use InternalServerError instead) | openai.APIError | Generic 500-status code error | 
+| 500         | APIError | openai.APIError | Generic 500-status code error | 
 | 503 | ServiceUnavailableError | openai.APIStatusError | If provider returns a service unavailable error, this error is raised |
 | >=500       | InternalServerError      | openai.InternalServerError | If any unmapped 500-status code error is returned, this error is raised |
 | N/A         | APIResponseValidationError | openai.APIResponseValidationError | If Rules are used, and request/response fails a rule, this error is raised |
 | N/A | BudgetExceededError | Exception | Raised for proxy, when budget is exceeded |
-
 | N/A | JSONSchemaValidationError | litellm.APIResponseValidationError | Raised when response does not match expected json schema - used if `response_schema` param passed in with `enforce_validation=True` |
 | N/A | MockException | Exception | Internal exception, raised by mock_completion class. Do not use directly | 
 | N/A | OpenAIError | openai.OpenAIError | Deprecated internal exception, inherits from openai.OpenAIError. |

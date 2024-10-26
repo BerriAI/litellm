@@ -933,12 +933,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "input_cost_per_token": input_cost_per_token,
                         "output_cost_per_token": output_cost_per_token,
                         "litellm_provider": custom_llm_provider,
-                    },
-                    model: {
-                        "input_cost_per_token": input_cost_per_token,
-                        "output_cost_per_token": output_cost_per_token,
-                        "litellm_provider": custom_llm_provider,
-                    },
+                    }
                 }
             )
         elif (
@@ -951,12 +946,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "input_cost_per_second": input_cost_per_second,
                         "output_cost_per_second": output_cost_per_second,
                         "litellm_provider": custom_llm_provider,
-                    },
-                    model: {
-                        "input_cost_per_second": input_cost_per_second,
-                        "output_cost_per_second": output_cost_per_second,
-                        "litellm_provider": custom_llm_provider,
-                    },
+                    }
                 }
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
@@ -3331,7 +3321,7 @@ def embedding(  # noqa: PLR0915
     if input_cost_per_token is not None and output_cost_per_token is not None:
         litellm.register_model(
             {
-                model: {
+                f"{custom_llm_provider}/{model}": {
                     "input_cost_per_token": input_cost_per_token,
                     "output_cost_per_token": output_cost_per_token,
                     "litellm_provider": custom_llm_provider,
@@ -3342,7 +3332,7 @@ def embedding(  # noqa: PLR0915
         output_cost_per_second = output_cost_per_second or 0.0
         litellm.register_model(
             {
-                model: {
+                f"{custom_llm_provider}/{model}": {
                     "input_cost_per_second": input_cost_per_second,
                     "output_cost_per_second": output_cost_per_second,
                     "litellm_provider": custom_llm_provider,
