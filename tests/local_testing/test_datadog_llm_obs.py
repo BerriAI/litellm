@@ -28,10 +28,12 @@ async def test_datadog_llm_obs_logging():
     datadog_llm_obs_logger = DataDogLLMObsLogger()
     litellm.callbacks = [datadog_llm_obs_logger]
     litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="gpt-4o", messages=["Hello, world!"], mock_response="hi"
-    )
 
-    print(response)
+    for _ in range(2):
+        response = await litellm.acompletion(
+            model="gpt-4o", messages=["Hello testing dd llm obs!"], mock_response="hi"
+        )
+
+        print(response)
 
     await asyncio.sleep(6)

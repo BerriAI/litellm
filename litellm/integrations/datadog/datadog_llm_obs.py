@@ -44,6 +44,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
+            self.log_queue: List[LLMObsPayload] = []
             super().__init__(**kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
@@ -78,17 +79,17 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             # Prepare the payload
             payload = {
-                "data": {
-                    "type": "span",
-                    "attributes": {
-                        "ml_app": "litellm",
-                        "tags": [
+                "data": DDIntakePayload(
+                    type="span",
+                    attributes=DDSpanAttributes(
+                        ml_app="litellm",
+                        tags=[
                             "service:litellm",
                             f"env:{os.getenv('DD_ENV', 'production')}",
                         ],
-                        "spans": self.log_queue,
-                    },
-                }
+                        spans=self.log_queue,
+                    ),
+                ),
             }
 
             response = await self.async_client.post(
@@ -112,17 +113,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             self.log_queue.clear()
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
-            import traceback
-
-            traceback.print_exc()
-
-    from litellm.types.integrations.datadog_llm_obs import (
-        InputMeta,
-        LLMMetrics,
-        LLMObsPayload,
-        Meta,
-        OutputMeta,
-    )
 
     def create_llm_obs_payload(
         self, kwargs: Dict, response_obj: Any, start_time: datetime, end_time: datetime
@@ -137,16 +127,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
         input_meta = InputMeta(messages=messages)
-        output_meta = OutputMeta(
-            messages=[
-                {
-                    "content": response_obj.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", ""),
-                    "role": "assistant",
-                }
-            ]
-        )
+        output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
 
         meta = Meta(kind="llm", input=input_meta, output=output_meta)
 
@@ -167,3 +148,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
         )
+
+    def _get_response_messages(self, response_obj: Any) -> List[Any]:
+        """
+        Get the messages from the response object
+
+        for now this handles logging /chat/completions responses
+        """
+        if isinstance(response_obj, litellm.ModelResponse):
+            return [response_obj["choices"][0]["message"].json()]
+        return []

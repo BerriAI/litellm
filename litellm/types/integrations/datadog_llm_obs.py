@@ -39,3 +39,14 @@ class LLMObsPayload(TypedDict):
     start_ns: int
     duration: int
     metrics: LLMMetrics
+
+
+class DDSpanAttributes(TypedDict):
+    ml_app: str
+    tags: List[str]
+    spans: List[LLMObsPayload]
+
+
+class DDIntakePayload(TypedDict):
+    type: str
+    attributes: DDSpanAttributes
