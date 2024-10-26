@@ -138,7 +138,7 @@ def _is_ui_route_allowed(
             )
 
 
-def _is_api_route_allowed(
+async def _is_api_route_allowed(
     route: str,
     request: Request,
     request_data: dict,
@@ -155,7 +155,7 @@ def _is_api_route_allowed(
         raise Exception("Invalid proxy server token passed")
 
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
-        RouteChecks.non_proxy_admin_allowed_routes_check(
+        await RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=_user_role,
             route=route,
@@ -167,7 +167,7 @@ def _is_api_route_allowed(
     return True
 
 
-def _is_allowed_route(
+async def _is_allowed_route(
     route: str,
     token_type: Literal["ui", "api"],
     request: Request,
@@ -182,7 +182,7 @@ def _is_allowed_route(
     if token_type == "ui":
         return _is_ui_route_allowed(route=route, user_obj=user_obj)
     else:
-        return _is_api_route_allowed(
+        return await _is_api_route_allowed(
             route=route,
             request=request,
             request_data=request_data,
@@ -1137,7 +1137,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             if token_team is not None and token_team == "litellm-dashboard"
             else "api"
         )
-        _is_route_allowed = _is_allowed_route(
+        _is_route_allowed = await _is_allowed_route(
             route=route,
             token_type=token_type,
             user_obj=user_obj,
