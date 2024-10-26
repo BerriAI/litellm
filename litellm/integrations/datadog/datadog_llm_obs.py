@@ -135,7 +135,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         messages = standard_logging_payload["messages"]
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
-        input_meta = InputMeta(messages=messages)
+        input_meta = InputMeta(messages=messages)  # type: ignore
         output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
 
         meta = Meta(kind="llm", input=input_meta, output=output_meta)
