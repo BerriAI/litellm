@@ -104,7 +104,7 @@ class LitellmUserRoles(str, enum.Enum):
         return ui_labels.get(self.value, "")
 
 
-class LitellmTableNames(enum.Enum):
+class LitellmTableNames(str, enum.Enum):
     """
     Enum for Table Names used by LiteLLM
     """

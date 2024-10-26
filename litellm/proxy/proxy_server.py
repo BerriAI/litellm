@@ -194,6 +194,7 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
+from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -6398,11 +6399,7 @@ async def list_end_user(
         --header 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
@@ -6431,38 +6428,6 @@ async def list_end_user(
     for item in response:
         returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
     return returned_response
-
-
-async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
-    if premium_user is not True:
-        return
-
-    if litellm.store_audit_logs is not True:
-        return
-    if prisma_client is None:
-        raise Exception("prisma_client is None, no DB connected")
-
-    verbose_proxy_logger.debug("creating audit log for %s", request_data)
-
-    if isinstance(request_data.updated_values, dict):
-        request_data.updated_values = json.dumps(request_data.updated_values)
-
-    if isinstance(request_data.before_value, dict):
-        request_data.before_value = json.dumps(request_data.before_value)
-
-    _request_data = request_data.dict(exclude_none=True)
-
-    try:
-        await prisma_client.db.litellm_auditlog.create(
-            data={
-                **_request_data,  # type: ignore
-            }
-        )
-    except Exception as e:
-        # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error(f"Failed Creating audit log {e}")
-
-    return
 
 
 #### BUDGET TABLE MANAGEMENT ####
