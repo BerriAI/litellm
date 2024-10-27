@@ -25,6 +25,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -50,6 +51,7 @@ from litellm._logging import verbose_router_logger
 from litellm.assistants.main import AssistantDeleted
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -139,6 +141,13 @@ from litellm.utils import (
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class RoutingArgs(enum.Enum):
@@ -793,6 +802,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -801,7 +811,10 @@ class Router:
             )
 
             # debug how often this deployment picked
-            self._track_deployment_metrics(deployment=deployment)
+
+            self._track_deployment_metrics(
+                deployment=deployment, parent_otel_span=parent_otel_span
+            )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             data = deployment["litellm_params"].copy()
@@ -872,7 +885,11 @@ class Router:
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
             # debug how often this deployment picked
-            self._track_deployment_metrics(deployment=deployment, response=response)
+            self._track_deployment_metrics(
+                deployment=deployment,
+                response=response,
+                parent_otel_span=parent_otel_span,
+            )
 
             return response
         except Exception as e:
@@ -3217,8 +3234,10 @@ class Router:
             if _model is None:
                 raise e  # re-raise error, if model can't be determined for loadbalancing
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             _healthy_deployments, _all_deployments = self._get_healthy_deployments(
                 model=_model,
+                parent_otel_span=parent_otel_span,
             )
 
             # raises an exception if this error should not be retries
@@ -3260,8 +3279,10 @@ class Router:
 
                     if _model is None:
                         raise e  # re-raise error, if model can't be determined for loadbalancing
+                    parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                     _healthy_deployments, _ = self._get_healthy_deployments(
                         model=_model,
+                        parent_otel_span=parent_otel_span,
                     )
                     remaining_retries = num_retries - current_attempt
                     _timeout = self._time_to_sleep_before_retry(
@@ -3323,9 +3344,13 @@ class Router:
                 # ------------
                 # update cache
 
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 ## TPM
                 await self.cache.async_increment_cache(
-                    key=tpm_key, value=total_tokens, ttl=RoutingArgs.ttl.value
+                    key=tpm_key,
+                    value=total_tokens,
+                    parent_otel_span=parent_otel_span,
+                    ttl=RoutingArgs.ttl.value,
                 )
 
                 increment_deployment_successes_for_current_minute(
@@ -3474,7 +3499,9 @@ class Router:
         except Exception as e:
             raise e
 
-    def _update_usage(self, deployment_id: str) -> int:
+    def _update_usage(
+        self, deployment_id: str, parent_otel_span: Optional[Span]
+    ) -> int:
         """
         Update deployment rpm for that minute
 
@@ -3483,7 +3510,9 @@ class Router:
         """
         rpm_key = deployment_id
 
-        request_count = self.cache.get_cache(key=rpm_key, local_only=True)
+        request_count = self.cache.get_cache(
+            key=rpm_key, parent_otel_span=parent_otel_span, local_only=True
+        )
         if request_count is None:
             request_count = 1
             self.cache.set_cache(
@@ -3591,7 +3620,7 @@ class Router:
         )
         return False
 
-    def _get_healthy_deployments(self, model: str):
+    def _get_healthy_deployments(self, model: str, parent_otel_span: Optional[Span]):
         _all_deployments: list = []
         try:
             _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
@@ -3602,7 +3631,9 @@ class Router:
         except Exception:
             pass
 
-        unhealthy_deployments = _get_cooldown_deployments(litellm_router_instance=self)
+        unhealthy_deployments = _get_cooldown_deployments(
+            litellm_router_instance=self, parent_otel_span=parent_otel_span
+        )
         healthy_deployments: list = []
         for deployment in _all_deployments:
             if deployment["model_info"]["id"] in unhealthy_deployments:
@@ -4646,14 +4677,19 @@ class Router:
             The appropriate client based on the given client_type and kwargs.
         """
         model_id = deployment["model_info"]["id"]
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(kwargs)
         if client_type == "max_parallel_requests":
             cache_key = "{}_max_parallel_requests_client".format(model_id)
-            client = self.cache.get_cache(key=cache_key, local_only=True)
+            client = self.cache.get_cache(
+                key=cache_key, local_only=True, parent_otel_span=parent_otel_span
+            )
             return client
         elif client_type == "async":
             if kwargs.get("stream") is True:
                 cache_key = f"{model_id}_stream_async_client"
-                client = self.cache.get_cache(key=cache_key, local_only=True)
+                client = self.cache.get_cache(
+                    key=cache_key, local_only=True, parent_otel_span=parent_otel_span
+                )
                 if client is None:
                     """
                     Re-initialize the client
@@ -4661,11 +4697,17 @@ class Router:
                     InitalizeOpenAISDKClient.set_client(
                         litellm_router_instance=self, model=deployment
                     )
-                    client = self.cache.get_cache(key=cache_key, local_only=True)
+                    client = self.cache.get_cache(
+                        key=cache_key,
+                        local_only=True,
+                        parent_otel_span=parent_otel_span,
+                    )
                 return client
             else:
                 cache_key = f"{model_id}_async_client"
-                client = self.cache.get_cache(key=cache_key, local_only=True)
+                client = self.cache.get_cache(
+                    key=cache_key, local_only=True, parent_otel_span=parent_otel_span
+                )
                 if client is None:
                     """
                     Re-initialize the client
@@ -4673,12 +4715,18 @@ class Router:
                     InitalizeOpenAISDKClient.set_client(
                         litellm_router_instance=self, model=deployment
                     )
-                    client = self.cache.get_cache(key=cache_key, local_only=True)
+                    client = self.cache.get_cache(
+                        key=cache_key,
+                        local_only=True,
+                        parent_otel_span=parent_otel_span,
+                    )
                 return client
         else:
             if kwargs.get("stream") is True:
                 cache_key = f"{model_id}_stream_client"
-                client = self.cache.get_cache(key=cache_key)
+                client = self.cache.get_cache(
+                    key=cache_key, parent_otel_span=parent_otel_span
+                )
                 if client is None:
                     """
                     Re-initialize the client
@@ -4686,11 +4734,15 @@ class Router:
                     InitalizeOpenAISDKClient.set_client(
                         litellm_router_instance=self, model=deployment
                     )
-                    client = self.cache.get_cache(key=cache_key)
+                    client = self.cache.get_cache(
+                        key=cache_key, parent_otel_span=parent_otel_span
+                    )
                 return client
             else:
                 cache_key = f"{model_id}_client"
-                client = self.cache.get_cache(key=cache_key)
+                client = self.cache.get_cache(
+                    key=cache_key, parent_otel_span=parent_otel_span
+                )
                 if client is None:
                     """
                     Re-initialize the client
@@ -4698,7 +4750,9 @@ class Router:
                     InitalizeOpenAISDKClient.set_client(
                         litellm_router_instance=self, model=deployment
                     )
-                    client = self.cache.get_cache(key=cache_key)
+                    client = self.cache.get_cache(
+                        key=cache_key, parent_otel_span=parent_otel_span
+                    )
                 return client
 
     def _pre_call_checks(  # noqa: PLR0915
@@ -4738,13 +4792,17 @@ class Router:
         _context_window_error = False
         _potential_error_str = ""
         _rate_limit_error = False
+        parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
         ## get model group RPM ##
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
         rpm_key = f"{model}:rpm:{current_minute}"
         model_group_cache = (
-            self.cache.get_cache(key=rpm_key, local_only=True) or {}
+            self.cache.get_cache(
+                key=rpm_key, local_only=True, parent_otel_span=parent_otel_span
+            )
+            or {}
         )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
         for idx, deployment in enumerate(_returned_deployments):
             # see if we have the info for this model
@@ -4783,7 +4841,10 @@ class Router:
             ## RPM CHECK ##
             ### get local router cache ###
             current_request_cache_local = (
-                self.cache.get_cache(key=model_id, local_only=True) or 0
+                self.cache.get_cache(
+                    key=model_id, local_only=True, parent_otel_span=parent_otel_span
+                )
+                or 0
             )
             ### get usage based cache ###
             if (
@@ -5053,15 +5114,17 @@ class Router:
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
-
+            parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
             if len(healthy_deployments) == 0:
                 if _allowed_model_region is None:
                     _allowed_model_region = "n/a"
                 model_ids = self.get_model_ids(model_name=model)
                 _cooldown_time = self.cooldown_cache.get_min_cooldown(
-                    model_ids=model_ids
+                    model_ids=model_ids, parent_otel_span=parent_otel_span
                 )
-                _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
+                _cooldown_list = _get_cooldown_deployments(
+                    litellm_router_instance=self, parent_otel_span=parent_otel_span
+                )
                 raise RouterRateLimitError(
                     model=model,
                     cooldown_time=_cooldown_time,
@@ -5107,9 +5170,11 @@ class Router:
                 )
                 model_ids = self.get_model_ids(model_name=model)
                 _cooldown_time = self.cooldown_cache.get_min_cooldown(
-                    model_ids=model_ids
+                    model_ids=model_ids, parent_otel_span=parent_otel_span
                 )
-                _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
+                _cooldown_list = _get_cooldown_deployments(
+                    litellm_router_instance=self, parent_otel_span=parent_otel_span
+                )
                 raise RouterRateLimitError(
                     model=model,
                     cooldown_time=_cooldown_time,
@@ -5163,7 +5228,12 @@ class Router:
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
 
-        cooldown_deployments = _get_cooldown_deployments(litellm_router_instance=self)
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
+            request_kwargs
+        )
+        cooldown_deployments = _get_cooldown_deployments(
+            litellm_router_instance=self, parent_otel_span=parent_otel_span
+        )
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
@@ -5180,8 +5250,12 @@ class Router:
 
         if len(healthy_deployments) == 0:
             model_ids = self.get_model_ids(model_name=model)
-            _cooldown_time = self.cooldown_cache.get_min_cooldown(model_ids=model_ids)
-            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
+            _cooldown_time = self.cooldown_cache.get_min_cooldown(
+                model_ids=model_ids, parent_otel_span=parent_otel_span
+            )
+            _cooldown_list = _get_cooldown_deployments(
+                litellm_router_instance=self, parent_otel_span=parent_otel_span
+            )
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -5238,8 +5312,12 @@ class Router:
                 f"get_available_deployment for model: {model}, No deployment available"
             )
             model_ids = self.get_model_ids(model_name=model)
-            _cooldown_time = self.cooldown_cache.get_min_cooldown(model_ids=model_ids)
-            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self)
+            _cooldown_time = self.cooldown_cache.get_min_cooldown(
+                model_ids=model_ids, parent_otel_span=parent_otel_span
+            )
+            _cooldown_list = _get_cooldown_deployments(
+                litellm_router_instance=self, parent_otel_span=parent_otel_span
+            )
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -5278,7 +5356,9 @@ class Router:
             healthy_deployments.remove(deployment)
         return healthy_deployments
 
-    def _track_deployment_metrics(self, deployment, response=None):
+    def _track_deployment_metrics(
+        self, deployment, parent_otel_span: Optional[Span], response=None
+    ):
         """
         Tracks successful requests rpm usage.
         """
@@ -5288,7 +5368,9 @@ class Router:
 
                 # update self.deployment_stats
                 if model_id is not None:
-                    self._update_usage(model_id)  # update in-memory cache for tracking
+                    self._update_usage(
+                        model_id, parent_otel_span
+                    )  # update in-memory cache for tracking
         except Exception as e:
             verbose_router_logger.error(f"Error in _track_deployment_metrics: {str(e)}")
 

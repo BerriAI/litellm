@@ -8,7 +8,14 @@ Has 4 methods:
     - async_get_cache
 """
 
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class BaseCache:
@@ -26,7 +33,7 @@ class BaseCache:
     async def async_set_cache(self, key, value, **kwargs):
         raise NotImplementedError
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
         raise NotImplementedError
 
     async def async_get_cache(self, key, **kwargs):

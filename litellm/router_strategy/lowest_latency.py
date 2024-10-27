@@ -3,7 +3,7 @@
 import random
 import traceback
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -11,6 +11,14 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class LiteLLMBase(BaseModel):
@@ -115,8 +123,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-
-                request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+                request_count_dict = (
+                    self.router_cache.get_cache(
+                        key=latency_key, parent_otel_span=parent_otel_span
+                    )
+                    or {}
+                )
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -213,7 +226,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     """
                     latency_key = f"{model_group}_map"
                     request_count_dict = (
-                        self.router_cache.get_cache(key=latency_key) or {}
+                        await self.router_cache.async_get_cache(key=latency_key) or {}
                     )
 
                     if id not in request_count_dict:
@@ -316,8 +329,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-
-                request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=latency_key) or {}
+                )
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -394,7 +408,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
         latency_key = f"{model_group}_map"
         _latency_per_deployment = {}
 
-        request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
+            request_kwargs
+        )
+        request_count_dict = (
+            self.router_cache.get_cache(
+                key=latency_key, parent_otel_span=parent_otel_span
+            )
+            or {}
+        )
 
         # -----------------------
         # Find lowest used model
