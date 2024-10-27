@@ -2853,7 +2853,7 @@ class Router:
                     Context_Policy_Fallbacks={content_policy_fallbacks}",
             )
 
-    async def async_function_with_retries(self, *args, **kwargs):
+    async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
         verbose_router_logger.debug(
             f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
         )
