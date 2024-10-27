@@ -859,12 +859,16 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, logging_obj=logging_obj
+                        deployment=deployment,
+                        logging_obj=logging_obj,
+                        parent_otel_span=parent_otel_span,
                     )
                     response = await _response
             else:
                 await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, logging_obj=logging_obj
+                    deployment=deployment,
+                    logging_obj=logging_obj,
+                    parent_otel_span=parent_otel_span,
                 )
                 response = await _response
 
@@ -1370,6 +1374,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
@@ -1412,11 +1417,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response
 
             self.success_calls[model_name] += 1
@@ -1482,6 +1489,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _atranscription()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
@@ -1522,11 +1530,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response
 
             self.success_calls[model_name] += 1
@@ -1878,6 +1888,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
@@ -1920,11 +1931,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response
 
             self.success_calls[model_name] += 1
@@ -1975,6 +1988,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _aadapter_completion()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "default text"}],
@@ -2017,11 +2031,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response  # type: ignore
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
@@ -2145,6 +2161,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _aembedding()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 input=input,
@@ -2185,11 +2202,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response
 
             self.success_calls[model_name] += 1
@@ -2240,6 +2259,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "files-api-fake-text"}],
@@ -2290,11 +2310,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response  # type: ignore
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
@@ -2344,6 +2366,7 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _acreate_batch()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "files-api-fake-text"}],
@@ -2406,11 +2429,13 @@ class Router:
                     - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
                     """
                     await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment
+                        deployment=deployment, parent_otel_span=parent_otel_span
                     )
                     response = await response  # type: ignore
             else:
-                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
                 response = await response  # type: ignore
 
             self.success_calls[model_name] += 1
@@ -3690,7 +3715,10 @@ class Router:
                 _callback.pre_call_check(deployment)
 
     async def async_routing_strategy_pre_call_checks(
-        self, deployment: dict, logging_obj: Optional[LiteLLMLogging] = None
+        self,
+        deployment: dict,
+        parent_otel_span: Optional[Span],
+        logging_obj: Optional[LiteLLMLogging] = None,
     ):
         """
         For usage-based-routing-v2, enables running rpm checks before the call is made, inside the semaphore.
@@ -3706,7 +3734,7 @@ class Router:
         for _callback in litellm.callbacks:
             if isinstance(_callback, CustomLogger):
                 try:
-                    await _callback.async_pre_call_check(deployment)
+                    await _callback.async_pre_call_check(deployment, parent_otel_span)
                 except litellm.RateLimitError as e:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:

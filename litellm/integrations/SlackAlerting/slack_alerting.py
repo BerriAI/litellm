@@ -268,6 +268,7 @@ class SlackAlerting(CustomBatchLogger):
                         SlackAlertingCacheKeys.failed_requests_key.value,
                     ),
                     value=1,
+                    parent_otel_span=None,  # no attached request, this is a background operation
                 )
 
                 return_val += 1
@@ -279,6 +280,7 @@ class SlackAlerting(CustomBatchLogger):
                         deployment_metrics.id, SlackAlertingCacheKeys.latency_key.value
                     ),
                     value=deployment_metrics.latency_per_output_token,
+                    parent_otel_span=None,  # no attached request, this is a background operation
                 )
 
                 return_val += 1

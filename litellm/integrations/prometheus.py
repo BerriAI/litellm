@@ -397,7 +397,7 @@ class PrometheusLogger(CustomLogger):
 
         # input, output, total token metrics
         self._increment_token_metrics(
-            standard_logging_payload=standard_logging_payload,
+            standard_logging_payload=standard_logging_payload,  # type: ignore
             end_user_id=end_user_id,
             user_api_key=user_api_key,
             user_api_key_alias=user_api_key_alias,
@@ -432,7 +432,7 @@ class PrometheusLogger(CustomLogger):
             user_api_key_alias=user_api_key_alias,
             user_api_team=user_api_team,
             user_api_team_alias=user_api_team_alias,
-            standard_logging_payload=standard_logging_payload,
+            standard_logging_payload=standard_logging_payload,  # type: ignore
         )
 
         # set x-ratelimit headers

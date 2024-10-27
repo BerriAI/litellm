@@ -33,7 +33,7 @@ class BaseCache:
     async def async_set_cache(self, key, value, **kwargs):
         raise NotImplementedError
 
-    def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
+    def get_cache(self, key, **kwargs):
         raise NotImplementedError
 
     async def async_get_cache(self, key, **kwargs):
