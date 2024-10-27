@@ -84,13 +84,18 @@ class CooldownCache:
             raise e
 
     async def async_get_active_cooldowns(
-        self, model_ids: List[str]
+        self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = await self.cache.async_batch_get_cache(keys=keys) or []
+        results = (
+            await self.cache.async_batch_get_cache(
+                keys=keys, parent_otel_span=parent_otel_span
+            )
+            or []
+        )
 
         active_cooldowns = []
         # Process the results
@@ -106,7 +111,6 @@ class CooldownCache:
     ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
-
         # Retrieve the values for the keys using mget
         results = (
             self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)

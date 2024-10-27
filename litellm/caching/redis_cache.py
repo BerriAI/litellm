@@ -673,7 +673,9 @@ class RedisCache(BaseCache):
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
             return key_value_dict
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(
+        self, key, parent_otel_span: Optional[Span] = None, **kwargs
+    ):
         from redis.asyncio import Redis
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
@@ -697,7 +699,7 @@ class RedisCache(BaseCache):
                         call_type="async_get_cache",
                         start_time=start_time,
                         end_time=end_time,
-                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        parent_otel_span=parent_otel_span,
                         event_metadata={"key": key},
                     )
                 )
@@ -714,7 +716,7 @@ class RedisCache(BaseCache):
                         call_type="async_get_cache",
                         start_time=start_time,
                         end_time=end_time,
-                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        parent_otel_span=parent_otel_span,
                         event_metadata={"key": key},
                     )
                 )
@@ -723,10 +725,13 @@ class RedisCache(BaseCache):
                     f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}"
                 )
 
-    async def async_batch_get_cache(self, key_list) -> dict:
+    async def async_batch_get_cache(
+        self, key_list: List[str], parent_otel_span: Optional[Span] = None
+    ) -> dict:
         """
         Use Redis for bulk read operations
         """
+
         _redis_client = await self.init_async_client()
         key_value_dict = {}
         start_time = time.time()
@@ -748,6 +753,7 @@ class RedisCache(BaseCache):
                     call_type="async_batch_get_cache",
                     start_time=start_time,
                     end_time=end_time,
+                    parent_otel_span=parent_otel_span,
                 )
             )
 
@@ -775,6 +781,7 @@ class RedisCache(BaseCache):
                     call_type="async_batch_get_cache",
                     start_time=start_time,
                     end_time=end_time,
+                    parent_otel_span=parent_otel_span,
                 )
             )
             print_verbose(f"Error occurred in pipeline read - {str(e)}")

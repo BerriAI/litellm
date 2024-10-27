@@ -170,7 +170,13 @@ class DualCache(BaseCache):
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
-    async def async_get_cache(self, key, local_only: bool = False, **kwargs):
+    async def async_get_cache(
+        self,
+        key,
+        parent_otel_span: Optional[Span] = None,
+        local_only: bool = False,
+        **kwargs,
+    ):
         # Try to fetch from in-memory cache first
         try:
             print_verbose(
@@ -188,7 +194,9 @@ class DualCache(BaseCache):
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
-                redis_result = await self.redis_cache.async_get_cache(key, **kwargs)
+                redis_result = await self.redis_cache.async_get_cache(
+                    key, parent_otel_span=parent_otel_span
+                )
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
@@ -204,7 +212,11 @@ class DualCache(BaseCache):
             verbose_logger.error(traceback.format_exc())
 
     async def async_batch_get_cache(
-        self, keys: list, local_only: bool = False, **kwargs
+        self,
+        keys: list,
+        parent_otel_span: Optional[Span] = None,
+        local_only: bool = False,
+        **kwargs,
     ):
         try:
             result = [None for _ in range(len(keys))]
@@ -225,7 +237,7 @@ class DualCache(BaseCache):
                 ]
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result = await self.redis_cache.async_batch_get_cache(
-                    sublist_keys, **kwargs
+                    sublist_keys, parent_otel_span=parent_otel_span
                 )
 
                 if redis_result is not None:

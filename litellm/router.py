@@ -126,6 +126,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import OPENAI_RESPONSE_HEADERS
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import (
@@ -301,6 +302,8 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
+
+        from litellm._service_logger import ServiceLogging
 
         if semaphore:
             self.semaphore = semaphore
@@ -503,7 +506,7 @@ class Router:
             f"Routing context window fallbacks: {self.context_window_fallbacks}\n\n"
             f"Router Redis Caching={self.cache.redis_cache}\n"
         )
-
+        self.service_logger_obj = ServiceLogging()
         self.routing_strategy_args = routing_strategy_args
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
@@ -771,10 +774,23 @@ class Router:
 
             request_priority = kwargs.get("priority") or self.default_priority
 
+            start_time = time.time()
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.ROUTER,
+                    duration=_duration,
+                    call_type="acompletion",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                )
+            )
 
             return response
         except Exception as e:
@@ -803,11 +819,24 @@ class Router:
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            start_time = time.time()
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
+            )
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.ROUTER,
+                    duration=_duration,
+                    call_type="async_get_available_deployment",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                )
             )
 
             # debug how often this deployment picked
@@ -1233,6 +1262,7 @@ class Router:
         stream=False,
         **kwargs,
     ):
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
         ### FLOW ITEM ###
         _request_id = str(uuid.uuid4())
         item = FlowItem(
@@ -1253,7 +1283,7 @@ class Router:
 
         while curr_time < end_time:
             _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model
+                model=model, parent_otel_span=parent_otel_span
             )
             make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
                 id=item.request_id,
@@ -2744,12 +2774,14 @@ class Router:
                     )
                     return response
             except Exception as new_exception:
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 verbose_router_logger.error(
                     "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
                         str(new_exception),
                         traceback.format_exc(),
                         await _async_get_cooldown_deployments_with_debug_info(
-                            litellm_router_instance=self
+                            litellm_router_instance=self,
+                            parent_otel_span=parent_otel_span,
                         ),
                     )
                 )
@@ -2827,6 +2859,7 @@ class Router:
         )
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
@@ -2864,6 +2897,7 @@ class Router:
             _healthy_deployments, _all_deployments = (
                 await self._async_get_healthy_deployments(
                     model=kwargs.get("model") or "",
+                    parent_otel_span=parent_otel_span,
                 )
             )
 
@@ -2921,6 +2955,7 @@ class Router:
                         _healthy_deployments, _ = (
                             await self._async_get_healthy_deployments(
                                 model=_model,
+                                parent_otel_span=parent_otel_span,
                             )
                         )
                     else:
@@ -3669,7 +3704,7 @@ class Router:
         return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(
-        self, model: str
+        self, model: str, parent_otel_span: Optional[Span]
     ) -> Tuple[List[Dict], List[Dict]]:
         """
         Returns Tuple of:
@@ -3688,7 +3723,7 @@ class Router:
             pass
 
         unhealthy_deployments = await _async_get_cooldown_deployments(
-            litellm_router_instance=self
+            litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
         healthy_deployments: list = []
         for deployment in _all_deployments:
@@ -5091,6 +5126,7 @@ class Router:
             self.routing_strategy != "usage-based-routing-v2"
             and self.routing_strategy != "simple-shuffle"
             and self.routing_strategy != "cost-based-routing"
+            and self.routing_strategy != "latency-based-routing"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -5100,6 +5136,7 @@ class Router:
                 request_kwargs=request_kwargs,
             )
         try:
+            parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
             model, healthy_deployments = self._common_checks_available_deployment(
                 model=model,
                 messages=messages,
@@ -5110,7 +5147,7 @@ class Router:
                 return healthy_deployments
 
             cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=self
+                litellm_router_instance=self, parent_otel_span=parent_otel_span
             )
             verbose_router_logger.debug(
                 f"async cooldown deployments: {cooldown_deployments}"
@@ -5142,7 +5179,7 @@ class Router:
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
-            parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
+
             if len(healthy_deployments) == 0:
                 if _allowed_model_region is None:
                     _allowed_model_region = "n/a"
@@ -5159,7 +5196,7 @@ class Router:
                     enable_pre_call_checks=self.enable_pre_call_checks,
                     cooldown_list=_cooldown_list,
                 )
-
+            start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -5182,6 +5219,19 @@ class Router:
                         healthy_deployments=healthy_deployments,  # type: ignore
                         messages=messages,
                         input=input,
+                    )
+                )
+            elif (
+                self.routing_strategy == "latency-based-routing"
+                and self.lowestlatency_logger is not None
+            ):
+                deployment = (
+                    await self.lowestlatency_logger.async_get_available_deployments(
+                        model_group=model,
+                        healthy_deployments=healthy_deployments,  # type: ignore
+                        messages=messages,
+                        input=input,
+                        request_kwargs=request_kwargs,
                     )
                 )
             elif self.routing_strategy == "simple-shuffle":
@@ -5211,6 +5261,19 @@ class Router:
                 )
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
+            )
+
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.ROUTER,
+                    duration=_duration,
+                    call_type="<routing_strategy>.async_get_available_deployments",
+                    parent_otel_span=parent_otel_span,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
             )
 
             return deployment

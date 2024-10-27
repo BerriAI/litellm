@@ -210,6 +210,7 @@ def _set_cooldown_deployments(
 
 async def _async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
+    parent_otel_span: Optional[Span],
 ) -> List[str]:
     """
     Async implementation of '_get_cooldown_deployments'
@@ -217,7 +218,8 @@ async def _async_get_cooldown_deployments(
     model_ids = litellm_router_instance.get_model_ids()
     cooldown_models = (
         await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
-            model_ids=model_ids
+            model_ids=model_ids,
+            parent_otel_span=parent_otel_span,
         )
     )
 
@@ -236,6 +238,7 @@ async def _async_get_cooldown_deployments(
 
 async def _async_get_cooldown_deployments_with_debug_info(
     litellm_router_instance: LitellmRouter,
+    parent_otel_span: Optional[Span],
 ) -> List[tuple]:
     """
     Async implementation of '_get_cooldown_deployments'
@@ -243,7 +246,7 @@ async def _async_get_cooldown_deployments_with_debug_info(
     model_ids = litellm_router_instance.get_model_ids()
     cooldown_models = (
         await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
-            model_ids=model_ids
+            model_ids=model_ids, parent_otel_span=parent_otel_span
         )
     )
 

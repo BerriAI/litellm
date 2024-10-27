@@ -329,8 +329,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict = (
-                    await self.router_cache.async_get_cache(key=latency_key) or {}
+                    await self.router_cache.async_get_cache(
+                        key=latency_key,
+                        parent_otel_span=parent_otel_span,
+                        local_only=True,
+                    )
+                    or {}
                 )
 
                 if id not in request_count_dict:
@@ -393,34 +399,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    def get_available_deployments(  # noqa: PLR0915
+    def _get_available_deployments(  # noqa: PLR0915
         self,
         model_group: str,
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         request_kwargs: Optional[Dict] = None,
+        request_count_dict: Optional[Dict] = None,
     ):
-        """
-        Returns a deployment with the lowest latency
-        """
-        # get list of potential deployments
-        latency_key = f"{model_group}_map"
-        _latency_per_deployment = {}
-
-        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
-            request_kwargs
-        )
-        request_count_dict = (
-            self.router_cache.get_cache(
-                key=latency_key, parent_otel_span=parent_otel_span
-            )
-            or {}
-        )
+        """Common logic for both sync and async get_available_deployments"""
 
         # -----------------------
         # Find lowest used model
         # ----------------------
+        _latency_per_deployment = {}
         lowest_latency = float("inf")
 
         current_date = datetime.now().strftime("%Y-%m-%d")
@@ -547,3 +540,66 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "_latency_per_deployment"
             ] = _latency_per_deployment
         return deployment
+
+    async def async_get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        # get list of potential deployments
+        latency_key = f"{model_group}_map"
+
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
+            request_kwargs
+        )
+        request_count_dict = (
+            await self.router_cache.async_get_cache(
+                key=latency_key, parent_otel_span=parent_otel_span
+            )
+            or {}
+        )
+
+        return self._get_available_deployments(
+            model_group,
+            healthy_deployments,
+            messages,
+            input,
+            request_kwargs,
+            request_count_dict,
+        )
+
+    def get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Returns a deployment with the lowest latency
+        """
+        # get list of potential deployments
+        latency_key = f"{model_group}_map"
+
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
+            request_kwargs
+        )
+        request_count_dict = (
+            self.router_cache.get_cache(
+                key=latency_key, parent_otel_span=parent_otel_span
+            )
+            or {}
+        )
+
+        return self._get_available_deployments(
+            model_group,
+            healthy_deployments,
+            messages,
+            input,
+            request_kwargs,
+            request_count_dict,
+        )

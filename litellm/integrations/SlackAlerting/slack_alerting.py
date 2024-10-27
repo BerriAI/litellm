@@ -1520,7 +1520,8 @@ Model Info:
         report_sent_bool = False
 
         report_sent = await self.internal_usage_cache.async_get_cache(
-            key=SlackAlertingCacheKeys.report_sent_key.value
+            key=SlackAlertingCacheKeys.report_sent_key.value,
+            parent_otel_span=None,
         )  # None | float
 
         current_time = time.time()
