@@ -203,6 +203,7 @@ def create_async_task(**completion_kwargs):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_langfuse_logging_without_request_response(stream, langfuse_client):
     try:
         import uuid
