@@ -607,7 +607,8 @@ def test_passing_tool_result_as_list():
             },
         },
     ]
-    resp = completion(model=model, messages=messages, tools=tools)
-    print(resp)
+    for _ in range(2):
+        resp = completion(model=model, messages=messages, tools=tools)
+        print(resp)
 
     assert resp.usage.prompt_tokens_details.cached_tokens > 0
