@@ -1,6 +1,7 @@
 
 # build docker image
 docker build --platform=linux/arm64 -t litellm-raga:latest -f raga.Dockerfile .
+docker run -it -p4000:4000 litellm-raga:latest
 
 # run the docker image
 docker run -it --platform=linux/arm64 \
@@ -9,7 +10,7 @@ docker run -it --platform=linux/arm64 \
 -p 4000:4000 litellm-raga:latest
 
 
-# test the openAI API
+# test the openAI API locally
 curl --location 'http://localhost:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
@@ -17,7 +18,7 @@ curl --location 'http://localhost:4000/chat/completions' \
       "messages": [
         {
           "role": "user",
-          "content": "write a poem on pirates and sandworms"
+          "content": "write a poem on pirates and penguins"
         }
       ],
       "api_key": "sk_1234567890", # replace this
