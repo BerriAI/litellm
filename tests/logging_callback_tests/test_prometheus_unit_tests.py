@@ -26,6 +26,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -432,3 +433,64 @@ async def test_async_log_failure_event(prometheus_logger):
         team_alias="test_team_alias",
     )
     prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook(prometheus_logger):
+    """
+    Test for the async_post_call_failure_hook method
+
+    it should increment the litellm_proxy_failed_requests_metric and litellm_proxy_total_requests_metric
+    """
+    # Mock the prometheus metrics
+    prometheus_logger.litellm_proxy_failed_requests_metric = MagicMock()
+    prometheus_logger.litellm_proxy_total_requests_metric = MagicMock()
+
+    # Create test data
+    request_data = {"model": "gpt-3.5-turbo"}
+
+    original_exception = litellm.RateLimitError(
+        message="Test error", llm_provider="openai", model="gpt-3.5-turbo"
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        key_alias="test_alias",
+        team_id="test_team",
+        team_alias="test_team_alias",
+        user_id="test_user",
+        end_user_id="test_end_user",
+    )
+
+    # Call the function
+    await prometheus_logger.async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=original_exception,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Assert failed requests metric was incremented with correct labels
+    prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
+        end_user="test_end_user",
+        hashed_api_key="test_key",
+        api_key_alias="test_alias",
+        requested_model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        exception_status=429,
+        exception_class="RateLimitError",
+    )
+    prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
+
+    # Assert total requests metric was incremented with correct labels
+    prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
+        "test_end_user",
+        "test_key",
+        "test_alias",
+        "gpt-3.5-turbo",
+        "test_team",
+        "test_team_alias",
+        "test_user",
+    )
+    prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
