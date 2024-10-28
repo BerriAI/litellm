@@ -31,6 +31,10 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     show_missing_vars_in_env,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.sso_helper_utils import (
+    check_is_admin_only_access,
+    has_admin_ui_access,
+)
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
@@ -42,7 +46,7 @@ router = APIRouter()
 
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request):
+async def google_login(request: Request):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
@@ -217,7 +221,7 @@ async def google_login(request: Request):
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request):
+async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
@@ -545,17 +549,16 @@ async def auth_callback(request: Request):
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
     )
     ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    if ui_access_mode == "admin_only" and (
-        user_role != LitellmUserRoles.PROXY_ADMIN.value
-        or user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-    ):
-        verbose_proxy_logger.debug("EXCEPTION RAISED")
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
-            },
-        )
+    is_admin_only_access = check_is_admin_only_access(ui_access_mode)
+    if is_admin_only_access:
+        has_access = has_admin_ui_access(user_role)
+        if not has_access:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
+                },
+            )
 
     import jwt
 

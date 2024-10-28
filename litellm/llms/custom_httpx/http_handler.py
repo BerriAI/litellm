@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT
@@ -32,15 +32,20 @@ class AsyncHTTPHandler:
     def __init__(
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
     ):
         self.timeout = timeout
+        self.event_hooks = event_hooks
         self.client = self.create_client(
-            timeout=timeout, concurrent_limit=concurrent_limit
+            timeout=timeout, concurrent_limit=concurrent_limit, event_hooks=event_hooks
         )
 
     def create_client(
-        self, timeout: Optional[Union[float, httpx.Timeout]], concurrent_limit: int
+        self,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        concurrent_limit: int,
+        event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
     ) -> httpx.AsyncClient:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
@@ -55,6 +60,7 @@ class AsyncHTTPHandler:
         # Create a client with a connection pool
 
         return httpx.AsyncClient(
+            event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
@@ -114,7 +120,9 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, concurrent_limit=1)
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -144,8 +152,10 @@ class AsyncHTTPHandler:
             setattr(e, "status_code", e.response.status_code)
             if stream is True:
                 setattr(e, "message", await e.response.aread())
+                setattr(e, "text", await e.response.aread())
             else:
                 setattr(e, "message", e.response.text)
+                setattr(e, "text", e.response.text)
             raise e
         except Exception as e:
             raise e
@@ -163,15 +173,18 @@ class AsyncHTTPHandler:
         try:
             if timeout is None:
                 timeout = self.timeout
+
             req = self.client.build_request(
                 "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
             )
-            response = await self.client.send(req, stream=stream)
+            response = await self.client.send(req)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, concurrent_limit=1)
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -228,7 +241,9 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, concurrent_limit=1)
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
             try:
                 return await self.single_connection_post_request(
                     url=url,

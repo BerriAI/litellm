@@ -43,7 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk, PromptTokensDetails
+from litellm.types.utils import GenericStreamingChunk, PromptTokensDetailsWrapper
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ...base import BaseLLM
@@ -294,7 +294,7 @@ class AnthropicChatCompletion(BaseLLM):
             cache_read_input_tokens = _usage["cache_read_input_tokens"]
             prompt_tokens += cache_read_input_tokens
 
-        prompt_tokens_details = PromptTokensDetails(
+        prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
         total_tokens = prompt_tokens + completion_tokens
@@ -398,6 +398,8 @@ class AnthropicChatCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
+            if error_response and hasattr(error_response, "text"):
+                error_text = getattr(error_response, "text", error_text)
             raise AnthropicError(
                 message=error_text,
                 status_code=status_code,

@@ -11,9 +11,15 @@ def get_function_names_from_file(file_path):
 
     function_names = []
 
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Top-level functions
             function_names.append(node.name)
+        elif isinstance(node, ast.ClassDef):
+            # Functions inside classes
+            for class_node in node.body:
+                if isinstance(class_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    function_names.append(class_node.name)
 
     return function_names
 
@@ -69,28 +75,28 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "__init__",
-    "_acreate_file",
-    "_acreate_batch",
-    "acreate_assistants",
-    "adelete_assistant",
-    "aget_assistants",
-    "acreate_thread",
-    "aget_thread",
-    "a_add_message",
-    "aget_messages",
-    "arun_thread",
 ]
 
 
 def main():
-    router_file = "./litellm/router.py"  # Update this path if it's located elsewhere
-    # router_file = "../../litellm/router.py"  ## LOCAL TESTING
+    router_file = [
+        "./litellm/router.py",
+        "./litellm/router_utils/batch_utils.py",
+        "./litellm/router_utils/pattern_match_deployments.py",
+    ]
+    # router_file = [
+    #     "../../litellm/router.py",
+    #     "../../litellm/router_utils/pattern_match_deployments.py",
+    #     "../../litellm/router_utils/batch_utils.py",
+    # ]  ## LOCAL TESTING
     tests_dir = (
         "./tests/"  # Update this path if your tests directory is located elsewhere
     )
     # tests_dir = "../../tests/"  # LOCAL TESTING
 
-    router_functions = get_functions_from_router(router_file)
+    router_functions = []
+    for file in router_file:
+        router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
     untested_functions = [
@@ -103,8 +109,8 @@ def main():
             if func not in ignored_function_names:
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
-        print("perc_covered: ", untested_perc)
-        if untested_perc < 0.3:
+        print("untested_perc: ", untested_perc)
+        if untested_perc > 0:
             print("The following functions in router.py are not tested:")
             raise Exception(
                 f"{untested_perc * 100:.2f}% of functions in router.py are not tested: {all_untested_functions}"

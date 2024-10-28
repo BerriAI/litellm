@@ -41,6 +41,40 @@ from litellm.proxy.management_helpers.utils import (
 router = APIRouter()
 
 
+def _update_internal_user_params(data_json: dict, data: NewUserRequest) -> dict:
+    if "user_id" in data_json and data_json["user_id"] is None:
+        data_json["user_id"] = str(uuid.uuid4())
+    auto_create_key = data_json.pop("auto_create_key", True)
+    if auto_create_key is False:
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
+
+    is_internal_user = False
+    if data.user_role == LitellmUserRoles.INTERNAL_USER:
+        is_internal_user = True
+        if litellm.default_internal_user_params:
+            for key, value in litellm.default_internal_user_params.items():
+                if key not in data_json or data_json[key] is None:
+                    data_json[key] = value
+                elif (
+                    key == "models"
+                    and isinstance(data_json[key], list)
+                    and len(data_json[key]) == 0
+                ):
+                    data_json[key] = value
+
+    if "max_budget" in data_json and data_json["max_budget"] is None:
+        if is_internal_user and litellm.max_internal_user_budget is not None:
+            data_json["max_budget"] = litellm.max_internal_user_budget
+
+    if "budget_duration" in data_json and data_json["budget_duration"] is None:
+        if is_internal_user and litellm.internal_user_budget_duration is not None:
+            data_json["budget_duration"] = litellm.internal_user_budget_duration
+
+    return data_json
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -94,26 +128,7 @@ async def new_user(
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     data_json = data.json()  # type: ignore
-    if "user_id" in data_json and data_json["user_id"] is None:
-        data_json["user_id"] = str(uuid.uuid4())
-    auto_create_key = data_json.pop("auto_create_key", True)
-    if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
-
-    is_internal_user = False
-    if data.user_role == LitellmUserRoles.INTERNAL_USER:
-        is_internal_user = True
-
-    if "max_budget" in data_json and data_json["max_budget"] is None:
-        if is_internal_user and litellm.max_internal_user_budget is not None:
-            data_json["max_budget"] = litellm.max_internal_user_budget
-
-    if "budget_duration" in data_json and data_json["budget_duration"] is None:
-        if is_internal_user and litellm.internal_user_budget_duration is not None:
-            data_json["budget_duration"] = litellm.internal_user_budget_duration
-
+    data_json = _update_internal_user_params(data_json, data)
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
@@ -308,7 +323,7 @@ def get_team_from_list(
     # response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
-async def user_info(
+async def user_info(  # noqa: PLR0915
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),

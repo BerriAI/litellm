@@ -93,6 +93,7 @@ class OpenAIGPTConfig:
             "top_logprobs",
             "max_tokens",
             "max_completion_tokens",
+            "modalities",
             "n",
             "presence_penalty",
             "seed",
@@ -131,6 +132,17 @@ class OpenAIGPTConfig:
         model: str,
         drop_params: bool,
     ) -> dict:
+        """
+        If any supported_openai_params are in non_default_params, add them to optional_params, so they are use in API call
+
+        Args:
+            non_default_params (dict): Non-default parameters to filter.
+            optional_params (dict): Optional parameters to update.
+            model (str): Model name for parameter support check.
+
+        Returns:
+            dict: Updated optional_params with supported non-default parameters.
+        """
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:

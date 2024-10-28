@@ -26,14 +26,23 @@ async with websockets.connect(  # type: ignore
 
 import asyncio
 import concurrent.futures
+import json
 import traceback
 from asyncio import Task
 from typing import Any, Dict, List, Optional, Union
+
+import litellm
 
 from .litellm_logging import Logging as LiteLLMLogging
 
 # Create a thread pool with a maximum of 10 threads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+
+DefaultLoggedRealTimeEventTypes = [
+    "session.created",
+    "response.create",
+    "response.done",
+]
 
 
 class RealTimeStreaming:
@@ -49,9 +58,27 @@ class RealTimeStreaming:
         self.messages: List = []
         self.input_message: Dict = {}
 
+        _logged_real_time_event_types = litellm.logged_real_time_event_types
+
+        if _logged_real_time_event_types is None:
+            _logged_real_time_event_types = DefaultLoggedRealTimeEventTypes
+        self.logged_real_time_event_types = _logged_real_time_event_types
+
+    def _should_store_message(self, message: Union[str, bytes]) -> bool:
+        if isinstance(message, bytes):
+            message = message.decode("utf-8")
+        message_obj = json.loads(message)
+        _msg_type = message_obj["type"]
+        if self.logged_real_time_event_types == "*":
+            return True
+        if _msg_type in self.logged_real_time_event_types:
+            return True
+        return False
+
     def store_message(self, message: Union[str, bytes]):
         """Store message in list"""
-        self.messages.append(message)
+        if self._should_store_message(message):
+            self.messages.append(message)
 
     def store_input(self, message: dict):
         """Store input message"""

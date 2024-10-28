@@ -72,7 +72,7 @@ class OpenTelemetryConfig:
 class OpenTelemetry(CustomLogger):
     def __init__(
         self,
-        config=OpenTelemetryConfig.from_env(),
+        config: OpenTelemetryConfig = OpenTelemetryConfig.from_env(),
         callback_name: Optional[str] = None,
         **kwargs,
     ):
@@ -171,7 +171,7 @@ class OpenTelemetry(CustomLogger):
                         try:
                             value = str(value)
                         except Exception:
-                            value = "litllm logging error - could_not_json_serialize"
+                            value = "litellm logging error - could_not_json_serialize"
                     self.safe_set_attribute(
                         span=service_logging_span,
                         key=key,
@@ -393,12 +393,12 @@ class OpenTelemetry(CustomLogger):
         except Exception:
             return ""
 
-    def set_attributes(self, span: Span, kwargs, response_obj):
+    def set_attributes(self, span: Span, kwargs, response_obj):  # noqa: PLR0915
         try:
             if self.callback_name == "arize":
-                from litellm.integrations.arize_ai import set_arize_ai_attributes
+                from litellm.integrations.arize_ai import ArizeLogger
 
-                set_arize_ai_attributes(span, kwargs, response_obj)
+                ArizeLogger.set_arize_ai_attributes(span, kwargs, response_obj)
                 return
             elif self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes

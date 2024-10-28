@@ -19,6 +19,7 @@ from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "anthropic.claude-3-opus-20240229-v1:0",
     "anthropic.claude-3-sonnet-20240229-v1:0",
@@ -200,7 +201,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,

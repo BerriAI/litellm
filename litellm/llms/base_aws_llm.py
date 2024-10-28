@@ -38,7 +38,7 @@ class BaseAWSLLM(BaseLLM):
         credential_str = json.dumps(credential_args, sort_keys=True)
         return hashlib.sha256(credential_str.encode()).hexdigest()
 
-    def get_credentials(
+    def get_credentials(  # noqa: PLR0915
         self,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,

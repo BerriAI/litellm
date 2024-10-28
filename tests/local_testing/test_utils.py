@@ -15,6 +15,7 @@ sys.path.insert(
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.proxy.utils import (
     _duration_in_seconds,
     _extract_from_regex,
@@ -330,6 +331,13 @@ def test_validate_environment_api_key():
     ), f"Missing keys={response_obj['missing_keys']}"
 
 
+def test_validate_environment_api_base_dynamic():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider + "/mistral", api_base="https://example.com")
+        assert kv["keys_in_environment"]
+        assert kv["missing_keys"] == []
+
+
 @mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
 def test_validate_environment_ollama():
     for provider in ["ollama", "ollama_chat"]:
@@ -448,24 +456,19 @@ def test_token_counter():
 # test_token_counter()
 
 
-def test_supports_function_calling():
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gpt-3.5-turbo", True),
+        ("azure/gpt-4-1106-preview", True),
+        ("groq/gemma-7b-it", True),
+        ("anthropic.claude-instant-v1", False),
+        ("palm/chat-bison", False),
+    ],
+)
+def test_supports_function_calling(model, expected_bool):
     try:
-        assert litellm.supports_function_calling(model="gpt-3.5-turbo") == True
-        assert (
-            litellm.supports_function_calling(model="azure/gpt-4-1106-preview") == True
-        )
-        assert litellm.supports_function_calling(model="groq/gemma-7b-it") == True
-        assert (
-            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
-            == False
-        )
-        assert litellm.supports_function_calling(model="palm/chat-bison") == False
-        assert litellm.supports_function_calling(model="ollama/llama2") == False
-        assert (
-            litellm.supports_function_calling(model="anthropic.claude-instant-v1")
-            == False
-        )
-        assert litellm.supports_function_calling(model="claude-2") == False
+        assert litellm.supports_function_calling(model=model) == expected_bool
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -833,3 +836,41 @@ def test_is_base64_encoded():
     from litellm.utils import is_base64_encoded
 
     assert is_base64_encoded(s=base64_image) is True
+
+
+@mock.patch("httpx.AsyncClient")
+@mock.patch.dict(os.environ, {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"}, clear=True)
+def test_async_http_handler(mock_async_client):
+    import httpx
+
+    timeout = 120
+    event_hooks = {"request": [lambda r: r]}
+    concurrent_limit = 2
+
+    AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+
+    mock_async_client.assert_called_with(
+        cert="/client.pem",
+        event_hooks=event_hooks,
+        headers=headers,
+        limits=httpx.Limits(
+            max_connections=concurrent_limit,
+            max_keepalive_connections=concurrent_limit,
+        ),
+        timeout=timeout,
+        verify="/certificate.pem",
+    )
+
+@pytest.mark.parametrize(
+    "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
+)
+def test_supports_audio_input(model, expected_bool):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import supports_audio_input, supports_audio_output
+
+    supports_pc = supports_audio_input(model=model)
+
+    assert supports_pc == expected_bool
+

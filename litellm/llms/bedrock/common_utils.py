@@ -53,6 +53,17 @@ class AmazonBedrockGlobalConfig:
             "eu-central-1",
         ]
 
+    def get_us_regions(self) -> List[str]:
+        """
+        Source: https://www.aws-services.info/bedrock.html
+        """
+        return [
+            "us-east-2",
+            "us-east-1",
+            "us-west-2",
+            "us-gov-west-1",
+        ]
+
 
 class AmazonTitanConfig:
     """

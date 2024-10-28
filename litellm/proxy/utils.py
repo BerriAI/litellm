@@ -349,6 +349,31 @@ class ProxyLogging:
         )
         self.premium_user = premium_user
 
+    def startup_event(
+        self,
+        llm_router: Optional[litellm.Router],
+        redis_usage_cache: Optional[RedisCache],
+    ):
+        """Initialize logging and alerting on proxy startup"""
+        ## UPDATE SLACK ALERTING ##
+        self.slack_alerting_instance.update_values(llm_router=llm_router)
+
+        ## UPDATE INTERNAL USAGE CACHE ##
+        self.update_values(
+            redis_cache=redis_usage_cache
+        )  # used by parallel request limiter for rate limiting keys across instances
+
+        self._init_litellm_callbacks(
+            llm_router=llm_router
+        )  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+
+        if "daily_reports" in self.slack_alerting_instance.alert_types:
+            asyncio.create_task(
+                self.slack_alerting_instance._run_scheduled_daily_report(
+                    llm_router=llm_router
+                )
+            )  # RUN DAILY REPORT (if scheduled)
+
     def update_values(
         self,
         alerting: Optional[List] = None,
@@ -1124,6 +1149,7 @@ class PrismaClient:
                 "MonthlyGlobalSpendPerKey",
                 "MonthlyGlobalSpendPerUserPerKey",
                 "Last30dTopEndUsersSpend",
+                "DailyTagSpend",
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
@@ -1425,7 +1451,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     @log_to_opentelemetry
-    async def get_data(
+    async def get_data(  # noqa: PLR0915
         self,
         token: Optional[Union[str, list]] = None,
         user_id: Optional[str] = None,
@@ -1580,15 +1606,9 @@ class PrismaClient:
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:
-                    user_id_values = ", ".join(f"'{item}'" for item in user_id_list)
-                    sql_query = f"""
-                    SELECT *
-                    FROM "LiteLLM_UserTable"
-                    WHERE "user_id" IN ({user_id_values})
-                    """
-                    # Execute the raw query
-                    # The asterisk before `user_id_list` unpacks the list into separate arguments
-                    response = await self.db.query_raw(sql_query)
+                    response = await self.db.litellm_usertable.find_many(
+                        where={"user_id": {"in": user_id_list}}
+                    )
                 elif query_type == "find_all":
                     if expires is not None:
                         response = await self.db.litellm_usertable.find_many(  # type: ignore
@@ -1785,7 +1805,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(
+    async def insert_data(  # noqa: PLR0915
         self,
         data: dict,
         table_name: Literal[
@@ -1933,7 +1953,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def update_data(
+    async def update_data(  # noqa: PLR0915
         self,
         token: Optional[str] = None,
         data: dict = {},
@@ -2622,7 +2642,7 @@ async def reset_budget(prisma_client: PrismaClient):
             )
 
 
-async def update_spend(
+async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
     db_writer_client: Optional[HTTPHandler],
     proxy_logging_obj: ProxyLogging,

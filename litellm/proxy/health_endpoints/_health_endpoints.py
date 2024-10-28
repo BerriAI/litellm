@@ -53,7 +53,7 @@ async def test_endpoint(request: Request):
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def health_services_endpoint(
+async def health_services_endpoint(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: Union[
         Literal[
@@ -120,7 +120,7 @@ async def health_services_endpoint(
             }
 
         if service == "langfuse":
-            from litellm.integrations.langfuse import LangFuseLogger
+            from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger = LangFuseLogger()
             langfuse_logger.Langfuse.auth_check()
@@ -373,14 +373,40 @@ async def _db_health_readiness_check():
 
 
 @router.get(
+    "/settings",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
     "/active/callbacks",
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def active_callbacks():
     """
-    Returns a list of active callbacks on litellm.callbacks, litellm.input_callback, litellm.failure_callback, litellm.success_callback
+    Returns a list of litellm level settings
+
+    This is useful for debugging and ensuring the proxy server is configured correctly.
+
+    Response schema:
+    ```
+    {
+        "alerting": _alerting,
+        "litellm.callbacks": litellm_callbacks,
+        "litellm.input_callback": litellm_input_callbacks,
+        "litellm.failure_callback": litellm_failure_callbacks,
+        "litellm.success_callback": litellm_success_callbacks,
+        "litellm._async_success_callback": litellm_async_success_callbacks,
+        "litellm._async_failure_callback": litellm_async_failure_callbacks,
+        "litellm._async_input_callback": litellm_async_input_callbacks,
+        "all_litellm_callbacks": all_litellm_callbacks,
+        "num_callbacks": len(all_litellm_callbacks),
+        "num_alerting": _num_alerting,
+        "litellm.request_timeout": litellm.request_timeout,
+    }
+    ```
     """
+
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     _alerting = str(general_settings.get("alerting"))
@@ -421,6 +447,7 @@ async def active_callbacks():
         "all_litellm_callbacks": all_litellm_callbacks,
         "num_callbacks": len(all_litellm_callbacks),
         "num_alerting": _num_alerting,
+        "litellm.request_timeout": litellm.request_timeout,
     }
 
 

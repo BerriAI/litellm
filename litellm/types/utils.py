@@ -66,6 +66,7 @@ class ModelInfo(TypedDict, total=False):
     cache_creation_input_token_cost: Optional[float]
     cache_read_input_token_cost: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
+    input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_character_above_128k_tokens: Optional[
         float
@@ -77,6 +78,7 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
     output_cost_per_token: Required[float]
     output_cost_per_character: Optional[float]  # only for vertex ai models
+    output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
@@ -102,6 +104,8 @@ class ModelInfo(TypedDict, total=False):
     supports_function_calling: Optional[bool]
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
+    supports_audio_input: Optional[bool]
+    supports_audio_output: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -137,6 +141,27 @@ class CallTypes(Enum):
     rerank = "rerank"
     arerank = "arerank"
     arealtime = "_arealtime"
+
+
+CallTypesLiteral = Literal[
+    "embedding",
+    "aembedding",
+    "completion",
+    "acompletion",
+    "atext_completion",
+    "text_completion",
+    "image_generation",
+    "aimage_generation",
+    "moderation",
+    "amoderation",
+    "atranscription",
+    "transcription",
+    "aspeech",
+    "speech",
+    "rerank",
+    "arerank",
+    "_arealtime",
+]
 
 
 class PassthroughCallTypes(Enum):
@@ -321,6 +346,44 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+from openai.types.chat.chat_completion_audio import ChatCompletionAudio
+
+
+class ChatCompletionAudioResponse(ChatCompletionAudio):
+
+    def __init__(
+        self,
+        data: str,
+        expires_at: int,
+        transcript: str,
+        id: Optional[str] = None,
+        **params,
+    ):
+        if id is not None:
+            id = id
+        else:
+            id = f"{uuid.uuid4()}"
+        super(ChatCompletionAudioResponse, self).__init__(
+            data=data, expires_at=expires_at, transcript=transcript, id=id, **params
+        )
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
+
 """
 Reference:
 ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
@@ -328,11 +391,11 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 
 
 class Message(OpenAIObject):
-
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
+    audio: Optional[ChatCompletionAudioResponse] = None
 
     def __init__(
         self,
@@ -340,9 +403,10 @@ class Message(OpenAIObject):
         role: Literal["assistant"] = "assistant",
         function_call=None,
         tool_calls: Optional[list] = None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
-        init_values = {
+        init_values: Dict[str, Any] = {
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (
@@ -361,10 +425,19 @@ class Message(OpenAIObject):
                 else None
             ),
         }
+
+        if audio is not None:
+            init_values["audio"] = audio
+
         super(Message, self).__init__(
             **init_values,  # type: ignore
             **params,
         )
+
+        if audio is None:
+            # delete audio from self
+            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
+            del self.audio
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -393,11 +466,17 @@ class Delta(OpenAIObject):
         role=None,
         function_call=None,
         tool_calls=None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
+
+        # Set default values and correct types
+        self.function_call: Optional[Union[FunctionCall, Any]] = None
+        self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
+        self.audio: Optional[ChatCompletionAudioResponse] = None
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -414,6 +493,8 @@ class Delta(OpenAIObject):
                     self.tool_calls.append(tool_call)
         else:
             self.tool_calls = tool_calls
+
+        self.audio = audio
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -479,6 +560,23 @@ class Choices(OpenAIObject):
         setattr(self, key, value)
 
 
+class CompletionTokensDetailsWrapper(
+    CompletionTokensDetails
+):  # wrapper for older openai versions
+    text_tokens: Optional[int] = None
+    """Text tokens generated by the model."""
+
+
+class PromptTokensDetailsWrapper(
+    PromptTokensDetails
+):  # wrapper for older openai versions
+    text_tokens: Optional[int] = None
+    """Text tokens sent to the model."""
+
+    image_tokens: Optional[int] = None
+    """Image tokens sent to the model."""
+
+
 class Usage(CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -493,23 +591,23 @@ class Usage(CompletionUsage):
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         reasoning_tokens: Optional[int] = None,
-        prompt_tokens_details: Optional[Union[PromptTokensDetails, dict]] = None,
+        prompt_tokens_details: Optional[Union[PromptTokensDetailsWrapper, dict]] = None,
         completion_tokens_details: Optional[
-            Union[CompletionTokensDetails, dict]
+            Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
         **params,
     ):
         # handle reasoning_tokens
-        _completion_tokens_details: Optional[CompletionTokensDetails] = None
+        _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         if reasoning_tokens:
-            completion_tokens_details = CompletionTokensDetails(
+            completion_tokens_details = CompletionTokensDetailsWrapper(
                 reasoning_tokens=reasoning_tokens
             )
 
         # Ensure completion_tokens_details is properly handled
         if completion_tokens_details:
             if isinstance(completion_tokens_details, dict):
-                _completion_tokens_details = CompletionTokensDetails(
+                _completion_tokens_details = CompletionTokensDetailsWrapper(
                     **completion_tokens_details
                 )
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
@@ -520,7 +618,7 @@ class Usage(CompletionUsage):
             params["prompt_cache_hit_tokens"], int
         ):
             if prompt_tokens_details is None:
-                prompt_tokens_details = PromptTokensDetails(
+                prompt_tokens_details = PromptTokensDetailsWrapper(
                     cached_tokens=params["prompt_cache_hit_tokens"]
                 )
 
@@ -529,15 +627,17 @@ class Usage(CompletionUsage):
             params["cache_read_input_tokens"], int
         ):
             if prompt_tokens_details is None:
-                prompt_tokens_details = PromptTokensDetails(
+                prompt_tokens_details = PromptTokensDetailsWrapper(
                     cached_tokens=params["cache_read_input_tokens"]
                 )
 
         # handle prompt_tokens_details
-        _prompt_tokens_details: Optional[PromptTokensDetails] = None
+        _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if prompt_tokens_details:
             if isinstance(prompt_tokens_details, dict):
-                _prompt_tokens_details = PromptTokensDetails(**prompt_tokens_details)
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **prompt_tokens_details
+                )
             elif isinstance(prompt_tokens_details, PromptTokensDetails):
                 _prompt_tokens_details = prompt_tokens_details
 
@@ -870,9 +970,9 @@ class EmbeddingResponse(OpenAIObject):
 
 class Logprobs(OpenAIObject):
     text_offset: List[int]
-    token_logprobs: List[float]
+    token_logprobs: List[Union[float, None]]
     tokens: List[str]
-    top_logprobs: List[Dict[str, float]]
+    top_logprobs: List[Union[Dict[str, float], None]]
 
 
 class TextChoices(OpenAIObject):
@@ -1077,12 +1177,15 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse):
     _hidden_params: dict = {}
+    usage: Usage
 
     def __init__(
         self,
         created: Optional[int] = None,
         data: Optional[List[ImageObject]] = None,
         response_ms=None,
+        usage: Optional[Usage] = None,
+        hidden_params: Optional[dict] = None,
     ):
         if response_ms:
             _response_ms = response_ms
@@ -1104,8 +1207,13 @@ class ImageResponse(OpenAIImageResponse):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
                 _data.append(ImageObject(**d.model_dump()))
-        super().__init__(created=created, data=_data)
-        self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        _usage = usage or Usage(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+        )
+        super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+        self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1246,6 +1354,9 @@ all_litellm_params = [
     "user_continue_message",
     "configurable_clientside_auth_params",
     "weight",
+    "ensure_alternating_roles",
+    "assistant_continue_message",
+    "user_continue_message",
 ]
 
 
@@ -1301,16 +1412,20 @@ class AdapterCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-class StandardLoggingMetadata(TypedDict):
+class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
+    user_api_key_alias: Optional[str]
+    user_api_key_org_id: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+
+
+class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
     Specific metadata k,v pairs logged to integration for easier cost tracking
     """
 
-    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
-    user_api_key_alias: Optional[str]
-    user_api_key_team_id: Optional[str]
-    user_api_key_user_id: Optional[str]
-    user_api_key_team_alias: Optional[str]
     spend_logs_metadata: Optional[
         dict
     ]  # special param to log k,v pairs to spendlogs for a call

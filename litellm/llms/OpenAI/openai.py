@@ -17,6 +17,7 @@ from typing_extensions import overload, override
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ProviderField
 from litellm.utils import (
     Choices,
@@ -221,6 +222,18 @@ class DeepInfraConfig:
                     optional_params[param] = value
         return optional_params
 
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+        api_base = (
+            api_base
+            or get_secret_str("DEEPINFRA_API_BASE")
+            or "https://api.deepinfra.com/v1/openai"
+        )
+        dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
+        return api_base, dynamic_api_key
+
 
 class OpenAIConfig:
     """
@@ -303,10 +316,25 @@ class OpenAIConfig:
         }
 
     def get_supported_openai_params(self, model: str) -> list:
-        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
-            return litellm.OpenAIO1Config().get_supported_openai_params(model=model)
+        """
+        This function returns the list of supported openai parameters for a given OpenAI Model
+
+        - If O1 model, returns O1 supported params
+        - If gpt-audio model, returns gpt-audio supported params
+        - Else, returns gpt supported params
+
+        Args:
+            model (str): OpenAI model
+
+        Returns:
+            list: List of supported openai parameters
+        """
+        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+            return litellm.openAIO1Config.get_supported_openai_params(model=model)
+        elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
+            return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
-            return litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
+            return litellm.openAIGPTConfig.get_supported_openai_params(model=model)
 
     def _map_openai_params(
         self, non_default_params: dict, optional_params: dict, model: str
@@ -325,14 +353,22 @@ class OpenAIConfig:
         drop_params: bool,
     ) -> dict:
         """ """
-        if litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model):
-            return litellm.OpenAIO1Config().map_openai_params(
+        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+            return litellm.openAIO1Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
             )
-        return litellm.OpenAIGPTConfig().map_openai_params(
+        elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
+            return litellm.openAIGPTAudioConfig.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+
+        return litellm.openAIGPTConfig.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -590,6 +626,7 @@ class OpenAIChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        raw_response = None
         try:
             raw_response = openai_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -602,9 +639,16 @@ class OpenAIChatCompletion(BaseLLM):
             response = raw_response.parse()
             return headers, response
         except Exception as e:
-            raise e
+            if raw_response is not None:
+                raise Exception(
+                    "error - {}, Received response - {}, Type of response - {}".format(
+                        e, raw_response, type(raw_response)
+                    )
+                )
+            else:
+                raise e
 
-    def completion(  # type: ignore
+    def completion(  # type: ignore # noqa: PLR0915
         self,
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],
@@ -658,10 +702,10 @@ class OpenAIChatCompletion(BaseLLM):
                         custom_llm_provider=custom_llm_provider,
                     )
             if (
-                litellm.OpenAIO1Config().is_model_o1_reasoning_model(model=model)
+                litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
                 and messages is not None
             ):
-                messages = litellm.OpenAIO1Config().o1_prompt_factory(
+                messages = litellm.openAIO1Config.o1_prompt_factory(
                     messages=messages,
                 )
 
@@ -1305,7 +1349,7 @@ class OpenAIChatCompletion(BaseLLM):
             if aimg_generation is True:
                 return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
 
-            openai_client = self._get_openai_client(
+            openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
                 api_key=api_key,
                 api_base=api_base,
@@ -1327,8 +1371,9 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             ## COMPLETION CALL
-            response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
-            response = response.model_dump()  # type: ignore
+            _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+
+            response = _response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1336,7 +1381,6 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-            # return response
             return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
 

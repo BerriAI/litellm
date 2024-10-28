@@ -173,6 +173,117 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+def test_get_settings_request_timeout(client_no_auth):
+    """
+    When no timeout is set, it should use the litellm.request_timeout value
+    """
+    # Set a known value for litellm.request_timeout
+    import litellm
+
+    # Make a GET request to /settings
+    response = client_no_auth.get("/settings")
+
+    # Check if the request was successful
+    assert response.status_code == 200
+
+    # Parse the JSON response
+    settings = response.json()
+    print("settings", settings)
+
+    assert settings["litellm.request_timeout"] == litellm.request_timeout
+
+
+@pytest.mark.parametrize(
+    "litellm_key_header_name",
+    ["x-litellm-key", None],
+)
+def test_add_headers_to_request(litellm_key_header_name):
+    from fastapi import Request
+    from starlette.datastructures import URL
+    import json
+    from litellm.proxy.litellm_pre_call_utils import (
+        clean_headers,
+        LiteLLMProxyRequestSetup,
+    )
+
+    headers = {
+        "Authorization": "Bearer 1234",
+        "X-Custom-Header": "Custom-Value",
+        "X-Stainless-Header": "Stainless-Value",
+    }
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-3.5-turbo"}).encode("utf-8")
+    request_headers = clean_headers(headers, litellm_key_header_name)
+    forwarded_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(
+        request_headers
+    )
+    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
+
+
+@pytest.mark.parametrize(
+    "litellm_key_header_name",
+    ["x-litellm-key", None],
+)
+@pytest.mark.parametrize(
+    "forward_headers",
+    [True, False],
+)
+@mock_patch_acompletion()
+def test_chat_completion_forward_headers(
+    mock_acompletion, client_no_auth, litellm_key_header_name, forward_headers
+):
+    global headers
+    try:
+        if forward_headers:
+            gs = getattr(litellm.proxy.proxy_server, "general_settings")
+            gs["forward_client_headers_to_llm_api"] = True
+            setattr(litellm.proxy.proxy_server, "general_settings", gs)
+        if litellm_key_header_name is not None:
+            gs = getattr(litellm.proxy.proxy_server, "general_settings")
+            gs["litellm_key_header_name"] = litellm_key_header_name
+            setattr(litellm.proxy.proxy_server, "general_settings", gs)
+        # Your test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+
+        headers_to_forward = {
+            "X-Custom-Header": "Custom-Value",
+            "X-Another-Header": "Another-Value",
+        }
+
+        if litellm_key_header_name is not None:
+            headers_to_not_forward = {litellm_key_header_name: "Bearer 1234"}
+        else:
+            headers_to_not_forward = {"Authorization": "Bearer 1234"}
+
+        received_headers = {**headers_to_forward, **headers_to_not_forward}
+
+        print("testing proxy server with chat completions")
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=received_headers
+        )
+        if not forward_headers:
+            assert "headers" not in mock_acompletion.call_args.kwargs
+        else:
+            assert mock_acompletion.call_args.kwargs["headers"] == {
+                "x-custom-header": "Custom-Value",
+                "x-another-header": "Another-Value",
+            }
+
+        print(f"response - {response.text}")
+        assert response.status_code == 200
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
 @mock_patch_acompletion()
 @pytest.mark.asyncio
 async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
@@ -1706,3 +1817,105 @@ async def test_proxy_model_group_info_rerank(prisma_client):
     print(resp)
     models = resp["data"]
     assert models[0].mode == "rerank"
+
+
+# @pytest.mark.asyncio
+# async def test_proxy_team_member_add(prisma_client):
+#     """
+#     Add 10 people to a team. Confirm all 10 are added.
+#     """
+#     from litellm.proxy.management_endpoints.team_endpoints import (
+#         team_member_add,
+#         new_team,
+#     )
+#     from litellm.proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
+
+#     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     try:
+
+#         async def test():
+#             await litellm.proxy.proxy_server.prisma_client.connect()
+#             from litellm.proxy.proxy_server import user_api_key_cache
+
+#             user_api_key_dict = UserAPIKeyAuth(
+#                 user_role=LitellmUserRoles.PROXY_ADMIN,
+#                 api_key="sk-1234",
+#                 user_id="1234",
+#             )
+
+#             new_team()
+#             for _ in range(10):
+#                 request = TeamMemberAddRequest(
+#                     team_id="1234",
+#                     member=Member(
+#                         user_id="1234",
+#                         user_role=LitellmUserRoles.INTERNAL_USER,
+#                     ),
+#                 )
+#                 key = await team_member_add(
+#                     request, user_api_key_dict=user_api_key_dict
+#                 )
+
+#             print(key)
+#             user_id = key.user_id
+
+#             # check /user/info to verify user_role was set correctly
+#             new_user_info = await user_info(
+#                 user_id=user_id, user_api_key_dict=user_api_key_dict
+#             )
+#             new_user_info = new_user_info.user_info
+#             print("new_user_info=", new_user_info)
+#             assert new_user_info["user_role"] == LitellmUserRoles.INTERNAL_USER
+#             assert new_user_info["user_id"] == user_id
+
+#             generated_key = key.key
+#             bearer_token = "Bearer " + generated_key
+
+#             assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+
+#             value_from_prisma = await prisma_client.get_data(
+#                 token=generated_key,
+#             )
+#             print("token from prisma", value_from_prisma)
+
+#             request = Request(
+#                 {
+#                     "type": "http",
+#                     "route": api_route,
+#                     "path": api_route.path,
+#                     "headers": [("Authorization", bearer_token)],
+#                 }
+#             )
+
+#             # use generated key to auth in
+#             result = await user_api_key_auth(request=request, api_key=bearer_token)
+#             print("result from user auth with new key", result)
+
+#         asyncio.run(test())
+#     except Exception as e:
+#         pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_proxy_server_prisma_setup():
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.caching import DualCache
+
+    user_api_key_cache = DualCache()
+
+    with patch.object(
+        litellm.proxy.proxy_server, "PrismaClient", new=MagicMock()
+    ) as mock_prisma_client:
+        mock_client = mock_prisma_client.return_value  # This is the mocked instance
+        mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
+
+        ProxyStartupEvent._setup_prisma_client(
+            database_url=os.getenv("DATABASE_URL"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            user_api_key_cache=user_api_key_cache,
+        )
+
+        await asyncio.sleep(1)
+        mock_client.check_view_exists.assert_called_once()

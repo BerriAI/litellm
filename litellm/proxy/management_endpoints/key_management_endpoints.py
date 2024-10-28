@@ -45,7 +45,7 @@ router = APIRouter()
     response_model=GenerateKeyResponse,
 )
 @management_endpoint_wrapper
-async def generate_key_fn(
+async def generate_key_fn(  # noqa: PLR0915
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
@@ -768,7 +768,7 @@ async def info_key_fn(
         )
 
 
-async def generate_key_helper_fn(
+async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate

@@ -25,10 +25,13 @@ def cost_per_token(
     """
     ## GET MODEL INFO
     model_info = get_model_info(model=model, custom_llm_provider="azure")
-
+    cached_tokens: Optional[int] = None
     ## CALCULATE INPUT COST
-    total_prompt_tokens: float = usage["prompt_tokens"] - usage._cache_read_input_tokens
-    prompt_cost: float = total_prompt_tokens * model_info["input_cost_per_token"]
+    non_cached_text_tokens = usage.prompt_tokens
+    if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens:
+        cached_tokens = usage.prompt_tokens_details.cached_tokens
+        non_cached_text_tokens = non_cached_text_tokens - cached_tokens
+    prompt_cost: float = non_cached_text_tokens * model_info["input_cost_per_token"]
 
     ## CALCULATE OUTPUT COST
     completion_cost: float = (
@@ -36,9 +39,9 @@ def cost_per_token(
     )
 
     ## Prompt Caching cost calculation
-    if model_info.get("cache_read_input_token_cost") is not None:
+    if model_info.get("cache_read_input_token_cost") is not None and cached_tokens:
         # Note: We read ._cache_read_input_tokens from the Usage - since cost_calculator.py standardizes the cache read tokens on usage._cache_read_input_tokens
-        prompt_cost += usage._cache_read_input_tokens * (
+        prompt_cost += cached_tokens * (
             model_info.get("cache_read_input_token_cost", 0) or 0
         )
 

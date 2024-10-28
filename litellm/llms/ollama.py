@@ -14,7 +14,8 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.types.utils import ProviderField, StreamingChoices
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
 
 from .prompt_templates.factory import custom_prompt, prompt_factory
 
@@ -162,6 +163,56 @@ class OllamaConfig:
             "stop",
             "response_format",
         ]
+
+    def _supports_function_calling(self, ollama_model_info: dict) -> bool:
+        """
+        Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
+        """
+        _template: str = str(ollama_model_info.get("template", "") or "")
+        return "tools" in _template.lower()
+
+    def _get_max_tokens(self, ollama_model_info: dict) -> Optional[int]:
+        _model_info: dict = ollama_model_info.get("model_info", {})
+
+        for k, v in _model_info.items():
+            if "context_length" in k:
+                return v
+        return None
+
+    def get_model_info(self, model: str) -> ModelInfo:
+        """
+        curl http://localhost:11434/api/show -d '{
+          "name": "mistral"
+        }'
+        """
+        api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+
+        try:
+            response = litellm.module_level_client.post(
+                url=f"{api_base}/api/show",
+                json={"name": model},
+            )
+        except Exception as e:
+            raise Exception(
+                f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
+            )
+
+        model_info = response.json()
+
+        _max_tokens: Optional[int] = self._get_max_tokens(model_info)
+
+        return ModelInfo(
+            key=model,
+            litellm_provider="ollama",
+            mode="chat",
+            supported_openai_params=self.get_supported_openai_params(),
+            supports_function_calling=self._supports_function_calling(model_info),
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=_max_tokens,
+            max_input_tokens=_max_tokens,
+            max_output_tokens=_max_tokens,
+        )
 
 
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
@@ -347,6 +398,7 @@ def ollama_completion_stream(url, data, logging_obj):
                         isinstance(content_chunk, StreamingChoices)
                         and hasattr(content_chunk, "delta")
                         and hasattr(content_chunk.delta, "content")
+                        and content_chunk.delta.content is not None
                     ):
                         content_chunks.append(content_chunk.delta.content)
                 response_content = "".join(content_chunks)
