@@ -62,6 +62,38 @@ async def test_dual_cache_get_set(is_async):
 
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
+async def test_dual_cache_local_only(is_async):
+    """Test that when local_only=True, only in-memory cache is used"""
+    in_memory = InMemoryCache()
+    redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"))
+    dual_cache = DualCache(in_memory_cache=in_memory, redis_cache=redis_cache)
+
+    test_key = f"test_key_{str(uuid.uuid4())}"
+    test_value = {"test": "value"}
+
+    # Mock Redis methods to ensure they're not called
+    redis_set_method = "async_set_cache" if is_async else "set_cache"
+    redis_get_method = "async_get_cache" if is_async else "get_cache"
+
+    with patch.object(redis_cache, redis_set_method) as mock_redis_set, patch.object(
+        redis_cache, redis_get_method
+    ) as mock_redis_get:
+
+        # Set value with local_only=True
+        if is_async:
+            await dual_cache.async_set_cache(test_key, test_value, local_only=True)
+            result = await dual_cache.async_get_cache(test_key, local_only=True)
+        else:
+            dual_cache.set_cache(test_key, test_value, local_only=True)
+            result = dual_cache.get_cache(test_key, local_only=True)
+
+        assert result == test_value
+        mock_redis_set.assert_not_called()  # Verify Redis set wasn't called
+        mock_redis_get.assert_not_called()  # Verify Redis get wasn't called
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
 async def test_dual_cache_value_not_in_memory(is_async):
     """Test that DualCache falls back to Redis when value isn't in memory,
     and subsequent requests use in-memory cache"""
