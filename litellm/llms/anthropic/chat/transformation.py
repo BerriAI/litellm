@@ -84,6 +84,7 @@ class AnthropicConfig:
             "tools",
             "tool_choice",
             "extra_headers",
+            "parallel_tool_calls",
         ]
 
     def get_cache_control_headers(self) -> dict:
@@ -91,6 +92,32 @@ class AnthropicConfig:
             "anthropic-version": "2023-06-01",
             "anthropic-beta": "prompt-caching-2024-07-31",
         }
+
+    def _map_tool_choice(
+        self, tool_choice: Optional[str], disable_parallel_tool_use: Optional[bool]
+    ) -> Optional[AnthropicMessagesToolChoice]:
+        _tool_choice: Optional[AnthropicMessagesToolChoice] = None
+        if tool_choice == "auto":
+            _tool_choice = AnthropicMessagesToolChoice(
+                type="auto",
+            )
+        elif tool_choice == "required":
+            _tool_choice = AnthropicMessagesToolChoice(type="any")
+        elif isinstance(tool_choice, dict):
+            _tool_name = tool_choice.get("function", {}).get("name")
+            _tool_choice = AnthropicMessagesToolChoice(type="tool")
+            if _tool_name is not None:
+                _tool_choice["name"] = _tool_name
+
+        if disable_parallel_tool_use is not None:
+            if _tool_choice is not None:
+                _tool_choice["disable_parallel_tool_use"] = disable_parallel_tool_use
+            else:  # use anthropic defaults and make sure to send the disable_parallel_tool_use flag
+                _tool_choice = AnthropicMessagesToolChoice(
+                    type="auto",
+                    disable_parallel_tool_use=disable_parallel_tool_use,
+                )
+        return _tool_choice
 
     def map_openai_params(
         self,
@@ -105,14 +132,15 @@ class AnthropicConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
-            if param == "tool_choice":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = None
-                if value == "auto":
-                    _tool_choice = {"type": "auto"}
-                elif value == "required":
-                    _tool_choice = {"type": "any"}
-                elif isinstance(value, dict):
-                    _tool_choice = {"type": "tool", "name": value["function"]["name"]}
+            if param == "tool_choice" or param == "parallel_tool_calls":
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
+                    self._map_tool_choice(
+                        tool_choice=non_default_params.get("tool_choice"),
+                        disable_parallel_tool_use=non_default_params.get(
+                            "parallel_tool_calls"
+                        ),
+                    )
+                )
 
                 if _tool_choice is not None:
                     optional_params["tool_choice"] = _tool_choice

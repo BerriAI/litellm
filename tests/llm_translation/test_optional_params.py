@@ -784,3 +784,14 @@ def test_unmapped_vertex_anthropic_model():
         max_retries=10,
     )
     assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+def test_anthropic_parallel_tool_calls(provider):
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider=provider,
+        parallel_tool_calls=True,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tool_choice"]["disable_parallel_tool_use"] is True

@@ -9,6 +9,7 @@ from .openai import ChatCompletionCachedContent
 class AnthropicMessagesToolChoice(TypedDict, total=False):
     type: Required[Literal["auto", "any", "tool"]]
     name: str
+    disable_parallel_tool_use: bool  # default is false
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
