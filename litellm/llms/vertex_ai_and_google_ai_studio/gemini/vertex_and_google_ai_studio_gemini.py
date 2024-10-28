@@ -894,27 +894,33 @@ class VertexLLM(VertexBase):
                         content_str = candidate["content"]["parts"][0]["text"]
 
                     if (
-                        "parts" in candidate["content"]
-                        and "functionCall" in candidate["content"]["parts"][0]
+                            "parts" in candidate["content"]
+
                     ):
-                        _function_chunk = ChatCompletionToolCallFunctionChunk(
-                            name=candidate["content"]["parts"][0]["functionCall"][
-                                "name"
-                            ],
-                            arguments=json.dumps(
-                                candidate["content"]["parts"][0]["functionCall"]["args"]
-                            ),
-                        )
-                        if litellm_params.get("litellm_param_is_function_call") is True:
-                            functions = _function_chunk
-                        else:
-                            _tool_response_chunk = ChatCompletionToolCallChunk(
-                                id=f"call_{str(uuid.uuid4())}",
-                                type="function",
-                                function=_function_chunk,
-                                index=candidate.get("index", idx),
-                            )
-                            tools.append(_tool_response_chunk)
+                        for fidx in range(len(candidate["content"]["parts"])):
+                            if  "text" in candidate["content"]["parts"][fidx]:
+                                content_str = candidate["content"]["parts"][fidx]["text"]
+                            elif "functionCall" in candidate["content"]["parts"][fidx]:
+                                args: dict = candidate["content"]["parts"][fidx]["functionCall"]["args"]
+
+                                _function_chunk = ChatCompletionToolCallFunctionChunk(
+                                    name=candidate["content"]["parts"][fidx]["functionCall"][
+                                        "name"
+                                    ],
+                                    arguments=json.dumps(
+                                        args
+                                    ),
+                                )
+                                if litellm_params.get("litellm_param_is_function_call") is True:
+                                    functions = _function_chunk
+                                else:
+                                    _tool_response_chunk = ChatCompletionToolCallChunk(
+                                        id=f"call_{str(uuid.uuid4())}",
+                                        type="function",
+                                        function=_function_chunk,
+                                        index=candidate.get("index", idx),
+                                    )
+                                    tools.append(_tool_response_chunk)
                     chat_completion_message["content"] = (
                         content_str if len(content_str) > 0 else None
                     )
@@ -1355,8 +1361,7 @@ class ModelResponseIterator:
         try:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
 
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
@@ -1369,23 +1374,26 @@ class ModelResponseIterator:
                 and "content" in gemini_chunk
                 and "parts" in gemini_chunk["content"]
             ):
-                if "text" in gemini_chunk["content"]["parts"][0]:
-                    text = gemini_chunk["content"]["parts"][0]["text"]
-                elif "functionCall" in gemini_chunk["content"]["parts"][0]:
-                    function_call = ChatCompletionToolCallFunctionChunk(
-                        name=gemini_chunk["content"]["parts"][0]["functionCall"][
-                            "name"
-                        ],
-                        arguments=json.dumps(
-                            gemini_chunk["content"]["parts"][0]["functionCall"]["args"]
-                        ),
-                    )
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=str(uuid.uuid4()),
-                        type="function",
-                        function=function_call,
-                        index=0,
-                    )
+                text = ""
+                tool_use: Optional[ChatCompletionToolCallChunk] = None
+                for fidx in range(len(gemini_chunk["content"]["parts"])):
+                    if "text" in gemini_chunk["content"]["parts"][fidx]:
+                        text = gemini_chunk["content"]["parts"][fidx]["text"]
+                    elif "functionCall" in gemini_chunk["content"]["parts"][fidx]:
+                        function_call = ChatCompletionToolCallFunctionChunk(
+                            name=gemini_chunk["content"]["parts"][fidx]["functionCall"][
+                                "name"
+                            ],
+                            arguments=json.dumps(
+                                gemini_chunk["content"]["parts"][fidx]["functionCall"]["args"]
+                            ),
+                        )
+                        tool_use = ChatCompletionToolCallChunk(
+                            id=str(uuid.uuid4()),
+                            type="function",
+                            function=function_call,
+                            index=0,
+                        )
 
             if gemini_chunk and "finishReason" in gemini_chunk:
                 finish_reason = map_finish_reason(

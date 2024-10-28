@@ -147,6 +147,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     last_message_with_tool_calls = None
 
     msg_i = 0
+    tool_call_responses = []
     try:
         while msg_i < len(messages):
             user_content: List[PartType] = []
@@ -243,15 +244,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 contents.append(ContentType(role="model", parts=assistant_content))
 
             ## APPEND TOOL CALL MESSAGES ##
-            if msg_i < len(messages) and (
-                messages[msg_i]["role"] == "tool"
-                or messages[msg_i]["role"] == "function"
-            ):
-                _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
-                )
-                contents.append(ContentType(parts=[_part]))  # type: ignore
-                msg_i += 1
+            if msg_i < len(messages):
+                if messages[msg_i]["role"] == "tool" or messages[msg_i]["role"] == "function":
+                    _part = convert_to_gemini_tool_call_result(
+                        messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    )
+                    msg_i += 1
+                    tool_call_responses.append(_part)
+            if msg_i < len(messages):
+                if not (messages[msg_i]["role"] == "tool" or messages[msg_i]["role"] == "function"):
+                    if len(tool_call_responses) > 0:
+                        contents.append(ContentType(parts=tool_call_responses))
+                        tool_call_responses = []
 
             if msg_i == init_msg_i:  # prevent infinite loops
                 raise Exception(
@@ -259,6 +263,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         messages[msg_i]
                     )
                 )
+        if len(tool_call_responses) > 0:
+            contents.append(ContentType(parts=tool_call_responses))
         return contents
     except Exception as e:
         raise e
