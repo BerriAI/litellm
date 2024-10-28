@@ -172,6 +172,8 @@ class AnthropicConfig:
         Used to check if anthropic prompt caching headers need to be set.
         """
         for message in messages:
+            if message.get("cache_control", None) is not None:
+                return True
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
                 for content in _message_content:
