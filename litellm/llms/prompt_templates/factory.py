@@ -1224,6 +1224,10 @@ def convert_to_anthropic_tool_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
+
+    anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
+    ## PROMPT CACHING CHECK ##
+    cache_control = message.get("cache_control", None)
     if message["role"] == "tool":
         tool_message: ChatCompletionToolMessage = message
         tool_call_id: str = tool_message["tool_call_id"]
@@ -1233,7 +1237,7 @@ def convert_to_anthropic_tool_result(
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
-        return anthropic_tool_result
+
     if message["role"] == "function":
         function_message: ChatCompletionFunctionMessage = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
@@ -1241,13 +1245,11 @@ def convert_to_anthropic_tool_result(
             type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
 
-        return anthropic_tool_result
-    else:
-        raise Exception(
-            "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
-                message.get("content")
-            )
-        )
+    if anthropic_tool_result is None:
+        raise Exception(f"Unable to parse anthropic tool result for message: {message}")
+    if cache_control is not None:
+        anthropic_tool_result["cache_control"] = cache_control  # type: ignore
+    return anthropic_tool_result
 
 
 def convert_function_to_anthropic_tool_invoke(
@@ -1384,55 +1386,73 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ] = messages[
                 msg_i
             ]  # type: ignore
-            if user_message_types_block["content"] and isinstance(
-                user_message_types_block["content"], list
-            ):
-                for m in user_message_types_block["content"]:
-                    if m.get("type", "") == "image_url":
-                        m = cast(ChatCompletionImageObject, m)
-                        if isinstance(m["image_url"], str):
-                            image_chunk = convert_to_anthropic_image_obj(
-                                openai_image_url=m["image_url"]
+            if user_message_types_block["role"] == "user":
+                if isinstance(user_message_types_block["content"], list):
+                    for m in user_message_types_block["content"]:
+                        if m.get("type", "") == "image_url":
+                            m = cast(ChatCompletionImageObject, m)
+                            if isinstance(m["image_url"], str):
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=m["image_url"]
+                                )
+                            else:
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=m["image_url"]["url"]
+                                )
+
+                            _anthropic_content_element = AnthropicMessagesImageParam(
+                                type="image",
+                                source=AnthropicImageParamSource(
+                                    type="base64",
+                                    media_type=image_chunk["media_type"],
+                                    data=image_chunk["data"],
+                                ),
                             )
-                        else:
-                            image_chunk = convert_to_anthropic_image_obj(
-                                openai_image_url=m["image_url"]["url"]
+
+                            _content_element = add_cache_control_to_content(
+                                anthropic_content_element=_anthropic_content_element,
+                                orignal_content_element=dict(m),
                             )
 
-                        _anthropic_content_element = AnthropicMessagesImageParam(
-                            type="image",
-                            source=AnthropicImageParamSource(
-                                type="base64",
-                                media_type=image_chunk["media_type"],
-                                data=image_chunk["data"],
-                            ),
-                        )
-
-                        _content_element = add_cache_control_to_content(
-                            anthropic_content_element=_anthropic_content_element,
-                            orignal_content_element=dict(m),
-                        )
-
-                        if "cache_control" in _content_element:
-                            _anthropic_content_element["cache_control"] = (
-                                _content_element["cache_control"]
+                            if "cache_control" in _content_element:
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
+                            user_content.append(_anthropic_content_element)
+                        elif m.get("type", "") == "text":
+                            m = cast(ChatCompletionTextObject, m)
+                            _anthropic_text_content_element = (
+                                AnthropicMessagesTextParam(
+                                    type="text",
+                                    text=m["text"],
+                                )
                             )
-                        user_content.append(_anthropic_content_element)
-                    elif m.get("type", "") == "text":
-                        m = cast(ChatCompletionTextObject, m)
-                        _anthropic_text_content_element = AnthropicMessagesTextParam(
-                            type="text",
-                            text=m["text"],
-                        )
-                        _content_element = add_cache_control_to_content(
-                            anthropic_content_element=_anthropic_text_content_element,
-                            orignal_content_element=dict(m),
-                        )
-                        _content_element = cast(
-                            AnthropicMessagesTextParam, _content_element
+                            _content_element = add_cache_control_to_content(
+                                anthropic_content_element=_anthropic_text_content_element,
+                                orignal_content_element=dict(m),
+                            )
+                            _content_element = cast(
+                                AnthropicMessagesTextParam, _content_element
+                            )
+
+                            user_content.append(_content_element)
+                elif isinstance(user_message_types_block["content"], str):
+                    _anthropic_content_text_element: AnthropicMessagesTextParam = {
+                        "type": "text",
+                        "text": user_message_types_block["content"],
+                    }
+                    _content_element = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_content_text_element,
+                        orignal_content_element=dict(user_message_types_block),
+                    )
+
+                    if "cache_control" in _content_element:
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
                         )
 
-                        user_content.append(_content_element)
+                    user_content.append(_anthropic_content_text_element)
+
             elif (
                 user_message_types_block["role"] == "tool"
                 or user_message_types_block["role"] == "function"
@@ -1441,22 +1461,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block)
                 )
-            elif isinstance(user_message_types_block["content"], str):
-                _anthropic_content_text_element: AnthropicMessagesTextParam = {
-                    "type": "text",
-                    "text": user_message_types_block["content"],
-                }
-                _content_element = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_content_text_element,
-                    orignal_content_element=dict(user_message_types_block),
-                )
-
-                if "cache_control" in _content_element:
-                    _anthropic_content_text_element["cache_control"] = _content_element[
-                        "cache_control"
-                    ]
-
-                user_content.append(_anthropic_content_text_element)
 
             msg_i += 1
 
