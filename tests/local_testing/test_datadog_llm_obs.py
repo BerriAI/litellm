@@ -1,3 +1,7 @@
+"""
+Test the DataDogLLMObsLogger
+"""
+
 import io
 import os
 import sys
