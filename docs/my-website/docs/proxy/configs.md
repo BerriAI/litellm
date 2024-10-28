@@ -918,6 +918,7 @@ router_settings:
 | DD_API_KEY | API key for Datadog integration
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
+| DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
