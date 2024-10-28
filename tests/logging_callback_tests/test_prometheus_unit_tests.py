@@ -67,6 +67,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             user_api_key_team_id="test_team",
             user_api_key_user_id="test_user",
             user_api_key_team_alias="test_team_alias",
+            user_api_key_org_id=None,
             spend_logs_metadata=None,
             requester_ip_address="127.0.0.1",
             requester_metadata=None,
@@ -342,3 +343,92 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event(prometheus_logger):
+    # NOTE: almost all params for this metric are read from standard logging payload
+    standard_logging_object = create_standard_logging_payload()
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "custom_llm_provider": "openai",
+        },
+        "start_time": datetime.now(),
+        "completion_start_time": datetime.now(),
+        "api_call_start_time": datetime.now(),
+        "end_time": datetime.now() + timedelta(seconds=1),
+        "standard_logging_object": standard_logging_object,
+        "exception": Exception("Test error"),
+    }
+    response_obj = MagicMock()
+
+    # Mock the metrics
+    prometheus_logger.litellm_llm_api_failed_requests_metric = MagicMock()
+    prometheus_logger.litellm_deployment_failure_responses = MagicMock()
+    prometheus_logger.litellm_deployment_total_requests = MagicMock()
+    prometheus_logger.set_deployment_partial_outage = MagicMock()
+
+    await prometheus_logger.async_log_failure_event(
+        kwargs, response_obj, kwargs["start_time"], kwargs["end_time"]
+    )
+
+    # litellm_llm_api_failed_requests_metric incremented
+    """
+    Expected metrics
+    end_user_id,
+    user_api_key,
+    user_api_key_alias,
+    model,
+    user_api_team,
+    user_api_team_alias,
+    user_id,
+    """
+    prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
+        None,
+        "test_hash",
+        "test_alias",
+        "gpt-3.5-turbo",
+        "test_team",
+        "test_team_alias",
+        "test_user",
+    )
+    prometheus_logger.litellm_llm_api_failed_requests_metric.labels().inc.assert_called_once()
+
+    # deployment should be marked in partial outage
+    prometheus_logger.set_deployment_partial_outage.assert_called_once_with(
+        litellm_model_name="gpt-3.5-turbo",
+        model_id="model-123",
+        api_base="https://api.openai.com",
+        api_provider="openai",
+    )
+
+    # deployment failure responses incremented
+    prometheus_logger.litellm_deployment_failure_responses.labels.assert_called_once_with(
+        litellm_model_name="gpt-3.5-turbo",
+        model_id="model-123",
+        api_base="https://api.openai.com",
+        api_provider="openai",
+        exception_status="None",
+        exception_class="Exception",
+        requested_model="openai-gpt",  # passed in standard logging payload
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+    )
+    prometheus_logger.litellm_deployment_failure_responses.labels().inc.assert_called_once()
+
+    # deployment total requests incremented
+    prometheus_logger.litellm_deployment_total_requests.labels.assert_called_once_with(
+        litellm_model_name="gpt-3.5-turbo",
+        model_id="model-123",
+        api_base="https://api.openai.com",
+        api_provider="openai",
+        requested_model="openai-gpt",  # passed in standard logging payload
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+    )
+    prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
