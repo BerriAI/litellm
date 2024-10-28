@@ -795,3 +795,29 @@ def test_anthropic_parallel_tool_calls(provider):
     )
     print(f"optional_params: {optional_params}")
     assert optional_params["tool_choice"]["disable_parallel_tool_use"] is True
+
+
+def test_anthropic_computer_tool_use():
+    tools = [
+        {
+            "type": "computer_20241022",
+            "function": {
+                "name": "computer",
+                "parameters": {
+                    "display_height_px": 100,
+                    "display_width_px": 100,
+                    "display_number": 1,
+                },
+            },
+        }
+    ]
+
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider="anthropic",
+        tools=tools,
+    )
+    assert optional_params["tools"][0]["type"] == "computer_20241022"
+    assert optional_params["tools"][0]["display_height_px"] == 100
+    assert optional_params["tools"][0]["display_width_px"] == 100
+    assert optional_params["tools"][0]["display_number"] == 1

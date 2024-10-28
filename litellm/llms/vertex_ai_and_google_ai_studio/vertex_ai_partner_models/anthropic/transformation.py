@@ -15,10 +15,6 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.anthropic import (
-    AnthropicMessagesTool,
-    AnthropicMessagesToolChoice,
-)
 from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,

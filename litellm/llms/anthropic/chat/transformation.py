@@ -4,6 +4,9 @@ from typing import List, Literal, Optional, Tuple, Union
 import litellm
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicComputerTool,
+    AnthropicHostedTools,
     AnthropicMessageRequestBase,
     AnthropicMessagesRequest,
     AnthropicMessagesTool,
@@ -93,6 +96,30 @@ class AnthropicConfig:
             "anthropic-beta": "prompt-caching-2024-07-31",
         }
 
+    def get_anthropic_headers(
+        self,
+        api_key: str,
+        anthropic_version: Optional[str] = None,
+        computer_tool_used: bool = False,
+        prompt_caching_set: bool = False,
+    ) -> dict:
+        import json
+
+        betas = []
+        if prompt_caching_set:
+            betas.append("prompt-caching-2024-07-31")
+        if computer_tool_used:
+            betas.append("computer-use-2024-10-22")
+        betas_str = ",".join(betas)
+        headers = {
+            "anthropic-version": anthropic_version or "2023-06-01",
+            "anthropic-beta": betas_str,
+            "x-api-key": api_key,
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+        return headers
+
     def _map_tool_choice(
         self, tool_choice: Optional[str], disable_parallel_tool_use: Optional[bool]
     ) -> Optional[AnthropicMessagesToolChoice]:
@@ -119,6 +146,87 @@ class AnthropicConfig:
                 )
         return _tool_choice
 
+    def _map_tool_helper(
+        self, tool: ChatCompletionToolParam
+    ) -> AllAnthropicToolsValues:
+        returned_tool: Optional[AllAnthropicToolsValues] = None
+        if tool["type"] == "function" or tool["type"] == "custom":
+            _tool = AnthropicMessagesTool(
+                name=tool["function"]["name"],
+                input_schema=tool["function"].get(
+                    "parameters",
+                    {
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+            )
+
+            _description = tool["function"].get("description")
+            if _description is not None:
+                _tool["description"] = _description
+
+            returned_tool = _tool
+
+        elif tool["type"].startswith("computer_"):
+            ## check if all required 'display_' params are given
+            if "parameters" not in tool["function"]:
+                raise ValueError("Missing required parameter: parameters")
+            required_display_params = ["display_width_px", "display_height_px"]
+
+            _display_width_px: Optional[int] = tool["function"]["parameters"].get(
+                "display_width_px"
+            )
+            _display_height_px: Optional[int] = tool["function"]["parameters"].get(
+                "display_height_px"
+            )
+            if _display_width_px is None or _display_height_px is None:
+                raise ValueError(
+                    "Missing required parameter: display_width_px or display_height_px"
+                )
+
+            _computer_tool = AnthropicComputerTool(
+                type=tool["type"],
+                name=tool["function"].get("name", "computer"),
+                display_width_px=_display_width_px,
+                display_height_px=_display_height_px,
+            )
+
+            _display_number = tool["function"]["parameters"].get("display_number")
+            if _display_number is not None:
+                _computer_tool["display_number"] = _display_number
+
+            returned_tool = _computer_tool
+        elif tool["type"].startswith("bash_") or tool["type"].startswith(
+            "text_editor_"
+        ):
+            function_name = tool["function"].get("name")
+            if function_name is None:
+                raise ValueError("Missing required parameter: name")
+
+            returned_tool = AnthropicHostedTools(
+                type=tool["type"],
+                name=function_name,
+            )
+        if returned_tool is None:
+            raise ValueError(f"Unsupported tool type: {tool['type']}")
+
+        if "cache_control" in tool:
+            returned_tool["cache_control"] = tool["cache_control"]
+
+        return returned_tool
+
+    def _map_tools(self, tools: List) -> List[AllAnthropicToolsValues]:
+        anthropic_tools = []
+        for tool in tools:
+            if "input_schema" in tool:  # assume in anthropic format
+                anthropic_tools.append(tool)
+            else:  # assume openai tool call
+                new_tool = self._map_tool_helper(tool)
+
+                anthropic_tools.append(new_tool)
+        return anthropic_tools
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -131,7 +239,7 @@ class AnthropicConfig:
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "tools":
-                optional_params["tools"] = value
+                optional_params["tools"] = self._map_tools(value)
             if param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: Optional[AnthropicMessagesToolChoice] = (
                     self._map_tool_choice(
@@ -206,6 +314,16 @@ class AnthropicConfig:
                     if "cache_control" in content:
                         return True
 
+        return False
+
+    def is_computer_tool_used(
+        self, tools: Optional[List[AllAnthropicToolsValues]]
+    ) -> bool:
+        if tools is None:
+            return False
+        for tool in tools:
+            if "type" in tool and tool["type"].startswith("computer_"):
+                return True
         return False
 
     def translate_system_message(
@@ -302,24 +420,6 @@ class AnthropicConfig:
         ## Handle Tool Calling
         if "tools" in optional_params:
             _is_function_call = True
-            anthropic_tools = []
-            for tool in optional_params["tools"]:
-                if "input_schema" in tool:  # assume in anthropic format
-                    anthropic_tools.append(tool)
-                else:  # assume openai tool call
-                    new_tool = tool["function"]
-                    parameters = new_tool.pop(
-                        "parameters",
-                        {
-                            "type": "object",
-                            "properties": {},
-                        },
-                    )
-                    new_tool["input_schema"] = parameters  # rename key
-                    if "cache_control" in tool:
-                        new_tool["cache_control"] = tool["cache_control"]
-                    anthropic_tools.append(new_tool)
-            optional_params["tools"] = anthropic_tools
 
         data = {
             "messages": anthropic_messages,
