@@ -6,7 +6,7 @@ import subprocess
 import sys
 import traceback
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional, TypedDict, Union
 
 import dotenv
@@ -334,13 +334,8 @@ class PrometheusLogger(CustomLogger):
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
 
-    async def async_log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
-        from litellm.proxy.common_utils.callback_utils import (
-            get_model_group_from_litellm_kwargs,
-        )
         from litellm.types.utils import StandardLoggingPayload
 
         verbose_logger.debug(
@@ -351,14 +346,19 @@ class PrometheusLogger(CustomLogger):
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
         )
-        if standard_logging_payload is None:
-            raise ValueError("standard_logging_object is required")
+
+        if standard_logging_payload is None or not isinstance(
+            standard_logging_payload, dict
+        ):
+            raise ValueError(
+                f"standard_logging_object is required, got={standard_logging_payload}"
+            )
+
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
-        model_parameters: dict = standard_logging_payload["model_parameters"]
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -369,25 +369,6 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
-        _team_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_spend", None
-        )
-        _team_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_max_budget", None
-        )
-        _remaining_team_budget = safe_get_remaining_budget(
-            max_budget=_team_max_budget, spend=_team_spend
-        )
-
-        _api_key_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_spend", None
-        )
-        _api_key_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_max_budget", None
-        )
-        _remaining_api_key_budget = safe_get_remaining_budget(
-            max_budget=_api_key_max_budget, spend=_api_key_spend
-        )
 
         print_verbose(
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
@@ -402,24 +383,82 @@ class PrometheusLogger(CustomLogger):
 
             user_api_key = hash_token(user_api_key)
 
-        self.litellm_requests_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc()
-        self.litellm_spend_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(response_cost)
+        # increment total LLM requests and spend metric
+        self._increment_top_level_request_and_spend_metrics(
+            end_user_id=end_user_id,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            model=model,
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_id=user_id,
+            response_cost=response_cost,
+        )
+
+        # input, output, total token metrics
+        self._increment_token_metrics(
+            # why type ignore below?
+            # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
+            # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
+            standard_logging_payload=standard_logging_payload,  # type: ignore
+            end_user_id=end_user_id,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            model=model,
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_id=user_id,
+        )
+
+        # remaining budget metrics
+        self._increment_remaining_budget_metrics(
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            litellm_params=litellm_params,
+        )
+
+        # set proxy virtual key rpm/tpm metrics
+        self._set_virtual_key_rate_limit_metrics(
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            kwargs=kwargs,
+            metadata=_metadata,
+        )
+
+        # set latency metrics
+        self._set_latency_metrics(
+            kwargs=kwargs,
+            model=model,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            # why type ignore below?
+            # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
+            # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
+            standard_logging_payload=standard_logging_payload,  # type: ignore
+        )
+
+        # set x-ratelimit headers
+        self.set_llm_deployment_success_metrics(
+            kwargs, start_time, end_time, output_tokens
+        )
+        pass
+
+    def _increment_token_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        end_user_id: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        model: Optional[str],
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_id: Optional[str],
+    ):
+        # token metrics
         self.litellm_tokens_metric.labels(
             end_user_id,
             user_api_key,
@@ -450,6 +489,34 @@ class PrometheusLogger(CustomLogger):
             user_id,
         ).inc(standard_logging_payload["completion_tokens"])
 
+    def _increment_remaining_budget_metrics(
+        self,
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        litellm_params: dict,
+    ):
+        _team_spend = litellm_params.get("metadata", {}).get(
+            "user_api_key_team_spend", None
+        )
+        _team_max_budget = litellm_params.get("metadata", {}).get(
+            "user_api_key_team_max_budget", None
+        )
+        _remaining_team_budget = self._safe_get_remaining_budget(
+            max_budget=_team_max_budget, spend=_team_spend
+        )
+
+        _api_key_spend = litellm_params.get("metadata", {}).get(
+            "user_api_key_spend", None
+        )
+        _api_key_max_budget = litellm_params.get("metadata", {}).get(
+            "user_api_key_max_budget", None
+        )
+        _remaining_api_key_budget = self._safe_get_remaining_budget(
+            max_budget=_api_key_max_budget, spend=_api_key_spend
+        )
+        # Remaining Budget Metrics
         self.litellm_remaining_team_budget_metric.labels(
             user_api_team, user_api_team_alias
         ).set(_remaining_team_budget)
@@ -457,6 +524,47 @@ class PrometheusLogger(CustomLogger):
         self.litellm_remaining_api_key_budget_metric.labels(
             user_api_key, user_api_key_alias
         ).set(_remaining_api_key_budget)
+
+    def _increment_top_level_request_and_spend_metrics(
+        self,
+        end_user_id: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        model: Optional[str],
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_id: Optional[str],
+        response_cost: float,
+    ):
+        self.litellm_requests_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc()
+        self.litellm_spend_metric.labels(
+            end_user_id,
+            user_api_key,
+            user_api_key_alias,
+            model,
+            user_api_team,
+            user_api_team_alias,
+            user_id,
+        ).inc(response_cost)
+
+    def _set_virtual_key_rate_limit_metrics(
+        self,
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        kwargs: dict,
+        metadata: dict,
+    ):
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
 
         # Set remaining rpm/tpm for API Key + model
         # see parallel_request_limiter.py - variables are set there
@@ -466,10 +574,8 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = _metadata.get(
-            remaining_requests_variable_name, sys.maxsize
-        )
-        remaining_tokens = _metadata.get(remaining_tokens_variable_name, sys.maxsize)
+        remaining_requests = metadata.get(remaining_requests_variable_name, sys.maxsize)
+        remaining_tokens = metadata.get(remaining_tokens_variable_name, sys.maxsize)
 
         self.litellm_remaining_api_key_requests_for_model.labels(
             user_api_key, user_api_key_alias, model_group
@@ -479,9 +585,20 @@ class PrometheusLogger(CustomLogger):
             user_api_key, user_api_key_alias, model_group
         ).set(remaining_tokens)
 
+    def _set_latency_metrics(
+        self,
+        kwargs: dict,
+        model: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        standard_logging_payload: StandardLoggingPayload,
+    ):
         # latency metrics
-        total_time: timedelta = kwargs.get("end_time") - kwargs.get("start_time")
-        total_time_seconds = total_time.total_seconds()
+        model_parameters: dict = standard_logging_payload["model_parameters"]
+        end_time: datetime = kwargs.get("end_time") or datetime.now()
+        start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
 
         completion_start_time = kwargs.get("completion_start_time", None)
@@ -509,9 +626,7 @@ class PrometheusLogger(CustomLogger):
         if api_call_start_time is not None and isinstance(
             api_call_start_time, datetime
         ):
-            api_call_total_time: timedelta = (
-                kwargs.get("end_time") - api_call_start_time
-            )
+            api_call_total_time: timedelta = end_time - api_call_start_time
             api_call_total_time_seconds = api_call_total_time.total_seconds()
             self.litellm_llm_api_latency_metric.labels(
                 model,
@@ -521,20 +636,17 @@ class PrometheusLogger(CustomLogger):
                 user_api_team_alias,
             ).observe(api_call_total_time_seconds)
 
-        # log metrics
-        self.litellm_request_total_latency_metric.labels(
-            model,
-            user_api_key,
-            user_api_key_alias,
-            user_api_team,
-            user_api_team_alias,
-        ).observe(total_time_seconds)
-
-        # set x-ratelimit headers
-        self.set_llm_deployment_success_metrics(
-            kwargs, start_time, end_time, output_tokens
-        )
-        pass
+        # total request latency
+        if start_time is not None and isinstance(start_time, datetime):
+            total_time: timedelta = end_time - start_time
+            total_time_seconds = total_time.total_seconds()
+            self.litellm_request_total_latency_metric.labels(
+                model,
+                user_api_key,
+                user_api_key_alias,
+                user_api_team,
+                user_api_team_alias,
+            ).observe(total_time_seconds)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
@@ -651,23 +763,30 @@ class PrometheusLogger(CustomLogger):
             pass
 
     def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
+        """
+        Sets Failure metrics when an LLM API call fails
+
+        - mark the deployment as partial outage
+        - increment deployment failure responses metric
+        - increment deployment total requests metric
+
+        Args:
+            request_kwargs: dict
+
+        """
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
             standard_logging_payload: StandardLoggingPayload = request_kwargs.get(
                 "standard_logging_object", {}
             )
-            _response_headers = request_kwargs.get("response_headers")
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
-            _metadata = _litellm_params.get("metadata", {})
             litellm_model_name = request_kwargs.get("model", None)
-            api_base = _metadata.get("api_base", None)
-            model_group = _metadata.get("model_group", None)
-            if api_base is None:
-                api_base = _litellm_params.get("api_base", None)
-            llm_provider = _litellm_params.get("custom_llm_provider", None)
-            _model_info = _metadata.get("model_info") or {}
-            model_id = _model_info.get("id", None)
+            model_group = standard_logging_payload.get("model_group", None)
+            api_base = standard_logging_payload.get("api_base", None)
+            model_id = standard_logging_payload.get("model_id", None)
             exception: Exception = request_kwargs.get("exception", None)
+
+            llm_provider = _litellm_params.get("custom_llm_provider", None)
 
             """
             log these labels
@@ -891,7 +1010,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingMetadata,
-            get_standard_logging_metadata,
+            StandardLoggingPayloadSetup,
         )
 
         verbose_logger.debug(
@@ -900,8 +1019,10 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _metadata = kwargs.get("metadata", {})
-        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
-            metadata=_metadata
+        standard_metadata: StandardLoggingMetadata = (
+            StandardLoggingPayloadSetup.get_standard_logging_metadata(
+                metadata=_metadata
+            )
         )
         _new_model = kwargs.get("model")
         self.litellm_deployment_successful_fallbacks.labels(
@@ -923,7 +1044,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingMetadata,
-            get_standard_logging_metadata,
+            StandardLoggingPayloadSetup,
         )
 
         verbose_logger.debug(
@@ -933,8 +1054,10 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         _metadata = kwargs.get("metadata", {})
-        standard_metadata: StandardLoggingMetadata = get_standard_logging_metadata(
-            metadata=_metadata
+        standard_metadata: StandardLoggingMetadata = (
+            StandardLoggingPayloadSetup.get_standard_logging_metadata(
+                metadata=_metadata
+            )
         )
         self.litellm_deployment_failed_fallbacks.labels(
             requested_model=original_model_group,
@@ -951,8 +1074,8 @@ class PrometheusLogger(CustomLogger):
         self,
         state: int,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: Optional[str],
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.litellm_deployment_state.labels(
@@ -973,8 +1096,8 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_partial_outage(
         self,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: Optional[str],
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.set_litellm_deployment_state(
@@ -984,8 +1107,8 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_complete_outage(
         self,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: Optional[str],
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.set_litellm_deployment_state(
@@ -1007,14 +1130,13 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name, model_id, api_base, api_provider, exception_status
         ).inc()
 
+    def _safe_get_remaining_budget(
+        self, max_budget: Optional[float], spend: Optional[float]
+    ) -> float:
+        if max_budget is None:
+            return float("inf")
 
-def safe_get_remaining_budget(
-    max_budget: Optional[float], spend: Optional[float]
-) -> float:
-    if max_budget is None:
-        return float("inf")
+        if spend is None:
+            return max_budget
 
-    if spend is None:
-        return max_budget
-
-    return max_budget - spend
+        return max_budget - spend

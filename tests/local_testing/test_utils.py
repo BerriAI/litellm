@@ -15,6 +15,7 @@ sys.path.insert(
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.proxy.utils import (
     _duration_in_seconds,
     _extract_from_regex,
@@ -328,6 +329,13 @@ def test_validate_environment_api_key():
     assert (
         response_obj["keys_in_environment"] is True
     ), f"Missing keys={response_obj['missing_keys']}"
+
+
+def test_validate_environment_api_base_dynamic():
+    for provider in ["ollama", "ollama_chat"]:
+        kv = validate_environment(provider + "/mistral", api_base="https://example.com")
+        assert kv["keys_in_environment"]
+        assert kv["missing_keys"] == []
 
 
 @mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
@@ -830,6 +838,29 @@ def test_is_base64_encoded():
     assert is_base64_encoded(s=base64_image) is True
 
 
+@mock.patch("httpx.AsyncClient")
+@mock.patch.dict(os.environ, {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"}, clear=True)
+def test_async_http_handler(mock_async_client):
+    import httpx
+
+    timeout = 120
+    event_hooks = {"request": [lambda r: r]}
+    concurrent_limit = 2
+
+    AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+
+    mock_async_client.assert_called_with(
+        cert="/client.pem",
+        event_hooks=event_hooks,
+        headers=headers,
+        limits=httpx.Limits(
+            max_connections=concurrent_limit,
+            max_keepalive_connections=concurrent_limit,
+        ),
+        timeout=timeout,
+        verify="/certificate.pem",
+    )
+
 @pytest.mark.parametrize(
     "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
 )
@@ -842,3 +873,4 @@ def test_supports_audio_input(model, expected_bool):
     supports_pc = supports_audio_input(model=model)
 
     assert supports_pc == expected_bool
+

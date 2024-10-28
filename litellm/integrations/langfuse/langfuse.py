@@ -4,7 +4,7 @@ import copy
 import inspect
 import os
 import traceback
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -13,7 +13,13 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.integrations.langfuse import *
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
+else:
+    DynamicLoggingCache = Any
 
 
 class LangFuseLogger:

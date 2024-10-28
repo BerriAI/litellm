@@ -113,7 +113,7 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
-from .llms.cohere import embed as cohere_embed
+from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.groq.chat.handler import GroqChatCompletion
@@ -4986,7 +4986,6 @@ def speech(
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
     kwargs.pop("tags", [])
 
