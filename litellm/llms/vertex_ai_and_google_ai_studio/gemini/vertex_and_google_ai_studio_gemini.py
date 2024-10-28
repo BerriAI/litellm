@@ -56,6 +56,7 @@ from litellm.types.llms.vertex_ai import (
     FunctionDeclaration,
     GenerateContentResponseBody,
     GenerationConfig,
+    HttpxPartType,
     PartType,
     RequestBody,
     SafetSettingsConfig,
@@ -394,6 +395,7 @@ class VertexGeminiConfig:
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
+        code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
@@ -424,6 +426,8 @@ class VertexGeminiConfig:
             # check if grounding
             if tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif tool.get("code_execution", None) is not None:
+                code_execution = tool["code_execution"]
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
@@ -442,6 +446,8 @@ class VertexGeminiConfig:
         )
         if googleSearchRetrieval is not None:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        if code_execution is not None:
+            _tools["code_execution"] = code_execution
         return [_tools]
 
     def map_openai_params(
@@ -573,6 +579,13 @@ class VertexGeminiConfig:
                 exception_string
             )
         return exception_string
+
+    def get_assistant_content_message(self, parts: List[HttpxPartType]) -> str:
+        content_str = ""
+        for part in parts:
+            if "text" in part:
+                content_str += part["text"]
+        return content_str
 
 
 class GoogleAIStudioGeminiConfig(
@@ -842,7 +855,7 @@ class VertexLLM(VertexBase):
                 ## CONTENT POLICY VIOLATION ERROR
                 model_response.choices[0].finish_reason = "content_filter"
 
-                chat_completion_message = {
+                _chat_completion_message = {
                     "role": "assistant",
                     "content": None,
                 }
@@ -850,7 +863,7 @@ class VertexLLM(VertexBase):
                 choice = litellm.Choices(
                     finish_reason="content_filter",
                     index=0,
-                    message=chat_completion_message,  # type: ignore
+                    message=_chat_completion_message,
                     logprobs=None,
                     enhancements=None,
                 )
@@ -883,7 +896,7 @@ class VertexLLM(VertexBase):
             citation_metadata: List = []
             ## GET TEXT ##
             chat_completion_message = {"role": "assistant"}
-            content_str = ""
+            content_str: str = ""
             tools: List[ChatCompletionToolCallChunk] = []
             functions: Optional[ChatCompletionToolCallFunctionChunk] = None
             if _candidates:
@@ -899,11 +912,12 @@ class VertexLLM(VertexBase):
 
                     if "citationMetadata" in candidate:
                         citation_metadata.append(candidate["citationMetadata"])
-                    if (
-                        "parts" in candidate["content"]
-                        and "text" in candidate["content"]["parts"][0]
-                    ):
-                        content_str = candidate["content"]["parts"][0]["text"]
+                    if "parts" in candidate["content"]:
+                        content_str = (
+                            VertexGeminiConfig().get_assistant_content_message(
+                                parts=candidate["content"]["parts"]
+                            )
+                        )
 
                     if (
                         "parts" in candidate["content"]

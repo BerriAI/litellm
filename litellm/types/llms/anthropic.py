@@ -101,6 +101,7 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
             Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
         ],
     ]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesUserMessageValues = Union[
