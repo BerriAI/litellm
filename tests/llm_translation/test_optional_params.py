@@ -821,3 +821,129 @@ def test_anthropic_computer_tool_use():
     assert optional_params["tools"][0]["display_height_px"] == 100
     assert optional_params["tools"][0]["display_width_px"] == 100
     assert optional_params["tools"][0]["display_number"] == 1
+
+
+def test_vertex_schema_field():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "json",
+                "description": "Respond with a JSON object.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thinking": {
+                            "type": "string",
+                            "description": "Your internal thoughts on different problem details given the guidance.",
+                        },
+                        "problems": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "icon": {
+                                        "type": "string",
+                                        "enum": [
+                                            "BarChart2",
+                                            "Bell",
+                                            "Brain",
+                                            "Briefcase",
+                                            "Calendar",
+                                            "ClipboardList",
+                                            "Clock",
+                                            "Cloud",
+                                            "Code",
+                                            "CreditCard",
+                                            "Database",
+                                            "DollarSign",
+                                            "FileBarChart",
+                                            "FileSearch",
+                                            "FileSpreadsheet",
+                                            "FileText",
+                                            "GitBranch",
+                                            "Globe",
+                                            "Headphones",
+                                            "Image",
+                                            "Inbox",
+                                            "Key",
+                                            "Layers",
+                                            "ListChecks",
+                                            "Mail",
+                                            "MessageSquare",
+                                            "Mic",
+                                            "PieChart",
+                                            "Printer",
+                                            "Repeat",
+                                            "Send",
+                                            "Server",
+                                            "Settings",
+                                            "Share2",
+                                            "Shield",
+                                            "ShoppingCart",
+                                            "Smartphone",
+                                            "Tag",
+                                            "Trash2",
+                                            "Users",
+                                            "Video",
+                                            "Webhook",
+                                            "Wifi",
+                                            "Zap",
+                                        ],
+                                        "description": "The name of a Lucide icon to display",
+                                    },
+                                    "color": {
+                                        "type": "string",
+                                        "description": "A Tailwind color class for the icon, e.g., 'text-red-500'",
+                                    },
+                                    "problem": {
+                                        "type": "string",
+                                        "description": "The title of the problem being addressed, approximately 3-5 words.",
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": "A brief explanation of the problem, approximately 20 words.",
+                                    },
+                                    "impacts": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "A list of potential impacts or consequences of the problem, approximately 3 words each.",
+                                    },
+                                    "automations": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "A list of potential automations to address the problem, approximately 3-5 words each.",
+                                    },
+                                },
+                                "required": [
+                                    "icon",
+                                    "color",
+                                    "problem",
+                                    "description",
+                                    "impacts",
+                                    "automations",
+                                ],
+                                "additionalProperties": False,
+                            },
+                            "description": "Please generate problem cards that match this guidance.",
+                        },
+                    },
+                    "required": ["thinking", "problems"],
+                    "additionalProperties": False,
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                },
+            },
+        }
+    ]
+
+    optional_params = get_optional_params(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+    )
+    print(optional_params)
+    print(optional_params["tools"][0]["function_declarations"][0])
+    assert (
+        "$schema"
+        not in optional_params["tools"][0]["function_declarations"][0]["parameters"]
+    )
