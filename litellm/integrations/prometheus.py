@@ -1075,7 +1075,7 @@ class PrometheusLogger(CustomLogger):
         state: int,
         litellm_model_name: str,
         model_id: Optional[str],
-        api_base: str,
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.litellm_deployment_state.labels(
@@ -1097,7 +1097,7 @@ class PrometheusLogger(CustomLogger):
         self,
         litellm_model_name: str,
         model_id: Optional[str],
-        api_base: str,
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.set_litellm_deployment_state(
@@ -1107,8 +1107,8 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_complete_outage(
         self,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: Optional[str],
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.set_litellm_deployment_state(
