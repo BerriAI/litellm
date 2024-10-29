@@ -440,12 +440,12 @@ def test_update_usage(model_list):
     )
     deployment_id = deployment["model_info"]["id"]
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
     assert request_count == 1
 
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
 
     assert request_count == 2
@@ -482,7 +482,9 @@ def test_should_raise_content_policy_error(model_list, finish_reason, expected_e
 def test_get_healthy_deployments(model_list):
     """Test if the '_get_healthy_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_healthy_deployments(model="gpt-3.5-turbo")
+    deployments = router._get_healthy_deployments(
+        model="gpt-3.5-turbo", parent_otel_span=None
+    )
     assert len(deployments) > 0
 
 
@@ -756,6 +758,7 @@ def test_track_deployment_metrics(model_list):
             model="gpt-3.5-turbo",
             usage={"total_tokens": 100},
         ),
+        parent_otel_span=None,
     )
 
 
