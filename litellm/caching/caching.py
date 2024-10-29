@@ -271,7 +271,7 @@ class Cache:
                     cache_key += f"{str(param)}: {str(param_value)}"
 
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
-        hashed_cache_key = self._get_hashed_cache_key(cache_key)
+        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_redis_namespace_to_cache_key(
             hashed_cache_key, **kwargs
         )
@@ -431,7 +431,8 @@ class Cache:
         """
         return set(["metadata"])
 
-    def _get_hashed_cache_key(self, cache_key: str) -> str:
+    @staticmethod
+    def _get_hashed_cache_key(cache_key: str) -> str:
         """
         Get the hashed cache key for the given cache key.
 
