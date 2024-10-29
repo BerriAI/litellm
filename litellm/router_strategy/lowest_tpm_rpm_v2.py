@@ -2,7 +2,7 @@
 #   identifies lowest tpm deployment
 import random
 import traceback
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 from pydantic import BaseModel
@@ -12,8 +12,16 @@ from litellm import token_counter
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
 from litellm.utils import get_utc_datetime, print_verbose
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class LiteLLMBase(BaseModel):
@@ -136,7 +144,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
-    async def async_pre_call_check(self, deployment: Dict) -> Optional[Dict]:
+    async def async_pre_call_check(
+        self, deployment: Dict, parent_otel_span: Optional[Span]
+    ) -> Optional[Dict]:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -192,7 +202,10 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
                 result = await self.router_cache.async_increment_cache(
-                    key=rpm_key, value=1, ttl=self.routing_args.ttl
+                    key=rpm_key,
+                    value=1,
+                    ttl=self.routing_args.ttl,
+                    parent_otel_span=parent_otel_span,
                 )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
@@ -301,10 +314,13 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # Update usage
                 # ------------
                 # update cache
-
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 ## TPM
                 await self.router_cache.async_increment_cache(
-                    key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
+                    key=tpm_key,
+                    value=total_tokens,
+                    ttl=self.routing_args.ttl,
+                    parent_otel_span=parent_otel_span,
                 )
 
                 ### TESTING ###
@@ -547,6 +563,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
+        parent_otel_span: Optional[Span] = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -572,10 +589,10 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 rpm_keys.append(rpm_key)
 
         tpm_values = self.router_cache.batch_get_cache(
-            keys=tpm_keys
+            keys=tpm_keys, parent_otel_span=parent_otel_span
         )  # [1, 2, None, ..]
         rpm_values = self.router_cache.batch_get_cache(
-            keys=rpm_keys
+            keys=rpm_keys, parent_otel_span=parent_otel_span
         )  # [1, 2, None, ..]
 
         deployment = self._common_checks_available_deployment(
