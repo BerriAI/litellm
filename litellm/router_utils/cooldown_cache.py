@@ -105,7 +105,7 @@ class CooldownCache:
         results = await self.cache.async_batch_get_cache(
             keys=keys, parent_otel_span=parent_otel_span
         )
-        active_cooldowns = []
+        active_cooldowns: List[Tuple[str, CooldownCacheValue]] = []
 
         if results is None:
             return active_cooldowns
