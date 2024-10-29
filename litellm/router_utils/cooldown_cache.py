@@ -98,6 +98,9 @@ class CooldownCache:
     async def async_get_redis_cooldowns(
         self, keys: List[str], parent_otel_span: Optional[Span]
     ):
+        verbose_logger.debug(
+            "Enters 'async_get_redis_cooldowns' logic for cooldown deployments"
+        )
         hashed_key = Cache._get_hashed_cache_key(cache_key=",".join(keys))
         results = await self.in_memory_cache.async_get_cache(key=hashed_key)
         if results is None:
@@ -130,6 +133,12 @@ class CooldownCache:
         results = None
         results = await self.cache.async_batch_get_cache(
             keys=keys, parent_otel_span=parent_otel_span, local_only=True
+        )
+
+        verbose_logger.debug(
+            "results from in-memory cache for individual deployments: {}".format(
+                results
+            )
         )
 
         if results is None or any(result is None for result in results):

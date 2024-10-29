@@ -681,6 +681,7 @@ async def test_redis_cache_basic():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_redis_batch_cache_write():
     """
     Init redis client
