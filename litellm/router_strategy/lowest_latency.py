@@ -243,7 +243,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "latency"
                         ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
 
-                    self.router_cache.set_cache(
+                    await self.router_cache.async_set_cache(
                         key=latency_key,
                         value=request_count_dict,
                         ttl=self.routing_args.ttl,
@@ -384,7 +384,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id][precise_minute].get("rpm", 0) + 1
                 )
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )  # reset map within window
 

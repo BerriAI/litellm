@@ -731,6 +731,7 @@ class RedisCache(BaseCache):
         """
         Use Redis for bulk read operations
         """
+
         _redis_client = await self.init_async_client()
         key_value_dict = {}
         start_time = time.time()

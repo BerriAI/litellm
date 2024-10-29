@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
+
 
 class CooldownCacheValue(TypedDict):
     exception_received: str
@@ -109,6 +116,7 @@ class CooldownCache:
 
         if results is None:
             return active_cooldowns
+
 
         # Process the results
         for model_id, result in zip(model_ids, results):

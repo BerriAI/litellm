@@ -40,7 +40,6 @@ class LimitedSizeOrderedDict(OrderedDict):
             self.popitem(last=False)
         super().__setitem__(key, value)
 
-
 class DualCache(BaseCache):
     """
     DualCache is a cache implementation that updates both Redis and an in-memory cache simultaneously.
@@ -195,6 +194,7 @@ class DualCache(BaseCache):
                                 key, redis_result[key], **kwargs
                             )
 
+
                     for key, value in redis_result.items():
                         result[keys.index(key)] = value
 
@@ -249,7 +249,6 @@ class DualCache(BaseCache):
         keys: list,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
-        local_only_if_any_exists: bool = False,
         **kwargs,
     ):
         try:
@@ -284,6 +283,7 @@ class DualCache(BaseCache):
                     redis_result = await self.redis_cache.async_batch_get_cache(
                         sublist_keys, parent_otel_span=parent_otel_span
                     )
+
 
                     if redis_result is not None:
                         # Update in-memory cache with the value from Redis
@@ -393,7 +393,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only is False:
                 _ = await self.redis_cache.async_set_cache_sadd(
-                    key, value, ttl=kwargs.get("ttl", None) ** kwargs
+                    key, value, ttl=kwargs.get("ttl", None)
                 )
 
             return None

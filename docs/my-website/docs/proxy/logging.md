@@ -1468,6 +1468,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## Logging Proxy Input/Output - DataDog
 
+LiteLLM Supports logging to the following Datdog Integrations:
+- `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
+- `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+
+<Tabs>
+<TabItem value="datadog" label="Datadog Logs">
+
 We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog
 
 **Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
@@ -1481,6 +1488,21 @@ litellm_settings:
   success_callback: ["datadog"] # logs llm success logs on datadog
   service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
+
+</TabItem>
+<TabItem value="datadog_llm_observability" label="Datadog LLM Observability">
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
+```
+
+</TabItem>
+</Tabs>
 
 **Step 2**: Set Required env variables for datadog
 

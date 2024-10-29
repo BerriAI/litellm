@@ -5127,6 +5127,7 @@ class Router:
             and self.routing_strategy != "simple-shuffle"
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
+            and self.routing_strategy != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -5148,6 +5149,9 @@ class Router:
 
             cooldown_deployments = await _async_get_cooldown_deployments(
                 litellm_router_instance=self, parent_otel_span=parent_otel_span
+            )
+            verbose_router_logger.debug(
+                f"async cooldown deployments: {cooldown_deployments}"
             )
             verbose_router_logger.debug(f"cooldown_deployments: {cooldown_deployments}")
             healthy_deployments = self._filter_cooldown_deployments(
@@ -5237,6 +5241,16 @@ class Router:
                     llm_router_instance=self,
                     healthy_deployments=healthy_deployments,
                     model=model,
+                )
+            elif (
+                self.routing_strategy == "least-busy"
+                and self.leastbusy_logger is not None
+            ):
+                deployment = (
+                    await self.leastbusy_logger.async_get_available_deployments(
+                        model_group=model,
+                        healthy_deployments=healthy_deployments,  # type: ignore
+                    )
                 )
             else:
                 deployment = None

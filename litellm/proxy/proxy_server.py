@@ -250,7 +250,12 @@ from litellm.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.secret_managers.google_kms import load_google_kms
-from litellm.secret_managers.main import get_secret, get_secret_str, str_to_bool
+from litellm.secret_managers.main import (
+    get_secret,
+    get_secret_bool,
+    get_secret_str,
+    str_to_bool,
+)
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -2894,9 +2899,9 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
-        store_model_in_db: bool,
     ):
         """Initializes scheduled background jobs"""
+        global store_model_in_db
         scheduler = AsyncIOScheduler()
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
@@ -2921,8 +2926,9 @@ class ProxyStartupEvent:
 
         ### ADD NEW MODELS ###
         store_model_in_db = (
-            get_secret("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
-        )  # type: ignore
+            get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
+        )
+
         if store_model_in_db is True:
             scheduler.add_job(
                 proxy_config.add_deployment,
@@ -3141,7 +3147,6 @@ async def startup_event():
             proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
-            store_model_in_db=store_model_in_db,
         )
 
 
