@@ -110,14 +110,14 @@ class AnthropicConfig:
             betas.append("prompt-caching-2024-07-31")
         if computer_tool_used:
             betas.append("computer-use-2024-10-22")
-        betas_str = ",".join(betas)
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
-            "anthropic-beta": betas_str,
             "x-api-key": api_key,
             "accept": "application/json",
             "content-type": "application/json",
         }
+        if len(betas) > 0:
+            headers["anthropic-beta"] = ",".join(betas)
         return headers
 
     def _map_tool_choice(

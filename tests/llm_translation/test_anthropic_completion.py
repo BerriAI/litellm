@@ -556,3 +556,27 @@ def test_anthropic_computer_tool_use():
     )
 
     print(resp)
+
+
+@pytest.mark.parametrize(
+    "computer_tool_used, prompt_caching_set, expected_beta_header",
+    [
+        (True, False, True),
+        (False, True, True),
+        (True, True, True),
+        (False, False, False),
+    ],
+)
+def test_anthropic_beta_header(
+    computer_tool_used, prompt_caching_set, expected_beta_header
+):
+    headers = litellm.AnthropicConfig().get_anthropic_headers(
+        api_key="fake-api-key",
+        computer_tool_used=computer_tool_used,
+        prompt_caching_set=prompt_caching_set,
+    )
+
+    if expected_beta_header:
+        assert "anthropic-beta" in headers
+    else:
+        assert "anthropic-beta" not in headers
