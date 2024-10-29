@@ -158,7 +158,7 @@ async def test_dual_cache_batch_operations(is_async):
         if is_async:
             results = await dual_cache.async_batch_get_cache(test_keys)
         else:
-            results = dual_cache.batch_get_cache(test_keys)
+            results = dual_cache.batch_get_cache(test_keys, parent_otel_span=None)
 
         assert results == test_values
         mock_redis_get.assert_not_called()
