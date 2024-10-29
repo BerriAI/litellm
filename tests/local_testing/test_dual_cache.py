@@ -181,7 +181,10 @@ async def test_dual_cache_increment(is_async):
     ) as mock_redis_increment:
         if is_async:
             result = await dual_cache.async_increment_cache(
-                test_key, increment_value, local_only=True
+                test_key,
+                increment_value,
+                local_only=True,
+                parent_otel_span=None,
             )
         else:
             result = dual_cache.increment_cache(
