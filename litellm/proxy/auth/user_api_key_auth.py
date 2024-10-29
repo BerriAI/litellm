@@ -152,7 +152,7 @@ def _is_api_route_allowed(
     _user_role = _get_user_role(user_obj=user_obj)
 
     if valid_token is None:
-        raise Exception("Invalid proxy server token passed")
+        raise Exception("Invalid proxy server token passed. valid_token=None.")
 
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
@@ -769,6 +769,11 @@ async def user_api_key_auth(  # noqa: PLR0915
                 )
 
             except Exception:
+                verbose_logger.info(
+                    "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to find token={} in cache or `LiteLLM_VerificationTokenTable`. Defaulting 'valid_token' to None'".format(
+                        api_key
+                    )
+                )
                 valid_token = None
 
         user_obj: Optional[LiteLLM_UserTable] = None

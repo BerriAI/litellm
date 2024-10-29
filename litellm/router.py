@@ -186,6 +186,9 @@ class Router:
         default_priority: Optional[int] = None,
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
+        max_fallbacks: Optional[
+            int
+        ] = None,  # max fallbacks to try before exiting the call. Defaults to 5.
         timeout: Optional[float] = None,
         default_litellm_params: Optional[
             dict
@@ -406,6 +409,13 @@ class Router:
             self.num_retries = litellm.num_retries
         else:
             self.num_retries = openai.DEFAULT_MAX_RETRIES
+
+        if max_fallbacks is not None:
+            self.max_fallbacks = max_fallbacks
+        elif litellm.max_fallbacks is not None:
+            self.max_fallbacks = litellm.max_fallbacks
+        else:
+            self.max_fallbacks = litellm.ROUTER_MAX_FALLBACKS
 
         self.timeout = timeout or litellm.request_timeout
 
@@ -2669,8 +2679,19 @@ class Router:
             if original_model_group is None:
                 raise e
 
+            input_kwargs = {
+                "litellm_router": self,
+                "original_exception": original_exception,
+                **kwargs,
+            }
+
+            if "max_fallbacks" not in input_kwargs:
+                input_kwargs["max_fallbacks"] = self.max_fallbacks
+            if "fallback_depth" not in input_kwargs:
+                input_kwargs["fallback_depth"] = 0
+
             try:
-                verbose_router_logger.debug("Trying to fallback b/w models")
+                verbose_router_logger.info("Trying to fallback b/w models")
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
                         fallback_model_group: Optional[List[str]] = (
@@ -2682,13 +2703,16 @@ class Router:
                         if fallback_model_group is None:
                             raise original_exception
 
+                        input_kwargs.update(
+                            {
+                                "fallback_model_group": fallback_model_group,
+                                "original_model_group": original_model_group,
+                            }
+                        )
+
                         response = await run_async_fallback(
                             *args,
-                            litellm_router=self,
-                            fallback_model_group=fallback_model_group,
-                            original_model_group=original_model_group,
-                            original_exception=original_exception,
-                            **kwargs,
+                            **input_kwargs,
                         )
                         return response
 
@@ -2715,13 +2739,16 @@ class Router:
                         if fallback_model_group is None:
                             raise original_exception
 
+                        input_kwargs.update(
+                            {
+                                "fallback_model_group": fallback_model_group,
+                                "original_model_group": original_model_group,
+                            }
+                        )
+
                         response = await run_async_fallback(
                             *args,
-                            litellm_router=self,
-                            fallback_model_group=fallback_model_group,
-                            original_model_group=original_model_group,
-                            original_exception=original_exception,
-                            **kwargs,
+                            **input_kwargs,
                         )
                         return response
                     else:
@@ -2764,13 +2791,16 @@ class Router:
                             original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"  # type: ignore
                         raise original_exception
 
+                    input_kwargs.update(
+                        {
+                            "fallback_model_group": fallback_model_group,
+                            "original_model_group": original_model_group,
+                        }
+                    )
+
                     response = await run_async_fallback(
                         *args,
-                        litellm_router=self,
-                        fallback_model_group=fallback_model_group,
-                        original_model_group=original_model_group,
-                        original_exception=original_exception,
-                        **kwargs,
+                        **input_kwargs,
                     )
                     return response
             except Exception as new_exception:
@@ -2979,7 +3009,9 @@ class Router:
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group = kwargs.get("model")
-        response = await original_function(*args, **kwargs)
+        response = original_function(*args, **kwargs)
+        if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
+            response = await response
         ## PROCESS RESPONSE HEADERS
         await self.set_response_headers(response=response, model_group=model_group)
 
@@ -3077,120 +3109,38 @@ class Router:
 
     def function_with_fallbacks(self, *args, **kwargs):
         """
-        Try calling the function_with_retries
-        If it fails after num_retries, fall back to another model group
+        Sync wrapper for async_function_with_fallbacks
+
+        Wrapped to reduce code duplication and prevent bugs.
         """
-        model_group: Optional[str] = kwargs.get("model")
-        fallbacks = kwargs.get("fallbacks", self.fallbacks)
-        context_window_fallbacks = kwargs.get(
-            "context_window_fallbacks", self.context_window_fallbacks
-        )
-        content_policy_fallbacks = kwargs.get(
-            "content_policy_fallbacks", self.content_policy_fallbacks
-        )
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_in_new_loop():
+            """Run the coroutine in a new event loop within this thread."""
+            new_loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(new_loop)
+                return new_loop.run_until_complete(
+                    self.async_function_with_fallbacks(*args, **kwargs)
+                )
+            finally:
+                new_loop.close()
+                asyncio.set_event_loop(None)
 
         try:
-            self._handle_mock_testing_fallbacks(
-                kwargs=kwargs,
-                model_group=model_group,
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-            )
-            response = self.function_with_retries(*args, **kwargs)
-            return response
-        except Exception as e:
-            original_exception = e
-            original_model_group: Optional[str] = kwargs.get("model")
-            verbose_router_logger.debug(f"An exception occurs {original_exception}")
+            # First, try to get the current event loop
+            loop = asyncio.get_running_loop()
 
-            if original_model_group is None:
-                raise e
+            # If we're already in an event loop, run in a separate thread
+            # to avoid nested event loop issues
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result()
 
-            try:
-                verbose_router_logger.debug(
-                    f"Trying to fallback b/w models. Initial model group: {model_group}"
-                )
-                if (
-                    isinstance(e, litellm.ContextWindowExceededError)
-                    and context_window_fallbacks is not None
-                ):
-                    fallback_model_group = None
-
-                    fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
-                        )
-                    )
-
-                    if fallback_model_group is None:
-                        raise original_exception
-
-                    return run_sync_fallback(
-                        *args,
-                        litellm_router=self,
-                        fallback_model_group=fallback_model_group,
-                        original_model_group=original_model_group,
-                        original_exception=original_exception,
-                        **kwargs,
-                    )
-                elif (
-                    isinstance(e, litellm.ContentPolicyViolationError)
-                    and content_policy_fallbacks is not None
-                ):
-                    fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
-                        )
-                    )
-
-                    if fallback_model_group is None:
-                        raise original_exception
-
-                    return run_sync_fallback(
-                        *args,
-                        litellm_router=self,
-                        fallback_model_group=fallback_model_group,
-                        original_model_group=original_model_group,
-                        original_exception=original_exception,
-                        **kwargs,
-                    )
-                elif fallbacks is not None:
-                    verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
-                    fallback_model_group = None
-                    generic_fallback_idx: Optional[int] = None
-                    for idx, item in enumerate(fallbacks):
-                        if isinstance(item, dict):
-                            if list(item.keys())[0] == model_group:
-                                fallback_model_group = item[model_group]
-                                break
-                            elif list(item.keys())[0] == "*":
-                                generic_fallback_idx = idx
-                        elif isinstance(item, str):
-                            fallback_model_group = [fallbacks.pop(idx)]
-                    ## if none, check for generic fallback
-                    if (
-                        fallback_model_group is None
-                        and generic_fallback_idx is not None
-                    ):
-                        fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-
-                    if fallback_model_group is None:
-                        raise original_exception
-
-                    return run_sync_fallback(
-                        *args,
-                        litellm_router=self,
-                        fallback_model_group=fallback_model_group,
-                        original_model_group=original_model_group,
-                        original_exception=original_exception,
-                        **kwargs,
-                    )
-            except Exception as e:
-                raise e
-            raise original_exception
+        except RuntimeError:
+            # No running event loop, we can safely run in this thread
+            return run_in_new_loop()
 
     def _get_fallback_model_group_from_fallbacks(
         self,
