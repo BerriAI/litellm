@@ -288,8 +288,8 @@ class AnthropicConfig:
             and has_tool_call_blocks(messages)
         ):
             if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(
-                    custom_llm_provider="bedrock_converse"
+                optional_params["tools"] = self._map_tools(
+                    add_dummy_tool(custom_llm_provider="anthropic")
                 )
             else:
                 raise litellm.UnsupportedParamsError(
