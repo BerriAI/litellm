@@ -153,8 +153,8 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import time
 
-    # litellm.num_retries = num_retries
-    # litellm.request_timeout = 0.000001
+    litellm.num_retries = num_retries
+    litellm.request_timeout = 0.000001
 
     router = Router(
         model_list=[
@@ -162,11 +162,9 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
                     "model": "anthropic/claude-3-haiku-20240307",
-                    "timeout": 0.000001,
                 },
             }
         ],
-        num_retries=num_retries,
     )
 
     custom_client = HTTPHandler()
