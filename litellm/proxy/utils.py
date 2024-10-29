@@ -140,25 +140,21 @@ def safe_deep_copy(data):
 def log_to_opentelemetry(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        start_time = datetime.now()
+        start_time: datetime = datetime.now()
 
         try:
             result = await func(*args, **kwargs)
-            end_time = datetime.now()
+            end_time: datetime = datetime.now()
+
+            from litellm.proxy.proxy_server import proxy_logging_obj
 
             # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
-            if (
-                "parent_otel_span" in kwargs
-                and kwargs["parent_otel_span"] is not None
-                and "proxy_logging_obj" in kwargs
-                and kwargs["proxy_logging_obj"] is not None
-            ):
-                proxy_logging_obj = kwargs["proxy_logging_obj"]
+            if "PROXY" not in func.__name__:
                 await proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
-                    parent_otel_span=kwargs["parent_otel_span"],
-                    duration=0.0,
+                    parent_otel_span=kwargs.get("parent_otel_span", None),
+                    duration=(end_time - start_time).total_seconds(),
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
@@ -179,8 +175,6 @@ def log_to_opentelemetry(func):
                     kwargs=passed_kwargs
                 )
                 if parent_otel_span is not None:
-                    from litellm.proxy.proxy_server import proxy_logging_obj
-
                     metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
                     await proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.BATCH_WRITE_TO_DB,
@@ -194,28 +188,23 @@ def log_to_opentelemetry(func):
             # end of logging to otel
             return result
         except Exception as e:
-            end_time = datetime.now()
-            if (
-                "parent_otel_span" in kwargs
-                and kwargs["parent_otel_span"] is not None
-                and "proxy_logging_obj" in kwargs
-                and kwargs["proxy_logging_obj"] is not None
-            ):
-                proxy_logging_obj = kwargs["proxy_logging_obj"]
-                await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
-                    error=e,
-                    service=ServiceTypes.DB,
-                    call_type=func.__name__,
-                    parent_otel_span=kwargs["parent_otel_span"],
-                    duration=0.0,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "function_name": func.__name__,
-                        "function_kwargs": kwargs,
-                        "function_args": args,
-                    },
-                )
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            end_time: datetime = datetime.now()
+            await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                error=e,
+                service=ServiceTypes.DB,
+                call_type=func.__name__,
+                parent_otel_span=kwargs.get("parent_otel_span"),
+                duration=(end_time - start_time).total_seconds(),
+                start_time=start_time,
+                end_time=end_time,
+                event_metadata={
+                    "function_name": func.__name__,
+                    "function_kwargs": kwargs,
+                    "function_args": args,
+                },
+            )
             raise e
 
     return wrapper
