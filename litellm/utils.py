@@ -5361,7 +5361,7 @@ def validate_environment(  # noqa: PLR0915
             if "CODESTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.append("GROQ_API_KEY")
+                missing_keys.append("CODESTRAL_API_KEY")
         elif custom_llm_provider == "deepseek":
             if "DEEPSEEK_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5451,7 +5451,7 @@ def validate_environment(  # noqa: PLR0915
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_PROJECT"])
+                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
         ## huggingface
         elif model in litellm.huggingface_models:
             if "HUGGINGFACE_API_KEY" in os.environ:

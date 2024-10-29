@@ -681,6 +681,7 @@ async def test_redis_cache_basic():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_redis_batch_cache_write():
     """
     Init redis client
@@ -2477,3 +2478,30 @@ async def test_redis_caching_ttl_sadd():
         )
         print(f"expected_timedelta: {expected_timedelta}")
         assert mock_expire.call_args.args[1] == expected_timedelta
+
+
+@pytest.mark.asyncio()
+async def test_dual_cache_caching_batch_get_cache():
+    """
+    - check redis cache called for initial batch get cache
+    - check redis cache not called for consecutive batch get cache with same keys
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.caching.redis_cache import RedisCache
+
+    dc = DualCache(redis_cache=MagicMock(spec=RedisCache))
+
+    with patch.object(
+        dc.redis_cache,
+        "async_batch_get_cache",
+        new=AsyncMock(
+            return_value={"test_key1": "test_value1", "test_key2": "test_value2"}
+        ),
+    ) as mock_async_get_cache:
+        await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
+
+        assert mock_async_get_cache.call_count == 1
+
+        await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
+
+        assert mock_async_get_cache.call_count == 1

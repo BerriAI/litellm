@@ -65,7 +65,9 @@ def test_get_available_deployments():
 # test_get_available_deployments()
 
 
-def test_router_get_available_deployments():
+@pytest.mark.parametrize("async_test", [True, False])
+@pytest.mark.asyncio
+async def test_router_get_available_deployments(async_test):
     """
     Tests if 'get_available_deployments' returns the least busy deployment
     """
@@ -114,9 +116,14 @@ def test_router_get_available_deployments():
     deployment = "azure/chatgpt-v-2"
     request_count_dict = {1: 10, 2: 54, 3: 100}
     cache_key = f"{model_group}_request_count"
-    router.cache.set_cache(key=cache_key, value=request_count_dict)
-
-    deployment = router.get_available_deployment(model=model_group, messages=None)
+    if async_test is True:
+        await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
+        deployment = await router.async_get_available_deployment(
+            model=model_group, messages=None
+        )
+    else:
+        router.cache.set_cache(key=cache_key, value=request_count_dict)
+        deployment = router.get_available_deployment(model=model_group, messages=None)
     print(f"deployment: {deployment}")
     assert deployment["model_info"]["id"] == "1"
 

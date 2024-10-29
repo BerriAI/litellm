@@ -139,18 +139,22 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # update cache
 
                 ## TPM
-                request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=tpm_key) or {}
+                )
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )
 
                 ## RPM
-                request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=rpm_key) or {}
+                )
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )
 

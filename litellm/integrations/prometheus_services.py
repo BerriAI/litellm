@@ -15,6 +15,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
@@ -80,29 +81,29 @@ class PrometheusServicesLogger:
                 return True
         return False
 
-    def get_metric(self, metric_name):
-        for metric in self.REGISTRY.collect():
-            for sample in metric.samples:
-                if metric_name == sample.name:
-                    return metric
-        return None
+    def _get_metric(self, metric_name):
+        """
+        Helper function to get a metric from the registry by name.
+        """
+        return self.REGISTRY._names_to_collectors.get(metric_name)
 
     def create_histogram(self, service: str, type_of_request: str):
         metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
-            return self.get_metric(metric_name)
+            return self._get_metric(metric_name)
         return self.Histogram(
             metric_name,
             "Latency for {} service".format(service),
             labelnames=[service],
+            buckets=LATENCY_BUCKETS,
         )
 
     def create_counter(self, service: str, type_of_request: str):
         metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
-            return self.get_metric(metric_name)
+            return self._get_metric(metric_name)
         return self.Counter(
             metric_name,
             "Total {} for {} service".format(type_of_request, service),
