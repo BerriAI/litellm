@@ -15,6 +15,7 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionCachedContent,
     ChatCompletionSystemMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
@@ -217,8 +218,12 @@ class AnthropicConfig:
         _cache_control_function = tool.get("function", {}).get("cache_control", None)
         if _cache_control is not None:
             returned_tool["cache_control"] = _cache_control
-        elif _cache_control_function is not None:
-            returned_tool["cache_control"] = _cache_control_function
+        elif _cache_control_function is not None and isinstance(
+            _cache_control_function, dict
+        ):
+            returned_tool["cache_control"] = ChatCompletionCachedContent(
+                **_cache_control_function  # type: ignore
+            )
 
         return returned_tool
 
