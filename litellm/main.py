@@ -4472,8 +4472,9 @@ def image_generation(  # noqa: PLR0915
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         client = kwargs.get("client", None)
         extra_headers = kwargs.get("extra_headers", None)
-        headers: dict = kwargs.get("headers", None) or extra_headers or {}
-        headers.update(extra_headers)
+        headers: dict = kwargs.get("headers", None) or {}
+        if extra_headers is not None:
+            headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
