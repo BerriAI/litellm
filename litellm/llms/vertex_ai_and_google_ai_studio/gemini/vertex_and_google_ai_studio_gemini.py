@@ -211,6 +211,8 @@ class VertexAIConfig:
                         description=tool["function"].get("description", ""),
                         parameters=tool["function"].get("parameters", {}),
                     )
+                    if gtool_func_declaration["parameters"]["properties"] == {}:
+                        del gtool_func_declaration["parameters"]
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
                     generative_models.Tool(
@@ -418,6 +420,8 @@ class VertexGeminiConfig:
                     description=openai_function_object.get("description", ""),
                     parameters=openai_function_object.get("parameters", {}),
                 )
+                if gtool_func_declaration["parameters"]["properties"] == {}:
+                    del gtool_func_declaration["parameters"]
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
                 # assume it's a provider-specific param
