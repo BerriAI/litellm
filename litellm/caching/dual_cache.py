@@ -8,8 +8,9 @@ Has 4 primary methods:
     - async_get_cache
 """
 
+import time
 import traceback
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -25,6 +26,20 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+from collections import OrderedDict
+
+
+class LimitedSizeOrderedDict(OrderedDict):
+    def __init__(self, *args, max_size=100, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        # If inserting a new key exceeds max size, remove the oldest item
+        if len(self) >= self.max_size:
+            self.popitem(last=False)
+        super().__setitem__(key, value)
+
 
 class DualCache(BaseCache):
     """
@@ -39,13 +54,18 @@ class DualCache(BaseCache):
         redis_cache: Optional[RedisCache] = None,
         default_in_memory_ttl: Optional[float] = None,
         default_redis_ttl: Optional[float] = None,
+        default_redis_batch_cache_expiry: float = 1,
+        default_max_redis_batch_cache_size: int = 100,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
         self.in_memory_cache = in_memory_cache or InMemoryCache()
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
-
+        self.last_redis_batch_access_time = LimitedSizeOrderedDict(
+            max_size=default_max_redis_batch_cache_size
+        )
+        self.redis_batch_cache_expiry = default_redis_batch_cache_expiry
         self.default_in_memory_ttl = (
             default_in_memory_ttl or litellm.default_in_memory_ttl
         )
@@ -150,20 +170,33 @@ class DualCache(BaseCache):
                 - for the none values in the result
                 - check the redis cache
                 """
-                sublist_keys = [
-                    key for key, value in zip(keys, result) if value is None
-                ]
-                # If not found in in-memory cache, try fetching from Redis
-                redis_result = self.redis_cache.batch_get_cache(
-                    sublist_keys, parent_otel_span=parent_otel_span
-                )
-                if redis_result is not None:
-                    # Update in-memory cache with the value from Redis
-                    for key in redis_result:
-                        self.in_memory_cache.set_cache(key, redis_result[key], **kwargs)
+                # Track the last access time for these keys
+                current_time = time.time()
+                key_tuple = tuple(keys)
 
-                for key, value in redis_result.items():
-                    result[keys.index(key)] = value
+                # Only hit Redis if the last access time was more than 5 seconds ago
+                if (
+                    key_tuple not in self.last_redis_batch_access_time
+                    or current_time - self.last_redis_batch_access_time[key_tuple]
+                    >= self.redis_batch_cache_expiry
+                ):
+
+                    sublist_keys = [
+                        key for key, value in zip(keys, result) if value is None
+                    ]
+                    # If not found in in-memory cache, try fetching from Redis
+                    redis_result = self.redis_cache.batch_get_cache(
+                        sublist_keys, parent_otel_span=parent_otel_span
+                    )
+                    if redis_result is not None:
+                        # Update in-memory cache with the value from Redis
+                        for key in redis_result:
+                            self.in_memory_cache.set_cache(
+                                key, redis_result[key], **kwargs
+                            )
+
+                    for key, value in redis_result.items():
+                        result[keys.index(key)] = value
 
             print_verbose(f"async batch get cache: cache result: {result}")
             return result
@@ -216,6 +249,7 @@ class DualCache(BaseCache):
         keys: list,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
+        local_only_if_any_exists: bool = False,
         **kwargs,
     ):
         try:
@@ -227,29 +261,40 @@ class DualCache(BaseCache):
 
                 if in_memory_result is not None:
                     result = in_memory_result
+
             if None in result and self.redis_cache is not None and local_only is False:
                 """
                 - for the none values in the result
                 - check the redis cache
                 """
-                sublist_keys = [
-                    key for key, value in zip(keys, result) if value is None
-                ]
-                # If not found in in-memory cache, try fetching from Redis
-                redis_result = await self.redis_cache.async_batch_get_cache(
-                    sublist_keys, parent_otel_span=parent_otel_span
-                )
+                # Track the last access time for these keys
+                current_time = time.time()
+                key_tuple = tuple(keys)
 
-                if redis_result is not None:
-                    # Update in-memory cache with the value from Redis
+                # Only hit Redis if the last access time was more than 5 seconds ago
+                if (
+                    key_tuple not in self.last_redis_batch_access_time
+                    or current_time - self.last_redis_batch_access_time[key_tuple]
+                    >= self.redis_batch_cache_expiry
+                ):
+                    sublist_keys = [
+                        key for key, value in zip(keys, result) if value is None
+                    ]
+                    # If not found in in-memory cache, try fetching from Redis
+                    redis_result = await self.redis_cache.async_batch_get_cache(
+                        sublist_keys, parent_otel_span=parent_otel_span
+                    )
+
+                    if redis_result is not None:
+                        # Update in-memory cache with the value from Redis
+                        for key, value in redis_result.items():
+                            if value is not None:
+                                await self.in_memory_cache.async_set_cache(
+                                    key, redis_result[key], **kwargs
+                                )
                     for key, value in redis_result.items():
-                        if value is not None:
-                            await self.in_memory_cache.async_set_cache(
-                                key, redis_result[key], **kwargs
-                            )
-                for key, value in redis_result.items():
-                    index = keys.index(key)
-                    result[index] = value
+                        index = keys.index(key)
+                        result[index] = value
 
             return result
         except Exception:

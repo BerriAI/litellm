@@ -30,7 +30,6 @@ class CooldownCache:
         self.cache = cache
         self.default_cooldown_time = default_cooldown_time
         self.in_memory_cache = InMemoryCache()
-        self.in_memory_cooldown_cache_ttl = 1
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
@@ -86,36 +85,9 @@ class CooldownCache:
             )
             raise e
 
-    async def _add_to_in_memory_cache(self, key: str, value: Any):
-        await self.in_memory_cache.async_set_cache(
-            key=key, value=value, ttl=self.in_memory_cooldown_cache_ttl
-        )
-
     @staticmethod
     def get_cooldown_cache_key(model_id: str) -> str:
         return f"deployment:{model_id}:cooldown"
-
-    async def async_get_redis_cooldowns(
-        self, keys: List[str], parent_otel_span: Optional[Span]
-    ):
-        verbose_logger.debug(
-            "Enters 'async_get_redis_cooldowns' logic for cooldown deployments"
-        )
-        hashed_key = Cache._get_hashed_cache_key(cache_key=",".join(keys))
-        results = await self.in_memory_cache.async_get_cache(key=hashed_key)
-        if results is None:
-            results = (
-                await self.cache.async_batch_get_cache(
-                    keys=keys, parent_otel_span=parent_otel_span
-                )
-                or []
-            )
-
-            ## add to in memory cache
-            await self._add_to_in_memory_cache(
-                key=hashed_key, value=results
-            )  # store for 5s only
-        return results
 
     async def async_get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
@@ -130,21 +102,14 @@ class CooldownCache:
         ## each redis call adds ~100ms latency.
 
         ## check in memory cache first
-        results = None
         results = await self.cache.async_batch_get_cache(
-            keys=keys, parent_otel_span=parent_otel_span, local_only=True
+            keys=keys, parent_otel_span=parent_otel_span
         )
-
-        verbose_logger.debug(
-            "results from in-memory cache for individual deployments: {}".format(
-                results
-            )
-        )
-
-        if results is None or any(result is None for result in results):
-            results = await self.async_get_redis_cooldowns(keys, parent_otel_span)
-
         active_cooldowns = []
+
+        if results is None:
+            return active_cooldowns
+
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):

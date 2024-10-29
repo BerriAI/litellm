@@ -5149,9 +5149,7 @@ class Router:
             cooldown_deployments = await _async_get_cooldown_deployments(
                 litellm_router_instance=self, parent_otel_span=parent_otel_span
             )
-            verbose_router_logger.debug(
-                f"async cooldown deployments: {cooldown_deployments}"
-            )
+            verbose_router_logger.debug(f"cooldown_deployments: {cooldown_deployments}")
             healthy_deployments = self._filter_cooldown_deployments(
                 healthy_deployments=healthy_deployments,
                 cooldown_deployments=cooldown_deployments,
@@ -5250,7 +5248,7 @@ class Router:
                 _cooldown_time = self.cooldown_cache.get_min_cooldown(
                     model_ids=model_ids, parent_otel_span=parent_otel_span
                 )
-                _cooldown_list = _get_cooldown_deployments(
+                _cooldown_list = await _async_get_cooldown_deployments(
                     litellm_router_instance=self, parent_otel_span=parent_otel_span
                 )
                 raise RouterRateLimitError(
