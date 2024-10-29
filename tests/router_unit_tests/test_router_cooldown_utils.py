@@ -11,7 +11,7 @@ from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
@@ -394,3 +394,41 @@ def test_cast_exception_status_to_int():
     assert cast_exception_status_to_int(200) == 200
     assert cast_exception_status_to_int("404") == 404
     assert cast_exception_status_to_int("invalid") == 500
+
+
+@pytest.mark.parametrize("known_value", [True, False])
+@pytest.mark.asyncio
+async def test_cooldown_cache_batch_get(known_value):
+    from litellm.router_utils.cooldown_cache import CooldownCache
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.caching.dual_cache import DualCache
+    from litellm.caching.caching import Cache
+
+    deployments = ["test_deployment"]
+
+    cooldown_cache_keys = [
+        CooldownCache.get_cooldown_cache_key(model_id) for model_id in deployments
+    ]
+
+    cache_key = Cache._get_hashed_cache_key(",".join(cooldown_cache_keys))
+
+    dc = DualCache(redis_cache=None)
+    cooldown_cache = CooldownCache(
+        cache=dc,
+        default_cooldown_time=1,
+    )
+
+    if known_value:
+        print("setting cache, cache_key=", cache_key)
+        cooldown_cache.in_memory_cache.set_cache(cache_key, "my-fake-value")
+    with patch.object(
+        dc, "async_batch_get_cache", new=AsyncMock()
+    ) as mock_async_get_cache:
+        await cooldown_cache.async_get_active_cooldowns(
+            model_ids=deployments, parent_otel_span=None
+        )
+
+        if known_value:
+            assert mock_async_get_cache.call_count == 0
+        else:
+            assert mock_async_get_cache.call_count == 1
