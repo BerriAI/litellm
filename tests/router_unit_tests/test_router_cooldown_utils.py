@@ -403,6 +403,7 @@ async def test_cooldown_cache_batch_get(known_value):
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.caching.dual_cache import DualCache
     from litellm.caching.caching import Cache
+    from litellm.caching.redis_cache import RedisCache
 
     deployments = ["test_deployment"]
 
@@ -412,7 +413,7 @@ async def test_cooldown_cache_batch_get(known_value):
 
     cache_key = Cache._get_hashed_cache_key(",".join(cooldown_cache_keys))
 
-    dc = DualCache(redis_cache=None)
+    dc = DualCache(redis_cache=MagicMock(spec=RedisCache))
     cooldown_cache = CooldownCache(
         cache=dc,
         default_cooldown_time=1,
@@ -422,7 +423,7 @@ async def test_cooldown_cache_batch_get(known_value):
         print("setting cache, cache_key=", cache_key)
         cooldown_cache.in_memory_cache.set_cache(cache_key, "my-fake-value")
     with patch.object(
-        dc, "async_batch_get_cache", new=AsyncMock()
+        dc.redis_cache, "async_batch_get_cache", new=AsyncMock()
     ) as mock_async_get_cache:
         await cooldown_cache.async_get_active_cooldowns(
             model_ids=deployments, parent_otel_span=None

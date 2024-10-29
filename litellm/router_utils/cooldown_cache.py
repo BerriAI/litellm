@@ -95,20 +95,9 @@ class CooldownCache:
     def get_cooldown_cache_key(model_id: str) -> str:
         return f"deployment:{model_id}:cooldown"
 
-    async def async_get_active_cooldowns(
-        self, model_ids: List[str], parent_otel_span: Optional[Span]
-    ) -> List[Tuple[str, CooldownCacheValue]]:
-        # Generate the keys for the deployments
-        keys = [
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
-        ]
-
-        # Retrieve the values for the keys using mget
-        ## more likely to be none if no models ratelimited. So just check redis every 1s
-        ## each redis call adds ~100ms latency.
-
-        ## check in memory cache first
-        results = None
+    async def async_get_redis_cooldowns(
+        self, keys: List[str], parent_otel_span: Optional[Span]
+    ):
         hashed_key = Cache._get_hashed_cache_key(cache_key=",".join(keys))
         results = await self.in_memory_cache.async_get_cache(key=hashed_key)
         if results is None:
@@ -123,6 +112,28 @@ class CooldownCache:
             await self._add_to_in_memory_cache(
                 key=hashed_key, value=results
             )  # store for 5s only
+        return results
+
+    async def async_get_active_cooldowns(
+        self, model_ids: List[str], parent_otel_span: Optional[Span]
+    ) -> List[Tuple[str, CooldownCacheValue]]:
+        # Generate the keys for the deployments
+        keys = [
+            CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
+        ]
+
+        # Retrieve the values for the keys using mget
+        ## more likely to be none if no models ratelimited. So just check redis every 1s
+        ## each redis call adds ~100ms latency.
+
+        ## check in memory cache first
+        results = None
+        results = await self.cache.async_batch_get_cache(
+            keys=keys, parent_otel_span=parent_otel_span, local_only=True
+        )
+
+        if results is None or any(result is None for result in results):
+            results = await self.async_get_redis_cooldowns(keys, parent_otel_span)
 
         active_cooldowns = []
         # Process the results
