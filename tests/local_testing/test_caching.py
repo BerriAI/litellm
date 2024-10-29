@@ -83,7 +83,9 @@ def test_dual_cache_batch_get_cache():
 
     in_memory_cache.set_cache(key="test_value", value="hello world")
 
-    result = dual_cache.batch_get_cache(keys=["test_value", "test_value_2"])
+    result = dual_cache.batch_get_cache(
+        keys=["test_value", "test_value_2"], parent_otel_span=None
+    )
 
     assert result[0] == "hello world"
     assert result[1] == None

@@ -4,6 +4,17 @@ import TabItem from '@theme/TabItem';
 
 # VertexAI [Anthropic, Gemini, Model Garden]
 
+
+| Property | Details |
+|-------|-------|
+| Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
+| Provider Route on LiteLLM | `vertex_ai/` |
+| Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
+| Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+
+<br />
+<br />
+
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>

@@ -4,11 +4,23 @@ import TabItem from '@theme/TabItem';
 
 # Gemini - Google AI Studio
 
-## Pre-requisites
-* `pip install -q google-generativeai`
-* Get API Key - https://aistudio.google.com/
+| Property | Details |
+|-------|-------|
+| Description | Google AI Studio is a fully-managed AI development platform for building and using generative AI. |
+| Provider Route on LiteLLM | `gemini/` |
+| Provider Doc | [Google AI Studio ↗](https://ai.google.dev/aistudio) |
+| API Endpoint for Provider | https://generativelanguage.googleapis.com |
 
-# Gemini-Pro
+<br />
+
+
+## API Keys
+
+```python
+import os
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+```
+
 ## Sample Usage
 ```python
 from litellm import completion

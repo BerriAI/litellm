@@ -15,6 +15,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
@@ -96,6 +97,7 @@ class PrometheusServicesLogger:
             metric_name,
             "Latency for {} service".format(service),
             labelnames=[service],
+            buckets=LATENCY_BUCKETS,
         )
 
     def create_counter(self, service: str, type_of_request: str):
