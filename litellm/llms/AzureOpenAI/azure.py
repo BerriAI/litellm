@@ -1301,7 +1301,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["azure_ad_token"] = azure_ad_token
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
+                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers)  # type: ignore
 
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params, model=data.get("model", "")
