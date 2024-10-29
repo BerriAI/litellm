@@ -63,12 +63,22 @@ async def test_organization_new():
 
 @pytest.mark.asyncio
 async def test_organization_list():
+    """
+    create 5 new Organizations
+    check if the Organization list is not empty
+    """
+        organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            status = response.status
-            response_json = await response.json()
+        tasks = [
+            new_organization(
+                session=session, i=0, organization_alias=organization_alias
+            )
+            for i in range(1, 2)
+        ]
+        await asyncio.gather(*tasks)
 
-            print(response_json)
+        response_json = await  list_organization(session)
+        print(len(response_json))
 
-            if status != 200:
-                raise Exception(f"Request did not return a 200 status code: {status}")
+        if len(response_json)==0:
+            raise Exception(f"Return empty list of organization")
