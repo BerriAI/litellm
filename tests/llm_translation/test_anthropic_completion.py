@@ -580,3 +580,45 @@ def test_anthropic_beta_header(
         assert "anthropic-beta" in headers
     else:
         assert "anthropic-beta" not in headers
+
+
+@pytest.mark.parametrize(
+    "cache_control_location",
+    [
+        "inside_function",
+        "outside_function",
+    ],
+)
+def test_anthropic_tool_helper(cache_control_location):
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                    },
+                },
+                "required": ["location"],
+            },
+        },
+    }
+
+    if cache_control_location == "inside_function":
+        tool["function"]["cache_control"] = {"type": "ephemeral"}
+    else:
+        tool["cache_control"] = {"type": "ephemeral"}
+
+    tool = AnthropicConfig()._map_tool_helper(tool=tool)
+
+    assert tool["cache_control"] == {"type": "ephemeral"}

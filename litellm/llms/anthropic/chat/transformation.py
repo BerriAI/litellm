@@ -151,6 +151,7 @@ class AnthropicConfig:
         self, tool: ChatCompletionToolParam
     ) -> AllAnthropicToolsValues:
         returned_tool: Optional[AllAnthropicToolsValues] = None
+
         if tool["type"] == "function" or tool["type"] == "custom":
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
@@ -211,8 +212,13 @@ class AnthropicConfig:
         if returned_tool is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
-        if "cache_control" in tool:
-            returned_tool["cache_control"] = tool["cache_control"]
+        ## check if cache_control is set in the tool
+        _cache_control = tool.get("cache_control", None)
+        _cache_control_function = tool.get("function", {}).get("cache_control", None)
+        if _cache_control is not None:
+            returned_tool["cache_control"] = _cache_control
+        elif _cache_control_function is not None:
+            returned_tool["cache_control"] = _cache_control_function
 
         return returned_tool
 
