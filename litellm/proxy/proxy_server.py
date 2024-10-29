@@ -2899,9 +2899,9 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
-        store_model_in_db: bool,
     ):
         """Initializes scheduled background jobs"""
+        global store_model_in_db
         scheduler = AsyncIOScheduler()
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
@@ -2922,6 +2922,11 @@ class ProxyStartupEvent:
             "interval",
             seconds=batch_writing_interval,
             args=[prisma_client, db_writer_client, proxy_logging_obj],
+        )
+
+        ### ADD NEW MODELS ###
+        store_model_in_db = (
+            get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
         )
 
         if store_model_in_db is True:
@@ -3024,10 +3029,6 @@ async def startup_event():
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
     master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
-    ### ADD NEW MODELS ###
-    store_model_in_db = (
-        get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
-    )
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -3146,7 +3147,6 @@ async def startup_event():
             proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
-            store_model_in_db=store_model_in_db,
         )
 
 
