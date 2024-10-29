@@ -64,10 +64,10 @@ async def test_organization_new():
 @pytest.mark.asyncio
 async def test_organization_list():
     """
-    create 5 new Organizations
+    create 2 new Organizations
     check if the Organization list is not empty
     """
-        organization_alias = f"Organization: {uuid.uuid4()}"
+    organization_alias = f"Organization: {uuid.uuid4()}"
     async with aiohttp.ClientSession() as session:
         tasks = [
             new_organization(
