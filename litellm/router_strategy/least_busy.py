@@ -145,13 +145,14 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_api_key = f"{model_group}_request_count"
                 # decrement count in cache
                 request_count_dict = (
-                    self.router_cache.get_cache(key=request_count_api_key) or {}
+                    await self.router_cache.async_get_cache(key=request_count_api_key)
+                    or {}
                 )
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
                 request_count_dict[id] = request_count_value - 1
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
 
@@ -178,13 +179,14 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_api_key = f"{model_group}_request_count"
                 # decrement count in cache
                 request_count_dict = (
-                    self.router_cache.get_cache(key=request_count_api_key) or {}
+                    await self.router_cache.async_get_cache(key=request_count_api_key)
+                    or {}
                 )
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
                 request_count_dict[id] = request_count_value - 1
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
 
@@ -194,10 +196,14 @@ class LeastBusyLoggingHandler(CustomLogger):
         except Exception:
             pass
 
-    def get_available_deployments(self, model_group: str, healthy_deployments: list):
-        request_count_api_key = f"{model_group}_request_count"
-        deployments = self.router_cache.get_cache(key=request_count_api_key) or {}
-        all_deployments = deployments
+    def _get_available_deployments(
+        self,
+        healthy_deployments: list,
+        all_deployments: dict,
+    ):
+        """
+        Helper to get deployments using least busy strategy
+        """
         for d in healthy_deployments:
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
@@ -219,3 +225,33 @@ class LeastBusyLoggingHandler(CustomLogger):
         else:
             min_deployment = random.choice(healthy_deployments)
         return min_deployment
+
+    def get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+    ):
+        """
+        Sync helper to get deployments using least busy strategy
+        """
+        request_count_api_key = f"{model_group}_request_count"
+        all_deployments = self.router_cache.get_cache(key=request_count_api_key) or {}
+        return self._get_available_deployments(
+            healthy_deployments=healthy_deployments,
+            all_deployments=all_deployments,
+        )
+
+    async def async_get_available_deployments(
+        self, model_group: str, healthy_deployments: list
+    ):
+        """
+        Async helper to get deployments using least busy strategy
+        """
+        request_count_api_key = f"{model_group}_request_count"
+        all_deployments = (
+            await self.router_cache.async_get_cache(key=request_count_api_key) or {}
+        )
+        return self._get_available_deployments(
+            healthy_deployments=healthy_deployments,
+            all_deployments=all_deployments,
+        )
