@@ -318,7 +318,10 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only is False:
                 result = await self.redis_cache.async_increment(
-                    key, value, parent_otel_span=parent_otel_span
+                    key,
+                    value,
+                    parent_otel_span=parent_otel_span,
+                    ttl=kwargs.get("ttl", None),
                 )
 
             return result
