@@ -1,11 +1,9 @@
-import logging
+import json
 import threading
 from typing import Optional
 
 from litellm.integrations.custom_logger import CustomLogger
-
-_logger = logging.getLogger(__name__)
-
+from litellm._logging import verbose_logger
 
 class MlflowLogger(CustomLogger):
     def __init__(self):
@@ -24,17 +22,21 @@ class MlflowLogger(CustomLogger):
         from mlflow.entities import SpanStatusCode
 
         try:
-            span = self._start_span_or_trace(kwargs, start_time)
-            end_time_ns = int(end_time.timestamp() * 1e9)
-            self._end_span_or_trace(
-                span=span,
-                outputs=response_obj,
-                status=SpanStatusCode.OK,
-                end_time_ns=end_time_ns,
-            )
-        except Exception as e:
-            _logger.debug(f"Failed to log success event for litellm call: {e}", exc_info=True)
+            verbose_logger.debug(f"MLflow logging start for success event")
 
+            if kwargs.get("stream"):
+                self._handle_stream_event(kwargs, response_obj, start_time, end_time)
+            else:
+                span = self._start_span_or_trace(kwargs, start_time)
+                end_time_ns = int(end_time.timestamp() * 1e9)
+                self._end_span_or_trace(
+                    span=span,
+                    outputs=response_obj,
+                    status=SpanStatusCode.OK,
+                    end_time_ns=end_time_ns,
+                )
+        except Exception:
+            verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -49,15 +51,8 @@ class MlflowLogger(CustomLogger):
             end_time_ns = int(end_time.timestamp() * 1e9)
 
             # Record exception info as event
-            exception_attributes = {
-                "exception.message": kwargs.get("exception"),
-                "exception.type": None,
-                "exception.stacktrace": kwargs.get("traceback_exception"),
-            }
-            event = SpanEvent(
-                name="exception", timestamp=end_time_ns, attributes=exception_attributes
-            )
-            span.add_event(event)
+            if exception := kwargs.get("exception"):
+                span.add_event(SpanEvent.from_exception(exception))
 
             self._end_span_or_trace(
                 span=span,
@@ -67,7 +62,62 @@ class MlflowLogger(CustomLogger):
             )
 
         except Exception as e:
-            _logger.debug(f"Failed to log failure event for litellm call: {e}", exc_info=True)
+            verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
+
+    def _handle_stream_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Handle the success event for a streaming response. For streaming calls,
+        log_success_event handle is triggered for every chunk of the stream.
+        We create a single span for the entire stream request as follows:
+
+        1. For the first chunk, start a new span and store it in the map.
+        2. For subsequent chunks, add the chunk as an event to the span.
+        3. For the final chunk, end the span and remove the span from the map.
+        """
+        from mlflow.entities import SpanStatusCode
+
+        litellm_call_id = kwargs.get("litellm_call_id")
+
+        if litellm_call_id not in self._stream_id_to_span:
+            with self._lock:
+                # Check again after acquiring lock
+                if litellm_call_id not in self._stream_id_to_span:
+                    # Start a new span for the first chunk of the stream
+                    span = self._start_span_or_trace(kwargs, start_time)
+                    self._stream_id_to_span[litellm_call_id] = span
+
+        # Add chunk as event to the span
+        span = self._stream_id_to_span[litellm_call_id]
+        self._add_chunk_events(span, response_obj)
+
+        # If this is the final chunk, end the span. The final chunk
+        # has complete_streaming_response that gathers the full response.
+        if final_response := kwargs.get("complete_streaming_response"):
+            end_time_ns = int(end_time.timestamp() * 1e9)
+            self._end_span_or_trace(
+                span=span,
+                outputs=final_response,
+                status=SpanStatusCode.OK,
+                end_time_ns=end_time_ns,
+            )
+
+            # Remove the stream_id from the map
+            with self._lock:
+                self._stream_id_to_span.pop(litellm_call_id)
+
+    def _add_chunk_events(self, span, response_obj):
+        from mlflow.entities import SpanEvent
+
+        try:
+            for choice in response_obj.choices:
+                span.add_event(
+                    SpanEvent(
+                        name="streaming_chunk",
+                        attributes={"delta": json.dumps(choice.delta.model_dump())},
+                    )
+                )
+        except Exception:
+            verbose_logger.debug("Error adding chunk events to span", stack_info=True)
 
     def _construct_input(self, kwargs):
         """Construct span inputs with optional parameters"""
@@ -97,9 +147,9 @@ class MlflowLogger(CustomLogger):
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
                     "usage": {
-                        "completion_tokens": standard_obj.get("completion_token"),
-                        "prompt_tokens": standard_obj.get("prompt_token"),
-                        "total_tokens": standard_obj.get("total_token"),
+                        "completion_tokens": standard_obj.get("completion_tokens"),
+                        "prompt_tokens": standard_obj.get("prompt_tokens"),
+                        "total_tokens": standard_obj.get("total_tokens"),
                     },
                     "raw_llm_response": standard_obj.get("response"),
                     "response_cost": standard_obj.get("response_cost"),
