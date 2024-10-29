@@ -210,3 +210,88 @@ async def test_service_logger_db_monitoring_failure():
         assert actual_payload.call_type == "query"
         assert actual_payload.is_error is True
         assert actual_payload.error == "Database connection failed"
+
+
+def test_get_metric_existing():
+    """Test _get_metric when metric exists. _get_metric should return the metric object"""
+    pl = PrometheusServicesLogger()
+    # Create a metric first
+    hist = pl.create_histogram(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    # Test retrieving existing metric
+    retrieved_metric = pl._get_metric("litellm_test_service_test_type_of_request")
+    assert retrieved_metric is hist
+    assert retrieved_metric is not None
+
+
+def test_get_metric_non_existing():
+    """Test _get_metric when metric doesn't exist, returns None"""
+    pl = PrometheusServicesLogger()
+
+    # Test retrieving non-existent metric
+    non_existent = pl._get_metric("non_existent_metric")
+    assert non_existent is None
+
+
+def test_create_histogram_new():
+    """Test creating a new histogram"""
+    pl = PrometheusServicesLogger()
+
+    # Create new histogram
+    hist = pl.create_histogram(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    assert hist is not None
+    assert pl._get_metric("litellm_test_service_test_type_of_request") is hist
+
+
+def test_create_histogram_existing():
+    """Test creating a histogram that already exists"""
+    pl = PrometheusServicesLogger()
+
+    # Create initial histogram
+    hist1 = pl.create_histogram(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    # Create same histogram again
+    hist2 = pl.create_histogram(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    assert hist2 is hist1  # same object
+    assert pl._get_metric("litellm_test_service_test_type_of_request") is hist1
+
+
+def test_create_counter_new():
+    """Test creating a new counter"""
+    pl = PrometheusServicesLogger()
+
+    # Create new counter
+    counter = pl.create_counter(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    assert counter is not None
+    assert pl._get_metric("litellm_test_service_test_type_of_request") is counter
+
+
+def test_create_counter_existing():
+    """Test creating a counter that already exists"""
+    pl = PrometheusServicesLogger()
+
+    # Create initial counter
+    counter1 = pl.create_counter(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    # Create same counter again
+    counter2 = pl.create_counter(
+        service="test_service", type_of_request="test_type_of_request"
+    )
+
+    assert counter2 is counter1
+    assert pl._get_metric("litellm_test_service_test_type_of_request") is counter1
