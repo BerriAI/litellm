@@ -394,6 +394,10 @@ class VertexGeminiConfig:
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
+        # remove 'additionalProperties' from tools
+        value = _remove_additional_properties(value)
+        # remove 'strict' from tools
+        value = _remove_strict_from_schema(value)
 
         for tool in value:
             openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
