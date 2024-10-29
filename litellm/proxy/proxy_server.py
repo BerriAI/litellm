@@ -250,7 +250,12 @@ from litellm.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.secret_managers.google_kms import load_google_kms
-from litellm.secret_managers.main import get_secret, get_secret_str, str_to_bool
+from litellm.secret_managers.main import (
+    get_secret,
+    get_secret_bool,
+    get_secret_str,
+    str_to_bool,
+)
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -2919,10 +2924,6 @@ class ProxyStartupEvent:
             args=[prisma_client, db_writer_client, proxy_logging_obj],
         )
 
-        ### ADD NEW MODELS ###
-        store_model_in_db = (
-            get_secret("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
-        )  # type: ignore
         if store_model_in_db is True:
             scheduler.add_job(
                 proxy_config.add_deployment,
@@ -3023,6 +3024,10 @@ async def startup_event():
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
     master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
+    ### ADD NEW MODELS ###
+    store_model_in_db = (
+        get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
+    )
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
