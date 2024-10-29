@@ -63,7 +63,7 @@ class InMemoryCache(BaseCache):
             self.evict_cache()
 
         self.cache_dict[key] = value
-        if "ttl" in kwargs:
+        if "ttl" in kwargs and kwargs["ttl"] is not None:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
         else:
             self.ttl_dict[key] = time.time() + self.default_ttl
