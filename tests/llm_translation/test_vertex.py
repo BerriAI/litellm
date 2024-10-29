@@ -54,11 +54,19 @@ def test_completion_pydantic_obj_2():
                                     "type": "array",
                                 },
                             },
+                            "required": [
+                                "name",
+                                "date",
+                                "participants",
+                            ],
                             "type": "object",
                         },
                         "type": "array",
                     }
                 },
+                "required": [
+                    "events",
+                ],
                 "type": "object",
             },
         },
@@ -81,3 +89,31 @@ def test_completion_pydantic_obj_2():
         print(mock_post.call_args.kwargs)
 
         assert mock_post.call_args.kwargs["json"] == expected_request_body
+
+
+def test_build_vertex_schema():
+    from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+        _build_vertex_schema,
+    )
+    import json
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "recipes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"recipe_name": {"type": "string"}},
+                    "required": ["recipe_name"],
+                },
+            }
+        },
+        "required": ["recipes"],
+    }
+
+    new_schema = _build_vertex_schema(schema)
+    print(f"new_schema: {new_schema}")
+    assert new_schema["type"] == schema["type"]
+    assert new_schema["properties"] == schema["properties"]
+    assert "required" in new_schema and new_schema["required"] == schema["required"]

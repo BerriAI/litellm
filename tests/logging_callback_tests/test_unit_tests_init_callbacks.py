@@ -27,6 +27,7 @@ from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
@@ -49,6 +50,7 @@ callback_class_str_to_classType = {
     "literalai": LiteralAILogger,
     "prometheus": PrometheusLogger,
     "datadog": DataDogLogger,
+    "datadog_llm_observability": DataDogLLMObsLogger,
     "gcs_bucket": GCSBucketLogger,
     "opik": OpikLogger,
     "argilla": ArgillaLogger,

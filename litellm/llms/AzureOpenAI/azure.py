@@ -1173,7 +1173,6 @@ class AzureChatCompletion(BaseLLM):
     def create_azure_base_url(
         self, azure_client_params: dict, model: Optional[str]
     ) -> str:
-
         api_base: str = azure_client_params.get(
             "azure_endpoint", ""
         )  # "https://example-endpoint.openai.azure.com"
@@ -1182,16 +1181,16 @@ class AzureChatCompletion(BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
-        new_api_base = (
-            api_base
-            + "/openai/deployments/"
-            + model
-            + "/images/generations"
-            + "?api-version="
-            + api_version
-        )
 
-        return new_api_base
+        if "/openai/deployments/" in api_base:
+            base_url_with_deployment = api_base
+        else:
+            base_url_with_deployment = api_base + "/openai/deployments/" + model
+
+        base_url_with_deployment += "/images/generations"
+        base_url_with_deployment += "?api-version=" + api_version
+
+        return base_url_with_deployment
 
     async def aimage_generation(
         self,

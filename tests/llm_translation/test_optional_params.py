@@ -784,3 +784,21 @@ def test_unmapped_vertex_anthropic_model():
         max_retries=10,
     )
     assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "tools, key",
+    [
+        ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
+        ([{"code_execution": {}}], "code_execution"),
+    ],
+)
+def test_vertex_tool_params(tools, key):
+
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+    )
+    print(optional_params)
+    assert optional_params["tools"][0][key] == {}

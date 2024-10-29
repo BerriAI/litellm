@@ -348,7 +348,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only is False:
                 _ = await self.redis_cache.async_set_cache_sadd(
-                    key, value, ttl=kwargs.get("ttl", None) ** kwargs
+                    key, value, ttl=kwargs.get("ttl", None)
                 )
 
             return None
