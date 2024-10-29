@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import json
 import time
+import traceback
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
@@ -25,14 +26,17 @@ from litellm.types.utils import all_litellm_params
 from .base_cache import BaseCache
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis
     from redis.asyncio.client import Pipeline
 
     pipeline = Pipeline
     async_redis_client = Redis
+    Span = _Span
 else:
     pipeline = Any
     async_redis_client = Any
+    Span = Any
 
 
 class RedisCache(BaseCache):
@@ -524,7 +528,11 @@ class RedisCache(BaseCache):
             await self.flush_cache_buffer()  # logging done in here
 
     async def async_increment(
-        self, key, value: float, ttl: Optional[int] = None, **kwargs
+        self,
+        key,
+        value: float,
+        ttl: Optional[int] = None,
+        parent_otel_span: Optional[Span] = None,
     ) -> float:
         from redis.asyncio import Redis
 
@@ -552,7 +560,7 @@ class RedisCache(BaseCache):
                         call_type="async_increment",
                         start_time=start_time,
                         end_time=end_time,
-                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        parent_otel_span=parent_otel_span,
                     )
                 )
                 return result
@@ -568,7 +576,7 @@ class RedisCache(BaseCache):
                     call_type="async_increment",
                     start_time=start_time,
                     end_time=end_time,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=parent_otel_span,
                 )
             )
             verbose_logger.error(
@@ -601,7 +609,7 @@ class RedisCache(BaseCache):
             cached_response = ast.literal_eval(cached_response)
         return cached_response
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
         try:
             key = self.check_and_fix_namespace(key=key)
             print_verbose(f"Get Redis Cache: key: {key}")
@@ -615,6 +623,7 @@ class RedisCache(BaseCache):
                 call_type="get_cache",
                 start_time=start_time,
                 end_time=end_time,
+                parent_otel_span=parent_otel_span,
             )
             print_verbose(
                 f"Got Redis Cache: key: {key}, cached_response {cached_response}"
@@ -626,11 +635,12 @@ class RedisCache(BaseCache):
                 "litellm.caching.caching: get() - Got exception from REDIS: ", e
             )
 
-    def batch_get_cache(self, key_list) -> dict:
+    def batch_get_cache(self, key_list, parent_otel_span: Optional[Span]) -> dict:
         """
         Use Redis for bulk read operations
         """
         key_value_dict = {}
+
         try:
             _keys = []
             for cache_key in key_list:
@@ -646,6 +656,7 @@ class RedisCache(BaseCache):
                 call_type="batch_get_cache",
                 start_time=start_time,
                 end_time=end_time,
+                parent_otel_span=parent_otel_span,
             )
 
             # Associate the results back with their keys.
@@ -662,7 +673,9 @@ class RedisCache(BaseCache):
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
             return key_value_dict
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(
+        self, key, parent_otel_span: Optional[Span] = None, **kwargs
+    ):
         from redis.asyncio import Redis
 
         _redis_client: Redis = self.init_async_client()  # type: ignore
@@ -686,7 +699,7 @@ class RedisCache(BaseCache):
                         call_type="async_get_cache",
                         start_time=start_time,
                         end_time=end_time,
-                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        parent_otel_span=parent_otel_span,
                         event_metadata={"key": key},
                     )
                 )
@@ -703,7 +716,7 @@ class RedisCache(BaseCache):
                         call_type="async_get_cache",
                         start_time=start_time,
                         end_time=end_time,
-                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                        parent_otel_span=parent_otel_span,
                         event_metadata={"key": key},
                     )
                 )
@@ -712,10 +725,13 @@ class RedisCache(BaseCache):
                     f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}"
                 )
 
-    async def async_batch_get_cache(self, key_list) -> dict:
+    async def async_batch_get_cache(
+        self, key_list: List[str], parent_otel_span: Optional[Span] = None
+    ) -> dict:
         """
         Use Redis for bulk read operations
         """
+
         _redis_client = await self.init_async_client()
         key_value_dict = {}
         start_time = time.time()
@@ -737,6 +753,7 @@ class RedisCache(BaseCache):
                     call_type="async_batch_get_cache",
                     start_time=start_time,
                     end_time=end_time,
+                    parent_otel_span=parent_otel_span,
                 )
             )
 
@@ -764,6 +781,7 @@ class RedisCache(BaseCache):
                     call_type="async_batch_get_cache",
                     start_time=start_time,
                     end_time=end_time,
+                    parent_otel_span=parent_otel_span,
                 )
             )
             print_verbose(f"Error occurred in pipeline read - {str(e)}")

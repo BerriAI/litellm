@@ -4,10 +4,17 @@ Wrapper around router cache. Meant to handle model cooldown logic
 
 import json
 import time
-from typing import List, Optional, Tuple, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict
 
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class CooldownCacheValue(TypedDict):
@@ -77,13 +84,18 @@ class CooldownCache:
             raise e
 
     async def async_get_active_cooldowns(
-        self, model_ids: List[str]
+        self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = await self.cache.async_batch_get_cache(keys=keys) or []
+        results = (
+            await self.cache.async_batch_get_cache(
+                keys=keys, parent_otel_span=parent_otel_span
+            )
+            or []
+        )
 
         active_cooldowns = []
         # Process the results
@@ -95,13 +107,15 @@ class CooldownCache:
         return active_cooldowns
 
     def get_active_cooldowns(
-        self, model_ids: List[str]
+        self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
-
         # Retrieve the values for the keys using mget
-        results = self.cache.batch_get_cache(keys=keys) or []
+        results = (
+            self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+            or []
+        )
 
         active_cooldowns = []
         # Process the results
@@ -112,14 +126,19 @@ class CooldownCache:
 
         return active_cooldowns
 
-    def get_min_cooldown(self, model_ids: List[str]) -> float:
+    def get_min_cooldown(
+        self, model_ids: List[str], parent_otel_span: Optional[Span]
+    ) -> float:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = self.cache.batch_get_cache(keys=keys) or []
+        results = (
+            self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+            or []
+        )
 
         min_cooldown_time: Optional[float] = None
         # Process the results
