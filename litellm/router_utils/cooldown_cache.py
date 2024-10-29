@@ -17,20 +17,6 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span
-else:
-    Span = Any
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span
-else:
-    Span = Any
-
 
 class CooldownCacheValue(TypedDict):
     exception_received: str
