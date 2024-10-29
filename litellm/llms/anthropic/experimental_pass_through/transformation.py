@@ -227,9 +227,9 @@ class AnthropicExperimentalPassThroughConfig:
                 name=tool["name"],
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]
+                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
             if "description" in tool:
-                function_chunk["description"] = tool["description"]
+                function_chunk["description"] = tool["description"]  # type: ignore
 
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
