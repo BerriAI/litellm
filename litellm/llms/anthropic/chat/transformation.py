@@ -172,7 +172,6 @@ class AnthropicConfig:
             ## check if all required 'display_' params are given
             if "parameters" not in tool["function"]:
                 raise ValueError("Missing required parameter: parameters")
-            required_display_params = ["display_width_px", "display_height_px"]
 
             _display_width_px: Optional[int] = tool["function"]["parameters"].get(
                 "display_width_px"
