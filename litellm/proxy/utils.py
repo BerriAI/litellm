@@ -281,7 +281,7 @@ class InternalUsageCache:
             key=key,
             value=value,
             local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+            parent_otel_span=litellm_parent_otel_span,
             **kwargs,
         )
 
