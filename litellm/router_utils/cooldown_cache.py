@@ -30,7 +30,7 @@ class CooldownCache:
         self.cache = cache
         self.default_cooldown_time = default_cooldown_time
         self.in_memory_cache = InMemoryCache()
-        self.in_memory_cooldown_cache_ttl = 5
+        self.in_memory_cooldown_cache_ttl = 1
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
