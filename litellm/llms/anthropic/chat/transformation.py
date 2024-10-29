@@ -88,6 +88,7 @@ class AnthropicConfig:
             "tool_choice",
             "extra_headers",
             "parallel_tool_calls",
+            "response_format",
         ]
 
     def get_cache_control_headers(self) -> dict:
@@ -277,6 +278,32 @@ class AnthropicConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
+            if param == "response_format" and isinstance(value, dict):
+                json_schema: Optional[dict] = None
+                if "response_schema" in value:
+                    json_schema = value["response_schema"]
+                elif "json_schema" in value:
+                    json_schema = value["json_schema"]["schema"]
+                """
+                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+                - You usually want to provide a single tool
+                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+                """
+                _tool_choice = None
+                _tool_choice = {"name": "json_tool_call", "type": "tool"}
+
+                _tool = AnthropicMessagesTool(
+                    name="json_tool_call",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"values": json_schema},  # type: ignore
+                    },
+                )
+
+                optional_params["tools"] = [_tool]
+                optional_params["tool_choice"] = _tool_choice
+                optional_params["json_mode"] = True
 
         ## VALIDATE REQUEST
         """
