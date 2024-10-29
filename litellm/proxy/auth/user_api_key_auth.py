@@ -260,6 +260,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     headers=request.headers
                 ),
             )
+
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore

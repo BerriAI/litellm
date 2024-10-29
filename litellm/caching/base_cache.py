@@ -8,7 +8,14 @@ Has 4 methods:
     - async_get_cache
 """
 
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class BaseCache:

@@ -8,7 +8,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.services import ServiceLoggerPayload
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    StandardLoggingPayload,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -136,12 +141,12 @@ class OpenTelemetry(CustomLogger):
         _end_time_ns = 0
 
         if isinstance(start_time, float):
-            _start_time_ns = int(int(start_time) * 1e9)
+            _start_time_ns = int(start_time * 1e9)
         else:
             _start_time_ns = self._to_ns(start_time)
 
         if isinstance(end_time, float):
-            _end_time_ns = int(int(end_time) * 1e9)
+            _end_time_ns = int(end_time * 1e9)
         else:
             _end_time_ns = self._to_ns(end_time)
 
@@ -276,6 +281,21 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+    ):
+        from opentelemetry import trace
+        from opentelemetry.trace import Status, StatusCode
+
+        parent_otel_span = user_api_key_dict.parent_otel_span
+        if parent_otel_span is not None:
+            parent_otel_span.set_status(Status(StatusCode.OK))
+            # End Parent OTEL Sspan
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -314,8 +334,8 @@ class OpenTelemetry(CustomLogger):
 
         span.end(end_time=self._to_ns(end_time))
 
-        if parent_otel_span is not None:
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+        # if parent_otel_span is not None:
+        #     parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -808,12 +828,12 @@ class OpenTelemetry(CustomLogger):
         end_time = logging_payload.end_time
 
         if isinstance(start_time, float):
-            _start_time_ns = int(int(start_time) * 1e9)
+            _start_time_ns = int(start_time * 1e9)
         else:
             _start_time_ns = self._to_ns(start_time)
 
         if isinstance(end_time, float):
-            _end_time_ns = int(int(end_time) * 1e9)
+            _end_time_ns = int(end_time * 1e9)
         else:
             _end_time_ns = self._to_ns(end_time)
 

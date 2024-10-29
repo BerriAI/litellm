@@ -2447,11 +2447,11 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
 
         if sync_mode:
             cooldown_deployments = _get_cooldown_deployments(
-                litellm_router_instance=router
+                litellm_router_instance=router, parent_otel_span=None
             )
         else:
             cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=router
+                litellm_router_instance=router, parent_otel_span=None
             )
         print(
             "Cooldown deployments - {}\n{}".format(
