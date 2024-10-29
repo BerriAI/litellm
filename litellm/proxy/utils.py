@@ -138,6 +138,12 @@ def safe_deep_copy(data):
 
 
 def log_to_opentelemetry(func):
+    """
+    Decorator to log the duration of a DB related function to ServiceLogger()
+
+    Handles logging DB success/failure to ServiceLogger(), which logs to Prometheus, OTEL, Datadog
+    """
+
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time: datetime = datetime.now()
@@ -145,10 +151,8 @@ def log_to_opentelemetry(func):
         try:
             result = await func(*args, **kwargs)
             end_time: datetime = datetime.now()
-
             from litellm.proxy.proxy_server import proxy_logging_obj
 
-            # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
             if "PROXY" not in func.__name__:
                 await proxy_logging_obj.service_logging_obj.async_service_success_hook(
                     service=ServiceTypes.DB,
