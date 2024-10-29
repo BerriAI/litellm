@@ -14,6 +14,7 @@ class ServiceTypes(str, enum.Enum):
     DB = "postgres"
     BATCH_WRITE_TO_DB = "batch_write_to_db"
     LITELLM = "self"
+    ROUTER = "router"
 
 
 class ServiceLoggerPayload(BaseModel):

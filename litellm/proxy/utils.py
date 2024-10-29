@@ -235,7 +235,7 @@ class InternalUsageCache:
         return await self.dual_cache.async_get_cache(
             key=key,
             local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+            parent_otel_span=litellm_parent_otel_span,
             **kwargs,
         )
 
@@ -281,7 +281,7 @@ class InternalUsageCache:
             key=key,
             value=value,
             local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+            parent_otel_span=litellm_parent_otel_span,
             **kwargs,
         )
 
@@ -367,7 +367,10 @@ class ProxyLogging:
             llm_router=llm_router
         )  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
-        if "daily_reports" in self.slack_alerting_instance.alert_types:
+        if (
+            self.slack_alerting_instance is not None
+            and "daily_reports" in self.slack_alerting_instance.alert_types
+        ):
             asyncio.create_task(
                 self.slack_alerting_instance._run_scheduled_daily_report(
                     llm_router=llm_router

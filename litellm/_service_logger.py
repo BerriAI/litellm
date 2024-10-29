@@ -44,8 +44,7 @@ class ServiceLogging(CustomLogger):
         """
         Handles both sync and async monitoring by checking for existing event loop.
         """
-        # if service == ServiceTypes.REDIS:
-        #     print(f"SYNC service: {service}, call_type: {call_type}")
+
         if self.mock_testing:
             self.mock_testing_sync_success_hook += 1
 
@@ -112,8 +111,7 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is successful
         """
-        # if service == ServiceTypes.REDIS:
-        #     print(f"service: {service}, call_type: {call_type}")
+
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
 
