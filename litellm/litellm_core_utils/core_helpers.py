@@ -80,7 +80,7 @@ def _get_parent_otel_span_from_kwargs(
 ) -> Union[Span, None]:
     try:
         if kwargs is None:
-            raise ValueError("kwargs is None")
+            return None
         litellm_params = kwargs.get("litellm_params")
         _metadata = kwargs.get("metadata") or {}
         if "litellm_parent_otel_span" in _metadata:
