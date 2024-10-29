@@ -5106,6 +5106,7 @@ class Router:
             verbose_router_logger.debug(
                 f"async cooldown deployments: {cooldown_deployments}"
             )
+            verbose_router_logger.debug(f"cooldown_deployments: {cooldown_deployments}")
             healthy_deployments = self._filter_cooldown_deployments(
                 healthy_deployments=healthy_deployments,
                 cooldown_deployments=cooldown_deployments,
@@ -5198,8 +5199,17 @@ class Router:
             else:
                 deployment = None
             if deployment is None:
-                exception = await async_raise_no_deployment_exception(
-                    litellm_router_instance=self,
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, No deployment available"
+                )
+                model_ids = self.get_model_ids(model_name=model)
+                _cooldown_time = self.cooldown_cache.get_min_cooldown(
+                    model_ids=model_ids, parent_otel_span=parent_otel_span
+                )
+                _cooldown_list = await _async_get_cooldown_deployments(
+                    litellm_router_instance=self, parent_otel_span=parent_otel_span
+                )
+                raise RouterRateLimitError(
                     model=model,
                     parent_otel_span=parent_otel_span,
                 )
