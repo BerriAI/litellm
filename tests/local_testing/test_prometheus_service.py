@@ -11,6 +11,8 @@ import pytest
 from litellm import acompletion, Cache
 from litellm._service_logger import ServiceLogging
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
+from litellm.proxy.utils import ServiceTypes
+from unittest.mock import patch, AsyncMock
 import litellm
 
 """
@@ -139,3 +141,72 @@ async def test_router_with_caching():
 
     except Exception as e:
         pytest.fail(f"An exception occured - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_service_logger_db_monitoring():
+    """
+    Test prometheus monitoring for database operations
+    """
+    litellm.service_callback = ["prometheus_system"]
+    sl = ServiceLogging()
+
+    # Create spy on prometheus logger's async_service_success_hook
+    with patch.object(
+        sl.prometheusServicesLogger,
+        "async_service_success_hook",
+        new_callable=AsyncMock,
+    ) as mock_prometheus_success:
+        # Test DB success monitoring
+        await sl.async_service_success_hook(
+            service=ServiceTypes.DB,
+            duration=0.3,
+            call_type="query",
+            event_metadata={"query_type": "SELECT", "table": "api_keys"},
+        )
+
+        # Assert prometheus logger's success hook was called
+        mock_prometheus_success.assert_called_once()
+        # Optionally verify the payload
+        actual_payload = mock_prometheus_success.call_args[1]["payload"]
+        print("actual_payload sent to prometheus: ", actual_payload)
+        assert actual_payload.service == ServiceTypes.DB
+        assert actual_payload.duration == 0.3
+        assert actual_payload.call_type == "query"
+        assert actual_payload.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_service_logger_db_monitoring_failure():
+    """
+    Test prometheus monitoring for failed database operations
+    """
+    litellm.service_callback = ["prometheus_system"]
+    sl = ServiceLogging()
+
+    # Create spy on prometheus logger's async_service_failure_hook
+    with patch.object(
+        sl.prometheusServicesLogger,
+        "async_service_failure_hook",
+        new_callable=AsyncMock,
+    ) as mock_prometheus_failure:
+        # Test DB failure monitoring
+        test_error = Exception("Database connection failed")
+        await sl.async_service_failure_hook(
+            service=ServiceTypes.DB,
+            duration=0.3,
+            error=test_error,
+            call_type="query",
+            event_metadata={"query_type": "SELECT", "table": "api_keys"},
+        )
+
+        # Assert prometheus logger's failure hook was called
+        mock_prometheus_failure.assert_called_once()
+        # Verify the payload
+        actual_payload = mock_prometheus_failure.call_args[1]["payload"]
+        print("actual_payload sent to prometheus: ", actual_payload)
+        assert actual_payload.service == ServiceTypes.DB
+        assert actual_payload.duration == 0.3
+        assert actual_payload.call_type == "query"
+        assert actual_payload.is_error is True
+        assert actual_payload.error == "Database connection failed"
