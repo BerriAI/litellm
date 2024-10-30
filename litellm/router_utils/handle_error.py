@@ -1,15 +1,21 @@
 import asyncio
 import traceback
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
+from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.router import RouterRateLimitError
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
+    Span = _Span
 else:
     LitellmRouter = Any
+    Span = Any
 
 
 async def send_llm_exception_alert(
@@ -54,4 +60,25 @@ async def send_llm_exception_alert(
         level="High",
         alert_type=AlertType.llm_exceptions,
         alerting_metadata={},
+    )
+
+
+async def async_raise_router_rate_limit_error(
+    litellm_router_instance: LitellmRouter,
+    model: str,
+    parent_otel_span: Optional[Span],
+):
+    model_ids = litellm_router_instance.get_model_ids(model_name=model)
+    _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
+        model_ids=model_ids, parent_otel_span=parent_otel_span
+    )
+    _cooldown_list = await _async_get_cooldown_deployments(
+        litellm_router_instance=litellm_router_instance,
+        parent_otel_span=parent_otel_span,
+    )
+    return RouterRateLimitError(
+        model=model,
+        cooldown_time=_cooldown_time,
+        enable_pre_call_checks=litellm_router_instance.enable_pre_call_checks,
+        cooldown_list=_cooldown_list,
     )
