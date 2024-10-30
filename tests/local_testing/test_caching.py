@@ -609,7 +609,7 @@ async def test_embedding_caching_redis_ttl():
             type="redis",
             host="dummy_host",
             password="dummy_password",
-            default_in_redis_ttl=2.5,
+            default_in_redis_ttl=2,
         )
 
         inputs = [
@@ -635,7 +635,7 @@ async def test_embedding_caching_redis_ttl():
             print(f"redis pipeline set args: {args}")
             print(f"redis pipeline set kwargs: {kwargs}")
             assert kwargs.get("ex") == datetime.timedelta(
-                seconds=2.5
+                seconds=2
             )  # Check if TTL is set to 2.5 seconds
 
 
