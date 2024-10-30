@@ -370,7 +370,55 @@ async def test_get_users(prisma_client):
         assert "spend" in user
         assert "user_email" in user
         assert "user_role" in user
+        assert "key_count" in user
 
     # Clean up test users
     for user in test_users:
         await prisma_client.db.litellm_usertable.delete(where={"user_id": user.user_id})
+
+
+@pytest.mark.asyncio
+async def test_get_users_key_count(prisma_client):
+    """
+    Test that verifies the key_count in get_users increases when a new key is created for a user
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Get initial user list and select the first user
+    initial_users = await get_users(role=None, page=1, page_size=20)
+    print("initial_users", initial_users)
+    assert len(initial_users["users"]) > 0, "No users found to test with"
+
+    test_user = initial_users["users"][0]
+    initial_key_count = test_user["key_count"]
+
+    # Create a new key for the selected user
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=test_user["user_id"],
+            key_alias=f"test_key_{uuid.uuid4()}",
+            models=["fake-model"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    # Get updated user list and check key count
+    updated_users = await get_users(role=None, page=1, page_size=20)
+    print("updated_users", updated_users)
+    updated_key_count = None
+    for user in updated_users["users"]:
+        if user["user_id"] == test_user["user_id"]:
+            updated_key_count = user["key_count"]
+            break
+
+    assert updated_key_count is not None, "Test user not found in updated users list"
+    assert (
+        updated_key_count == initial_key_count + 1
+    ), f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
