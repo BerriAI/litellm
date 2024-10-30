@@ -1045,7 +1045,7 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
             },
         ],
         default_fallbacks=(
-            ["my-good-model"] if litellm_module_fallbacks == False else None
+            ["my-good-model"] if litellm_module_fallbacks is False else None
         ),
     )
 
@@ -1398,3 +1398,48 @@ def test_router_fallbacks_with_custom_model_costs():
 
     assert model_info["input_cost_per_token"] == 30
     assert model_info["output_cost_per_token"] == 60
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
+    """
+    Tests to ensure there is not an infinite fallback loop when there is a default fallback and model specific fallback.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-bad-model-2",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["my-bad-model-2"]}],
+        default_fallbacks=["bad-model"],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        if sync_mode:
+            resp = router.completion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+
+            print(f"resp: {resp}")
+        else:
+            await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+    assert isinstance(
+        exc_info.value, litellm.AuthenticationError
+    ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
