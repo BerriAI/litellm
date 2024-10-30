@@ -2684,7 +2684,7 @@ class StandardLoggingPayloadSetup:
                             )
                         )
                     else:
-                        clean_hidden_params[key] = hidden_params[key]
+                        clean_hidden_params[key] = hidden_params[key]  # type: ignore
         return clean_hidden_params
 
 
