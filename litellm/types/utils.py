@@ -1315,6 +1315,7 @@ all_litellm_params = [
     "num_retries",
     "context_window_fallback_dict",
     "retry_policy",
+    "retry_strategy",
     "roles",
     "final_prompt_value",
     "bos_token",
