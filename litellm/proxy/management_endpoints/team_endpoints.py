@@ -1275,10 +1275,17 @@ async def list_team(
         for tm in returned_tm:
             if tm.team_id == team.team_id:
                 _team_memberships.append(tm)
+
+        # add all keys that belong to the team
+        keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": team.team_id}
+        )
+
         returned_responses.append(
             TeamListResponseObject(
                 **team.model_dump(),
                 team_memberships=_team_memberships,
+                keys=keys,
             )
         )
 
