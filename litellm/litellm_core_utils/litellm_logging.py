@@ -1251,19 +1251,6 @@ class Logging:
                                 print_verbose=print_verbose,
                             )
 
-                    if callback == "mlflow":
-                        global mlflowLogger
-
-                        if mlflowLogger is None:
-                            mlflowLogger = MlflowLogger()
-
-                        mlflowLogger.log_success_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -1917,19 +1904,6 @@ class Logging:
                             print_verbose=print_verbose,
                         )
 
-                    if callback == "mlflow":
-                        global mlflowLogger
-
-                        if mlflowLogger is None:
-                            mlflowLogger = MlflowLogger()
-
-                        mlflowLogger.log_failure_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {str(e)}"
@@ -2072,7 +2046,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, mlflowLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -2158,8 +2132,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
-            elif callback == "mlflow":
-                mlflowLogger = MlflowLogger()
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
@@ -2368,6 +2340,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
 
+    elif logging_integration == "mlflow":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, MlflowLogger):
+                return callback  # type: ignore
+
+        _mlflow_logger = MlflowLogger()
+        _in_memory_loggers.append(_mlflow_logger)
+        return _mlflow_logger  # type: ignore
 
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
@@ -2469,6 +2449,12 @@ def get_custom_logger_compatible_class(
                 and callback.callback_name == "langtrace"
             ):
                 return callback
+
+    elif logging_integration == "mlflow":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, MlflowLogger):
+                return callback
+
     return None
 
 
