@@ -42,6 +42,7 @@ from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
     StandardCallbackDynamicParams,
+    StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
@@ -2640,6 +2641,52 @@ class StandardLoggingPayloadSetup:
 
         return final_response_obj
 
+    @staticmethod
+    def get_additional_headers(
+        additiona_headers: Optional[dict],
+    ) -> Optional[StandardLoggingAdditionalHeaders]:
+
+        if additiona_headers is None:
+            return None
+
+        additional_logging_headers: StandardLoggingAdditionalHeaders = {}
+
+        for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
+            _key = key.lower()
+            _key = _key.replace("_", "-")
+            if _key in additiona_headers:
+                try:
+                    additional_logging_headers[key] = int(additiona_headers[_key])  # type: ignore
+                except (ValueError, TypeError):
+                    verbose_logger.debug(
+                        f"Could not convert {additiona_headers[_key]} to int for key {key}."
+                    )
+        return additional_logging_headers
+
+    @staticmethod
+    def get_hidden_params(
+        hidden_params: Optional[dict],
+    ) -> StandardLoggingHiddenParams:
+        clean_hidden_params = StandardLoggingHiddenParams(
+            model_id=None,
+            cache_key=None,
+            api_base=None,
+            response_cost=None,
+            additional_headers=None,
+        )
+        if hidden_params is not None:
+            for key in StandardLoggingHiddenParams.__annotations__.keys():
+                if key in hidden_params:
+                    if key == "additional_headers":
+                        clean_hidden_params["additional_headers"] = (
+                            StandardLoggingPayloadSetup.get_additional_headers(
+                                hidden_params[key]
+                            )
+                        )
+                    else:
+                        clean_hidden_params[key] = hidden_params[key]  # type: ignore
+        return clean_hidden_params
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2671,7 +2718,9 @@ def get_standard_logging_object_payload(
             if response_headers is not None:
                 hidden_params = dict(
                     StandardLoggingHiddenParams(
-                        additional_headers=dict(response_headers),
+                        additional_headers=StandardLoggingPayloadSetup.get_additional_headers(
+                            dict(response_headers)
+                        ),
                         model_id=None,
                         cache_key=None,
                         api_base=None,
@@ -2712,21 +2761,9 @@ def get_standard_logging_object_payload(
             )
         )
         # clean up litellm hidden params
-        clean_hidden_params = StandardLoggingHiddenParams(
-            model_id=None,
-            cache_key=None,
-            api_base=None,
-            response_cost=None,
-            additional_headers=None,
+        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
+            hidden_params
         )
-        if hidden_params is not None:
-            clean_hidden_params = StandardLoggingHiddenParams(
-                **{  # type: ignore
-                    key: hidden_params[key]
-                    for key in StandardLoggingHiddenParams.__annotations__.keys()
-                    if key in hidden_params
-                }
-            )
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata

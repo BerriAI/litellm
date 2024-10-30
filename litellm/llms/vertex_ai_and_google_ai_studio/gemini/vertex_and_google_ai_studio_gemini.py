@@ -431,9 +431,13 @@ class VertexGeminiConfig:
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
-                    description=openai_function_object.get("description", ""),
-                    parameters=openai_function_object.get("parameters", {}),
                 )
+                _description = openai_function_object.get("description", None)
+                _parameters = openai_function_object.get("parameters", None)
+                if _description is not None:
+                    gtool_func_declaration["description"] = _description
+                if _parameters is not None:
+                    gtool_func_declaration["parameters"] = _parameters
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
                 # assume it's a provider-specific param

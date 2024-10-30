@@ -549,13 +549,14 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
 
     standard_logging_payload = create_standard_logging_payload()
 
+    standard_logging_payload["hidden_params"]["additional_headers"] = {
+        "x_ratelimit_remaining_requests": 123,
+        "x_ratelimit_remaining_tokens": 4321,
+    }
+
     # Create test data
     request_kwargs = {
         "model": "gpt-3.5-turbo",
-        "response_headers": {
-            "x-ratelimit-remaining-requests": 123,
-            "x-ratelimit-remaining-tokens": 4321,
-        },
         "litellm_params": {
             "custom_llm_provider": "openai",
             "metadata": {"model_info": {"id": "model-123"}},

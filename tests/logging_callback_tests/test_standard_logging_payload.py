@@ -65,3 +65,42 @@ def test_get_usage(response_obj, expected_values):
     assert usage.prompt_tokens == expected_values[0]
     assert usage.completion_tokens == expected_values[1]
     assert usage.total_tokens == expected_values[2]
+
+
+def test_get_additional_headers():
+    additional_headers = {
+        "x-ratelimit-limit-requests": "2000",
+        "x-ratelimit-remaining-requests": "1999",
+        "x-ratelimit-limit-tokens": "160000",
+        "x-ratelimit-remaining-tokens": "160000",
+        "llm_provider-date": "Tue, 29 Oct 2024 23:57:37 GMT",
+        "llm_provider-content-type": "application/json",
+        "llm_provider-transfer-encoding": "chunked",
+        "llm_provider-connection": "keep-alive",
+        "llm_provider-anthropic-ratelimit-requests-limit": "2000",
+        "llm_provider-anthropic-ratelimit-requests-remaining": "1999",
+        "llm_provider-anthropic-ratelimit-requests-reset": "2024-10-29T23:57:40Z",
+        "llm_provider-anthropic-ratelimit-tokens-limit": "160000",
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "160000",
+        "llm_provider-anthropic-ratelimit-tokens-reset": "2024-10-29T23:57:36Z",
+        "llm_provider-request-id": "req_01F6CycZZPSHKRCCctcS1Vto",
+        "llm_provider-via": "1.1 google",
+        "llm_provider-cf-cache-status": "DYNAMIC",
+        "llm_provider-x-robots-tag": "none",
+        "llm_provider-server": "cloudflare",
+        "llm_provider-cf-ray": "8da71bdbc9b57abb-SJC",
+        "llm_provider-content-encoding": "gzip",
+        "llm_provider-x-ratelimit-limit-requests": "2000",
+        "llm_provider-x-ratelimit-remaining-requests": "1999",
+        "llm_provider-x-ratelimit-limit-tokens": "160000",
+        "llm_provider-x-ratelimit-remaining-tokens": "160000",
+    }
+    additional_logging_headers = StandardLoggingPayloadSetup.get_additional_headers(
+        additional_headers
+    )
+    assert additional_logging_headers == {
+        "x_ratelimit_limit_requests": 2000,
+        "x_ratelimit_remaining_requests": 1999,
+        "x_ratelimit_limit_tokens": 160000,
+        "x_ratelimit_remaining_tokens": 160000,
+    }
