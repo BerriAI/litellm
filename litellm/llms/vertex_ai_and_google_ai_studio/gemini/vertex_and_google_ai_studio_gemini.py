@@ -358,6 +358,7 @@ class VertexGeminiConfig:
             "presence_penalty",
             "extra_headers",
             "seed",
+            "logprobs",
         ]
 
     def map_tool_choice_values(
@@ -505,6 +506,8 @@ class VertexGeminiConfig:
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
+            if param == "logprobs":
+                optional_params["responseLogprobs"] = value
             if (param == "tools" or param == "functions") and isinstance(value, list):
                 optional_params["tools"] = self._map_function(value=value)
                 optional_params["litellm_param_is_function_call"] = (
@@ -594,7 +597,7 @@ class VertexGeminiConfig:
         Optional[List[ChatCompletionToolCallChunk]],
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
-        tools: Optional[List[ChatCompletionToolCallChunk]] = []
+        _tools: List[ChatCompletionToolCallChunk] = []
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -610,9 +613,11 @@ class VertexGeminiConfig:
                         function=_function_chunk,
                         index=index,
                     )
-                    tools.append(_tool_response_chunk)
-        if len(tools) == 0:
-            tools = None
+                    _tools.append(_tool_response_chunk)
+        if len(_tools) == 0:
+            tools: Optional[List[ChatCompletionToolCallChunk]] = None
+        else:
+            tools = _tools
         return function, tools
 
     def _handle_blocked_response(
@@ -937,6 +942,7 @@ class GoogleAIStudioGeminiConfig(
             "response_format",
             "n",
             "stop",
+            "logprobs",
         ]
 
     def map_openai_params(
