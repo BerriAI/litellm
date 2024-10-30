@@ -267,7 +267,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>
                         <TableCell>
-                          {user.max_budget ? user.max_budget : "Unlimited"}
+                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
                         </TableCell>
                         <TableCell>
                           <Grid numItems={2}>
