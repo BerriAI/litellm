@@ -450,6 +450,7 @@ async def test_internal_user_permissions(prisma_client):
     """Test INTERNAL_USER permissions:
     - Can view/create/delete keys ✅
     - Can view /user/info for themselves ✅
+    - Can access llm endpoints ✅
     - Cannot add/update/delete new users ❌
     - Cannot add/update/delete teams ❌
     - Cannot add/update/delete organizations ❌
@@ -481,6 +482,7 @@ async def test_internal_user_permissions(prisma_client):
         ("/key/generate", "POST"),
         ("/key/delete", "POST"),
         ("/user/info", "GET"),
+        ("/chat/completions", "POST"),
     ]
 
     for endpoint, method in allowed_endpoints:
@@ -526,6 +528,7 @@ async def test_internal_user_viewer_permissions(prisma_client):
     - Can view own keys ✅
     - Can view /user/info for themselves ✅
     - Can view spend logs ✅
+    - Can access llm endpoints ✅ (NOTE: this is to maintain backwards compatibility)
     - Cannot create, update, delete keys ❌
     - Cannot create, update, delete users ❌
     - Cannot create, update, delete teams ❌
@@ -556,6 +559,7 @@ async def test_internal_user_viewer_permissions(prisma_client):
         ("/key/info", "GET"),
         ("/user/info", "GET"),
         ("/spend/logs", "GET"),
+        ("/chat/completions", "POST"),
     ]
 
     for endpoint, method in allowed_endpoints:
@@ -632,6 +636,7 @@ async def test_proxy_admin_viewer_permissions(prisma_client):
     allowed_endpoints = [
         ("/key/info", "GET"),
         ("/spend/logs", "GET"),
+        ("/chat/completions", "POST"),
     ]
 
     for endpoint, method in allowed_endpoints:
@@ -647,7 +652,6 @@ async def test_proxy_admin_viewer_permissions(prisma_client):
         ("/key/generate", "POST"),
         ("/key/delete", "POST"),
         ("/user/new", "POST"),
-        ("/user/update", "POST"),
         ("/user/delete", "POST"),
         ("/team/new", "POST"),
         ("/team/update", "POST"),
@@ -675,6 +679,7 @@ async def test_proxy_admin_permissions(prisma_client):
     - Can add new users ✅
     - Can manage organizations ✅
     - Can manage teams ✅
+     - Can access llm endpoints ✅ (NOTE: this is to maintain backwards compatibility)
     - Has full access to all admin endpoints ✅
     """
     import json
@@ -716,6 +721,7 @@ async def test_proxy_admin_permissions(prisma_client):
         ("/spend/logs", "GET"),
         ("/spend/key", "GET"),
         ("/spend/user", "GET"),
+        ("/chat/completions", "POST"),
     ]
 
     for endpoint, method in admin_endpoints:
