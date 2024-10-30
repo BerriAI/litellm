@@ -23,12 +23,8 @@ class BaseCache:
         self.default_ttl = default_ttl
 
     def get_ttl(self, **kwargs) -> Optional[int]:
-        kwargs_ttl: Optional[int] = kwargs.get("ttl")
-        if kwargs_ttl is not None:
-            try:
-                return int(kwargs_ttl)
-            except ValueError:
-                return self.default_ttl
+        if kwargs.get("ttl") is not None:
+            return kwargs.get("ttl")
         return self.default_ttl
 
     def set_cache(self, key, value, **kwargs):
