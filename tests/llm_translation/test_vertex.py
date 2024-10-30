@@ -178,3 +178,55 @@ def test_vertex_function_translation(tool, expect_parameters):
         assert (
             "parameters" not in optional_params["tools"][0]["function_declarations"][0]
         )
+
+
+def test_function_calling_with_gemini():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    with patch.object(client, "post", new=MagicMock()) as mock_post:
+        try:
+            litellm.completion(
+                model="gemini/gemini-1.5-pro-002",
+                messages=[
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "You are a helpful assistant that can interact with a computer to solve tasks.\n<IMPORTANT>\n* If user provides a path, you should NOT assume it's relative to the current working directory. Instead, you should explore the file system to find the file before working on it.\n</IMPORTANT>\n",
+                            }
+                        ],
+                        "role": "system",
+                    },
+                    {
+                        "content": [{"type": "text", "text": "Hey, how's it going?"}],
+                        "role": "user",
+                    },
+                ],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "finish",
+                            "description": "Finish the interaction when the task is complete OR if the assistant cannot proceed further with the task.",
+                        },
+                    },
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs)
+
+        assert mock_post.call_args.kwargs["json"]["tools"] == [
+            {
+                "function_declarations": [
+                    {
+                        "name": "finish",
+                        "description": "Finish the interaction when the task is complete OR if the assistant cannot proceed further with the task.",
+                    }
+                ]
+            }
+        ]
