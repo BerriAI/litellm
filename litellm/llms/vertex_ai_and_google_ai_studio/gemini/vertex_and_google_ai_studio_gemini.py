@@ -50,6 +50,7 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     GenerationConfig,
     HttpxPartType,
+    LogprobsResult,
     PartType,
     RequestBody,
     SafetSettingsConfig,
@@ -57,7 +58,12 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
+    ChoiceLogprobs,
+    GenericStreamingChunk,
+    TopLogprob,
+)
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
@@ -455,6 +461,7 @@ class VertexGeminiConfig:
         optional_params: dict,
         drop_params: bool,
     ):
+
         for param, value in non_default_params.items():
             if param == "temperature":
                 optional_params["temperature"] = value
@@ -523,6 +530,7 @@ class VertexGeminiConfig:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "seed":
                 optional_params["seed"] = value
+
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
@@ -619,6 +627,38 @@ class VertexGeminiConfig:
         else:
             tools = _tools
         return function, tools
+
+    def _transform_logprobs(
+        self, logprobs_result: Optional[LogprobsResult]
+    ) -> Optional[ChoiceLogprobs]:
+        if logprobs_result is None:
+            return None
+        if "chosenCandidates" not in logprobs_result:
+            return None
+        logprobs_list: List[ChatCompletionTokenLogprob] = []
+        for index, candidate in enumerate(logprobs_result["chosenCandidates"]):
+            top_logprobs: List[TopLogprob] = []
+            if "topCandidates" in logprobs_result and index < len(
+                logprobs_result["topCandidates"]
+            ):
+                top_candidates_for_index = logprobs_result["topCandidates"][index][
+                    "candidates"
+                ]
+
+                for options in top_candidates_for_index:
+                    top_logprobs.append(
+                        TopLogprob(
+                            token=options["token"], logprob=options["logProbability"]
+                        )
+                    )
+            logprobs_list.append(
+                ChatCompletionTokenLogprob(
+                    token=candidate["token"],
+                    logprob=candidate["logProbability"],
+                    top_logprobs=top_logprobs,
+                )
+            )
+        return ChoiceLogprobs(content=logprobs_list)
 
     def _handle_blocked_response(
         self,
@@ -768,6 +808,7 @@ class VertexGeminiConfig:
             chat_completion_message: ChatCompletionResponseMessage = {
                 "role": "assistant"
             }
+            chat_completion_logprobs: Optional[ChoiceLogprobs] = None
             tools: Optional[List[ChatCompletionToolCallChunk]] = []
             functions: Optional[ChatCompletionToolCallFunctionChunk] = None
             if _candidates:
@@ -798,6 +839,11 @@ class VertexGeminiConfig:
                             ),
                         )
 
+                    if "logprobsResult" in candidate:
+                        chat_completion_logprobs = self._transform_logprobs(
+                            logprobs_result=candidate["logprobsResult"]
+                        )
+
                     if tools:
                         chat_completion_message["tool_calls"] = tools
 
@@ -807,7 +853,7 @@ class VertexGeminiConfig:
                         finish_reason=candidate.get("finishReason", "stop"),
                         index=candidate.get("index", idx),
                         message=chat_completion_message,  # type: ignore
-                        logprobs=None,
+                        logprobs=chat_completion_logprobs,
                         enhancements=None,
                     )
 
