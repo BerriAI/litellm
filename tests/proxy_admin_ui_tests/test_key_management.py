@@ -365,7 +365,6 @@ async def test_get_users(prisma_client):
     assert "users" in result
 
     for user in result["users"]:
-        user = user.model_dump()
         assert "user_id" in user
         assert "spend" in user
         assert "user_email" in user
