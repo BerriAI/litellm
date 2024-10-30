@@ -5214,6 +5214,7 @@ class Router:
                     enable_pre_call_checks=self.enable_pre_call_checks,
                     cooldown_list=_cooldown_list,
                 )
+                raise exception
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
