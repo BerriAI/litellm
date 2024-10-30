@@ -8,4 +8,6 @@ model_list:
 litellm_settings:
   callbacks: ["prometheus"]
   service_callback: ["prometheus_system"]
-  cache: true
+  default_internal_user_params:
+    user_role: "internal_user_viewer"
+    max_budget: 0

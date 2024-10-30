@@ -105,39 +105,6 @@ def _get_bearer_token(
     return api_key
 
 
-def _is_ui_route_allowed(
-    route: str,
-    user_obj: Optional[LiteLLM_UserTable] = None,
-) -> bool:
-    """
-    - Route b/w ui token check and normal token check
-    """
-    # this token is only used for managing the ui
-    allowed_routes = LiteLLMRoutes.ui_routes.value
-    # check if the current route startswith any of the allowed routes
-    if (
-        route is not None
-        and isinstance(route, str)
-        and any(route.startswith(allowed_route) for allowed_route in allowed_routes)
-    ):
-        # Do something if the current route starts with any of the allowed routes
-        return True
-    elif any(
-        RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
-        for allowed_route in allowed_routes
-    ):
-        return True
-    else:
-        if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
-            return True
-        elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-            return True
-        else:
-            raise Exception(
-                f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
-            )
-
-
 def _is_api_route_allowed(
     route: str,
     request: Request,
@@ -165,31 +132,6 @@ def _is_api_route_allowed(
             valid_token=valid_token,
         )
     return True
-
-
-def _is_allowed_route(
-    route: str,
-    token_type: Literal["ui", "api"],
-    request: Request,
-    request_data: dict,
-    api_key: str,
-    valid_token: Optional[UserAPIKeyAuth],
-    user_obj: Optional[LiteLLM_UserTable] = None,
-) -> bool:
-    """
-    - Route b/w ui token check and normal token check
-    """
-    if token_type == "ui":
-        return _is_ui_route_allowed(route=route, user_obj=user_obj)
-    else:
-        return _is_api_route_allowed(
-            route=route,
-            request=request,
-            request_data=request_data,
-            api_key=api_key,
-            valid_token=valid_token,
-            user_obj=user_obj,
-        )
 
 
 async def user_api_key_auth(  # noqa: PLR0915
@@ -1138,14 +1080,8 @@ async def user_api_key_auth(  # noqa: PLR0915
         # sso/login, ui/login, /key functions and /user functions
         # this will never be allowed to call /chat/completions
         token_team = getattr(valid_token, "team_id", None)
-        token_type: Literal["ui", "api"] = (
-            "ui"
-            if token_team is not None and token_team == "litellm-dashboard"
-            else "api"
-        )
-        _is_route_allowed = _is_allowed_route(
+        _is_route_allowed = _is_api_route_allowed(
             route=route,
-            token_type=token_type,
             user_obj=user_obj,
             request=request,
             request_data=request_data,
