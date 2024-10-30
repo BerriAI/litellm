@@ -2033,6 +2033,7 @@ class TeamInfoResponseObject(TypedDict):
 
 class TeamListResponseObject(LiteLLM_TeamTable):
     team_memberships: List[LiteLLM_TeamMembership]
+    keys: List  # list of keys that belong to the team
 
 
 class CurrentItemRateLimit(TypedDict):

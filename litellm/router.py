@@ -5204,7 +5204,6 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
                 raise exception
-
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
