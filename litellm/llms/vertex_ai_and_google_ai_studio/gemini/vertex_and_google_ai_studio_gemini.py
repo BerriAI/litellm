@@ -454,6 +454,16 @@ class VertexGeminiConfig:
             _tools["code_execution"] = code_execution
         return [_tools]
 
+    def _map_response_schema(self, value: dict) -> dict:
+        old_schema = deepcopy(value)
+        if isinstance(old_schema, list):
+            for item in old_schema:
+                if isinstance(item, dict):
+                    item = _build_vertex_schema(parameters=item)
+        elif isinstance(old_schema, dict):
+            old_schema = _build_vertex_schema(parameters=old_schema)
+        return old_schema
+
     def map_openai_params(
         self,
         model: str,
@@ -500,15 +510,9 @@ class VertexGeminiConfig:
                 if "response_schema" in optional_params and isinstance(
                     optional_params["response_schema"], dict
                 ):
-                    old_schema = deepcopy(optional_params["response_schema"])
-
-                    if isinstance(old_schema, list):
-                        for item in old_schema:
-                            if isinstance(item, dict):
-                                item = _build_vertex_schema(parameters=item)
-                    elif isinstance(old_schema, dict):
-                        old_schema = _build_vertex_schema(parameters=old_schema)
-                    optional_params["response_schema"] = old_schema
+                    optional_params["response_schema"] = self._map_response_schema(
+                        value=optional_params["response_schema"]
+                    )
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
