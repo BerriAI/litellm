@@ -721,6 +721,37 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
+### Computer Tools
+
+```python
+from litellm import completion
+
+tools = [
+    {
+        "type": "computer_20241022",
+        "function": {
+            "name": "computer",
+            "parameters": {
+                "display_height_px": 100,
+                "display_width_px": 100,
+                "display_number": 1,
+            },
+        },
+    }
+]
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "Save a picture of a cat to my desktop."}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+    # headers={"anthropic-beta": "computer-use-2024-10-22"},
+)
+
+print(resp)
+```
+
 ## Usage - Vision 
 
 ```python

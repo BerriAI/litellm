@@ -400,14 +400,26 @@ class VertexGeminiConfig:
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
+
         for tool in value:
             openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
                 None
             )
             if "function" in tool:  # tools list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
                 )
+
+                if (
+                    "parameters" in _openai_function_object
+                    and _openai_function_object["parameters"] is not None
+                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
+                    _openai_function_object["parameters"] = _build_vertex_schema(
+                        _openai_function_object["parameters"]
+                    )
+
+                openai_function_object = _openai_function_object
+
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
