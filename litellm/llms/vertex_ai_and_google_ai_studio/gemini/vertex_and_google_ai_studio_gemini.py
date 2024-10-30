@@ -787,8 +787,6 @@ class VertexLLM(VertexBase):
             additional_args={"complete_input_dict": data},
         )
 
-        print_verbose(f"raw model_response: {response.text}")
-
         ## RESPONSE OBJECT
         try:
             completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
