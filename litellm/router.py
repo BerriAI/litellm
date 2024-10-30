@@ -5210,9 +5210,10 @@ class Router:
                 )
                 raise RouterRateLimitError(
                     model=model,
-                    parent_otel_span=parent_otel_span,
+                    cooldown_time=_cooldown_time,
+                    enable_pre_call_checks=self.enable_pre_call_checks,
+                    cooldown_list=_cooldown_list,
                 )
-                raise exception
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
