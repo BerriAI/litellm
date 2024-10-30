@@ -96,6 +96,66 @@ def test_process_azure_headers_with_dict_input():
     assert result == expected_output, "Unexpected output for dict input"
 
 
+from httpx import Client
+from unittest.mock import MagicMock, patch
+from openai import AzureOpenAI
+import litellm
+from litellm import completion
+import os
+
+
+@pytest.mark.parametrize(
+    "input, call_type",
+    [
+        ({"messages": [{"role": "user", "content": "Hello world"}]}, "completion"),
+        ({"input": "Hello world"}, "embedding"),
+        ({"prompt": "Hello world"}, "image_generation"),
+    ],
+)
+def test_azure_extra_headers(input, call_type):
+    from litellm import embedding, image_generation
+
+    http_client = Client()
+
+    messages = [{"role": "user", "content": "Hello world"}]
+    with patch.object(http_client, "send", new=MagicMock()) as mock_client:
+        litellm.client_session = http_client
+        try:
+            if call_type == "completion":
+                func = completion
+            elif call_type == "embedding":
+                func = embedding
+            elif call_type == "image_generation":
+                func = image_generation
+            response = func(
+                model="azure/chatgpt-v-2",
+                api_base="https://openai-gpt-4-test-v-1.openai.azure.com",
+                api_version="2023-07-01-preview",
+                api_key="my-azure-api-key",
+                extra_headers={
+                    "Authorization": "my-bad-key",
+                    "Ocp-Apim-Subscription-Key": "hello-world-testing",
+                },
+                **input,
+            )
+            print(response)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        request = mock_client.call_args[0][0]
+        print(request.method)  # This will print 'POST'
+        print(request.url)  # This will print the full URL
+        print(request.headers)  # This will print the full URL
+        auth_header = request.headers.get("Authorization")
+        apim_key = request.headers.get("Ocp-Apim-Subscription-Key")
+        print(auth_header)
+        assert auth_header == "my-bad-key"
+        assert apim_key == "hello-world-testing"
+
+
 @pytest.mark.parametrize(
     "api_base, model, expected_endpoint",
     [
