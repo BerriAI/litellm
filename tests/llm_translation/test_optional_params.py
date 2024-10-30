@@ -786,7 +786,6 @@ def test_unmapped_vertex_anthropic_model():
     assert "max_retries" not in optional_params
 
 
-
 @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
 def test_anthropic_parallel_tool_calls(provider):
     optional_params = get_optional_params(
