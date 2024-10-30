@@ -448,10 +448,11 @@ RBAC checks
 @pytest.mark.asyncio
 async def test_internal_user_permissions(prisma_client):
     """Test INTERNAL_USER permissions:
-    - Can view own keys ✅
-    - Can create own keys ✅
-    - Can delete own keys ✅
-    - Cannot add new users ❌
+    - Can view/create/delete keys ✅
+    - Can view /user/info for themselves ✅
+    - Cannot add/update/delete new users ❌
+    - Cannot add/update/delete teams ❌
+    - Cannot add/update/delete organizations ❌
     """
     import json
 
@@ -479,10 +480,18 @@ async def test_internal_user_permissions(prisma_client):
         ("/key/info", "GET"),
         ("/key/generate", "POST"),
         ("/key/delete", "POST"),
+        ("/user/info", "GET"),
     ]
 
     for endpoint, method in allowed_endpoints:
-        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        if endpoint == "/user/info":
+            query_string = b"user_id=" + user_id.encode()
+        else:
+            query_string = b""
+
+        request = Request(
+            scope={"type": "http", "method": method, "query_string": query_string}
+        )
         request._url = URL(url=endpoint)
         response = await user_api_key_auth(
             request=request, api_key="Bearer " + internal_key
@@ -494,6 +503,9 @@ async def test_internal_user_permissions(prisma_client):
         ("/user/new", "POST"),
         ("/user/update", "POST"),
         ("/user/delete", "POST"),
+        ("/team/new", "POST"),
+        ("/team/update", "POST"),
+        ("/team/delete", "POST"),
         ("/organization/new", "POST"),
         ("/organization/member_add", "POST"),
     ]
@@ -512,9 +524,12 @@ async def test_internal_user_permissions(prisma_client):
 async def test_internal_user_viewer_permissions(prisma_client):
     """Test internal user viewer permissions:
     - Can view own keys ✅
-    - Cannot create keys ❌
-    - Cannot delete keys ❌
-    - Cannot add new users ❌
+    - Can view /user/info for themselves ✅
+    - Can view spend logs ✅
+    - Cannot create, update, delete keys ❌
+    - Cannot create, update, delete users ❌
+    - Cannot create, update, delete teams ❌
+    - Cannot create, update, delete organizations ❌
     """
     import json
 
@@ -539,11 +554,19 @@ async def test_internal_user_viewer_permissions(prisma_client):
     # Test allowed endpoints
     allowed_endpoints = [
         ("/key/info", "GET"),
+        ("/user/info", "GET"),
         ("/spend/logs", "GET"),
     ]
 
     for endpoint, method in allowed_endpoints:
-        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        if endpoint == "/user/info":
+            query_string = b"user_id=" + user_id.encode()
+        else:
+            query_string = b""
+
+        request = Request(
+            scope={"type": "http", "method": method, "query_string": query_string}
+        )
         request._url = URL(url=endpoint)
         response = await user_api_key_auth(
             request=request, api_key="Bearer " + viewer_key
