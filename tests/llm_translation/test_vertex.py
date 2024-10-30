@@ -497,3 +497,98 @@ def test_multiple_function_call_changed_text_pos():
             },
             {"role": "user", "parts": [{"text": "tell me the results."}]},
         ]
+
+
+def test_function_calling_with_gemini_multiple_results():
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    # Step 1: send the conversation and available functions to the model
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        }
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    response_body = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_weather",
+                                "args": {"location": "San Francisco"},
+                            }
+                        },
+                        {
+                            "functionCall": {
+                                "name": "get_current_weather",
+                                "args": {"location": "Tokyo"},
+                            }
+                        },
+                        {
+                            "functionCall": {
+                                "name": "get_current_weather",
+                                "args": {"location": "Paris"},
+                            }
+                        },
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "avgLogprobs": -0.0040788948535919189,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 90,
+            "candidatesTokenCount": 22,
+            "totalTokenCount": 112,
+        },
+        "modelVersion": "gemini-1.5-flash-002",
+    }
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = response_body
+
+    with patch.object(client, "post", return_value=mock_response):
+        response = litellm.completion(
+            model="gemini/gemini-1.5-flash-002",
+            messages=messages,
+            tools=tools,
+            tool_choice="required",
+            client=client,
+        )
+        print("Response\n", response)
+
+        assert len(response.choices[0].message.tool_calls) == 3
+
+        expected_locations = ["San Francisco", "Tokyo", "Paris"]
+        for idx, tool_call in enumerate(response.choices[0].message.tool_calls):
+            json_args = json.loads(tool_call.function.arguments)
+            assert json_args["location"] == expected_locations[idx]

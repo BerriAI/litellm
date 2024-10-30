@@ -79,7 +79,7 @@ def _process_gemini_image(image_url: str) -> PartType:
         raise e
 
 
-def _gemini_convert_messages_with_history(
+def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
 ) -> List[ContentType]:
     """
