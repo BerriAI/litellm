@@ -1292,6 +1292,7 @@ all_litellm_params = [
     "metadata",
     "tags",
     "acompletion",
+    "aimg_generation",
     "atext_completion",
     "text_completion",
     "caching",
@@ -1357,6 +1358,8 @@ all_litellm_params = [
     "ensure_alternating_roles",
     "assistant_continue_message",
     "user_continue_message",
+    "fallback_depth",
+    "max_fallbacks",
 ]
 
 

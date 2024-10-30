@@ -14,11 +14,13 @@ else:
 
 
 async def run_async_fallback(
-    litellm_router: LitellmRouter,
     *args: Tuple[Any],
+    litellm_router: LitellmRouter,
     fallback_model_group: List[str],
     original_model_group: str,
     original_exception: Exception,
+    max_fallbacks: int,
+    fallback_depth: int,
     **kwargs,
 ) -> Any:
     """
@@ -41,6 +43,11 @@ async def run_async_fallback(
     Raises:
         The most recent exception if all fallback model groups fail.
     """
+
+    ### BASE CASE ### MAX FALLBACK DEPTH REACHED
+    if fallback_depth >= max_fallbacks:
+        raise original_exception
+
     error_from_fallbacks = original_exception
     for mg in fallback_model_group:
         if mg == original_model_group:
@@ -53,6 +60,8 @@ async def run_async_fallback(
             kwargs.setdefault("metadata", {}).update(
                 {"model_group": mg}
             )  # update model_group used, if fallbacks are done
+            kwargs["fallback_depth"] = fallback_depth + 1
+            kwargs["max_fallbacks"] = max_fallbacks
             response = await litellm_router.async_function_with_fallbacks(
                 *args, **kwargs
             )
