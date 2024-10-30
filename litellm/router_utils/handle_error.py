@@ -64,7 +64,6 @@ async def send_llm_exception_alert(
     )
 
 
-
 async def async_raise_no_deployment_exception(
     litellm_router_instance: LitellmRouter, model: str, parent_otel_span: Optional[Span]
 ):
@@ -74,7 +73,6 @@ async def async_raise_no_deployment_exception(
     verbose_router_logger.info(
         f"get_available_deployment for model: {model}, No deployment available"
     )
-
     model_ids = litellm_router_instance.get_model_ids(model_name=model)
     _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
