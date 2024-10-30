@@ -9,13 +9,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
 
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span
-else:
-    Span = Any
-
 
 class CooldownCacheValue(TypedDict):
     exception_received: str
@@ -96,8 +89,11 @@ class CooldownCache:
             )
             or []
         )
+        active_cooldowns: List[Tuple[str, CooldownCacheValue]] = []
 
-        active_cooldowns = []
+        if results is None:
+            return active_cooldowns
+
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):

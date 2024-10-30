@@ -133,7 +133,7 @@ class DualCache(BaseCache):
     def batch_get_cache(
         self,
         keys: list,
-        parent_otel_span: Optional[Span],
+        parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
         **kwargs,
     ):
@@ -298,7 +298,7 @@ class DualCache(BaseCache):
         self,
         key,
         value: float,
-        parent_otel_span: Optional[Span],
+        parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
         **kwargs,
     ) -> float:
