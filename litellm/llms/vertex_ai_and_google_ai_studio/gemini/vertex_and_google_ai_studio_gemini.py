@@ -35,13 +35,6 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.prompt_templates.factory import (
-    convert_url_to_base64,
-    response_schema_prompt,
-)
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
-    _gemini_convert_messages_with_history,
-)
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
