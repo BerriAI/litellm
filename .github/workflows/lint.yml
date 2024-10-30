@@ -22,12 +22,12 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.1
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Install poetry
         run: pipx install poetry
-      - uses: actions/setup-python@v5.0.0
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: poetry install
