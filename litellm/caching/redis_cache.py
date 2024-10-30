@@ -301,6 +301,7 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
             )
+
             try:
                 if not hasattr(redis_client, "set"):
                     raise Exception(
