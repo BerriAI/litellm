@@ -105,7 +105,7 @@ def _get_bearer_token(
     return api_key
 
 
-def _is_api_route_allowed(
+def _is_route_allowed_check(
     route: str,
     request: Request,
     request_data: dict,
@@ -114,7 +114,20 @@ def _is_api_route_allowed(
     user_obj: Optional[LiteLLM_UserTable] = None,
 ) -> bool:
     """
-    - Route b/w api token check and normal token check
+    Checks if the route is allowed for the user_role
+
+    Doc LiteLLM User Roles: https://docs.litellm.ai/docs/proxy/access_control#roles
+
+    Args:
+        route: str
+        request: Request
+        request_data: dict
+        api_key: str
+        user_obj: LiteLLM_UserTable
+    Returns:
+        bool, True if the route is allowed
+    Raises:
+        Exception: If the route is not allowed
     """
     _user_role = _get_user_role(user_obj=user_obj)
 
@@ -1079,7 +1092,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
         # this will never be allowed to call /chat/completions
-        _is_route_allowed = _is_api_route_allowed(
+        _is_route_allowed = _is_route_allowed_check(
             route=route,
             user_obj=user_obj,
             request=request,
