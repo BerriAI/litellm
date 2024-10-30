@@ -271,23 +271,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                         </TableCell>
                         <TableCell>
                           <Grid numItems={2}>
-                            {user && user.key_aliases ? (
-                              user.key_aliases.filter(
-                                (key: any) => key !== null
-                              ).length > 0 ? (
-                                <Badge size={"xs"} color={"indigo"}>
-                                  {
-                                    user.key_aliases.filter(
-                                      (key: any) => key !== null
-                                    ).length
-                                  }
-                                  &nbsp;Keys
-                                </Badge>
-                              ) : (
-                                <Badge size={"xs"} color={"gray"}>
-                                  No Keys
-                                </Badge>
-                              )
+                            {user.key_count > 0 ? (
+                              <Badge size={"xs"} color={"indigo"}>
+                                {user.key_count} Keys
+                              </Badge>
                             ) : (
                               <Badge size={"xs"} color={"gray"}>
                                 No Keys
