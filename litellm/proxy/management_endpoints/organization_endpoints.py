@@ -198,6 +198,45 @@ async def delete_organization():
     pass
 
 
+@router.get(
+    "/organization/list",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_organization(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+        """
+    ```
+    curl --location --request GET 'http://0.0.0.0:4000/organization/list' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+        from litellm.proxy.proxy_server import prisma_client
+        
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})    
+    
+        if (
+            user_api_key_dict.user_role is None
+            or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"Only admins can list orgs. Your role is = {user_api_key_dict.user_role}"
+                },
+            )
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        response= await prisma_client.db.litellm_organizationtable.find_many()
+
+        return response
+    
+
 @router.post(
     "/organization/info",
     tags=["organization management"],
