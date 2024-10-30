@@ -1079,7 +1079,6 @@ async def user_api_key_auth(  # noqa: PLR0915
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
         # this will never be allowed to call /chat/completions
-        token_team = getattr(valid_token, "team_id", None)
         _is_route_allowed = _is_api_route_allowed(
             route=route,
             user_obj=user_obj,
