@@ -81,7 +81,10 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
     run_sync_fallback,
 )
-from litellm.router_utils.handle_error import send_llm_exception_alert
+from litellm.router_utils.handle_error import (
+    async_raise_no_deployment_exception,
+    send_llm_exception_alert,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -5183,21 +5186,12 @@ class Router:
             )
 
             if len(healthy_deployments) == 0:
-                if _allowed_model_region is None:
-                    _allowed_model_region = "n/a"
-                model_ids = self.get_model_ids(model_name=model)
-                _cooldown_time = self.cooldown_cache.get_min_cooldown(
-                    model_ids=model_ids, parent_otel_span=parent_otel_span
-                )
-                _cooldown_list = _get_cooldown_deployments(
-                    litellm_router_instance=self, parent_otel_span=parent_otel_span
-                )
-                raise RouterRateLimitError(
+                exception = await async_raise_no_deployment_exception(
+                    litellm_router_instance=self,
                     model=model,
-                    cooldown_time=_cooldown_time,
-                    enable_pre_call_checks=self.enable_pre_call_checks,
-                    cooldown_list=_cooldown_list,
+                    parent_otel_span=parent_otel_span,
                 )
+                raise exception
             start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
@@ -5255,22 +5249,12 @@ class Router:
             else:
                 deployment = None
             if deployment is None:
-                verbose_router_logger.info(
-                    f"get_available_deployment for model: {model}, No deployment available"
-                )
-                model_ids = self.get_model_ids(model_name=model)
-                _cooldown_time = self.cooldown_cache.get_min_cooldown(
-                    model_ids=model_ids, parent_otel_span=parent_otel_span
-                )
-                _cooldown_list = await _async_get_cooldown_deployments(
-                    litellm_router_instance=self, parent_otel_span=parent_otel_span
-                )
-                raise RouterRateLimitError(
+                exception = await async_raise_no_deployment_exception(
+                    litellm_router_instance=self,
                     model=model,
-                    cooldown_time=_cooldown_time,
-                    enable_pre_call_checks=self.enable_pre_call_checks,
-                    cooldown_list=_cooldown_list,
+                    parent_otel_span=parent_otel_span,
                 )
+                raise exception
             verbose_router_logger.info(
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
