@@ -17,7 +17,7 @@ from litellm._logging import (
     _turn_on_json,
     log_level,
 )
-
+from litellm.constants import ROUTER_MAX_FALLBACKS
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
     KeyManagementSystem,
@@ -284,6 +284,7 @@ request_timeout: float = 6000  # time in seconds
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
 module_level_client = HTTPHandler(timeout=request_timeout)
 num_retries: Optional[int] = None  # per model endpoint
+max_fallbacks: Optional[int] = None
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
