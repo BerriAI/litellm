@@ -13,7 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-
+from unittest.mock import patch, MagicMock, AsyncMock
 import os
 
 from dotenv import load_dotenv
@@ -139,3 +139,51 @@ async def test_router_timeouts_bedrock():
         pytest.fail(
             f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
         )
+
+
+@pytest.mark.parametrize(
+    "num_retries, expected_call_count",
+    [(0, 1), (1, 2), (2, 3), (3, 4)],
+)
+def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_count):
+    """
+    If request hits custom timeout, ensure it's retried.
+    """
+    litellm._turn_on_debug()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import time
+
+    litellm.num_retries = num_retries
+    litellm.request_timeout = 0.000001
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-haiku-20240307",
+                },
+            }
+        ],
+    )
+
+    custom_client = HTTPHandler()
+
+    with patch.object(custom_client, "post", new=MagicMock()) as mock_client:
+        try:
+
+            def delayed_response(*args, **kwargs):
+                time.sleep(0.01)  # Exceeds the 0.000001 timeout
+                raise TimeoutError("Request timed out.")
+
+            mock_client.side_effect = delayed_response
+
+            router.completion(
+                model="claude-3-haiku",
+                messages=[{"role": "user", "content": "hello, who are u"}],
+                client=custom_client,
+            )
+        except litellm.Timeout:
+            pass
+
+        assert mock_client.call_count == expected_call_count
