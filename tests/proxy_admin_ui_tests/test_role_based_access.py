@@ -43,6 +43,7 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     new_organization,
     organization_member_add,
 )
+from litellm.proxy._types import ProxyException
 
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
@@ -437,3 +438,282 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
             "You do not have the required role to call" in e.message
             and org2_id in e.message
         )
+
+
+"""
+RBAC checks 
+"""
+
+
+@pytest.mark.asyncio
+async def test_internal_user_permissions(prisma_client):
+    """Test INTERNAL_USER permissions:
+    - Can view own keys ✅
+    - Can create own keys ✅
+    - Can delete own keys ✅
+    - Cannot add new users ❌
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create internal user
+    user_id = f"internal-user-{uuid.uuid4()}"
+    _new_key = await new_user(
+        data=NewUserRequest(
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+    internal_key = _new_key.key
+
+    # Test allowed endpoints
+    allowed_endpoints = [
+        ("/key/info", "GET"),
+        ("/key/generate", "POST"),
+        ("/key/delete", "POST"),
+    ]
+
+    for endpoint, method in allowed_endpoints:
+        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        request._url = URL(url=endpoint)
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + internal_key
+        )
+        assert response.user_role == LitellmUserRoles.INTERNAL_USER
+
+    # Test forbidden endpoints
+    forbidden_endpoints = [
+        ("/user/new", "POST"),
+        ("/user/update", "POST"),
+        ("/user/delete", "POST"),
+        ("/organization/new", "POST"),
+        ("/organization/member_add", "POST"),
+    ]
+
+    for endpoint, method in forbidden_endpoints:
+        request = Request(scope={"type": "http", "method": method})
+        request._url = URL(url=endpoint)
+        try:
+            await user_api_key_auth(request=request, api_key="Bearer " + internal_key)
+            pytest.fail(f"Should not allow {method} {endpoint} for internal user")
+        except ProxyException as e:
+            assert int(e.code) == 401  # Unauthorized
+
+
+@pytest.mark.asyncio
+async def test_internal_user_viewer_permissions(prisma_client):
+    """Test internal user viewer permissions:
+    - Can view own keys ✅
+    - Cannot create keys ❌
+    - Cannot delete keys ❌
+    - Cannot add new users ❌
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create internal user viewer
+    user_id = f"internal-viewer-{uuid.uuid4()}"
+    _new_key = await new_user(
+        data=NewUserRequest(
+            user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+    viewer_key = _new_key.key
+
+    # Test allowed endpoints
+    allowed_endpoints = [
+        ("/key/info", "GET"),
+        ("/spend/logs", "GET"),
+    ]
+
+    for endpoint, method in allowed_endpoints:
+        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        request._url = URL(url=endpoint)
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + viewer_key
+        )
+        assert response.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+
+    # Test forbidden endpoints
+    forbidden_endpoints = [
+        ("/key/generate", "POST"),
+        ("/key/delete", "POST"),
+        ("/user/new", "POST"),
+        ("/user/update", "POST"),
+        ("/user/delete", "POST"),
+        ("/team/new", "POST"),
+        ("/team/update", "POST"),
+        ("/team/delete", "POST"),
+        ("/organization/new", "POST"),
+        ("/organization/member_add", "POST"),
+    ]
+
+    for endpoint, method in forbidden_endpoints:
+        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        request._url = URL(url=endpoint)
+        try:
+            await user_api_key_auth(request=request, api_key="Bearer " + viewer_key)
+            pytest.fail(
+                f"Should not allow {method} {endpoint} for internal user viewer"
+            )
+        except Exception as e:
+            assert int(e.code) == 401  # Unauthorized
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_viewer_permissions(prisma_client):
+    """Test PROXY_ADMIN_VIEWER permissions:
+    - Can view keys (GET /key/info) ✅
+    - Can view spend (GET /spend/logs) ✅
+    - Cannot create keys (POST /key/generate) ❌
+    - Cannot delete keys (POST /key/delete) ❌
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create proxy admin viewer user
+    user_id = f"proxy-admin-viewer-{uuid.uuid4()}"
+
+    _new_key = await new_user(
+        data=NewUserRequest(
+            user_id=user_id, user_role=LitellmUserRoles.PROXY_ADMIN_VIEWER
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+    viewer_key = _new_key.key
+
+    # Test allowed endpoints
+    allowed_endpoints = [
+        ("/key/info", "GET"),
+        ("/spend/logs", "GET"),
+    ]
+
+    for endpoint, method in allowed_endpoints:
+        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        request._url = URL(url=endpoint)
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + viewer_key
+        )
+        assert response.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+
+    # Test forbidden endpoints
+    forbidden_endpoints = [
+        ("/key/generate", "POST"),
+        ("/key/delete", "POST"),
+        ("/user/new", "POST"),
+        ("/user/update", "POST"),
+        ("/user/delete", "POST"),
+        ("/team/new", "POST"),
+        ("/team/update", "POST"),
+        ("/team/delete", "POST"),
+        ("/organization/member_add", "POST"),
+        ("/organization/new", "POST"),
+    ]
+
+    for endpoint, method in forbidden_endpoints:
+        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        request._url = URL(url=endpoint)
+        try:
+            await user_api_key_auth(request=request, api_key="Bearer " + viewer_key)
+            pytest.fail(f"Should not allow {method} {endpoint} for proxy admin viewer")
+        except ProxyException as e:
+            assert int(e.code) == 401  # Unauthorized
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_permissions(prisma_client):
+    """Test PROXY_ADMIN permissions:
+    - Can view all keys ✅
+    - Can create keys ✅
+    - Can delete keys ✅
+    - Can add new users ✅
+    - Can manage organizations ✅
+    - Can manage teams ✅
+    - Has full access to all admin endpoints ✅
+    """
+    import json
+
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create proxy admin user
+    user_id = f"proxy-admin-{uuid.uuid4()}"
+    _new_key = await new_user(
+        data=NewUserRequest(user_id=user_id, user_role=LitellmUserRoles.PROXY_ADMIN),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+    admin_key = _new_key.key
+
+    # Test all admin endpoints - should all be allowed
+    admin_endpoints = [
+        # Key Management
+        ("/key/info", "GET"),
+        ("/key/generate", "POST"),
+        ("/key/delete", "POST"),
+        # User Management
+        ("/user/new", "POST"),
+        ("/user/update", "POST"),
+        ("/user/delete", "POST"),
+        # Team Management
+        ("/team/new", "POST"),
+        ("/team/update", "POST"),
+        ("/team/delete", "POST"),
+        # Organization Management
+        ("/organization/new", "POST"),
+        ("/organization/member_add", "POST"),
+        # Spend Tracking
+        ("/spend/logs", "GET"),
+        ("/spend/key", "GET"),
+        ("/spend/user", "GET"),
+    ]
+
+    for endpoint, method in admin_endpoints:
+        request = Request(scope={"type": "http", "method": method, "query_string": b""})
+        request._url = URL(url=endpoint)
+
+        # If the endpoint needs a body (for POST requests)
+        if method == "POST":
+
+            async def return_body():
+                return b"{}"
+
+            request.body = return_body
+
+        try:
+            response = await user_api_key_auth(
+                request=request, api_key="Bearer " + admin_key
+            )
+            assert response.user_role == LitellmUserRoles.PROXY_ADMIN
+            print(f"✓ Successfully authorized {method} {endpoint}")
+        except Exception as e:
+            pytest.fail(
+                f"Should allow {method} {endpoint} for proxy admin. Error: {str(e)}"
+            )

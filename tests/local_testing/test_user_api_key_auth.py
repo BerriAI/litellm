@@ -310,8 +310,8 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/organization/member_add", "internal_user", False),
     ],
 )
-def test_is_ui_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.user_api_key_auth import _is_ui_route_allowed
+def test_is_route_allowed_check(route, user_role, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_route_allowed_check
     from litellm.proxy._types import LiteLLM_UserTable
 
     user_obj = LiteLLM_UserTable(
@@ -333,7 +333,7 @@ def test_is_ui_route_allowed(route, user_role, expected_result):
         "user_obj": user_obj,
     }
     try:
-        assert _is_ui_route_allowed(**received_args) == expected_result
+        assert _is_route_allowed_check(**received_args) == expected_result
     except Exception as e:
         # If expected result is False, we expect an error
         if expected_result is False:
