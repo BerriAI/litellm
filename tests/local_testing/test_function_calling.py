@@ -612,3 +612,34 @@ def test_passing_tool_result_as_list():
         print(resp)
 
     assert resp.usage.prompt_tokens_details.cached_tokens > 0
+
+
+def test_function_calling_with_gemini():
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="gemini/gemini-1.5-pro-002",
+        messages=[
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a helpful assistant that can interact with a computer to solve tasks.\n<IMPORTANT>\n* If user provides a path, you should NOT assume it's relative to the current working directory. Instead, you should explore the file system to find the file before working on it.\n</IMPORTANT>\n",
+                    }
+                ],
+                "role": "system",
+            },
+            {
+                "content": [{"type": "text", "text": "Hey, how's it going?"}],
+                "role": "user",
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "finish",
+                    "description": "Finish the interaction when the task is complete OR if the assistant cannot proceed further with the task.",
+                },
+            },
+        ],
+    )

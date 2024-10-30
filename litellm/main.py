@@ -3325,6 +3325,9 @@ def embedding(  # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret_str("AZURE_AD_TOKEN")
 
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
             api_key = (
                 api_key
                 or litellm.api_key
@@ -4406,7 +4409,10 @@ def image_generation(  # noqa: PLR0915
         metadata = kwargs.get("metadata", {})
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         client = kwargs.get("client", None)
-
+        extra_headers = kwargs.get("extra_headers", None)
+        headers: dict = kwargs.get("headers", None) or {}
+        if extra_headers is not None:
+            headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
@@ -4491,6 +4497,14 @@ def image_generation(  # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret_str("AZURE_AD_TOKEN")
 
+            default_headers = {
+                "Content-Type": "application/json;",
+                "api-key": api_key,
+            }
+            for k, v in default_headers.items():
+                if k not in headers:
+                    headers[k] = v
+
             model_response = azure_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -4503,6 +4517,7 @@ def image_generation(  # noqa: PLR0915
                 api_version=api_version,
                 aimg_generation=aimg_generation,
                 client=client,
+                headers=headers,
             )
         elif custom_llm_provider == "openai":
             model_response = openai_chat_completions.image_generation(
@@ -4699,11 +4714,7 @@ def transcription(
     """
     atranscription = kwargs.get("atranscription", False)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    kwargs.get("litellm_call_id", None)
-    kwargs.get("logger_fn", None)
-    kwargs.get("proxy_server_request", None)
-    kwargs.get("model_info", None)
-    kwargs.get("metadata", {})
+    extra_headers = kwargs.get("extra_headers", None)
     kwargs.pop("tags", [])
 
     drop_params = kwargs.get("drop_params", None)
@@ -4758,6 +4769,8 @@ def transcription(
             or litellm.azure_key
             or get_secret_str("AZURE_API_KEY")
         )
+
+        optional_params["extra_headers"] = extra_headers
 
         response = azure_audio_transcriptions.audio_transcriptions(
             model=model,
@@ -4877,6 +4890,7 @@ def speech(
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
+    extra_headers = kwargs.get("extra_headers", None)
     model_info = kwargs.get("model_info", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
     kwargs.pop("tags", [])
@@ -4989,7 +5003,8 @@ def speech(
             "AZURE_AD_TOKEN"
         )
 
-        headers = headers or litellm.headers
+        if extra_headers:
+            optional_params["extra_headers"] = extra_headers
 
         response = azure_chat_completions.audio_speech(
             model=model,

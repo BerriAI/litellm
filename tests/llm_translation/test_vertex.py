@@ -12,8 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-
+import pytest
 import litellm
+from litellm import get_optional_params
 
 
 def test_completion_pydantic_obj_2():
@@ -117,3 +118,63 @@ def test_build_vertex_schema():
     assert new_schema["type"] == schema["type"]
     assert new_schema["properties"] == schema["properties"]
     assert "required" in new_schema and new_schema["required"] == schema["required"]
+
+
+@pytest.mark.parametrize(
+    "tools, key",
+    [
+        ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
+        ([{"code_execution": {}}], "code_execution"),
+    ],
+)
+def test_vertex_tool_params(tools, key):
+
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+    )
+    print(optional_params)
+    assert optional_params["tools"][0][key] == {}
+
+
+@pytest.mark.parametrize(
+    "tool, expect_parameters",
+    [
+        (
+            {
+                "name": "test_function",
+                "description": "test_function_description",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"test_param": {"type": "string"}},
+                },
+            },
+            True,
+        ),
+        (
+            {
+                "name": "test_function",
+            },
+            False,
+        ),
+    ],
+)
+def test_vertex_function_translation(tool, expect_parameters):
+    """
+    If param not set, don't set it in the request
+    """
+
+    tools = [tool]
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+    )
+    print(optional_params)
+    if expect_parameters:
+        assert "parameters" in optional_params["tools"][0]["function_declarations"][0]
+    else:
+        assert (
+            "parameters" not in optional_params["tools"][0]["function_declarations"][0]
+        )
