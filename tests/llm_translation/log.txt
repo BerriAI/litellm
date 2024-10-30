@@ -1,0 +1,48 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.4, pytest-8.3.2, pluggy-1.5.0
+rootdir: /Users/krrishdholakia/Documents/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.23.8, cov-5.0.0, respx-0.21.1, anyio-4.6.0
+asyncio: mode=Mode.STRICT
+collected 1 item
+
+test_vertex.py <module 'litellm' from '/Users/krrishdholakia/Documents/litellm/litellm/__init__.py'>
+
+
+[92mRequest to litellm:[0m
+[92mlitellm.completion(messages=[{'role': 'user', 'content': [{'type': 'text', 'text': 'do test'}]}, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'test'}], 'tool_calls': [{'index': 0, 'function': {'arguments': '{"arg": "test"}', 'name': 'test'}, 'id': 'call_597e00e6-11d4-4ed2-94b2-27edee250aec', 'type': 'function'}, {'index': 1, 'function': {'arguments': '{"arg": "test2"}', 'name': 'test2'}, 'id': 'call_2414e8f9-283a-002b-182a-1290ab912c02', 'type': 'function'}]}, {'tool_call_id': 'call_597e00e6-11d4-4ed2-94b2-27edee250aec', 'role': 'tool', 'name': 'test', 'content': [{'type': 'text', 'text': '42'}]}, {'tool_call_id': 'call_2414e8f9-283a-002b-182a-1290ab912c02', 'role': 'tool', 'name': 'test2', 'content': [{'type': 'text', 'text': '15'}]}, {'role': 'user', 'content': [{'type': 'text', 'text': 'tell me the results.'}]}], model='gemini/gemini-1.5-flash-002', client=<litellm.llms.custom_httpx.http_handler.HTTPHandler object at 0x106348410>)[0m
+
+
+SYNC kwargs[caching]: False; litellm.cache: None; kwargs.get('cache')['no-cache']: False
+Final returned optional params: {}
+[92m
+
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-002:generateContent?key=AIzaSyBWSYr_8nyx5UhaARd8EGvt9QHxRiFa3u0 \
+-H 'Content-Type: *****' \
+-d '{'contents': [{'role': 'user', 'parts': [{'text': 'do test'}]}, {'role': 'model', 'parts': [{'text': 'test'}, {'function_call': {'name': 'test', 'args': {'fields': {'key': 'arg', 'value': {'string_value': 'test'}}}}}, {'function_call': {'name': 'test2', 'args': {'fields': {'key': 'arg', 'value': {'string_value': 'test2'}}}}}]}, {'parts': [{'function_response': {'name': 'test', 'response': {'fields': {'key': 'content', 'value': {'string_value': '42'}}}}}, {'function_response': {'name': 'test2', 'response': {'fields': {'key': 'content', 'value': {'string_value': '15'}}}}}]}, {'role': 'user', 'parts': [{'text': 'tell me the results.'}]}], 'generationConfig': {}}'
+[0m
+
+RAW RESPONSE:
+<MagicMock name='mock.text' id='4399071888'>
+
+
+raw model_response: <MagicMock name='mock.text' id='4399071888'>
+response json: {'candidates': [{'content': {'parts': [{'text': 'The `default_api.test` function call returned a JSON object indicating a successful execution.  The `fields` key contains a nested dictionary with a `key` of "content" and a `value` with a `string_value` of "42".\n\nSimilarly, the `default_api.test2` function call also returned a JSON object showing successful execution.  The `fields` key contains a nested dictionary with a `key` of "content" and a `value` with a `string_value` of "15".\n\nIn short, both test functions executed successfully and returned different numerical string values ("42" and "15").  The significance of these numbers depends on the internal logic of the `test` and `test2` functions within the `default_api`.\n'}], 'role': 'model'}, 'finishReason': 'STOP', 'avgLogprobs': -0.20577410289219447}], 'usageMetadata': {'promptTokenCount': 128, 'candidatesTokenCount': 168, 'totalTokenCount': 296}, 'modelVersion': 'gemini-1.5-flash-002'}
+Logging Details LiteLLM-Success Call: Cache_hit=None
+Looking up model=gemini/gemini-1.5-flash-002 in model_cost_map, custom_llm_provider=gemini, call_type=completion
+Looking up model=gemini/gemini-1.5-flash-002 in model_cost_map, custom_llm_provider=gemini, call_type=completion
+.
+
+=============================== warnings summary ===============================
+../../myenv/lib/python3.11/site-packages/pydantic/_internal/_config.py:284
+  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.11/site-packages/pydantic/_internal/_config.py:284: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.7/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+../../litellm/utils.py:140
+  /Users/krrishdholakia/Documents/litellm/litellm/utils.py:140: DeprecationWarning: open_text is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
+    with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 1 passed, 2 warnings in 0.12s =========================

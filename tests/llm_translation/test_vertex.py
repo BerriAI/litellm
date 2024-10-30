@@ -232,13 +232,145 @@ def test_function_calling_with_gemini():
         ]
 
 
-# def test_multiple_function_call():
-#     litellm.set_verbose = True
+def test_multiple_function_call():
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "do test"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "test"}],
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "function": {"arguments": '{"arg": "test"}', "name": "test"},
+                    "id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
+                    "type": "function",
+                },
+                {
+                    "index": 1,
+                    "function": {"arguments": '{"arg": "test2"}', "name": "test2"},
+                    "id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
+                    "type": "function",
+                },
+            ],
+        },
+        {
+            "tool_call_id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
+            "role": "tool",
+            "name": "test",
+            "content": [{"type": "text", "text": "42"}],
+        },
+        {
+            "tool_call_id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
+            "role": "tool",
+            "name": "test2",
+            "content": [{"type": "text", "text": "15"}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "tell me the results."}]},
+    ]
+
+    response_body = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": 'The `default_api.test` function call returned a JSON object indicating a successful execution.  The `fields` key contains a nested dictionary with a `key` of "content" and a `value` with a `string_value` of "42".\n\nSimilarly, the `default_api.test2` function call also returned a JSON object showing successful execution.  The `fields` key contains a nested dictionary with a `key` of "content" and a `value` with a `string_value` of "15".\n\nIn short, both test functions executed successfully and returned different numerical string values ("42" and "15").  The significance of these numbers depends on the internal logic of the `test` and `test2` functions within the `default_api`.\n'
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "avgLogprobs": -0.20577410289219447,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 128,
+            "candidatesTokenCount": 168,
+            "totalTokenCount": 296,
+        },
+        "modelVersion": "gemini-1.5-flash-002",
+    }
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = response_body
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        r = litellm.completion(
+            messages=messages, model="gemini/gemini-1.5-flash-002", client=client
+        )
+        assert len(r.choices) > 0
+
+        assert mock_post.call_args.kwargs["json"] == {
+            "contents": [
+                {"role": "user", "parts": [{"text": "do test"}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {"text": "test"},
+                        {
+                            "function_call": {
+                                "name": "test",
+                                "args": {
+                                    "fields": {
+                                        "key": "arg",
+                                        "value": {"string_value": "test"},
+                                    }
+                                },
+                            }
+                        },
+                        {
+                            "function_call": {
+                                "name": "test2",
+                                "args": {
+                                    "fields": {
+                                        "key": "arg",
+                                        "value": {"string_value": "test2"},
+                                    }
+                                },
+                            }
+                        },
+                    ],
+                },
+                {
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": "test",
+                                "response": {
+                                    "fields": {
+                                        "key": "content",
+                                        "value": {"string_value": "42"},
+                                    }
+                                },
+                            }
+                        },
+                        {
+                            "function_response": {
+                                "name": "test2",
+                                "response": {
+                                    "fields": {
+                                        "key": "content",
+                                        "value": {"string_value": "15"},
+                                    }
+                                },
+                            }
+                        },
+                    ]
+                },
+                {"role": "user", "parts": [{"text": "tell me the results."}]},
+            ],
+            "generationConfig": {},
+        }
+
+
+# def test_multiple_function_call_changed_text_pos():
 #     messages = [
 #         {"role": "user", "content": [{"type": "text", "text": "do test"}]},
 #         {
-#             "role": "assistant",
-#             "content": [{"type": "text", "text": "test"}],
 #             "tool_calls": [
 #                 {
 #                     "index": 0,
@@ -253,18 +385,20 @@ def test_function_calling_with_gemini():
 #                     "type": "function",
 #                 },
 #             ],
-#         },
-#         {
-#             "tool_call_id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
-#             "role": "tool",
-#             "name": "test",
-#             "content": [{"type": "text", "text": "42"}],
+#             "role": "assistant",
+#             "content": [{"type": "text", "text": "test"}],
 #         },
 #         {
 #             "tool_call_id": "call_2414e8f9-283a-002b-182a-1290ab912c02",
 #             "role": "tool",
 #             "name": "test2",
 #             "content": [{"type": "text", "text": "15"}],
+#         },
+#         {
+#             "tool_call_id": "call_597e00e6-11d4-4ed2-94b2-27edee250aec",
+#             "role": "tool",
+#             "name": "test",
+#             "content": [{"type": "text", "text": "42"}],
 #         },
 #         {"role": "user", "content": [{"type": "text", "text": "tell me the results."}]},
 #     ]
