@@ -849,9 +849,13 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: StandardLoggingPayload = request_kwargs.get(
-                "standard_logging_object", {}
+            standard_logging_payload: Optional[StandardLoggingPayload] = (
+                request_kwargs.get("standard_logging_object")
             )
+
+            if standard_logging_payload is None:
+                return
+
             model_group = standard_logging_payload["model_group"]
             api_base = standard_logging_payload["api_base"]
             _response_headers = request_kwargs.get("response_headers")
@@ -862,22 +866,30 @@ class PrometheusLogger(CustomLogger):
             _model_info = _metadata.get("model_info") or {}
             model_id = _model_info.get("id", None)
 
-            remaining_requests = None
-            remaining_tokens = None
+            remaining_requests: Optional[int] = None
+            remaining_tokens: Optional[int] = None
+            if additional_headers := standard_logging_payload["hidden_params"][
+                "additional_headers"
+            ]:
+                remaining_requests = additional_headers.get(
+                    "x_ratelimit_remaining_requests", None
+                )
+                remaining_tokens = additional_headers.get(
+                    "x_ratelimit_remaining_tokens", None
+                )
             # OpenAI / OpenAI Compatible headers
             if (
-                _response_headers
-                and "x-ratelimit-remaining-requests" in _response_headers
+                additional_headers
+                and "x_ratelimit_remaining_requests" in additional_headers
             ):
-                remaining_requests = _response_headers["x-ratelimit-remaining-requests"]
+                remaining_requests = additional_headers[
+                    "x_ratelimit_remaining_requests"
+                ]
             if (
-                _response_headers
-                and "x-ratelimit-remaining-tokens" in _response_headers
+                additional_headers
+                and "x_ratelimit_remaining_tokens" in additional_headers
             ):
-                remaining_tokens = _response_headers["x-ratelimit-remaining-tokens"]
-            verbose_logger.debug(
-                f"remaining requests: {remaining_requests}, remaining tokens: {remaining_tokens}"
-            )
+                remaining_tokens = additional_headers["x_ratelimit_remaining_tokens"]
 
             if remaining_requests:
                 """
