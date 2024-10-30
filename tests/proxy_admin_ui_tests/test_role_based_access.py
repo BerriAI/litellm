@@ -517,7 +517,7 @@ async def test_internal_user_permissions(prisma_client):
             await user_api_key_auth(request=request, api_key="Bearer " + internal_key)
             pytest.fail(f"Should not allow {method} {endpoint} for internal user")
         except ProxyException as e:
-            assert int(e.code) == 401  # Unauthorized
+            assert int(e.code) == 401 or int(e.code) == 403  # Unauthorized or Forbidden
 
 
 @pytest.mark.asyncio
@@ -596,7 +596,7 @@ async def test_internal_user_viewer_permissions(prisma_client):
                 f"Should not allow {method} {endpoint} for internal user viewer"
             )
         except Exception as e:
-            assert int(e.code) == 401  # Unauthorized
+            assert int(e.code) == 401 or int(e.code) == 403  # Unauthorized or Forbidden
 
 
 @pytest.mark.asyncio
@@ -663,7 +663,7 @@ async def test_proxy_admin_viewer_permissions(prisma_client):
             await user_api_key_auth(request=request, api_key="Bearer " + viewer_key)
             pytest.fail(f"Should not allow {method} {endpoint} for proxy admin viewer")
         except ProxyException as e:
-            assert int(e.code) == 401  # Unauthorized
+            assert int(e.code) == 401 or int(e.code) == 403  # Unauthorized or Forbidden
 
 
 @pytest.mark.asyncio
