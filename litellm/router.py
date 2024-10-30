@@ -3133,8 +3133,7 @@ class Router:
 
         try:
             # First, try to get the current event loop
-            loop = asyncio.get_running_loop()
-
+            _ = asyncio.get_running_loop()
             # If we're already in an event loop, run in a separate thread
             # to avoid nested event loop issues
             with ThreadPoolExecutor(max_workers=1) as executor:
