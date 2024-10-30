@@ -56,6 +56,7 @@ from litellm.proxy.proxy_server import (
     new_end_user,
     user_api_key_auth,
 )
+from litellm.proxy.management_endpoints.team_endpoints import list_team
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
     global_spend_logs,
@@ -88,6 +89,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy._types import *
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -421,3 +423,120 @@ async def test_get_users_key_count(prisma_client):
     assert (
         updated_key_count == initial_key_count + 1
     ), f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
+
+
+async def cleanup_existing_teams(prisma_client):
+    all_teams = await prisma_client.db.litellm_teamtable.find_many()
+    for team in all_teams:
+        await prisma_client.delete_data(team_id_list=[team.team_id], table_name="team")
+
+
+@pytest.mark.asyncio
+async def test_list_teams(prisma_client):
+    """
+    Tests /team/list endpoint to verify it returns both keys and members_with_roles
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Delete all existing teams first
+    await cleanup_existing_teams(prisma_client)
+
+    # Create a test team with members
+    team_id = f"test_team_{uuid.uuid4()}"
+    team_alias = f"test_team_alias_{uuid.uuid4()}"
+    test_team = await new_team(
+        data=NewTeamRequest(
+            team_id=team_id,
+            team_alias=team_alias,
+            members_with_roles=[
+                Member(role="admin", user_id="test_user_1"),
+                Member(role="user", user_id="test_user_2"),
+            ],
+            models=["gpt-4"],
+            tpm_limit=1000,
+            rpm_limit=1000,
+            budget_duration="30d",
+            max_budget=1000,
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    # Create a key for the team
+    test_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            team_id=team_id,
+            key_alias=f"test_key_{uuid.uuid4()}",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    # Get team list
+    teams = await list_team(
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+        user_id=None,
+    )
+
+    print("teams", teams)
+
+    # Find our test team in the response
+    test_team_response = None
+    for team in teams:
+        if team.team_id == team_id:
+            test_team_response = team
+            break
+
+    assert (
+        test_team_response is not None
+    ), f"Could not find test team {team_id} in response"
+
+    # Verify members_with_roles
+    assert (
+        len(test_team_response.members_with_roles) == 3
+    ), "Expected 3 members in team"  # 2 members + 1 team admin
+    member_roles = {m.role for m in test_team_response.members_with_roles}
+    assert "admin" in member_roles, "Expected admin role in members"
+    assert "user" in member_roles, "Expected user role in members"
+
+    # Verify all required fields in TeamListResponseObject
+    assert (
+        test_team_response.team_id == team_id
+    ), f"team_id should be expected value {team_id}"
+    assert (
+        test_team_response.team_alias == team_alias
+    ), f"team_alias should be expected value {team_alias}"
+    assert test_team_response.spend is not None, "spend should not be None"
+    assert (
+        test_team_response.max_budget == 1000
+    ), f"max_budget should be expected value 1000"
+    assert test_team_response.models == [
+        "gpt-4"
+    ], f"models should be expected value ['gpt-4']"
+    assert (
+        test_team_response.tpm_limit == 1000
+    ), f"tpm_limit should be expected value 1000"
+    assert (
+        test_team_response.rpm_limit == 1000
+    ), f"rpm_limit should be expected value 1000"
+    assert (
+        test_team_response.budget_reset_at is not None
+    ), "budget_reset_at should not be None since budget_duration is 30d"
+
+    # Verify keys are returned
+    assert len(test_team_response.keys) > 0, "Expected at least one key for team"
+    assert any(
+        k.team_id == team_id for k in test_team_response.keys
+    ), "Expected to find team key in response"
+
+    # Clean up
+    await prisma_client.delete_data(team_id_list=[team_id], table_name="team")
