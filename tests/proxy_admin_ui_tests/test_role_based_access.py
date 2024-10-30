@@ -597,7 +597,7 @@ async def test_proxy_admin_viewer_permissions(prisma_client):
 
     _new_key = await new_user(
         data=NewUserRequest(
-            user_id=user_id, user_role=LitellmUserRoles.PROXY_ADMIN_VIEWER
+            user_id=user_id, user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
