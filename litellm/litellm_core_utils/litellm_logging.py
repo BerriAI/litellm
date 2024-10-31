@@ -882,7 +882,9 @@ class Logging:
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
 
-            ## BUILD COMPLETE STREAMED RESPONSE
+            if self.logged_sync_streaming_response is True:
+                return
+
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = self.model_call_details.get("complete_streaming_response", None)
@@ -893,6 +895,7 @@ class Logging:
                 self.model_call_details["response_cost"] = (
                     self._response_cost_calculator(result=complete_streaming_response)
                 )
+                self.logged_sync_streaming_response = True
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = (
                     get_standard_logging_object_payload(
