@@ -963,11 +963,11 @@ class Logging:
 
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
-                            if "complete_streaming_response" not in kwargs:
+                            if complete_streaming_response is None:
                                 continue
                             else:
                                 print_verbose("reaches supabase for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
 
                         model = kwargs["model"]
                         messages = kwargs["messages"]
@@ -1005,11 +1005,11 @@ class Logging:
 
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
-                            if "complete_streaming_response" not in kwargs:
+                            if complete_streaming_response is None:
                                 continue
                             else:
                                 print_verbose("reaches logfire for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
 
                         logfireLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1035,10 +1035,10 @@ class Logging:
 
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
-                            if "complete_streaming_response" not in kwargs:
+                            if complete_streaming_response is None:
                                 continue
                             else:
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
 
                         lunaryLogger.log_event(
                             type=type,
@@ -1063,11 +1063,11 @@ class Logging:
 
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
-                            if "complete_streaming_response" not in kwargs:
+                            if complete_streaming_response is None:
                                 continue
                             else:
                                 print_verbose("reaches helicone for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
 
                         heliconeLogger.log_success(
                             model=model,
@@ -1096,7 +1096,7 @@ class Logging:
                                 continue
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
 
                         langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
                             globalLangfuseLogger=langFuseLogger,
@@ -1138,7 +1138,7 @@ class Logging:
                                 continue
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
                         if genericAPILogger is None:
                             genericAPILogger = GenericAPILogger()  # type: ignore
                         genericAPILogger.log_event(
@@ -1167,7 +1167,7 @@ class Logging:
                                 print_verbose(
                                     "reaches greenscale for streaming logging!"
                                 )
-                                result = kwargs["complete_streaming_response"]
+                                result = complete_streaming_response
 
                         greenscaleLogger.log_event(
                             kwargs=kwargs,
@@ -1205,15 +1205,13 @@ class Logging:
                         if s3Logger is None:
                             s3Logger = S3Logger()
                         if self.stream:
-                            if "complete_streaming_response" in self.model_call_details:
+                            if complete_streaming_response is not None:
                                 print_verbose(
                                     "S3Logger Logger: Got Stream Event - Completed Stream Response"
                                 )
                                 s3Logger.log_event(
                                     kwargs=self.model_call_details,
-                                    response_obj=self.model_call_details[
-                                        "complete_streaming_response"
-                                    ],
+                                    response_obj=complete_streaming_response,
                                     start_time=start_time,
                                     end_time=end_time,
                                     print_verbose=print_verbose,
@@ -1263,9 +1261,7 @@ class Logging:
                         else:
                             if self.stream and complete_streaming_response:
                                 self.model_call_details["complete_response"] = (
-                                    self.model_call_details.get(
-                                        "complete_streaming_response", {}
-                                    )
+                                    complete_streaming_response
                                 )
                                 result = self.model_call_details["complete_response"]
                             openMeterLogger.log_success_event(
@@ -1304,9 +1300,7 @@ class Logging:
                         else:
                             if self.stream and complete_streaming_response:
                                 self.model_call_details["complete_response"] = (
-                                    self.model_call_details.get(
-                                        "complete_streaming_response", {}
-                                    )
+                                    complete_streaming_response
                                 )
                                 result = self.model_call_details["complete_response"]
 
@@ -1496,12 +1490,10 @@ class Logging:
                     continue
                 if callback == "openmeter" and openMeterLogger is not None:
                     if self.stream is True:
-                        if "complete_streaming_response" in self.model_call_details:
+                        if complete_streaming_response is not None:
                             await openMeterLogger.async_log_success_event(
                                 kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
+                                response_obj=complete_streaming_response,
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -1521,12 +1513,10 @@ class Logging:
                         )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     if self.stream is True:
-                        if "complete_streaming_response" in self.model_call_details:
+                        if complete_streaming_response is not None:
                             await callback.async_log_success_event(
                                 kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
+                                response_obj=complete_streaming_response,
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -1549,12 +1539,10 @@ class Logging:
                     if customLogger is None:
                         customLogger = CustomLogger()
                     if self.stream:
-                        if "complete_streaming_response" in self.model_call_details:
+                        if complete_streaming_response is not None:
                             await customLogger.async_log_event(
                                 kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
+                                response_obj=complete_streaming_response,
                                 start_time=start_time,
                                 end_time=end_time,
                                 print_verbose=print_verbose,
@@ -1574,15 +1562,13 @@ class Logging:
                     if dynamoLogger is None:
                         dynamoLogger = DyanmoDBLogger()
                     if self.stream:
-                        if "complete_streaming_response" in self.model_call_details:
+                        if complete_streaming_response is not None:
                             print_verbose(
                                 "DynamoDB Logger: Got Stream Event - Completed Stream Response"
                             )
                             await dynamoLogger._async_log_event(
                                 kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
-                                    "complete_streaming_response"
-                                ],
+                                response_obj=complete_streaming_response,
                                 start_time=start_time,
                                 end_time=end_time,
                                 print_verbose=print_verbose,
