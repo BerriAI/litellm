@@ -882,32 +882,10 @@ class Logging:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
-            ] = None
-            if "complete_streaming_response" in self.model_call_details:
-                return  # break out of this.
-            if self.stream:
-                complete_streaming_response: Optional[
-                    Union[ModelResponse, TextCompletionResponse]
-                ] = _assemble_complete_response_from_streaming_chunks(
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    request_kwargs=self.model_call_details,
-                    streaming_chunks=self.sync_streaming_chunks,
-                    is_async=False,
-                )
-            _caching_complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = None
+            ] = self.model_call_details.get("complete_streaming_response", None)
             if complete_streaming_response is not None:
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
-                )
-                self.model_call_details["complete_streaming_response"] = (
-                    complete_streaming_response
-                )
-                _caching_complete_streaming_response = copy.deepcopy(
-                    complete_streaming_response
                 )
                 self.model_call_details["response_cost"] = (
                     self._response_cost_calculator(result=complete_streaming_response)
@@ -1396,22 +1374,9 @@ class Logging:
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
         ## BUILD COMPLETE STREAMED RESPONSE
-        if "async_complete_streaming_response" in self.model_call_details:
-            return  # break out of this.
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = None
-        if self.stream is True:
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = _assemble_complete_response_from_streaming_chunks(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                request_kwargs=self.model_call_details,
-                streaming_chunks=self.streaming_chunks,
-                is_async=True,
-            )
+        ] = self.model_call_details.get("complete_streaming_response", None)
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
