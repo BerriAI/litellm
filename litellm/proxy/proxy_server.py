@@ -781,7 +781,9 @@ async def _PROXY_track_cost_callback(
         )
         if standard_logging_payload is None:
             raise ValueError("Standard logging payload is missing from kwargs")
-        response_cost = standard_logging_payload.get("response_cost")
+        response_cost = standard_logging_payload.get("response_cost") or kwargs.get(
+            "response_cost", None
+        )  # read from kwargs for backwards compatibility with existing tests
         if response_cost is not None:
             user_api_key = metadata.get("user_api_key", None)
             if kwargs.get("cache_hit", False) is True:
