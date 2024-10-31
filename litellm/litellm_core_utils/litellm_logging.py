@@ -274,6 +274,9 @@ class Logging:
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
 
+        self.logged_async_streaming_response = False
+        self.logged_sync_streaming_response = False
+
     def process_dynamic_callbacks(self):
         """
         Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
@@ -1373,6 +1376,8 @@ class Logging:
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
+        if self.logged_async_streaming_response is True:
+            return
         ## BUILD COMPLETE STREAMED RESPONSE
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
@@ -1381,9 +1386,10 @@ class Logging:
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
 
-            self.model_call_details["async_complete_streaming_response"] = (
+            self.model_call_details["complete_streaming_response"] = (
                 complete_streaming_response
             )
+            self.logged_async_streaming_response = True
             try:
                 if self.model_call_details.get("cache_hit", False) is True:
                     self.model_call_details["response_cost"] = 0.0
@@ -1489,14 +1495,11 @@ class Logging:
                     continue
                 if callback == "openmeter" and openMeterLogger is not None:
                     if self.stream is True:
-                        if (
-                            "async_complete_streaming_response"
-                            in self.model_call_details
-                        ):
+                        if "complete_streaming_response" in self.model_call_details:
                             await openMeterLogger.async_log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
-                                    "async_complete_streaming_response"
+                                    "complete_streaming_response"
                                 ],
                                 start_time=start_time,
                                 end_time=end_time,
@@ -1517,14 +1520,11 @@ class Logging:
                         )
                 if isinstance(callback, CustomLogger):  # custom logger class
                     if self.stream is True:
-                        if (
-                            "async_complete_streaming_response"
-                            in self.model_call_details
-                        ):
+                        if "complete_streaming_response" in self.model_call_details:
                             await callback.async_log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
-                                    "async_complete_streaming_response"
+                                    "complete_streaming_response"
                                 ],
                                 start_time=start_time,
                                 end_time=end_time,
@@ -1548,14 +1548,11 @@ class Logging:
                     if customLogger is None:
                         customLogger = CustomLogger()
                     if self.stream:
-                        if (
-                            "async_complete_streaming_response"
-                            in self.model_call_details
-                        ):
+                        if "complete_streaming_response" in self.model_call_details:
                             await customLogger.async_log_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
-                                    "async_complete_streaming_response"
+                                    "complete_streaming_response"
                                 ],
                                 start_time=start_time,
                                 end_time=end_time,
@@ -1576,17 +1573,14 @@ class Logging:
                     if dynamoLogger is None:
                         dynamoLogger = DyanmoDBLogger()
                     if self.stream:
-                        if (
-                            "async_complete_streaming_response"
-                            in self.model_call_details
-                        ):
+                        if "complete_streaming_response" in self.model_call_details:
                             print_verbose(
                                 "DynamoDB Logger: Got Stream Event - Completed Stream Response"
                             )
                             await dynamoLogger._async_log_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
-                                    "async_complete_streaming_response"
+                                    "complete_streaming_response"
                                 ],
                                 start_time=start_time,
                                 end_time=end_time,
