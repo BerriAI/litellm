@@ -550,8 +550,14 @@ class SlackAlerting(CustomBatchLogger):
                     alerting_metadata=alerting_metadata,
                 )
 
-    async def failed_tracking_alert(self, error_message: str):
-        """Raise alert when tracking failed for specific model"""
+    async def failed_tracking_alert(self, error_message: str, failing_model: str):
+        """
+        Raise alert when tracking failed for specific model
+
+        Args:
+            error_message (str): Error message
+            failing_model (str): Model that failed tracking
+        """
         if self.alerting is None or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
@@ -560,7 +566,7 @@ class SlackAlerting(CustomBatchLogger):
 
         _cache: DualCache = self.internal_usage_cache
         message = "Failed Tracking Cost for " + error_message
-        _cache_key = "budget_alerts:failed_tracking:{}".format(message)
+        _cache_key = "budget_alerts:failed_tracking:{}".format(failing_model)
         result = await _cache.async_get_cache(key=_cache_key)
         if result is None:
             await self.send_alert(

@@ -845,6 +845,7 @@ async def _PROXY_track_cost_callback(
         asyncio.create_task(
             proxy_logging_obj.failed_tracking_alert(
                 error_message=error_msg,
+                failing_model=model,
             )
         )
         verbose_proxy_logger.debug("error in tracking cost callback - %s", e)
