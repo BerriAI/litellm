@@ -776,15 +776,8 @@ async def _PROXY_track_cost_callback(
         org_id = metadata.get("user_api_key_org_id", None)
         key_alias = metadata.get("user_api_key_alias", None)
         end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object", None
-        )
-        if standard_logging_payload is None:
-            raise ValueError("Standard logging payload is missing from kwargs")
-        response_cost = standard_logging_payload.get("response_cost") or kwargs.get(
-            "response_cost", None
-        )  # read from kwargs for backwards compatibility with existing tests
-        if response_cost is not None:
+        if kwargs.get("response_cost", None) is not None:
+            response_cost = kwargs["response_cost"]
             user_api_key = metadata.get("user_api_key", None)
             if kwargs.get("cache_hit", False) is True:
                 response_cost = 0.0
