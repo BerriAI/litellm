@@ -7443,7 +7443,14 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
-    def run_success_handlers_for_sync_function(self, processed_chunk, cache_hit: bool):
+    def run_success_handlers_for_sync_function(
+        self,
+        processed_chunk,
+        cache_hit: bool,
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None,
+    ):
         """
         Runs success logging in a thread and adds the response to the cache
         """
@@ -7460,7 +7467,9 @@ class CustomStreamWrapper:
         if self.logging_loop is not None:
             future = asyncio.run_coroutine_threadsafe(
                 self.logging_obj.async_success_handler(
-                    processed_chunk, None, None, cache_hit
+                    result=processed_chunk,
+                    cache_hit=cache_hit,
+                    complete_streaming_response=complete_streaming_response,
                 ),
                 loop=self.logging_loop,
             )
@@ -7468,11 +7477,17 @@ class CustomStreamWrapper:
         else:
             asyncio.run(
                 self.logging_obj.async_success_handler(
-                    processed_chunk, None, None, cache_hit
+                    result=processed_chunk,
+                    cache_hit=cache_hit,
+                    complete_streaming_response=complete_streaming_response,
                 )
             )
         ## SYNC LOGGING
-        self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
+        self.logging_obj.success_handler(
+            result=processed_chunk,
+            cache_hit=cache_hit,
+            complete_streaming_response=complete_streaming_response,
+        )
 
         ## Sync store in cache
         if self.logging_obj._llm_caching_handler is not None:
@@ -7480,14 +7495,25 @@ class CustomStreamWrapper:
                 processed_chunk
             )
 
-    def run_success_handlers_for_async_function(self, processed_chunk, cache_hit: bool):
+    def run_success_handlers_for_async_function(
+        self,
+        processed_chunk,
+        cache_hit: bool,
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None,
+    ):
         threading.Thread(
             target=self.logging_obj.success_handler,
-            args=(processed_chunk, None, None, cache_hit),
+            args=(processed_chunk, None, None, cache_hit, complete_streaming_response),
         ).start()  # log response
 
         asyncio.create_task(
-            self.logging_obj.async_success_handler(processed_chunk, cache_hit=cache_hit)
+            self.logging_obj.async_success_handler(
+                result=processed_chunk,
+                cache_hit=cache_hit,
+                complete_streaming_response=complete_streaming_response,
+            )
         )
 
     def finish_reason_handler(self):
@@ -7669,20 +7695,16 @@ class CustomStreamWrapper:
             is_async=False,
         )
 
-        if complete_streaming_response is not None:
-            self.logging_obj.model_call_details["complete_streaming_response"] = (
-                complete_streaming_response
-            )
-
         if is_async is True:
             self.run_success_handlers_for_async_function(
                 processed_chunk=processed_chunk,
                 cache_hit=cache_hit,
+                complete_streaming_response=complete_streaming_response,
             )
         else:
             threading.Thread(
                 target=self.run_success_handlers_for_sync_function,
-                args=(processed_chunk, cache_hit),
+                args=(processed_chunk, cache_hit, complete_streaming_response),
             ).start()
 
     async def __anext__(self):  # noqa: PLR0915

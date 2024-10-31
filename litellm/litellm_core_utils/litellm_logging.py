@@ -274,9 +274,6 @@ class Logging:
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
 
-        self.logged_async_streaming_response = False
-        self.logged_sync_streaming_response = False
-
     def process_dynamic_callbacks(self):
         """
         Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
@@ -869,7 +866,15 @@ class Logging:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
     def success_handler(  # noqa: PLR0915
-        self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None,
+        **kwargs,
     ):
         print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
         start_time, end_time, result = self._success_handler_helper_fn(
@@ -881,21 +886,13 @@ class Logging:
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
-
-            if self.logged_sync_streaming_response is True:
-                return
-
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = self.model_call_details.get("complete_streaming_response", None)
-            if complete_streaming_response is not None:
+            if self.stream is True and complete_streaming_response is not None:
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details["response_cost"] = (
                     self._response_cost_calculator(result=complete_streaming_response)
                 )
-                self.logged_sync_streaming_response = True
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = (
                     get_standard_logging_object_payload(
@@ -1368,7 +1365,15 @@ class Logging:
             )
 
     async def async_success_handler(  # noqa: PLR0915
-        self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None,
+        **kwargs,
     ):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
@@ -1379,20 +1384,13 @@ class Logging:
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
-        if self.logged_async_streaming_response is True:
-            return
         ## BUILD COMPLETE STREAMED RESPONSE
-        complete_streaming_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
-        ] = self.model_call_details.get("complete_streaming_response", None)
-
-        if complete_streaming_response is not None:
+        if self.stream is True and complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
 
             self.model_call_details["complete_streaming_response"] = (
                 complete_streaming_response
             )
-            self.logged_async_streaming_response = True
             try:
                 if self.model_call_details.get("cache_hit", False) is True:
                     self.model_call_details["response_cost"] = 0.0
