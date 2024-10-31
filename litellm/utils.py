@@ -79,6 +79,9 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.logging_utils import (
+    _assemble_complete_response_from_streaming_chunks,
+)
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -7630,14 +7633,33 @@ class CustomStreamWrapper:
 
     def handle_success_logging_for_chunk(
         self,
-        processed_chunk: Optional[ModelResponse],
+        processed_chunk: ModelResponse,
         cache_hit: bool,
     ):
         """
         Try to assemble a complete streaming response that can be logged
 
-        If a complete streaming response is assembled, it will be logged as a separate event.
+        If a complete streaming response is assembled
         """
+        from datetime import datetime
+
+        ## BUILD COMPLETE STREAMED RESPONSE
+        complete_streaming_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = _assemble_complete_response_from_streaming_chunks(
+            result=processed_chunk,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            request_kwargs=self.logging_obj.model_call_details,
+            streaming_chunks=self.logging_obj.sync_streaming_chunks,
+            is_async=False,
+        )
+
+        if complete_streaming_response is not None:
+            self.logging_obj.model_call_details["complete_streaming_response"] = (
+                complete_streaming_response
+            )
+
         threading.Thread(
             target=self.logging_obj.success_handler,
             args=(processed_chunk, None, None, cache_hit),
