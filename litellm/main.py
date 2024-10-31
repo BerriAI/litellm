@@ -3354,6 +3354,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                extra_headers=extra_headers,
             )
         elif (
             model in litellm.open_ai_embedding_models

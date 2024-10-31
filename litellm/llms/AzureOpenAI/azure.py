@@ -817,6 +817,7 @@ class AzureChatCompletion(BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         client: Optional[AsyncAzureOpenAI] = None,
+        extra_headers: Optional[dict] = None,
         timeout=None,
     ):
         response = None
@@ -826,7 +827,7 @@ class AzureChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             raw_response = await openai_aclient.embeddings.with_raw_response.create(
-                **data, timeout=timeout
+                **data, timeout=timeout, extra_headers=extra_headers,
             )
             headers = dict(raw_response.headers)
             response = raw_response.parse()
@@ -867,6 +868,7 @@ class AzureChatCompletion(BaseLLM):
         optional_params: dict,
         api_key: Optional[str] = None,
         azure_ad_token: Optional[str] = None,
+        extra_headers: Optional[dict] = None,
         client=None,
         aembedding=None,
     ) -> litellm.EmbeddingResponse:
@@ -923,13 +925,14 @@ class AzureChatCompletion(BaseLLM):
                     azure_client_params=azure_client_params,
                     timeout=timeout,
                     client=client,
+                    extra_headers=extra_headers,
                 )
             if client is None:
                 azure_client = AzureOpenAI(**azure_client_params)  # type: ignore
             else:
                 azure_client = client
             ## COMPLETION CALL
-            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout, extra_headers=extra_headers)  # type: ignore
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             ## LOGGING
