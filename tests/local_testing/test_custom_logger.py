@@ -96,10 +96,10 @@ class TmpFunction:
         print(f"ON ASYNC LOGGING")
         self.async_success = True
         print(
-            f'kwargs.get("async_complete_streaming_response"): {kwargs.get("async_complete_streaming_response")}'
+            f'kwargs.get("complete_streaming_response"): {kwargs.get("complete_streaming_response")}'
         )
         self.complete_streaming_response_in_callback = kwargs.get(
-            "async_complete_streaming_response"
+            "complete_streaming_response"
         )
 
 
@@ -107,7 +107,7 @@ class TmpFunction:
 async def test_async_chat_openai_stream():
     try:
         tmp_function = TmpFunction()
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         litellm.success_callback = [tmp_function.async_test_logging_fn]
         complete_streaming_response = ""
 
