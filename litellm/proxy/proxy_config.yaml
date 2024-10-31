@@ -6,6 +6,4 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
-  callbacks: ["prometheus"]
-  service_callback: ["prometheus_system"]
-  cache: true
+  success_callback: ["langfuse"]
