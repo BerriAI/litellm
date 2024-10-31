@@ -872,6 +872,9 @@ class Logging:
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
+        if self._sync_streaming_response_was_logged() is True:
+            return
+
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -881,10 +884,6 @@ class Logging:
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
-
-            if self.logged_sync_streaming_response is True:
-                return
-
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = self.model_call_details.get("complete_streaming_response", None)
@@ -1376,11 +1375,13 @@ class Logging:
         print_verbose(
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
+        if self._async_streaming_response_was_logged() is True:
+            return
+
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
-        if self.logged_async_streaming_response is True:
-            return
+
         ## BUILD COMPLETE STREAMED RESPONSE
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
@@ -1606,6 +1607,22 @@ class Logging:
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
                 pass
+
+    def _async_streaming_response_was_logged(self):
+        """
+        Return True if the streaming response was logged.
+
+        This is used to prevent logging the same streaming response multiple times.
+        """
+        return self.stream is True and self.logged_async_streaming_response is True
+
+    def _sync_streaming_response_was_logged(self):
+        """
+        Return True if the streaming response was logged.
+
+        This is used to prevent logging the same streaming response multiple times.
+        """
+        return self.stream is True and self.logged_sync_streaming_response is True
 
     def _failure_handler_helper_fn(
         self, exception, traceback_exception, start_time=None, end_time=None
