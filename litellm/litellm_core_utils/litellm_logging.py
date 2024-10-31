@@ -1192,7 +1192,7 @@ class Logging:
                         for k, v in self.model_call_details.items():
                             if k != "original_response":
                                 deep_copy[k] = v
-                        traceloopLogger.log_event(
+                        traceloopLogger.log_event(  # type: ignore
                             kwargs=deep_copy,
                             response_obj=result,
                             start_time=start_time,

@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     KeyManagementSettings,
     LiteLLM_UpperboundKeyGenerateParams,
 )
+from litellm.integrations.custom_logger import CustomLogger
 import httpx
 import dotenv
 from enum import Enum
@@ -36,10 +37,10 @@ if set_verbose == True:
     _turn_on_debug()
 #############################################
 ### Callbacks /Logging / Success / Failure Handlers ###
-input_callback: List[Union[str, Callable]] = []
-success_callback: List[Union[str, Callable]] = []
-failure_callback: List[Union[str, Callable]] = []
-service_callback: List[Union[str, Callable]] = []
+input_callback: List[Union[str, Callable, CustomLogger]] = []
+success_callback: List[Union[str, Callable, CustomLogger]] = []
+failure_callback: List[Union[str, Callable, CustomLogger]] = []
+service_callback: List[Union[str, Callable, CustomLogger]] = []
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -70,10 +71,10 @@ argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable]] = (
+_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Callable] = (
+_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
