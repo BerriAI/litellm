@@ -7443,7 +7443,7 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
-    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
+    def run_success_handlers_for_sync_function(self, processed_chunk, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
         """
@@ -7479,6 +7479,16 @@ class CustomStreamWrapper:
             self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(
                 processed_chunk
             )
+
+    def run_success_handlers_for_async_function(self, processed_chunk, cache_hit: bool):
+        threading.Thread(
+            target=self.logging_obj.success_handler,
+            args=(processed_chunk, None, None, cache_hit),
+        ).start()  # log response
+
+        asyncio.create_task(
+            self.logging_obj.async_success_handler(processed_chunk, cache_hit=cache_hit)
+        )
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -7525,10 +7535,11 @@ class CustomStreamWrapper:
                     if response is None:
                         continue
                     ## LOGGING
-                    threading.Thread(
-                        target=self.run_success_logging_and_cache_storage,
-                        args=(response, cache_hit),
-                    ).start()  # log response
+                    self.handle_success_logging_for_chunk(
+                        processed_chunk=response,
+                        cache_hit=cache_hit,
+                        is_async=False,
+                    )
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -7579,10 +7590,11 @@ class CustomStreamWrapper:
                             getattr(complete_streaming_response, "usage"),
                         )
                     ## LOGGING
-                    threading.Thread(
-                        target=self.logging_obj.success_handler,
-                        args=(response, None, None, cache_hit),
-                    ).start()  # log response
+                    self.handle_success_logging_for_chunk(
+                        processed_chunk=response,
+                        cache_hit=cache_hit,
+                        is_async=False,
+                    )
                     self.sent_stream_usage = True
                     return response
                 raise  # Re-raise StopIteration
@@ -7593,10 +7605,11 @@ class CustomStreamWrapper:
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
-                threading.Thread(
-                    target=self.run_success_logging_and_cache_storage,
-                    args=(processed_chunk, cache_hit),
-                ).start()  # log response
+                self.handle_success_logging_for_chunk(
+                    processed_chunk=processed_chunk,
+                    cache_hit=cache_hit,
+                    is_async=False,
+                )
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -7635,6 +7648,7 @@ class CustomStreamWrapper:
         self,
         processed_chunk: ModelResponse,
         cache_hit: bool,
+        is_async: bool,
     ):
         """
         Try to assemble a complete streaming response that can be logged
@@ -7660,14 +7674,16 @@ class CustomStreamWrapper:
                 complete_streaming_response
             )
 
-        threading.Thread(
-            target=self.logging_obj.success_handler,
-            args=(processed_chunk, None, None, cache_hit),
-        ).start()  # log response
-
-        asyncio.create_task(
-            self.logging_obj.async_success_handler(processed_chunk, cache_hit=cache_hit)
-        )
+        if is_async is True:
+            self.run_success_handlers_for_async_function(
+                processed_chunk=processed_chunk,
+                cache_hit=cache_hit,
+            )
+        else:
+            threading.Thread(
+                target=self.run_success_handlers_for_sync_function,
+                args=(processed_chunk, cache_hit),
+            ).start()
 
     async def __anext__(self):  # noqa: PLR0915
         cache_hit = False
@@ -7731,7 +7747,9 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     self.handle_success_logging_for_chunk(
-                        processed_chunk=processed_chunk, cache_hit=cache_hit
+                        processed_chunk=processed_chunk,
+                        cache_hit=cache_hit,
+                        is_async=True,
                     )
                     if self.logging_obj._llm_caching_handler is not None:
                         asyncio.create_task(
@@ -7785,7 +7803,9 @@ class CustomStreamWrapper:
                             continue
                         ## LOGGING
                         self.handle_success_logging_for_chunk(
-                            processed_chunk=processed_chunk, cache_hit=cache_hit
+                            processed_chunk=processed_chunk,
+                            cache_hit=cache_hit,
+                            is_async=True,
                         )
 
                         choice = processed_chunk.choices[0]
@@ -7821,7 +7841,9 @@ class CustomStreamWrapper:
                         )
                     ## LOGGING
                     self.handle_success_logging_for_chunk(
-                        processed_chunk=response, cache_hit=cache_hit
+                        processed_chunk=response,
+                        cache_hit=cache_hit,
+                        is_async=True,
                     )
 
                     self.sent_stream_usage = True
@@ -7832,7 +7854,9 @@ class CustomStreamWrapper:
                 processed_chunk = self.finish_reason_handler()
                 ## LOGGING
                 self.handle_success_logging_for_chunk(
-                    processed_chunk=processed_chunk, cache_hit=cache_hit
+                    processed_chunk=processed_chunk,
+                    cache_hit=cache_hit,
+                    is_async=True,
                 )
                 return processed_chunk
         except StopIteration:
@@ -7855,7 +7879,9 @@ class CustomStreamWrapper:
                         )
                     ## LOGGING
                     self.handle_success_logging_for_chunk(
-                        processed_chunk=response, cache_hit=cache_hit
+                        processed_chunk=response,
+                        cache_hit=cache_hit,
+                        is_async=True,
                     )
                     self.sent_stream_usage = True
                     return response
@@ -7865,7 +7891,9 @@ class CustomStreamWrapper:
                 processed_chunk = self.finish_reason_handler()
                 ## LOGGING
                 self.handle_success_logging_for_chunk(
-                    processed_chunk=processed_chunk, cache_hit=cache_hit
+                    processed_chunk=processed_chunk,
+                    cache_hit=cache_hit,
+                    is_async=True,
                 )
                 return processed_chunk
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
