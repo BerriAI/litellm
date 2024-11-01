@@ -53,9 +53,6 @@ from litellm import (  # type: ignore
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    LiteLLMResponseObjectHandler,
-)
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -65,6 +62,7 @@ from litellm.llms.prompt_templates.common_utils import get_content_from_model_re
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
+    LiteLLMResponseObjectHandler,
     Usage,
     async_mock_completion_streaming_obj,
     completion_with_fallbacks,

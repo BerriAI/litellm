@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    LiteLLMResponseObjectHandler,
     _handle_invalid_parallel_tool_calls,
     convert_to_model_response_object,
     convert_to_streaming_response,

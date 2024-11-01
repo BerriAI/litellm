@@ -271,12 +271,18 @@ class LiteLLMResponseObjectHandler:
         text_completion_response["object"] = "text_completion"
         text_completion_response["created"] = response.get("created", None)
         text_completion_response["model"] = response.get("model", None)
-        text_choices = TextChoices()
-        text_choices["text"] = response["choices"][0]["message"]["content"]
-        text_choices["index"] = response["choices"][0]["index"]
-        text_choices["logprobs"] = transformed_logprobs
-        text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
-        text_completion_response["choices"] = [text_choices]
+        choices_list: List[TextChoices] = []
+
+        # Convert each choice to TextChoices
+        for choice in response["choices"]:
+            text_choices = TextChoices()
+            text_choices["text"] = choice["message"]["content"]
+            text_choices["index"] = choice["index"]
+            text_choices["logprobs"] = transformed_logprobs
+            text_choices["finish_reason"] = choice["finish_reason"]
+            choices_list.append(text_choices)
+
+        text_completion_response["choices"] = choices_list
         text_completion_response["usage"] = response.get("usage", None)
         text_completion_response._hidden_params = HiddenParams(
             **response._hidden_params
