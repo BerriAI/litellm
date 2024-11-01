@@ -12,19 +12,16 @@ on:
       commit_hash:
         description: "Commit hash"
         required: true
+      image_tag:
+        description: 'Custom image tag name'
+        required: false
+        default: ''  # Empty default means we'll use PR-based naming
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   CHART_NAME: litellm-helm
-
-# Add workflow input
-inputs:
-  image_tag:
-    description: 'Custom image tag name'
-    required: false
-    default: ''  # Empty default means we'll use PR-based naming
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
