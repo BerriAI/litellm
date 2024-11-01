@@ -1880,12 +1880,15 @@ def test_bedrock_completion_test_4(modify_params):
                 "role": "assistant",
                 "content": [
                     {
+                        "text": """<thinking>\nThe user is asking about a specific file: main.py. Based on the environment details provided, this file is located in the computer-vision/hm-open3d/src/ directory and is currently open in a VSCode tab.\n\nTo answer the question of what this file is, the most relevant tool would be the read_file tool. This will allow me to examine the contents of main.py to determine its purpose.\n\nThe read_file tool requires the "path" parameter. I can infer this path based on the environment details:\npath: "computer-vision/hm-open3d/src/main.py"\n\nSince I have the necessary parameter, I can proceed with calling the read_file tool.\n</thinking>"""
+                    },
+                    {
                         "toolUse": {
                             "input": {"path": "computer-vision/hm-open3d/src/main.py"},
                             "name": "read_file",
                             "toolUseId": "tooluse_qCt-KEyWQlWiyHl26spQVA",
                         }
-                    }
+                    },
                 ],
             },
             {
