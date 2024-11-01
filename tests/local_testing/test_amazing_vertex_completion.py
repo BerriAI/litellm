@@ -1823,6 +1823,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_async_function_calling():
     load_vertex_ai_credentials()
+    litellm.set_verbose = True
     try:
         tools = [
             {

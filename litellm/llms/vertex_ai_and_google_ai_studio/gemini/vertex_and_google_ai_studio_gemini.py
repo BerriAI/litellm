@@ -592,12 +592,16 @@ class VertexGeminiConfig:
             )
         return exception_string
 
-    def get_assistant_content_message(self, parts: List[HttpxPartType]) -> str:
-        content_str = ""
+    def get_assistant_content_message(
+        self, parts: List[HttpxPartType]
+    ) -> Optional[str]:
+        _content_str = ""
         for part in parts:
             if "text" in part:
-                content_str += part["text"]
-        return content_str
+                _content_str += part["text"]
+        if _content_str:
+            return _content_str
+        return None
 
     def _transform_parts(
         self,
