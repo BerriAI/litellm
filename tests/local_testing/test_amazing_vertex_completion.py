@@ -2925,7 +2925,7 @@ def test_gemini_function_call_parameter_in_messages():
 
 
 def test_gemini_function_call_parameter_in_messages_2():
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
 
