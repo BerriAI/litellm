@@ -488,6 +488,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.JinaAIEmbeddingConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "xai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "voyage":
         # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
         api_base = (

@@ -500,9 +500,9 @@ ChatCompletionAssistantContentValue = (
 
 class ChatCompletionResponseMessage(TypedDict, total=False):
     content: Optional[ChatCompletionAssistantContentValue]
-    tool_calls: List[ChatCompletionToolCallChunk]
+    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
-    function_call: ChatCompletionToolCallFunctionChunk
+    function_call: Optional[ChatCompletionToolCallFunctionChunk]
 
 
 class ChatCompletionUsageBlock(TypedDict):

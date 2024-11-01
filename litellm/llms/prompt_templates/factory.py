@@ -2552,18 +2552,20 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 BedrockContentBlock(image=assistants_part)  # type: ignore
                             )
                 assistant_content.extend(assistants_parts)
-            elif messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke convertion
-                assistant_content.extend(
-                    _convert_to_bedrock_tool_call_invoke(messages[msg_i]["tool_calls"])
-                )
-            else:
+            elif messages[msg_i].get("content", None) is not None and isinstance(
+                messages[msg_i]["content"], str
+            ):
                 assistant_text = (
                     messages[msg_i].get("content") or ""
                 )  # either string or none
                 if assistant_text:
                     assistant_content.append(BedrockContentBlock(text=assistant_text))
+            if messages[msg_i].get(
+                "tool_calls", []
+            ):  # support assistant tool invoke convertion [TODO]:
+                assistant_content.extend(
+                    _convert_to_bedrock_tool_call_invoke(messages[msg_i]["tool_calls"])
+                )
 
             msg_i += 1
 

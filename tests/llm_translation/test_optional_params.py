@@ -794,7 +794,7 @@ def test_anthropic_parallel_tool_calls(provider):
         parallel_tool_calls=True,
     )
     print(f"optional_params: {optional_params}")
-    assert optional_params["tool_choice"]["disable_parallel_tool_use"] is True
+    assert optional_params["tool_choice"]["disable_parallel_tool_use"] is False
 
 
 def test_anthropic_computer_tool_use():
