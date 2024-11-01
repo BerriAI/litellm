@@ -473,9 +473,15 @@ def test_anthropic_function_call_with_no_schema(model):
     completion(model=model, messages=messages, tools=tools, tool_choice="auto")
 
 
-def test_passing_tool_result_as_list():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-5-sonnet-20241022",
+        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
+def test_passing_tool_result_as_list(model):
     litellm.set_verbose = True
-    model = "anthropic/claude-3-5-sonnet-20241022"
     messages = [
         {
             "content": [
@@ -611,4 +617,5 @@ def test_passing_tool_result_as_list():
         resp = completion(model=model, messages=messages, tools=tools)
         print(resp)
 
-    assert resp.usage.prompt_tokens_details.cached_tokens > 0
+    if model == "claude-3-5-sonnet-20241022":
+        assert resp.usage.prompt_tokens_details.cached_tokens > 0

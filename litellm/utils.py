@@ -7708,10 +7708,17 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     ## LOGGING
-                    threading.Thread(
-                        target=self.logging_obj.success_handler,
-                        args=(processed_chunk, None, None, cache_hit),
-                    ).start()  # log response
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        result=processed_chunk,
+                        start_time=None,
+                        end_time=None,
+                        cache_hit=cache_hit,
+                    )
+                    # threading.Thread(
+                    #     target=self.logging_obj.success_handler,
+                    #     args=(processed_chunk, None, None, cache_hit),
+                    # ).start()  # log response
                     asyncio.create_task(
                         self.logging_obj.async_success_handler(
                             processed_chunk, cache_hit=cache_hit

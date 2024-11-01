@@ -167,6 +167,8 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     seed: int
+    responseLogprobs: bool
+    logprobs: int
 
 
 class Tools(TypedDict, total=False):
@@ -270,6 +272,21 @@ class GroundingMetadata(TypedDict, total=False):
     groundingAttributions: List[dict]
 
 
+class LogprobsCandidate(TypedDict):
+    token: str
+    tokenId: int
+    logProbability: float
+
+
+class LogprobsTopCandidate(TypedDict):
+    candidates: List[LogprobsCandidate]
+
+
+class LogprobsResult(TypedDict, total=False):
+    topCandidates: List[LogprobsTopCandidate]
+    chosenCandidates: List[LogprobsCandidate]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
@@ -288,6 +305,7 @@ class Candidates(TypedDict, total=False):
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata
     finishMessage: str
+    logprobsResult: LogprobsResult
 
 
 class PromptFeedback(TypedDict):

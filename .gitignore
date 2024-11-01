@@ -65,3 +65,4 @@ litellm/tests/log.txt
 litellm/tests/langfuse.log
 litellm/tests/langfuse.log
 litellm/proxy/google-cloud-sdk/*
+tests/llm_translation/log.txt
