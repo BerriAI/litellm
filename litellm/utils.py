@@ -2680,6 +2680,7 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
             and custom_llm_provider != "cerebras"
+            and custom_llm_provider != "xai"
             and custom_llm_provider != "ai21_chat"
             and custom_llm_provider != "volcengine"
             and custom_llm_provider != "deepseek"
@@ -3456,6 +3457,16 @@ def get_optional_params(  # noqa: PLR0915
             optional_params=optional_params,
             model=model,
         )
+    elif custom_llm_provider == "xai":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.XAIChatConfig().map_openai_params(
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+        )
     elif custom_llm_provider == "ai21_chat":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4184,6 +4195,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.nvidiaNimEmbeddingConfig.get_supported_openai_params()
     elif custom_llm_provider == "cerebras":
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "xai":
+        return litellm.XAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ai21_chat":
         return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
@@ -5344,6 +5357,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
+        elif custom_llm_provider == "xai":
+            if "XAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("XAI_API_KEY")
         elif custom_llm_provider == "ai21_chat":
             if "AI21_API_KEY" in os.environ:
                 keys_in_environment = True
