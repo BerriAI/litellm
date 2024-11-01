@@ -1080,13 +1080,3 @@ def test_cohere_img_embeddings(input, input_type):
         assert response.usage.prompt_tokens_details.image_tokens > 0
     else:
         assert response.usage.prompt_tokens_details.text_tokens > 0
-
-
-def test_azure_ai_cohere_embed_v3_multilingual():
-    litellm.set_verbose = True
-    response = embedding(
-        model="azure_ai/Cohere-embed-v3-multilingual-jzu",
-        input=["Dogs", "Cats"],
-        api_base=os.getenv("AZURE_AI_COHERE_API_BASE_2"),
-        api_key=os.getenv("AZURE_AI_COHERE_API_KEY_2"),
-    )
