@@ -156,6 +156,7 @@ const sidebars = {
         "providers/predibase",
         "providers/nvidia_nim", 
         "providers/xai",
+        "providers/lm_studio",
         "providers/cerebras", 
         "providers/volcano", 
         "providers/triton-inference-server",
