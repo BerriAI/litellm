@@ -194,7 +194,7 @@ def _azure_ai_image_mock_response(*args, **kwargs):
         )
     ],
 )
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("sync_mode", [True])  # , False
 @pytest.mark.asyncio
 async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
     try:

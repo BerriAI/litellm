@@ -22,9 +22,10 @@ class AzureAICohereConfig:
         pass
 
     def _map_azure_model_group(self, model: str) -> str:
-        if "model=offer-cohere-embed-multili-paygo":
+
+        if model == "offer-cohere-embed-multili-paygo":
             return "Cohere-embed-v3-multilingual"
-        elif "model=offer-cohere-embed-english-paygo":
+        elif model == "offer-cohere-embed-english-paygo":
             return "Cohere-embed-v3-english"
 
         return model
