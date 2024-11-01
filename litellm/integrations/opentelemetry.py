@@ -413,7 +413,9 @@ class OpenTelemetry(CustomLogger):
         except Exception:
             return ""
 
-    def set_attributes(self, span: Span, kwargs, response_obj):  # noqa: PLR0915
+    def set_attributes(  # noqa: PLR0915
+        self, span: Span, kwargs, response_obj: Optional[Any]
+    ):
         try:
             if self.callback_name == "arize":
                 from litellm.integrations.arize_ai import ArizeLogger
@@ -505,20 +507,20 @@ class OpenTelemetry(CustomLogger):
                 )
 
             # The unique identifier for the completion.
-            if response_obj.get("id"):
+            if response_obj and response_obj.get("id"):
                 self.safe_set_attribute(
                     span=span, key="gen_ai.response.id", value=response_obj.get("id")
                 )
 
             # The model used to generate the response.
-            if response_obj.get("model"):
+            if response_obj and response_obj.get("model"):
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_RESPONSE_MODEL,
                     value=response_obj.get("model"),
                 )
 
-            usage = response_obj.get("usage")
+            usage = response_obj and response_obj.get("usage")
             if usage:
                 self.safe_set_attribute(
                     span=span,
@@ -619,7 +621,7 @@ class OpenTelemetry(CustomLogger):
                                 )
 
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
 
