@@ -16,6 +16,9 @@ from litellm.types.utils import (
     Function,
     HiddenParams,
     ImageResponse,
+)
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
+from litellm.types.utils import (
     Message,
     ModelResponse,
     RerankResponse,
@@ -284,13 +287,13 @@ class LiteLLMResponseObjectHandler:
     def _convert_provider_response_logprobs_to_text_completion_logprobs(
         response: ModelResponse,
         custom_llm_provider: Optional[str] = None,
-    ) -> Optional[list]:
+    ) -> Optional[TextCompletionLogprobs]:
         """
         Convert logprobs from provider to OpenAI.Completion() format
 
         Only supported for HF TGI models
         """
-        transformed_logprobs: Optional[list] = None
+        transformed_logprobs: Optional[TextCompletionLogprobs] = None
         if custom_llm_provider == "huggingface":
             # only supported for TGI models
             try:
