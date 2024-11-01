@@ -42,7 +42,7 @@ def test_add_pattern():
     )
     router.add_pattern("openai/*", deployment.to_json(exclude_none=True))
     assert len(router.patterns) == 1
-    assert list(router.patterns.keys())[0] == "^openai/.*$"
+    assert list(router.patterns.keys())[0] == "openai/(.*)"
 
     # try getting the pattern
     assert router.route(request="openai/gpt-15") == [
@@ -64,7 +64,7 @@ def test_add_pattern_vertex_ai():
     )
     router.add_pattern("vertex_ai/*", deployment.to_json(exclude_none=True))
     assert len(router.patterns) == 1
-    assert list(router.patterns.keys())[0] == "^vertex_ai/.*$"
+    assert list(router.patterns.keys())[0] == "vertex_ai/(.*)"
 
     # try getting the pattern
     assert router.route(request="vertex_ai/gemini-1.5-flash-latest") == [
@@ -99,10 +99,10 @@ def test_pattern_to_regex():
     Tests that the pattern is converted to a regex
     """
     router = PatternMatchRouter()
-    assert router._pattern_to_regex("openai/*") == "^openai/.*$"
+    assert router._pattern_to_regex("openai/*") == "openai/(.*)"
     assert (
         router._pattern_to_regex("openai/fo::*::static::*")
-        == "^openai/fo::.*::static::.*$"
+        == "openai/fo::(.*)::static::(.*)"
     )
 
 

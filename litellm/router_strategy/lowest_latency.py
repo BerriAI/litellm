@@ -3,7 +3,7 @@
 import random
 import traceback
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -11,6 +11,14 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class LiteLLMBase(BaseModel):
@@ -115,8 +123,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-
-                request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+                request_count_dict = (
+                    self.router_cache.get_cache(
+                        key=latency_key, parent_otel_span=parent_otel_span
+                    )
+                    or {}
+                )
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -213,7 +226,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     """
                     latency_key = f"{model_group}_map"
                     request_count_dict = (
-                        self.router_cache.get_cache(key=latency_key) or {}
+                        await self.router_cache.async_get_cache(key=latency_key) or {}
                     )
 
                     if id not in request_count_dict:
@@ -230,7 +243,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "latency"
                         ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
 
-                    self.router_cache.set_cache(
+                    await self.router_cache.async_set_cache(
                         key=latency_key,
                         value=request_count_dict,
                         ttl=self.routing_args.ttl,
@@ -316,8 +329,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 # Update usage
                 # ------------
-
-                request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(
+                        key=latency_key,
+                        parent_otel_span=parent_otel_span,
+                        local_only=True,
+                    )
+                    or {}
+                )
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -364,7 +384,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id][precise_minute].get("rpm", 0) + 1
                 )
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )  # reset map within window
 
@@ -379,26 +399,21 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    def get_available_deployments(  # noqa: PLR0915
+    def _get_available_deployments(  # noqa: PLR0915
         self,
         model_group: str,
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         request_kwargs: Optional[Dict] = None,
+        request_count_dict: Optional[Dict] = None,
     ):
-        """
-        Returns a deployment with the lowest latency
-        """
-        # get list of potential deployments
-        latency_key = f"{model_group}_map"
-        _latency_per_deployment = {}
-
-        request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+        """Common logic for both sync and async get_available_deployments"""
 
         # -----------------------
         # Find lowest used model
         # ----------------------
+        _latency_per_deployment = {}
         lowest_latency = float("inf")
 
         current_date = datetime.now().strftime("%Y-%m-%d")
@@ -428,8 +443,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # randomly sample from all_deployments, incase all deployments have latency=0.0
         _items = all_deployments.items()
 
-        all_deployments = random.sample(list(_items), len(_items))
-        all_deployments = dict(all_deployments)
+        _all_deployments = random.sample(list(_items), len(_items))
+        all_deployments = dict(_all_deployments)
         ### GET AVAILABLE DEPLOYMENTS ### filter out any deployments > tpm/rpm limits
 
         potential_deployments = []
@@ -525,3 +540,66 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "_latency_per_deployment"
             ] = _latency_per_deployment
         return deployment
+
+    async def async_get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        # get list of potential deployments
+        latency_key = f"{model_group}_map"
+
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
+            request_kwargs
+        )
+        request_count_dict = (
+            await self.router_cache.async_get_cache(
+                key=latency_key, parent_otel_span=parent_otel_span
+            )
+            or {}
+        )
+
+        return self._get_available_deployments(
+            model_group,
+            healthy_deployments,
+            messages,
+            input,
+            request_kwargs,
+            request_count_dict,
+        )
+
+    def get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Returns a deployment with the lowest latency
+        """
+        # get list of potential deployments
+        latency_key = f"{model_group}_map"
+
+        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
+            request_kwargs
+        )
+        request_count_dict = (
+            self.router_cache.get_cache(
+                key=latency_key, parent_otel_span=parent_otel_span
+            )
+            or {}
+        )
+
+        return self._get_available_deployments(
+            model_group,
+            healthy_deployments,
+            messages,
+            input,
+            request_kwargs,
+            request_count_dict,
+        )

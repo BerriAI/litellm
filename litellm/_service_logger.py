@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -32,13 +33,61 @@ class ServiceLogging(CustomLogger):
             self.prometheusServicesLogger = PrometheusServicesLogger()
 
     def service_success_hook(
-        self, service: ServiceTypes, duration: float, call_type: str
+        self,
+        service: ServiceTypes,
+        duration: float,
+        call_type: str,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[float, datetime]] = None,
     ):
         """
-        [TODO] Not implemented for sync calls yet. V0 is focused on async monitoring (used by proxy).
+        Handles both sync and async monitoring by checking for existing event loop.
         """
+
         if self.mock_testing:
             self.mock_testing_sync_success_hook += 1
+
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_event_loop()
+            # Check if the loop is running
+            if loop.is_running():
+                # If we're in a running loop, create a task
+                loop.create_task(
+                    self.async_service_success_hook(
+                        service=service,
+                        duration=duration,
+                        call_type=call_type,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                )
+            else:
+                # Loop exists but not running, we can use run_until_complete
+                loop.run_until_complete(
+                    self.async_service_success_hook(
+                        service=service,
+                        duration=duration,
+                        call_type=call_type,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                )
+        except RuntimeError:
+            # No event loop exists, create a new one and run
+            asyncio.run(
+                self.async_service_success_hook(
+                    service=service,
+                    duration=duration,
+                    call_type=call_type,
+                    parent_otel_span=parent_otel_span,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            )
 
     def service_failure_hook(
         self, service: ServiceTypes, duration: float, error: Exception, call_type: str
@@ -62,6 +111,7 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is successful
         """
+
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
 

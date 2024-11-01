@@ -970,9 +970,9 @@ class EmbeddingResponse(OpenAIObject):
 
 class Logprobs(OpenAIObject):
     text_offset: List[int]
-    token_logprobs: List[float]
+    token_logprobs: List[Union[float, None]]
     tokens: List[str]
-    top_logprobs: List[Dict[str, float]]
+    top_logprobs: List[Union[Dict[str, float], None]]
 
 
 class TextChoices(OpenAIObject):
@@ -1177,12 +1177,15 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse):
     _hidden_params: dict = {}
+    usage: Usage
 
     def __init__(
         self,
         created: Optional[int] = None,
         data: Optional[List[ImageObject]] = None,
         response_ms=None,
+        usage: Optional[Usage] = None,
+        hidden_params: Optional[dict] = None,
     ):
         if response_ms:
             _response_ms = response_ms
@@ -1204,8 +1207,13 @@ class ImageResponse(OpenAIImageResponse):
                 _data.append(ImageObject(**d))
             elif isinstance(d, BaseModel):
                 _data.append(ImageObject(**d.model_dump()))
-        super().__init__(created=created, data=_data)
-        self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        _usage = usage or Usage(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+        )
+        super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+        self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1284,6 +1292,7 @@ all_litellm_params = [
     "metadata",
     "tags",
     "acompletion",
+    "aimg_generation",
     "atext_completion",
     "text_completion",
     "caching",
@@ -1306,6 +1315,7 @@ all_litellm_params = [
     "num_retries",
     "context_window_fallback_dict",
     "retry_policy",
+    "retry_strategy",
     "roles",
     "final_prompt_value",
     "bos_token",
@@ -1349,6 +1359,8 @@ all_litellm_params = [
     "ensure_alternating_roles",
     "assistant_continue_message",
     "user_continue_message",
+    "fallback_depth",
+    "max_fallbacks",
 ]
 
 
@@ -1404,16 +1416,20 @@ class AdapterCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-class StandardLoggingMetadata(TypedDict):
+class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
+    user_api_key_alias: Optional[str]
+    user_api_key_org_id: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+
+
+class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
     Specific metadata k,v pairs logged to integration for easier cost tracking
     """
 
-    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
-    user_api_key_alias: Optional[str]
-    user_api_key_team_id: Optional[str]
-    user_api_key_user_id: Optional[str]
-    user_api_key_team_alias: Optional[str]
     spend_logs_metadata: Optional[
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
@@ -1421,12 +1437,19 @@ class StandardLoggingMetadata(TypedDict):
     requester_metadata: Optional[dict]
 
 
+class StandardLoggingAdditionalHeaders(TypedDict, total=False):
+    x_ratelimit_limit_requests: int
+    x_ratelimit_limit_tokens: int
+    x_ratelimit_remaining_requests: int
+    x_ratelimit_remaining_tokens: int
+
+
 class StandardLoggingHiddenParams(TypedDict):
     model_id: Optional[str]
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
-    additional_headers: Optional[dict]
+    additional_headers: Optional[StandardLoggingAdditionalHeaders]
 
 
 class StandardLoggingModelInformation(TypedDict):

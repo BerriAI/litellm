@@ -17,6 +17,7 @@ import concurrent
 from dotenv import load_dotenv
 
 import litellm
+
 from litellm import Router
 
 load_dotenv()
@@ -130,6 +131,7 @@ def test_multiple_deployments_parallel():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_cooldown_same_model_name(sync_mode):
+    litellm._turn_on_debug()
     # users could have the same model with different api_base
     # example
     # azure/chatgpt, api_base: 1234

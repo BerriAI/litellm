@@ -440,9 +440,13 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     parameters: dict
 
 
-class ChatCompletionToolParam(TypedDict):
-    type: Literal["function"]
+class OpenAIChatCompletionToolParam(TypedDict):
+    type: Union[Literal["function"], str]
     function: ChatCompletionToolParamFunctionChunk
+
+
+class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
+    cache_control: ChatCompletionCachedContent
 
 
 class Function(TypedDict, total=False):

@@ -1045,7 +1045,7 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
             },
         ],
         default_fallbacks=(
-            ["my-good-model"] if litellm_module_fallbacks == False else None
+            ["my-good-model"] if litellm_module_fallbacks is False else None
         ),
     )
 
@@ -1337,3 +1337,109 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
         mock_client.assert_called_once()
         print(chunks)
         assert len(chunks) > 0
+
+
+def test_router_fallbacks_with_custom_model_costs():
+    """
+    Tests prod use-case where a custom model is registered with a different provider + custom costs.
+
+    Goal: make sure custom model doesn't override default model costs.
+    """
+    model_list = [
+        {
+            "model_name": "claude-3-5-sonnet-20240620",
+            "litellm_params": {
+                "model": "claude-3-5-sonnet-20240620",
+                "api_key": os.environ["ANTHROPIC_API_KEY"],
+                "input_cost_per_token": 30,
+                "output_cost_per_token": 60,
+            },
+        },
+        {
+            "model_name": "claude-3-5-sonnet-aihubmix",
+            "litellm_params": {
+                "model": "openai/claude-3-5-sonnet-20240620",
+                "input_cost_per_token": 0.000003,  # 3$/M
+                "output_cost_per_token": 0.000015,  # 15$/M
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                "api_key": "my-fake-key",
+            },
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
+        fallbacks=[{"claude-3-5-sonnet-20240620": ["claude-3-5-sonnet-aihubmix"]}],
+    )
+
+    router.completion(
+        model="claude-3-5-sonnet-aihubmix",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+
+    print(f"key: {model_info['key']}")
+
+    assert model_info["litellm_provider"] == "anthropic"
+
+    response = router.completion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    print(f"response_cost: {response._hidden_params['response_cost']}")
+
+    assert response._hidden_params["response_cost"] > 10
+
+    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+
+    print(f"key: {model_info['key']}")
+
+    assert model_info["input_cost_per_token"] == 30
+    assert model_info["output_cost_per_token"] == 60
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
+    """
+    Tests to ensure there is not an infinite fallback loop when there is a default fallback and model specific fallback.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-bad-model-2",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["my-bad-model-2"]}],
+        default_fallbacks=["bad-model"],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        if sync_mode:
+            resp = router.completion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+
+            print(f"resp: {resp}")
+        else:
+            await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+    assert isinstance(
+        exc_info.value, litellm.AuthenticationError
+    ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"

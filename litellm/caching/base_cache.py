@@ -8,7 +8,14 @@ Has 4 methods:
     - async_get_cache
 """
 
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class BaseCache:
@@ -16,8 +23,12 @@ class BaseCache:
         self.default_ttl = default_ttl
 
     def get_ttl(self, **kwargs) -> Optional[int]:
-        if kwargs.get("ttl") is not None:
-            return kwargs.get("ttl")
+        kwargs_ttl: Optional[int] = kwargs.get("ttl")
+        if kwargs_ttl is not None:
+            try:
+                return int(kwargs_ttl)
+            except ValueError:
+                return self.default_ttl
         return self.default_ttl
 
     def set_cache(self, key, value, **kwargs):

@@ -55,12 +55,24 @@ class HttpxFunctionCall(TypedDict):
     args: dict
 
 
+class HttpxExecutableCode(TypedDict):
+    code: str
+    language: str
+
+
+class HttpxCodeExecutionResult(TypedDict):
+    outcome: str
+    output: str
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType
     functionCall: HttpxFunctionCall
     function_response: FunctionResponse
+    executableCode: HttpxExecutableCode
+    codeExecutionResult: HttpxCodeExecutionResult
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -160,6 +172,7 @@ class GenerationConfig(TypedDict, total=False):
 class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
     googleSearchRetrieval: dict
+    code_execution: dict
     retrieval: Retrieval
 
 

@@ -113,7 +113,7 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
-from .llms.cohere import embed as cohere_embed
+from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat import DatabricksChatCompletion
 from .llms.groq.chat.handler import GroqChatCompletion
@@ -933,12 +933,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "input_cost_per_token": input_cost_per_token,
                         "output_cost_per_token": output_cost_per_token,
                         "litellm_provider": custom_llm_provider,
-                    },
-                    model: {
-                        "input_cost_per_token": input_cost_per_token,
-                        "output_cost_per_token": output_cost_per_token,
-                        "litellm_provider": custom_llm_provider,
-                    },
+                    }
                 }
             )
         elif (
@@ -951,12 +946,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         "input_cost_per_second": input_cost_per_second,
                         "output_cost_per_second": output_cost_per_second,
                         "litellm_provider": custom_llm_provider,
-                    },
-                    model: {
-                        "input_cost_per_second": input_cost_per_second,
-                        "output_cost_per_second": output_cost_per_second,
-                        "litellm_provider": custom_llm_provider,
-                    },
+                    }
                 }
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
@@ -3246,62 +3236,10 @@ def embedding(  # noqa: PLR0915
         "encoding_format",
     ]
     litellm_params = [
-        "metadata",
         "aembedding",
-        "caching",
-        "mock_response",
-        "api_key",
-        "api_version",
-        "api_base",
-        "force_timeout",
-        "logger_fn",
-        "verbose",
-        "custom_llm_provider",
-        "litellm_logging_obj",
-        "litellm_call_id",
-        "use_client",
-        "id",
-        "fallbacks",
-        "azure",
-        "headers",
-        "model_list",
-        "num_retries",
-        "context_window_fallback_dict",
-        "retry_policy",
-        "roles",
-        "final_prompt_value",
-        "bos_token",
-        "eos_token",
-        "request_timeout",
-        "complete_response",
-        "self",
-        "client",
-        "rpm",
-        "tpm",
-        "max_parallel_requests",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "input_cost_per_second",
-        "output_cost_per_second",
-        "hf_model_name",
-        "proxy_server_request",
-        "model_info",
-        "preset_cache_key",
-        "caching_groups",
-        "ttl",
-        "cache",
-        "no-log",
-        "region_name",
-        "allowed_model_region",
-        "model_config",
-        "cooldown_time",
-        "tags",
-        "azure_ad_token_provider",
-        "tenant_id",
-        "client_id",
-        "client_secret",
         "extra_headers",
-    ]
+    ] + all_litellm_params
+
     default_params = openai_params + litellm_params
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
@@ -3331,7 +3269,7 @@ def embedding(  # noqa: PLR0915
     if input_cost_per_token is not None and output_cost_per_token is not None:
         litellm.register_model(
             {
-                model: {
+                f"{custom_llm_provider}/{model}": {
                     "input_cost_per_token": input_cost_per_token,
                     "output_cost_per_token": output_cost_per_token,
                     "litellm_provider": custom_llm_provider,
@@ -3342,7 +3280,7 @@ def embedding(  # noqa: PLR0915
         output_cost_per_second = output_cost_per_second or 0.0
         litellm.register_model(
             {
-                model: {
+                f"{custom_llm_provider}/{model}": {
                     "input_cost_per_second": input_cost_per_second,
                     "output_cost_per_second": output_cost_per_second,
                     "litellm_provider": custom_llm_provider,
@@ -3386,6 +3324,9 @@ def embedding(  # noqa: PLR0915
             azure_ad_token = optional_params.pop(
                 "azure_ad_token", None
             ) or get_secret_str("AZURE_AD_TOKEN")
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
 
             api_key = (
                 api_key
@@ -4468,7 +4409,10 @@ def image_generation(  # noqa: PLR0915
         metadata = kwargs.get("metadata", {})
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         client = kwargs.get("client", None)
-
+        extra_headers = kwargs.get("extra_headers", None)
+        headers: dict = kwargs.get("headers", None) or {}
+        if extra_headers is not None:
+            headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
@@ -4493,53 +4437,7 @@ def image_generation(  # noqa: PLR0915
             "size",
             "style",
         ]
-        litellm_params = [
-            "metadata",
-            "aimg_generation",
-            "caching",
-            "mock_response",
-            "api_key",
-            "api_version",
-            "api_base",
-            "force_timeout",
-            "logger_fn",
-            "verbose",
-            "custom_llm_provider",
-            "litellm_logging_obj",
-            "litellm_call_id",
-            "use_client",
-            "id",
-            "fallbacks",
-            "azure",
-            "headers",
-            "model_list",
-            "num_retries",
-            "context_window_fallback_dict",
-            "retry_policy",
-            "roles",
-            "final_prompt_value",
-            "bos_token",
-            "eos_token",
-            "request_timeout",
-            "complete_response",
-            "self",
-            "client",
-            "rpm",
-            "tpm",
-            "max_parallel_requests",
-            "input_cost_per_token",
-            "output_cost_per_token",
-            "hf_model_name",
-            "proxy_server_request",
-            "model_info",
-            "preset_cache_key",
-            "caching_groups",
-            "ttl",
-            "cache",
-            "region_name",
-            "allowed_model_region",
-            "model_config",
-        ]
+        litellm_params = all_litellm_params
         default_params = openai_params + litellm_params
         non_default_params = {
             k: v for k, v in kwargs.items() if k not in default_params
@@ -4599,6 +4497,14 @@ def image_generation(  # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret_str("AZURE_AD_TOKEN")
 
+            default_headers = {
+                "Content-Type": "application/json;",
+                "api-key": api_key,
+            }
+            for k, v in default_headers.items():
+                if k not in headers:
+                    headers[k] = v
+
             model_response = azure_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -4611,6 +4517,7 @@ def image_generation(  # noqa: PLR0915
                 api_version=api_version,
                 aimg_generation=aimg_generation,
                 client=client,
+                headers=headers,
             )
         elif custom_llm_provider == "openai":
             model_response = openai_chat_completions.image_generation(
@@ -4807,11 +4714,7 @@ def transcription(
     """
     atranscription = kwargs.get("atranscription", False)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    kwargs.get("litellm_call_id", None)
-    kwargs.get("logger_fn", None)
-    kwargs.get("proxy_server_request", None)
-    kwargs.get("model_info", None)
-    kwargs.get("metadata", {})
+    extra_headers = kwargs.get("extra_headers", None)
     kwargs.pop("tags", [])
 
     drop_params = kwargs.get("drop_params", None)
@@ -4866,6 +4769,8 @@ def transcription(
             or litellm.azure_key
             or get_secret_str("AZURE_API_KEY")
         )
+
+        optional_params["extra_headers"] = extra_headers
 
         response = azure_audio_transcriptions.audio_transcriptions(
             model=model,
@@ -4985,8 +4890,8 @@ def speech(
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
+    extra_headers = kwargs.get("extra_headers", None)
     model_info = kwargs.get("model_info", None)
-    metadata = kwargs.get("metadata", {})
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
     kwargs.pop("tags", [])
 
@@ -5098,7 +5003,8 @@ def speech(
             "AZURE_AD_TOKEN"
         )
 
-        headers = headers or litellm.headers
+        if extra_headers:
+            optional_params["extra_headers"] = extra_headers
 
         response = azure_chat_completions.audio_speech(
             model=model,

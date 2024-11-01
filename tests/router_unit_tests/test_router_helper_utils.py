@@ -440,12 +440,12 @@ def test_update_usage(model_list):
     )
     deployment_id = deployment["model_info"]["id"]
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
     assert request_count == 1
 
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
 
     assert request_count == 2
@@ -482,7 +482,9 @@ def test_should_raise_content_policy_error(model_list, finish_reason, expected_e
 def test_get_healthy_deployments(model_list):
     """Test if the '_get_healthy_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_healthy_deployments(model="gpt-3.5-turbo")
+    deployments = router._get_healthy_deployments(
+        model="gpt-3.5-turbo", parent_otel_span=None
+    )
     assert len(deployments) > 0
 
 
@@ -756,6 +758,7 @@ def test_track_deployment_metrics(model_list):
             model="gpt-3.5-turbo",
             usage={"total_tokens": 100},
         ),
+        parent_otel_span=None,
     )
 
 
@@ -914,3 +917,72 @@ def test_replace_model_in_jsonl(model_list):
     router = Router(model_list=model_list)
     deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
     assert deployments is not None
+
+
+# def test_pattern_match_deployments(model_list):
+#     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+#     import re
+
+#     patter_router = PatternMatchRouter()
+
+#     request = "fo::hi::static::hello"
+#     model_name = "fo::*:static::*"
+
+#     model_name_regex = patter_router._pattern_to_regex(model_name)
+
+#     # Match against the request
+#     match = re.match(model_name_regex, request)
+
+#     print(f"match: {match}")
+#     print(f"match.end: {match.end()}")
+#     if match is None:
+#         raise ValueError("Match not found")
+#     updated_model = patter_router.set_deployment_model_name(
+#         matched_pattern=match, litellm_deployment_litellm_model="openai/*"
+#     )
+#     assert updated_model == "openai/fo::hi:static::hello"
+
+
+@pytest.mark.parametrize(
+    "user_request_model, model_name, litellm_model, expected_model",
+    [
+        ("llmengine/foo", "llmengine/*", "openai/foo", "openai/foo"),
+        ("llmengine/foo", "llmengine/*", "openai/*", "openai/foo"),
+        (
+            "fo::hi::static::hello",
+            "fo::*::static::*",
+            "openai/fo::*:static::*",
+            "openai/fo::hi:static::hello",
+        ),
+        (
+            "fo::hi::static::hello",
+            "fo::*::static::*",
+            "openai/gpt-3.5-turbo",
+            "openai/gpt-3.5-turbo",
+        ),
+    ],
+)
+def test_pattern_match_deployment_set_model_name(
+    user_request_model, model_name, litellm_model, expected_model
+):
+    from re import Match
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    pattern_router = PatternMatchRouter()
+
+    import re
+
+    # Convert model_name into a proper regex
+    model_name_regex = pattern_router._pattern_to_regex(model_name)
+
+    # Match against the request
+    match = re.match(model_name_regex, user_request_model)
+
+    if match is None:
+        raise ValueError("Match not found")
+
+    # Call the set_deployment_model_name function
+    updated_model = pattern_router.set_deployment_model_name(match, litellm_model)
+
+    print(updated_model)  # Expected output: "openai/fo::hi:static::hello"
+    assert updated_model == expected_model

@@ -160,3 +160,12 @@ def test_get_llm_provider_jina_ai():
     assert custom_llm_provider == "openai_like"
     assert api_base == "https://api.jina.ai/v1"
     assert model == "jina-embeddings-v3"
+
+
+def test_get_llm_provider_hosted_vllm():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+    )
+    assert custom_llm_provider == "hosted_vllm"
+    assert model == "llama-3.1-70b-instruct"
+    assert dynamic_api_key == ""

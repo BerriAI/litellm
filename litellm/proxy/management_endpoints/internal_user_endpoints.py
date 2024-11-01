@@ -797,11 +797,20 @@ async def get_users(
     total_count = await prisma_client.db.litellm_usertable.count(where=query)  # type: ignore
 
     # Get paginated users
-    users = await prisma_client.db.litellm_usertable.find_many(
+    _users = await prisma_client.db.litellm_usertable.find_many(
         where=query,  # type: ignore
         skip=skip,
         take=take,
     )
+    # Add key_count to each user object directly
+    users = []
+    for user in _users:
+        user = user.model_dump()
+        key_count = await prisma_client.db.litellm_verificationtoken.count(
+            where={"user_id": user["user_id"]}
+        )
+        user["key_count"] = key_count
+        users.append(user)
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division

@@ -104,7 +104,7 @@ class LitellmUserRoles(str, enum.Enum):
         return ui_labels.get(self.value, "")
 
 
-class LitellmTableNames(enum.Enum):
+class LitellmTableNames(str, enum.Enum):
     """
     Enum for Table Names used by LiteLLM
     """
@@ -340,6 +340,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso/get/ui_settings",
         "/login",
         "/key/generate",
+        "/key/{token_id}/regenerate",
         "/key/update",
         "/key/info",
         "/key/delete",
@@ -1371,6 +1372,8 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2030,6 +2033,7 @@ class TeamInfoResponseObject(TypedDict):
 
 class TeamListResponseObject(LiteLLM_TeamTable):
     team_memberships: List[LiteLLM_TeamMembership]
+    keys: List  # list of keys that belong to the team
 
 
 class CurrentItemRateLimit(TypedDict):

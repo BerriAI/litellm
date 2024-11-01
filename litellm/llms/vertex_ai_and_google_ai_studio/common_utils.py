@@ -164,7 +164,12 @@ def _build_vertex_schema(parameters: dict):
     # 4. Suppress unnecessary title generation:
     #    * https://github.com/pydantic/pydantic/issues/1051
     #    * http://cl/586221780
-    strip_titles(parameters)
+    strip_field(parameters, field_name="title")
+
+    strip_field(
+        parameters, field_name="$schema"
+    )  # 5. Remove $schema - json schema value, not supported by OpenAPI - causes vertex errors.
+
     return parameters
 
 
@@ -234,7 +239,8 @@ def convert_to_nullable(schema):
 def add_object_type(schema):
     properties = schema.get("properties", None)
     if properties is not None:
-        schema.pop("required", None)
+        if "required" in schema and schema["required"] is None:
+            schema.pop("required", None)
         schema["type"] = "object"
         for name, value in properties.items():
             add_object_type(value)
@@ -244,14 +250,14 @@ def add_object_type(schema):
         add_object_type(items)
 
 
-def strip_titles(schema):
-    schema.pop("title", None)
+def strip_field(schema, field_name: str):
+    schema.pop(field_name, None)
 
     properties = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
-            strip_titles(value)
+            strip_field(value, field_name)
 
     items = schema.get("items", None)
     if items is not None:
-        strip_titles(items)
+        strip_field(items, field_name)
