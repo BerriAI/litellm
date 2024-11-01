@@ -1909,6 +1909,7 @@ async def test_proxy_server_prisma_setup():
         litellm.proxy.proxy_server, "PrismaClient", new=MagicMock()
     ) as mock_prisma_client:
         mock_client = mock_prisma_client.return_value  # This is the mocked instance
+        mock_client.connect = AsyncMock()  # Mock the connect method
         mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
 
         await ProxyStartupEvent._setup_prisma_client(
@@ -1917,5 +1918,6 @@ async def test_proxy_server_prisma_setup():
             user_api_key_cache=user_api_key_cache,
         )
 
-        await asyncio.sleep(1)
+        # Verify our mocked methods were called
+        mock_client.connect.assert_called_once()
         mock_client.check_view_exists.assert_called_once()
