@@ -128,3 +128,6 @@ Here's how to call a XAI model with the LiteLLM Proxy Server
   </Tabs>
 
 
+## Supported Parameters
+
+See [Supported Parameters](../completion/input.md#translated-openai-params) for supported parameters.
