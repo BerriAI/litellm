@@ -121,14 +121,14 @@ async def test_huggingface_text_completion_logprobs(respx_mock: MockRouter):
     choice = response.choices[0]
     assert choice.finish_reason == "length"
     assert choice.index == 0
-    assert isinstance(choice.logprobs["tokens"], list)
-    assert isinstance(choice.logprobs["token_logprobs"], list)
-    assert isinstance(choice.logprobs["text_offset"], list)
-    assert isinstance(choice.logprobs["top_logprobs"], list)
-    assert choice.logprobs["tokens"] == [",", "\n"]
-    assert choice.logprobs["token_logprobs"] == [-1.7626953, -1.7314453]
-    assert choice.logprobs["text_offset"] == [0, 1]
-    assert choice.logprobs["top_logprobs"] == [{}, {}]
+    assert isinstance(choice.logprobs.tokens, list)
+    assert isinstance(choice.logprobs.token_logprobs, list)
+    assert isinstance(choice.logprobs.text_offset, list)
+    assert isinstance(choice.logprobs.top_logprobs, list)
+    assert choice.logprobs.tokens == [",", "\n"]
+    assert choice.logprobs.token_logprobs == [-1.7626953, -1.7314453]
+    assert choice.logprobs.text_offset == [0, 1]
+    assert choice.logprobs.top_logprobs == [{}, {}]
 
     # Verify usage
     assert response.usage["completion_tokens"] > 0
