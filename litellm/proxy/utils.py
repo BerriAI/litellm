@@ -667,13 +667,18 @@ class ProxyLogging:
                 raise e
         return data
 
-    async def failed_tracking_alert(self, error_message: str):
+    async def failed_tracking_alert(
+        self,
+        error_message: str,
+        failing_model: str,
+    ):
         if self.alerting is None:
             return
 
         if self.slack_alerting_instance:
             await self.slack_alerting_instance.failed_tracking_alert(
-                error_message=error_message
+                error_message=error_message,
+                failing_model=failing_model,
             )
 
     async def budget_alerts(
