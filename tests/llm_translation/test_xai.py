@@ -113,7 +113,8 @@ def test_xai_chat_config_map_openai_params():
     assert "unsupported_param" not in result
 
 
-def test_completion_xai():
+@pytest.mark.parametrize("stream", [False, True])
+def test_completion_xai(stream):
     try:
         litellm.set_verbose = True
         messages = [
@@ -126,11 +127,20 @@ def test_completion_xai():
         response = completion(
             model="xai/grok-beta",
             messages=messages,
+            stream=stream,
         )
         print(response)
 
-        assert response is not None
-        assert isinstance(response, litellm.ModelResponse)
-        assert response.choices[0].message.content is not None
+        if stream is True:
+            for chunk in response:
+                print(chunk)
+                assert chunk is not None
+                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk.choices[0], litellm.utils.StreamingChoices)
+
+        else:
+            assert response is not None
+            assert isinstance(response, litellm.ModelResponse)
+            assert response.choices[0].message.content is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
