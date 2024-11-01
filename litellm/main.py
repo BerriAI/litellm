@@ -2338,6 +2338,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                     api_base=api_base,
                     extra_headers=extra_headers,
+                    base_model=litellm_params.get("base_model"),
                 )
             else:
                 model_response = vertex_ai_non_gemini.completion(

@@ -229,13 +229,14 @@ def _transform_request_body(
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
     cached_content: Optional[str],
+    base_model: Optional[str],
 ) -> RequestBody:
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
     # Separate system prompt from rest of message
     supports_system_message = get_supports_system_message(
-        model=model, custom_llm_provider=custom_llm_provider
+        model=base_model.split("/")[-1] if base_model is not None else model, custom_llm_provider=custom_llm_provider
     )
     system_instructions, messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
@@ -309,6 +310,7 @@ def sync_transform_request_body(
     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    base_model: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -336,6 +338,7 @@ def sync_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+        base_model=base_model,
     )
 
 
@@ -351,6 +354,7 @@ async def async_transform_request_body(
     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    base_model: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -380,6 +384,7 @@ async def async_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+        base_model=base_model,
     )
 
 
