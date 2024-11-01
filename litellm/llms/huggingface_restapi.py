@@ -15,6 +15,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.completion import ChatCompletionMessageToolCallParam
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from .base import BaseLLM
@@ -1184,7 +1185,9 @@ class Huggingface(BaseLLM):
             encoding=encoding,
         )
 
-    def _transform_logprobs(self, hf_response: Optional[List]) -> Optional[List[dict]]:
+    def _transform_logprobs(
+        self, hf_response: Optional[List]
+    ) -> Optional[TextCompletionLogprobs]:
         """
         Transform Hugging Face logprobs to OpenAI.Completion() format
         """
@@ -1192,21 +1195,18 @@ class Huggingface(BaseLLM):
             return None
 
         # Initialize an empty list for the transformed logprobs
-        transformed_logprobs: List[dict] = []
+        _logprob: TextCompletionLogprobs = TextCompletionLogprobs(
+            text_offset=[],
+            token_logprobs=[],
+            tokens=[],
+            top_logprobs=[],
+        )
 
         # For each Hugging Face response, transform the logprobs
         for response in hf_response:
             # Extract the relevant information from the response
             response_details = response["details"]
             top_tokens = response_details.get("top_tokens", {})
-
-            # Initialize an empty list for the token information
-            token_info = {
-                "tokens": [],
-                "token_logprobs": [],
-                "text_offset": [],
-                "top_logprobs": [],
-            }
 
             for i, token in enumerate(response_details["prefill"]):
                 # Extract the text of the token
@@ -1216,12 +1216,12 @@ class Huggingface(BaseLLM):
                 token_logprob = token["logprob"]
 
                 # Add the token information to the 'token_info' list
-                token_info["tokens"].append(token_text)
-                token_info["token_logprobs"].append(token_logprob)
+                _logprob.tokens.append(token_text)
+                _logprob.token_logprobs.append(token_logprob)
 
                 # stub this to work with llm eval harness
-                top_alt_tokens = {"": -1, "": -2, "": -3}  # noqa: F601
-                token_info["top_logprobs"].append(top_alt_tokens)
+                top_alt_tokens = {"": -1.0, "": -2.0, "": -3.0}  # noqa: F601
+                _logprob.top_logprobs.append(top_alt_tokens)
 
             # For each element in the 'tokens' list, extract the relevant information
             for i, token in enumerate(response_details["tokens"]):
@@ -1243,17 +1243,14 @@ class Huggingface(BaseLLM):
                     top_alt_tokens[text] = logprob
 
                 # Add the token information to the 'token_info' list
-                token_info["tokens"].append(token_text)
-                token_info["token_logprobs"].append(token_logprob)
-                token_info["top_logprobs"].append(top_alt_tokens)
+                _logprob.tokens.append(token_text)
+                _logprob.token_logprobs.append(token_logprob)
+                _logprob.top_logprobs.append(top_alt_tokens)
 
                 # Add the text offset of the token
                 # This is computed as the sum of the lengths of all previous tokens
-                token_info["text_offset"].append(
+                _logprob.text_offset.append(
                     sum(len(t["text"]) for t in response_details["tokens"][:i])
                 )
 
-            # Add the 'token_info' list to the 'transformed_logprobs' list
-            transformed_logprobs.append(token_info)
-
-        return transformed_logprobs
+        return _logprob
