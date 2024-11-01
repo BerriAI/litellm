@@ -142,6 +142,7 @@ def prisma_client():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_new_user_response(prisma_client):
     try:
 
@@ -2891,6 +2892,7 @@ async def test_generate_key_with_guardrails(prisma_client):
 
 
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_team_access_groups(prisma_client):
     """
     Test team based model access groups

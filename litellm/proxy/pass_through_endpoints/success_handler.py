@@ -97,9 +97,9 @@ class PassThroughEndpointLogging:
         if "generateContent" in url_route:
             model = self.extract_model_from_url(url_route)
 
-            instance_of_vertex_llm = VertexLLM()
+            instance_of_vertex_llm = litellm.VertexGeminiConfig()
             litellm_model_response: litellm.ModelResponse = (
-                instance_of_vertex_llm._process_response(
+                instance_of_vertex_llm._transform_response(
                     model=model,
                     messages=[
                         {"role": "user", "content": "no-message-pass-through-endpoint"}
