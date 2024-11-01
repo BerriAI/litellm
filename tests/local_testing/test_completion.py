@@ -1905,7 +1905,9 @@ def test_hf_test_completion_tgi():
 # hf_test_completion_tgi()
 
 
-@pytest.mark.parametrize("provider", ["openai", "hosted_vllm"])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "provider", ["openai", "hosted_vllm", "lm_studio"]
+)  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
     litellm.set_verbose = True
@@ -1931,8 +1933,8 @@ async def test_openai_compatible_custom_api_base(provider):
                 api_base="my-custom-api-base",
                 hello="world",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(e)
 
         mock_call.assert_called_once()
 
