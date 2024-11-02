@@ -164,6 +164,7 @@ class DualCache(BaseCache):
         **kwargs,
     ):
         received_args = locals()
+        received_args.pop("self")
 
         def run_in_new_loop():
             """Run the coroutine in a new event loop within this thread."""
