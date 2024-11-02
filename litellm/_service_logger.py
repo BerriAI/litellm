@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
@@ -122,6 +123,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
         )
+
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -139,8 +141,7 @@ class ServiceLogging(CustomLogger):
                     end_time=end_time,
                     event_metadata=event_metadata,
                 )
-            elif callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
+            elif callback == "otel" or isinstance(callback, OpenTelemetry):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()
@@ -246,8 +247,7 @@ class ServiceLogging(CustomLogger):
                     end_time=end_time,
                     event_metadata=event_metadata,
                 )
-            elif callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
+            elif callback == "otel" or isinstance(callback, OpenTelemetry):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()
