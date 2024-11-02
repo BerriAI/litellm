@@ -40,6 +40,7 @@ class LimitedSizeOrderedDict(OrderedDict):
             self.popitem(last=False)
         super().__setitem__(key, value)
 
+
 class DualCache(BaseCache):
     """
     DualCache is a cache implementation that updates both Redis and an in-memory cache simultaneously.
@@ -53,7 +54,7 @@ class DualCache(BaseCache):
         redis_cache: Optional[RedisCache] = None,
         default_in_memory_ttl: Optional[float] = None,
         default_redis_ttl: Optional[float] = None,
-        default_redis_batch_cache_expiry: float = 1,
+        default_redis_batch_cache_expiry: Optional[float] = None,
         default_max_redis_batch_cache_size: int = 100,
     ) -> None:
         super().__init__()
@@ -64,7 +65,11 @@ class DualCache(BaseCache):
         self.last_redis_batch_access_time = LimitedSizeOrderedDict(
             max_size=default_max_redis_batch_cache_size
         )
-        self.redis_batch_cache_expiry = default_redis_batch_cache_expiry
+        self.redis_batch_cache_expiry = (
+            default_redis_batch_cache_expiry
+            or litellm.default_redis_batch_cache_expiry
+            or 1
+        )
         self.default_in_memory_ttl = (
             default_in_memory_ttl or litellm.default_in_memory_ttl
         )
@@ -194,7 +199,6 @@ class DualCache(BaseCache):
                                 key, redis_result[key], **kwargs
                             )
 
-
                     for key, value in redis_result.items():
                         result[keys.index(key)] = value
 
@@ -244,6 +248,20 @@ class DualCache(BaseCache):
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
+    def get_redis_batch_keys(
+        self, current_time: float, keys: List[str], result: List[Any]
+    ) -> List[str]:
+        sublist_keys = []
+        for key, value in zip(keys, result):
+            if value is None:
+                if (
+                    key not in self.last_redis_batch_access_time
+                    or current_time - self.last_redis_batch_access_time[key]
+                    >= self.redis_batch_cache_expiry
+                ):
+                    sublist_keys.append(key)
+        return sublist_keys
+
     async def async_batch_get_cache(
         self,
         keys: list,
@@ -266,24 +284,15 @@ class DualCache(BaseCache):
                 - for the none values in the result
                 - check the redis cache
                 """
-                # Track the last access time for these keys
                 current_time = time.time()
-                key_tuple = tuple(keys)
+                sublist_keys = self.get_redis_batch_keys(current_time, keys, result)
 
                 # Only hit Redis if the last access time was more than 5 seconds ago
-                if (
-                    key_tuple not in self.last_redis_batch_access_time
-                    or current_time - self.last_redis_batch_access_time[key_tuple]
-                    >= self.redis_batch_cache_expiry
-                ):
-                    sublist_keys = [
-                        key for key, value in zip(keys, result) if value is None
-                    ]
+                if len(sublist_keys) > 0:
                     # If not found in in-memory cache, try fetching from Redis
                     redis_result = await self.redis_cache.async_batch_get_cache(
                         sublist_keys, parent_otel_span=parent_otel_span
                     )
-
 
                     if redis_result is not None:
                         # Update in-memory cache with the value from Redis
@@ -292,6 +301,9 @@ class DualCache(BaseCache):
                                 await self.in_memory_cache.async_set_cache(
                                     key, redis_result[key], **kwargs
                                 )
+                            # Update the last access time for each key fetched from Redis
+                            self.last_redis_batch_access_time[key] = current_time
+
                     for key, value in redis_result.items():
                         index = keys.index(key)
                         result[index] = value
