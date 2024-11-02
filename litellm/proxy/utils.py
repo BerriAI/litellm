@@ -265,7 +265,7 @@ class InternalUsageCache:
     async def async_batch_get_cache(
         self,
         keys: list,
-        parent_otel_span: Span | None = None,
+        parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
     ):
         return await self.dual_cache.async_batch_get_cache(
