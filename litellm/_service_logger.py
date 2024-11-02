@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
@@ -14,9 +13,13 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
     Span = _Span
+    OTELClass = OpenTelemetry
 else:
     Span = Any
+    OTELClass = Any
 
 
 class ServiceLogging(CustomLogger):
@@ -112,6 +115,7 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is successful
         """
+        from litellm.integrations.opentelemetry import OpenTelemetry
 
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
@@ -215,6 +219,8 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is unsuccessful
         """
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
 
