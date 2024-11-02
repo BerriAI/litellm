@@ -96,6 +96,7 @@ async def test_pre_call_hook():
             key=request_count_api_key
         )
     )
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -110,6 +111,7 @@ async def test_pre_call_hook_rpm_limits():
     Test if error raised on hitting rpm limits
     """
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
     )
@@ -152,6 +154,7 @@ async def test_pre_call_hook_rpm_limits_retry_after():
     Test if rate limit error, returns 'retry_after'
     """
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
     )
@@ -251,6 +254,7 @@ async def test_pre_call_hook_tpm_limits():
     Test if error raised on hitting tpm limits
     """
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=10
     )
@@ -306,9 +310,9 @@ async def test_pre_call_hook_user_tpm_limits():
     local_cache.set_cache(key=user_id, value=user_obj)
 
     _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
-        api_key=_api_key,
-        user_id=user_id,
+        api_key=_api_key, user_id=user_id, user_rpm_limit=10, user_tpm_limit=9
     )
     res = dict(user_api_key_dict)
     print("dict user", res)
@@ -372,7 +376,7 @@ async def test_success_call_hook():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -416,7 +420,7 @@ async def test_failure_call_hook():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -497,7 +501,7 @@ async def test_normal_router_call():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -579,7 +583,7 @@ async def test_normal_router_tpm_limit():
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
     print("Test: Checking current_requests for precise_minute=", precise_minute)
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -658,7 +662,7 @@ async def test_streaming_router_call():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -736,7 +740,7 @@ async def test_streaming_router_tpm_limit():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -814,7 +818,7 @@ async def test_bad_router_call():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(  # type: ignore
             key=request_count_api_key
@@ -890,7 +894,7 @@ async def test_bad_router_tpm_limit():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     assert (
         parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
@@ -979,7 +983,7 @@ async def test_bad_router_tpm_limit_per_model():
     current_minute = datetime.now().strftime("%M")
     precise_minute = f"{current_date}-{current_hour}-{current_minute}"
     request_count_api_key = f"{_api_key}::{model}::{precise_minute}::request_count"
-
+    await asyncio.sleep(1)
     print(
         "internal usage cache: ",
         parallel_request_handler.internal_usage_cache.dual_cache.in_memory_cache.cache_dict,

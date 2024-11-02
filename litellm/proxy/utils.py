@@ -262,6 +262,18 @@ class InternalUsageCache:
             **kwargs,
         )
 
+    async def async_batch_get_cache(
+        self,
+        keys: list,
+        parent_otel_span: Span | None = None,
+        local_only: bool = False,
+    ):
+        return await self.dual_cache.async_batch_get_cache(
+            keys=keys,
+            parent_otel_span=parent_otel_span,
+            local_only=local_only,
+        )
+
     async def async_increment_cache(
         self,
         key,

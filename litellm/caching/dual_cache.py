@@ -232,7 +232,10 @@ class DualCache(BaseCache):
             verbose_logger.error(traceback.format_exc())
 
     def get_redis_batch_keys(
-        self, current_time: float, keys: List[str], result: List[Any]
+        self,
+        current_time: float,
+        keys: List[str],
+        result: List[Any],
     ) -> List[str]:
         sublist_keys = []
         for key, value in zip(keys, result):
