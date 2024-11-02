@@ -1229,15 +1229,13 @@ def _return_user_api_key_auth_obj(
     start_time: datetime,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
-    asyncio.create_task(
-        user_api_key_service_logger_obj.async_service_success_hook(
-            service=ServiceTypes.AUTH,
-            call_type=route,
-            start_time=start_time,
-            end_time=end_time,
-            duration=end_time.timestamp() - start_time.timestamp(),
-            parent_otel_span=parent_otel_span,
-        )
+    user_api_key_service_logger_obj.service_success_hook(
+        service=ServiceTypes.AUTH,
+        call_type=route,
+        start_time=start_time,
+        end_time=end_time,
+        duration=end_time.timestamp() - start_time.timestamp(),
+        parent_otel_span=parent_otel_span,
     )
     retrieved_user_role = (
         _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER

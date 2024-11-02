@@ -139,6 +139,7 @@ async def test_check_blocked_team():
 def test_returned_user_api_key_auth(user_role, expected_role):
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    from datetime import datetime
 
     new_obj = _return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(
@@ -148,6 +149,7 @@ def test_returned_user_api_key_auth(user_role, expected_role):
         parent_otel_span=None,
         valid_token_dict={},
         route="/chat/completion",
+        start_time=datetime.now(),
     )
 
     assert new_obj.user_role == expected_role
