@@ -1,5 +1,5 @@
+import asyncio
 import sys
-import traceback
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
@@ -403,10 +403,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 values_to_update_in_cache=values_to_update_in_cache,
             )
 
-        await self.internal_usage_cache.async_batch_set_cache(
-            cache_list=values_to_update_in_cache,
-            ttl=60,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        asyncio.create_task(
+            self.internal_usage_cache.async_batch_set_cache(
+                cache_list=values_to_update_in_cache,
+                ttl=60,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )  # don't block execution for cache updates
         )
 
         return
