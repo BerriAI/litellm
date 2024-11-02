@@ -1242,27 +1242,25 @@ def _return_user_api_key_auth_obj(
     retrieved_user_role = (
         _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
     )
+
+    user_api_key_kwargs = {
+        "api_key": api_key,
+        "parent_otel_span": parent_otel_span,
+        "user_role": retrieved_user_role,
+        **valid_token_dict,
+    }
+    if user_obj is not None:
+        user_api_key_kwargs.update(
+            user_tpm_limit=user_obj.tpm_limit,
+            user_rpm_limit=user_obj.rpm_limit,
+        )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
-        return UserAPIKeyAuth(
-            api_key=api_key,
+        user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            parent_otel_span=parent_otel_span,
-            **valid_token_dict,
         )
-    elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-        return UserAPIKeyAuth(
-            api_key=api_key,
-            user_role=retrieved_user_role,
-            parent_otel_span=parent_otel_span,
-            **valid_token_dict,
-        )
+        return UserAPIKeyAuth(**user_api_key_kwargs)
     else:
-        return UserAPIKeyAuth(
-            api_key=api_key,
-            user_role=retrieved_user_role,
-            parent_otel_span=parent_otel_span,
-            **valid_token_dict,
-        )
+        return UserAPIKeyAuth(**user_api_key_kwargs)
 
 
 def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):

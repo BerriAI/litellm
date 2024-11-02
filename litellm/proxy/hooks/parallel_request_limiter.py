@@ -303,42 +303,29 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
-            _user_id_rate_limits = await self.get_internal_user_object(
-                user_id=user_id,
+            user_tpm_limit = user_api_key_dict.user_tpm_limit
+            user_rpm_limit = user_api_key_dict.user_rpm_limit
+            if user_tpm_limit is None:
+                user_tpm_limit = sys.maxsize
+            if user_rpm_limit is None:
+                user_rpm_limit = sys.maxsize
+
+            # now do the same tpm/rpm checks
+            request_count_api_key = f"{user_id}::{precise_minute}::request_count"
+
+            # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
+            await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type=call_type,
+                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                request_count_api_key=request_count_api_key,
+                tpm_limit=user_tpm_limit,
+                rpm_limit=user_rpm_limit,
+                rate_limit_type="user",
+                values_to_update_in_cache=values_to_update_in_cache,
             )
-            # get user tpm/rpm limits
-            if (
-                _user_id_rate_limits is not None
-                and isinstance(_user_id_rate_limits, dict)
-                and (
-                    _user_id_rate_limits.get("tpm_limit", None) is not None
-                    or _user_id_rate_limits.get("rpm_limit", None) is not None
-                )
-            ):
-                user_tpm_limit = _user_id_rate_limits.get("tpm_limit", None)
-                user_rpm_limit = _user_id_rate_limits.get("rpm_limit", None)
-                if user_tpm_limit is None:
-                    user_tpm_limit = sys.maxsize
-                if user_rpm_limit is None:
-                    user_rpm_limit = sys.maxsize
-
-                # now do the same tpm/rpm checks
-                request_count_api_key = f"{user_id}::{precise_minute}::request_count"
-
-                # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
-                await self.check_key_in_limits(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=cache,
-                    data=data,
-                    call_type=call_type,
-                    max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
-                    request_count_api_key=request_count_api_key,
-                    tpm_limit=user_tpm_limit,
-                    rpm_limit=user_rpm_limit,
-                    rate_limit_type="user",
-                    values_to_update_in_cache=values_to_update_in_cache,
-                )
 
         # TEAM RATE LIMITS
         ## get team tpm/rpm limits
