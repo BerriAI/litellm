@@ -3645,7 +3645,7 @@
         "output_cost_per_token": 0.000005,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_function_calling": true,
+        "supports_function_calling": true
     },
     "openrouter/anthropic/claude-3-haiku-20240307": {
         "max_tokens": 4096,
