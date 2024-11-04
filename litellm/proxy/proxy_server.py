@@ -8825,7 +8825,7 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if k == "alert_to_webhook_url":
                     # check if slack is already enabled. if not, enable it
                     if "alerting" not in _existing_settings:
-                        _existing_settings["alerting"].append("slack")
+                        _existing_settings["alerting"] = ["slack"]
                     elif isinstance(_existing_settings["alerting"], list):
                         if "slack" not in _existing_settings["alerting"]:
                             _existing_settings["alerting"].append("slack")

@@ -8419,7 +8419,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def validate_chat_completion_user_messages(messages: List[dict]):
+def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     """
     Ensures all user messages are valid OpenAI chat completion messages.
 
