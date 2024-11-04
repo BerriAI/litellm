@@ -19,6 +19,8 @@ def modify_user_request(data):
         if "user_id" in data:
             set_api_keys_from_vault(data)
             del data["user_id"]
+        if "provider" in data:
+            del data["provider"]
         return data, None
     except Exception as e:
         return None, {
