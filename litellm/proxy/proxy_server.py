@@ -2993,7 +2993,7 @@ class ProxyStartupEvent:
         scheduler.start()
 
     @classmethod
-    def _setup_prisma_client(
+    async def _setup_prisma_client(
         cls,
         database_url: Optional[str],
         proxy_logging_obj: ProxyLogging,
@@ -3011,6 +3011,8 @@ class ProxyStartupEvent:
                 )
             except Exception as e:
                 raise e
+
+            await prisma_client.connect()
 
             ## Add necessary views to proxy ##
             asyncio.create_task(
@@ -3033,7 +3035,7 @@ async def startup_event():
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
-        prisma_client = ProxyStartupEvent._setup_prisma_client(
+        prisma_client = await ProxyStartupEvent._setup_prisma_client(
             database_url=_db_url,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
@@ -3123,9 +3125,6 @@ async def startup_event():
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None:
-        await prisma_client.connect()
-
     if prisma_client is not None and master_key is not None:
         ProxyStartupEvent._add_master_key_hash_to_db(
             master_key=master_key,
