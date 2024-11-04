@@ -1400,6 +1400,7 @@ class PrismaClient:
 
         return
 
+    @log_to_opentelemetry
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff

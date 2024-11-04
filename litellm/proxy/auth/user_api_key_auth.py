@@ -1127,11 +1127,13 @@ async def user_api_key_auth(  # noqa: PLR0915
             api_key = valid_token.token
 
             # Add hashed token to cache
-            await _cache_key_object(
-                hashed_token=api_key,
-                user_api_key_obj=valid_token,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
+            asyncio.create_task(
+                _cache_key_object(
+                    hashed_token=api_key,
+                    user_api_key_obj=valid_token,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
             valid_token_dict = valid_token.model_dump(exclude_none=True)
