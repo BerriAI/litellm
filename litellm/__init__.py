@@ -528,7 +528,11 @@ openai_text_completion_compatible_providers: List = (
         "hosted_vllm",
     ]
 )
-
+_openai_like_providers: List = [
+    "predibase",
+    "databricks",
+    "watsonx",
+]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
 replicate_models: List = [
     # llama replicate supported LLMs
