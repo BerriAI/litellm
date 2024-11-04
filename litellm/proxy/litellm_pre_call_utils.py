@@ -1,4 +1,5 @@
 import copy
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import Request
@@ -6,6 +7,7 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._service_logger import ServiceLogging
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -16,10 +18,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
+
+service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -471,7 +477,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
-
+    start_time = time.time()
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
@@ -538,6 +544,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     verbose_proxy_logger.debug(
         f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+    )
+
+    end_time = time.time()
+    await service_logger_obj.async_service_success_hook(
+        service=ServiceTypes.PROXY_PRE_CALL,
+        duration=end_time - start_time,
+        call_type="add_litellm_data_to_request",
+        start_time=start_time,
+        end_time=end_time,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
     )
     return data
 

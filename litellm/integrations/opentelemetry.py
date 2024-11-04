@@ -281,21 +281,6 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
-    ):
-        from opentelemetry import trace
-        from opentelemetry.trace import Status, StatusCode
-
-        parent_otel_span = user_api_key_dict.parent_otel_span
-        if parent_otel_span is not None:
-            parent_otel_span.set_status(Status(StatusCode.OK))
-            # End Parent OTEL Sspan
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
-
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
