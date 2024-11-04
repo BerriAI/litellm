@@ -642,6 +642,16 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=original_exception.response,
                     )
+                elif (
+                    "The server received an invalid response from an upstream server."
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise litellm.InternalServerError(
+                        message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
