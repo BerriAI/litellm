@@ -1145,7 +1145,7 @@ class ImageObject(OpenAIImage):
     url: Optional[str] = None
     revised_prompt: Optional[str] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None):
+    def __init__(self, b64_json=None, url=None, revised_prompt=None, **kwargs):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
 
     def __contains__(self, key):
