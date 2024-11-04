@@ -8408,3 +8408,55 @@ def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
             ),
         )
     ]
+
+
+from litellm.types.llms.openai import (
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+    ChatCompletionUserMessage,
+    OpenAIMessageContent,
+)
+
+
+def validate_chat_completion_user_messages(messages: List[dict]):
+    """
+    Ensures all user messages are valid OpenAI chat completion messages.
+
+    Args:
+        messages: List of message dictionaries
+        message_content_type: Type to validate content against
+
+    Returns:
+        List[dict]: The validated messages
+
+    Raises:
+        ValueError: If any message is invalid
+    """
+    for idx, m in enumerate(messages):
+        try:
+            if m["role"] == "user":
+                user_content = m.get("content")
+                if user_content is None:
+                    raise Exception
+                elif isinstance(user_content, str):
+                    continue
+                elif isinstance(user_content, list):
+                    for item in user_content:
+                        if not isinstance(item, dict):
+                            raise Exception
+                        else:
+                            content_type = item.get("type")
+                            if content_type == "text":
+                                ChatCompletionTextObject(**item)  # type: ignore
+                            elif content_type == "image_url":
+                                ChatCompletionImageObject(**item)  # type: ignore
+                            else:
+                                raise Exception
+                else:
+                    raise Exception
+        except Exception:
+            raise Exception(
+                f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
+            )
+
+    return messages
