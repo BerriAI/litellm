@@ -45,11 +45,6 @@ async def make_call(
 
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
-    if response.status_code != 200:
-        raise OpenAILikeError(
-            status_code=response.status_code, message=await response.aread()
-        )
-
     if streaming_decoder is not None:
         completion_stream: Any = streaming_decoder.aiter_bytes(
             response.aiter_bytes(chunk_size=1024)
