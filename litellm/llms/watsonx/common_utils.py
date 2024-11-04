@@ -25,6 +25,7 @@ iam_token_cache = InMemoryCache()
 
 def generate_iam_token(api_key=None, **params) -> str:
     result: Optional[str] = iam_token_cache.get_cache(api_key)  # type: ignore
+
     if result is None:
         headers = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -43,11 +44,13 @@ def generate_iam_token(api_key=None, **params) -> str:
         response.raise_for_status()
         json_data = response.json()
 
+        result = json_data["access_token"]
         iam_token_cache.set_cache(
             key=api_key,
-            value=json_data["access_token"],
+            value=result,
             ttl=json_data["expires_in"] - 10,  # leave some buffer
         )
+
     return cast(str, result)
 
 
@@ -132,6 +135,7 @@ def _get_api_params(
             status_code=401,
             message="Error: Watsonx URL not set. Set WX_URL in environment variables or pass in as a parameter.",
         )
+
     if token is None and api_key is not None and generate_token:
         # generate the auth token
         if print_verbose is not None:
