@@ -391,13 +391,27 @@ def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
 def _should_check_db(
     key: str, last_db_access_time: LimitedSizeOrderedDict, db_cache_expiry: int
 ) -> bool:
+    """
+    Prevent calling db repeatedly for items that don't exist in the db.
+    """
     current_time = time.time()
-    if (
-        key not in last_db_access_time
-        or current_time - last_db_access_time[key] >= db_cache_expiry
-    ):
+    # if key doesn't exist in last_db_access_time -> check db
+    if key not in last_db_access_time:
         return True
+    elif (
+        last_db_access_time[key][0] is not None
+    ):  # check db for non-null values (for refresh operations)
+        return True
+    elif last_db_access_time[key][0] is None:
+        if current_time - last_db_access_time[key] >= db_cache_expiry:
+            return True
     return False
+
+
+def _update_last_db_access_time(
+    key: str, value: Optional[Any], last_db_access_time: LimitedSizeOrderedDict
+):
+    last_db_access_time[key] = (value, time.time())
 
 
 @log_to_opentelemetry
@@ -435,6 +449,7 @@ async def get_user_object(
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
         )
+
         if should_check_db:
             response = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
@@ -470,7 +485,11 @@ async def get_user_object(
         await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
 
         # save to db access time
-        last_db_access_time[db_access_time_key] = time.time()
+        _update_last_db_access_time(
+            key=db_access_time_key,
+            value=response_dict,
+            last_db_access_time=last_db_access_time,
+        )
 
         return _response
     except Exception as e:  # if user not in db
@@ -624,7 +643,12 @@ async def get_team_object(
         )
 
         # save to db access time
-        last_db_access_time[db_access_time_key] = time.time()
+        # save to db access time
+        _update_last_db_access_time(
+            key=db_access_time_key,
+            value=_response,
+            last_db_access_time=last_db_access_time,
+        )
 
         return _response
     except Exception:
