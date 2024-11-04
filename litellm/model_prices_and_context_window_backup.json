@@ -1730,6 +1730,22 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true
     },
+    "claude-3-5-haiku-20241022": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "cache_creation_input_token_cost": 0.00000125,
+        "cache_read_input_token_cost": 0.0000001,
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 264,
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true
+    },
     "claude-3-opus-20240229": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -2625,6 +2641,18 @@
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
+    },
+    "vertex_ai/claude-3-5-haiku@20241022": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
@@ -3627,6 +3655,20 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 264
     },
+    "openrouter/anthropic/claude-3-5-haiku-20241022": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 264,
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true
+    },
     "anthropic/claude-3-5-sonnet-20241022": {
         "max_tokens": 8192,
         "max_input_tokens": 200000,
@@ -4352,6 +4394,18 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
+    "anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
+    },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -4408,6 +4462,18 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
+    "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
+    },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -4463,6 +4529,18 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true
+    },
+    "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
