@@ -9,6 +9,7 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 import time
+import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Literal, Optional
 

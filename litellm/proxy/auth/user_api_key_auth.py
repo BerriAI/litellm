@@ -10,6 +10,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 import asyncio
 import json
 import secrets
+import time
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
@@ -44,6 +45,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._service_logger import ServiceLogging
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -73,6 +75,10 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
+from litellm.types.services import ServiceTypes
+
+user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+
 
 api_key_header = APIKeyHeader(
     name=SpecialHeaders.openai_authorization.value,
@@ -214,7 +220,7 @@ async def user_api_key_auth(  # noqa: PLR0915
     )
 
     parent_otel_span: Optional[Span] = None
-
+    start_time = datetime.now()
     try:
         route: str = get_request_route(request=request)
         # get the request body
@@ -255,7 +261,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
-                start_time=_to_ns(datetime.now()),
+                start_time=_to_ns(start_time),
                 context=open_telemetry_logger.get_traceparent_from_header(
                     headers=request.headers
                 ),
@@ -1165,6 +1171,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 parent_otel_span=parent_otel_span,
                 valid_token_dict=valid_token_dict,
                 route=route,
+                start_time=start_time,
             )
         else:
             raise Exception()
@@ -1219,31 +1226,39 @@ def _return_user_api_key_auth_obj(
     parent_otel_span: Optional[Span],
     valid_token_dict: dict,
     route: str,
+    start_time: datetime,
 ) -> UserAPIKeyAuth:
+    end_time = datetime.now()
+    user_api_key_service_logger_obj.service_success_hook(
+        service=ServiceTypes.AUTH,
+        call_type=route,
+        start_time=start_time,
+        end_time=end_time,
+        duration=end_time.timestamp() - start_time.timestamp(),
+        parent_otel_span=parent_otel_span,
+    )
     retrieved_user_role = (
         _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
     )
+
+    user_api_key_kwargs = {
+        "api_key": api_key,
+        "parent_otel_span": parent_otel_span,
+        "user_role": retrieved_user_role,
+        **valid_token_dict,
+    }
+    if user_obj is not None:
+        user_api_key_kwargs.update(
+            user_tpm_limit=user_obj.tpm_limit,
+            user_rpm_limit=user_obj.rpm_limit,
+        )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
-        return UserAPIKeyAuth(
-            api_key=api_key,
+        user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            parent_otel_span=parent_otel_span,
-            **valid_token_dict,
         )
-    elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-        return UserAPIKeyAuth(
-            api_key=api_key,
-            user_role=retrieved_user_role,
-            parent_otel_span=parent_otel_span,
-            **valid_token_dict,
-        )
+        return UserAPIKeyAuth(**user_api_key_kwargs)
     else:
-        return UserAPIKeyAuth(
-            api_key=api_key,
-            user_role=retrieved_user_role,
-            parent_otel_span=parent_otel_span,
-            **valid_token_dict,
-        )
+        return UserAPIKeyAuth(**user_api_key_kwargs)
 
 
 def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
