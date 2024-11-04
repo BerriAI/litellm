@@ -41,13 +41,14 @@ async def make_call(
     streaming_decoder: Optional[CustomStreamingDecoder] = None,
 ):
     if client is None:
-        client = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.DATABRICKS
-        )  # Create a new client if none provided
+        client = litellm.module_level_aclient
+
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
     if response.status_code != 200:
-        raise OpenAILikeError(status_code=response.status_code, message=response.text)
+        raise OpenAILikeError(
+            status_code=response.status_code, message=await response.aread()
+        )
 
     if streaming_decoder is not None:
         completion_stream: Any = streaming_decoder.aiter_bytes(
@@ -149,6 +150,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
         )
+
         return streamwrapper
 
     async def acompletion_function(
@@ -160,7 +162,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         model_response: ModelResponse,
         custom_llm_provider: str,
         print_verbose: Callable,
-        client: AsyncHTTPHandler,
+        client: Optional[AsyncHTTPHandler],
         encoding,
         api_key,
         logging_obj,
@@ -176,9 +178,12 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
 
+        if client is None:
+            client = litellm.module_level_aclient
+
         try:
             response = await client.post(
-                api_base, headers=headers, data=json.dumps(data)
+                api_base, headers=headers, data=json.dumps(data), timeout=timeout
             )
             response.raise_for_status()
 
@@ -264,9 +269,9 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         )
         if acompletion is True:
             if client is None or not isinstance(client, AsyncHTTPHandler):
-                client = AsyncHTTPHandler(timeout=timeout)
+                client = None
             if (
-                stream is not None and stream is True
+                stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 data["stream"] = stream
                 return self.acompletion_stream_function(

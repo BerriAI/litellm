@@ -3,6 +3,7 @@ from typing import Callable, Optional, cast
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import WatsonXAPIParams
@@ -38,6 +39,12 @@ def generate_iam_token(api_key=None, **params) -> str:
             "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
             "apikey": api_key,
         }
+        verbose_logger.debug(
+            "calling ibm `/identity/token` to retrieve IAM token.\nURL=%s\nheaders=%s\ndata=%s",
+            "https://iam.cloud.ibm.com/identity/token",
+            headers,
+            data,
+        )
         response = httpx.post(
             "https://iam.cloud.ibm.com/identity/token", data=data, headers=headers
         )

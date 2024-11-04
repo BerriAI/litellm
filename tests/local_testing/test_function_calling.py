@@ -669,7 +669,9 @@ async def test_watsonx_tool_choice(sync_mode):
                 tools=tools,
                 tool_choice="auto",
                 client=client,
+                stream=True,
             )
+
         print(resp)
 
         mock_completion.assert_called_once()
