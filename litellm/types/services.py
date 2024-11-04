@@ -16,6 +16,7 @@ class ServiceTypes(str, enum.Enum):
     LITELLM = "self"
     ROUTER = "router"
     AUTH = "auth"
+    PROXY_PRE_CALL = "proxy_pre_call"
 
 
 class ServiceLoggerPayload(BaseModel):
