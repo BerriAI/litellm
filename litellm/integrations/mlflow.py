@@ -15,6 +15,12 @@ class MlflowLogger(CustomLogger):
         self._lock = threading.Lock()  # lock for _stream_id_to_span
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._handle_success(kwargs, response_obj, start_time, end_time)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._handle_success(kwargs, response_obj, start_time, end_time)
+
+    def _handle_success(self, kwargs, response_obj, start_time, end_time):
         """
         Log the success event as an MLflow span.
         Note that this method is called asynchronously in the background thread.
@@ -39,6 +45,12 @@ class MlflowLogger(CustomLogger):
             verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._handle_failure(kwargs, response_obj, start_time, end_time)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self._handle_failure(kwargs, response_obj, start_time, end_time)
+
+    def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         """
         Log the failure event as an MLflow span.
         Note that this method is called *synchronously* unlike the success handler.
