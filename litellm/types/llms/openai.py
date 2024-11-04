@@ -423,6 +423,12 @@ class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False
     cache_control: ChatCompletionCachedContent
 
 
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+
 AllMessageValues = Union[
     ChatCompletionUserMessage,
     ChatCompletionAssistantMessage,

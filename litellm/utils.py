@@ -8416,6 +8416,7 @@ from litellm.types.llms.openai import (
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
     OpenAIMessageContent,
+    ValidUserMessageContentTypes,
 )
 
 
@@ -8437,20 +8438,14 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
         try:
             if m["role"] == "user":
                 user_content = m.get("content")
-                if user_content is None:
-                    raise Exception
-                elif isinstance(user_content, str):
-                    continue
-                elif isinstance(user_content, list):
-                    for item in user_content:
-                        if not isinstance(item, dict):
-                            raise Exception
-                        else:
-                            valid_content_types = ["text", "image_url", "input_audio"]
-                            if item.get("type") not in valid_content_types:
-                                raise Exception("invalid content type")
-                else:
-                    raise Exception
+                if user_content is not None:
+                    if isinstance(user_content, str):
+                        continue
+                    elif isinstance(user_content, list):
+                        for item in user_content:
+                            if isinstance(item, dict):
+                                if item.get("type") not in ValidUserMessageContentTypes:
+                                    raise Exception("invalid content type")
         except Exception:
             raise Exception(
                 f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
