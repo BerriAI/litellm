@@ -608,16 +608,16 @@ async def get_key_object(
 
     # check if in cache
     key = hashed_token
-    cached_team_obj: Optional[UserAPIKeyAuth] = None
 
-    if cached_team_obj is None:
-        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
+    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
+        key=key
+    )
 
-    if cached_team_obj is not None:
-        if isinstance(cached_team_obj, dict):
-            return UserAPIKeyAuth(**cached_team_obj)
-        elif isinstance(cached_team_obj, UserAPIKeyAuth):
-            return cached_team_obj
+    if cached_key_obj is not None:
+        if isinstance(cached_key_obj, dict):
+            return UserAPIKeyAuth(**cached_key_obj)
+        elif isinstance(cached_key_obj, UserAPIKeyAuth):
+            return cached_key_obj
 
     if check_cache_only:
         raise Exception(
