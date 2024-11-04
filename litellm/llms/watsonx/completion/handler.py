@@ -28,8 +28,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
-from .base import BaseLLM
-from .prompt_templates import factory as ptf
+from ...base import BaseLLM
+from ...prompt_templates import factory as ptf
 
 
 class WatsonXAIError(Exception):
@@ -140,6 +140,29 @@ class IBMWatsonXAIConfig:
             and v is not None
         }
 
+    def is_watsonx_text_param(self, param: str) -> bool:
+        """
+        Determine if user passed in a watsonx.ai text generation param
+        """
+        text_generation_params = [
+            "decoding_method",
+            "max_new_tokens",
+            "min_new_tokens",
+            "length_penalty",
+            "stop_sequences",
+            "top_k",
+            "repetition_penalty",
+            "truncate_input_tokens",
+            "include_stop_sequences",
+            "return_options",
+            "random_seed",
+            "moderations",
+            "decoding_method",
+            "min_tokens",
+        ]
+
+        return param in text_generation_params
+
     def get_supported_openai_params(self):
         return [
             "temperature",  # equivalent to temperature
@@ -150,6 +173,44 @@ class IBMWatsonXAIConfig:
             "seed",  # equivalent to random_seed
             "stream",  # equivalent to stream
         ]
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict
+    ) -> dict:
+        extra_body = {}
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["max_new_tokens"] = v
+            elif k == "stream":
+                optional_params["stream"] = v
+            elif k == "temperature":
+                optional_params["temperature"] = v
+            elif k == "top_p":
+                optional_params["top_p"] = v
+            elif k == "frequency_penalty":
+                optional_params["repetition_penalty"] = v
+            elif k == "seed":
+                optional_params["random_seed"] = v
+            elif k == "stop":
+                optional_params["stop_sequences"] = v
+            elif k == "decoding_method":
+                extra_body["decoding_method"] = v
+            elif k == "min_tokens":
+                extra_body["min_new_tokens"] = v
+            elif k == "top_k":
+                extra_body["top_k"] = v
+            elif k == "truncate_input_tokens":
+                extra_body["truncate_input_tokens"] = v
+            elif k == "length_penalty":
+                extra_body["length_penalty"] = v
+            elif k == "time_limit":
+                extra_body["time_limit"] = v
+            elif k == "return_options":
+                extra_body["return_options"] = v
+
+        if extra_body:
+            optional_params["extra_body"] = extra_body
+        return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
         """

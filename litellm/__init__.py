@@ -1039,7 +1039,8 @@ from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.AzureOpenAI.chat.o1_transformation import AzureOpenAIO1Config
-from .llms.watsonx import IBMWatsonXAIConfig
+from .llms.watsonx.completion.handler import IBMWatsonXAIConfig
+from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (

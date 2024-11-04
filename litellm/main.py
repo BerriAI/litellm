@@ -157,7 +157,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
 from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
     VertexEmbedding,
 )
-from .llms.watsonx import IBMWatsonXAI
+from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,

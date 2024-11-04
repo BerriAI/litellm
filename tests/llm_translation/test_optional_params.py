@@ -905,3 +905,19 @@ def test_vertex_schema_field():
         "$schema"
         not in optional_params["tools"][0]["function_declarations"][0]["parameters"]
     )
+
+
+def test_watsonx_tool_choice():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
+    )
+    print(optional_params)
+    assert optional_params["tool_choice_options"] == "auto"
+
+
+def test_watsonx_text_top_k():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider="watsonx_text", top_k=10
+    )
+    print(optional_params)
+    assert optional_params["top_k"] == 10
