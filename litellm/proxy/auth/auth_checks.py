@@ -18,6 +18,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
@@ -41,6 +42,10 @@ if TYPE_CHECKING:
     Span = _Span
 else:
     Span = Any
+
+
+last_db_access_time = LimitedSizeOrderedDict(max_size=100)
+db_cache_expiry = 5  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
@@ -383,6 +388,18 @@ def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
     return False
 
 
+def _should_check_db(
+    key: str, last_db_access_time: LimitedSizeOrderedDict, db_cache_expiry: int
+) -> bool:
+    current_time = time.time()
+    if (
+        key not in last_db_access_time
+        or current_time - last_db_access_time[key] >= db_cache_expiry
+    ):
+        return True
+    return False
+
+
 @log_to_opentelemetry
 async def get_user_object(
     user_id: str,
@@ -412,10 +429,18 @@ async def get_user_object(
     if prisma_client is None:
         raise Exception("No db connected")
     try:
-
-        response = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_id}, include={"organization_memberships": True}
+        db_access_time_key = "user_id:{}".format(user_id)
+        should_check_db = _should_check_db(
+            key=db_access_time_key,
+            last_db_access_time=last_db_access_time,
+            db_cache_expiry=db_cache_expiry,
         )
+        if should_check_db:
+            response = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}, include={"organization_memberships": True}
+            )
+        else:
+            response = None
 
         if response is None:
             if user_id_upsert:
@@ -443,6 +468,9 @@ async def get_user_object(
 
         # save the user object to cache
         await user_api_key_cache.async_set_cache(key=user_id, value=response_dict)
+
+        # save to db access time
+        last_db_access_time[db_access_time_key] = time.time()
 
         return _response
     except Exception as e:  # if user not in db
@@ -515,6 +543,12 @@ async def _delete_cache_key_object(
 
 
 @log_to_opentelemetry
+async def _get_team_db_check(team_id: str, prisma_client: PrismaClient):
+    return await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+
+
 async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
@@ -544,7 +578,7 @@ async def get_team_object(
     ):
         cached_team_obj = (
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
-                key=key
+                key=key, parent_otel_span=parent_otel_span
             )
         )
 
@@ -564,9 +598,18 @@ async def get_team_object(
 
     # else, check db
     try:
-        response = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": team_id}
+        db_access_time_key = "team_id:{}".format(team_id)
+        should_check_db = _should_check_db(
+            key=db_access_time_key,
+            last_db_access_time=last_db_access_time,
+            db_cache_expiry=db_cache_expiry,
         )
+        if should_check_db:
+            response = await _get_team_db_check(
+                team_id=team_id, prisma_client=prisma_client
+            )
+        else:
+            response = None
 
         if response is None:
             raise Exception
@@ -579,6 +622,9 @@ async def get_team_object(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        # save to db access time
+        last_db_access_time[db_access_time_key] = time.time()
 
         return _response
     except Exception:
