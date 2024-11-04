@@ -621,9 +621,12 @@ def test_passing_tool_result_as_list(model):
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
 
 
-def test_watsonx_tool_choice():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_watsonx_tool_choice(sync_mode):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
     import json
+    from litellm import acompletion, completion
 
     litellm.set_verbose = True
     tools = [
@@ -648,15 +651,25 @@ def test_watsonx_tool_choice():
     ]
     messages = [{"role": "user", "content": "What is the weather in San Francisco?"}]
 
-    client = HTTPHandler()
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
     with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
-        resp = completion(
-            model="watsonx/meta-llama/llama-3-1-8b-instruct",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            client=client,
-        )
+
+        if sync_mode:
+            resp = completion(
+                model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        else:
+            resp = await acompletion(
+                model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
         print(resp)
 
         mock_completion.assert_called_once()

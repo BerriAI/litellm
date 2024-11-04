@@ -160,6 +160,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         model_response: ModelResponse,
         custom_llm_provider: str,
         print_verbose: Callable,
+        client: AsyncHTTPHandler,
         encoding,
         api_key,
         logging_obj,
@@ -175,10 +176,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
 
-        self.async_handler = AsyncHTTPHandler(timeout=timeout)
-
         try:
-            response = await self.async_handler.post(
+            response = await client.post(
                 api_base, headers=headers, data=json.dumps(data)
             )
             response.raise_for_status()
@@ -264,8 +263,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             },
         )
         if acompletion is True:
-            if client is not None and isinstance(client, HTTPHandler):
-                client = None
+            if client is None or not isinstance(client, AsyncHTTPHandler):
+                client = AsyncHTTPHandler(timeout=timeout)
             if (
                 stream is not None and stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
@@ -310,6 +309,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     headers=headers,
                     timeout=timeout,
                     base_model=base_model,
+                    client=client,
                 )
         else:
             ## COMPLETION CALL
