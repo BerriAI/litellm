@@ -105,6 +105,12 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingModelInformation,
+    StandardLoggingMetadata,
+    StandardLoggingHiddenParams,
+)
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -139,6 +145,58 @@ def prisma_client():
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
+
+
+def create_simple_standard_logging_payload() -> StandardLoggingPayload:
+
+    return StandardLoggingPayload(
+        id="test_id",
+        call_type="completion",
+        response_cost=0.1,
+        response_cost_failure_debug_info=None,
+        status="success",
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=1234567890.5,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_org_id=None,
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response={"choices": [{"message": {"content": "Hi there!"}}]},
+        error_str=None,
+        model_parameters={"stream": True},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.1",
+            additional_headers=None,
+        ),
+    )
 
 
 @pytest.mark.asyncio()
@@ -514,16 +572,17 @@ def test_call_with_user_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
+
             await track_cost_callback(
                 kwargs={
                     "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": generated_key,
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -611,21 +670,17 @@ def test_call_with_end_user_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 10
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token="sk-1234"
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user
+            standard_logging_payload["end_user"] = user
             await track_cost_callback(
                 kwargs={
                     "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": "sk-1234",
-                            "user_api_key_user_id": user,
-                        },
-                        "proxy_server_request": {
-                            "body": {
-                                "user": user,
-                            }
-                        },
-                    },
-                    "response_cost": 10,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -717,16 +772,16 @@ def test_call_with_proxy_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
             await track_cost_callback(
                 kwargs={
                     "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": generated_key,
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -808,17 +863,17 @@ def test_call_with_user_over_budget_stream(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
             await track_cost_callback(
                 kwargs={
                     "stream": True,
                     "complete_streaming_response": resp,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": generated_key,
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=ModelResponse(),
                 start_time=datetime.now(),
@@ -914,17 +969,17 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
             await track_cost_callback(
                 kwargs={
                     "stream": True,
                     "complete_streaming_response": resp,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": generated_key,
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=ModelResponse(),
                 start_time=datetime.now(),
@@ -1471,17 +1526,17 @@ def test_call_with_key_over_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
             await track_cost_callback(
                 kwargs={
                     "model": "chatgpt-v-2",
                     "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": hash_token(generated_key),
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -1588,17 +1643,17 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
             await track_cost_callback(
                 kwargs={
                     "model": "chatgpt-v-2",
                     "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": hash_token(generated_key),
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -1712,17 +1767,17 @@ def test_call_with_key_over_model_budget(prisma_client):
                 model="gpt-35-turbo",  # azure always has model written like this
                 usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
             )
+            standard_logging_payload = create_simple_standard_logging_payload()
+            standard_logging_payload["response_cost"] = 0.00002
+            standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+                token=generated_key
+            )
+            standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
             await track_cost_callback(
                 kwargs={
                     "model": "chatgpt-v-2",
                     "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": hash_token(generated_key),
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
+                    "standard_logging_object": standard_logging_payload,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -1818,17 +1873,17 @@ async def test_call_with_key_never_over_budget(prisma_client):
                 prompt_tokens=210000, completion_tokens=200000, total_tokens=41000
             ),
         )
+        standard_logging_payload = create_simple_standard_logging_payload()
+        standard_logging_payload["response_cost"] = 200000
+        standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+            token=generated_key
+        )
+        standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
         await track_cost_callback(
             kwargs={
                 "model": "chatgpt-v-2",
                 "stream": False,
-                "litellm_params": {
-                    "metadata": {
-                        "user_api_key": hash_token(generated_key),
-                        "user_api_key_user_id": user_id,
-                    }
-                },
-                "response_cost": 200000,
+                "standard_logging_object": standard_logging_payload,
             },
             completion_response=resp,
             start_time=datetime.now(),
@@ -1899,19 +1954,19 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             model="gpt-35-turbo",  # azure always has model written like this
             usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
         )
+        standard_logging_payload = create_simple_standard_logging_payload()
+        standard_logging_payload["response_cost"] = 0.00005
+        standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+            token=generated_key
+        )
+        standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
         await track_cost_callback(
             kwargs={
                 "call_type": "acompletion",
                 "model": "sagemaker-chatgpt-v-2",
                 "stream": True,
                 "complete_streaming_response": resp,
-                "litellm_params": {
-                    "metadata": {
-                        "user_api_key": hash_token(generated_key),
-                        "user_api_key_user_id": user_id,
-                    }
-                },
-                "response_cost": 0.00005,
+                "standard_logging_object": standard_logging_payload,
             },
             completion_response=resp,
             start_time=datetime.now(),
@@ -2292,19 +2347,19 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
         model="gpt-35-turbo",  # azure always has model written like this
         usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
     )
+    standard_logging_payload = create_simple_standard_logging_payload()
+    standard_logging_payload["response_cost"] = 0.00005
+    standard_logging_payload["metadata"]["user_api_key_hash"] = hash_token(
+        token=generated_key
+    )
+    standard_logging_payload["metadata"]["user_api_key_user_id"] = user_id
     await track_cost_callback(
         kwargs={
             "call_type": "acompletion",
             "model": "sagemaker-chatgpt-v-2",
             "stream": True,
             "complete_streaming_response": resp,
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key": hash_token(generated_key),
-                    "user_api_key_user_id": user_id,
-                }
-            },
-            "response_cost": 0.00005,
+            "standard_logging_object": standard_logging_payload,
         },
         completion_response=resp,
         start_time=datetime.now(),
