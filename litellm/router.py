@@ -2962,14 +2962,14 @@ class Router:
                 raise
 
             # decides how long to sleep before retry
-            _timeout = self._time_to_sleep_before_retry(
+            retry_after = self._time_to_sleep_before_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
                 healthy_deployments=_healthy_deployments,
             )
-            # sleeps for the length of the timeout
-            await asyncio.sleep(_timeout)
+
+            await asyncio.sleep(retry_after)
             for current_attempt in range(num_retries):
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
@@ -4175,12 +4175,12 @@ class Router:
             verbose_router_logger.error(
                 "Could not identify azure model. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
             )
-        # elif custom_llm_provider != "azure":
-        #     model = _model
+        elif custom_llm_provider != "azure":
+            model = _model
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
         model_info = litellm.get_model_info(
-            model="{}/{}".format(custom_llm_provider, _model)
+            model="{}/{}".format(custom_llm_provider, model)
         )
 
         ## CHECK USER SET MODEL INFO

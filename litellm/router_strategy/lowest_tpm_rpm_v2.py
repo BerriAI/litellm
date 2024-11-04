@@ -194,7 +194,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             deployment_rpm,
                             local_result,
                         ),
-                        # headers={"retry-after": str(60)},  # type: ignore
+                        headers={"retry-after": str(60)},  # type: ignore
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                 )
@@ -220,7 +220,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                                 deployment_rpm,
                                 result,
                             ),
-                            # headers={"retry-after": str(60)},  # type: ignore
+                            headers={"retry-after": str(60)},  # type: ignore
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                     )
