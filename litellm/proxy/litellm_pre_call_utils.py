@@ -299,8 +299,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
     from litellm.proxy.proxy_server import llm_router, premium_user
 
-    start_time = time.time()
-
     safe_add_api_version_from_query_params(data, request)
 
     _headers = clean_headers(
@@ -479,7 +477,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
-
+    start_time = time.time()
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
