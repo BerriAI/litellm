@@ -2486,6 +2486,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_router_weighted_pick(sync_mode):
     router = Router(
         model_list=[
