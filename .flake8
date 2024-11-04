@@ -44,3 +44,9 @@ ignore =
 
 # https://black.readthedocs.io/en/stable/guides/using_black_with_other_tools.html#flake8
 extend-ignore = E203
+
+[flake8:local-plugins]
+extension =
+   FC1 = flake8_forbidden_calls:ForbiddenCallPlugin
+paths =
+  ./ci_cd
