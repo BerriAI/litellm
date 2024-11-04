@@ -995,7 +995,7 @@ async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
                 print(resp)
 
 
-def test_get_public_key_from_jwk_url():
+def test_get_public_key_from_jwk_url_rsa():
     import litellm
     from litellm.proxy.auth.handle_jwt import JWTHandler
 
@@ -1019,3 +1019,89 @@ def test_get_public_key_from_jwk_url():
 
     assert public_key is not None
     assert public_key == jwk_response[0]
+    
+def test_get_public_key_from_jwk_url_ecsda():
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    
+    jwt_handler = JWTHandler()
+    jwk_response = [
+        {
+            "kid":"mhRAPDi73xbe60PXUnlZ48OfoTm8VOJ9ePZ8KoL5Oto",
+            "kty":"EC",
+            "alg":"ES384",
+            "use":"sig",
+            "crv":"P-384",
+            "x":"TkOFqaQSdZwNNXP6ZThKavH9h4VUmiJ-QZxlizBM8nQ3K_4ZO5ReaIRDq7VahpIT",
+            "y":"YWqRQiWv_xnHcqY8iQq3AQ8wTMY02Qu3myiDE7wHpIc5s1fXUhO40AibIBbtQVL2"
+        }
+    ]
+    
+    public_key = jwt_handler.parse_keys(
+        keys=jwk_response,
+        kid="mhRAPDi73xbe60PXUnlZ48OfoTm8VOJ9ePZ8KoL5Oto"
+    )
+    
+    assert public_key is not None
+    assert public_key == jwk_response[0]
+
+@pytest.mark.asyncio
+async def test_auth_jwt_ecsda():
+    from base64 import b64decode
+    from json import loads
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    jwt_handler = JWTHandler()
+    # Deactivate expiration verification for testing purpose
+    jwt_handler.decode_options["verify_exp"] = False
+    
+    token = "eyJhbGciOiJFUzM4NCIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJtaFJBUERpNzN4YmU2MFBYVW5sWjQ4T2ZvVG04Vk9KOWVQWjhLb0w1T3RvIn0.eyJleHAiOjE3MzEwMTcwOTEsImlhdCI6MTczMTAxNjc5MSwianRpIjoiYjUwZjNiYWYtZWM1ZS00ZTI3LTlkZDAtZmI4MTRhNWRkZjBkIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9saXRlbGxtLXRlc3QtZXMzODQiLCJzdWIiOiIzZjE4YWVlNi03NDk3LTQ5ZjItYjdhNS1lN2UyMmIxMWZmNDkiLCJ0eXAiOiJCZWFyZXIiLCJhenAiOiJsaXRlbGxtLXRlc3Qtb3BlbmlkLWFwcC1lczM4NCIsImFjciI6IjEiLCJhbGxvd2VkLW9yaWdpbnMiOlsiLyoiXSwic2NvcGUiOiJvcGVuaWQgZW1haWwgcHJvZmlsZSIsImNsaWVudEhvc3QiOiIxOTIuMTY4LjY1LjEiLCJlbWFpbF92ZXJpZmllZCI6ZmFsc2UsInByZWZlcnJlZF91c2VybmFtZSI6InNlcnZpY2UtYWNjb3VudC1saXRlbGxtLXRlc3Qtb3BlbmlkLWFwcC1lczM4NCIsImNsaWVudEFkZHJlc3MiOiIxOTIuMTY4LjY1LjEiLCJjbGllbnRfaWQiOiJsaXRlbGxtLXRlc3Qtb3BlbmlkLWFwcC1lczM4NCJ9.K5c_KyjDxIrC1LzjmRsLUZ2vo9Fy5Djd9pUz8RHvqKHWSLY_125neVZFgGbo4iZtAJufngdZmhPwSqJzUQk-_w_U06fJdv7ekizNZxzPQ152WJdhMgIu1WWsesWwBafb"
+    jwk_response = [
+        {
+            "kid":"mhRAPDi73xbe60PXUnlZ48OfoTm8VOJ9ePZ8KoL5Oto",
+            "kty":"EC",
+            "alg":"ES384",
+            "use":"sig",
+            "crv":"P-384",
+            "x":"TkOFqaQSdZwNNXP6ZThKavH9h4VUmiJ-QZxlizBM8nQ3K_4ZO5ReaIRDq7VahpIT",
+            "y":"YWqRQiWv_xnHcqY8iQq3AQ8wTMY02Qu3myiDE7wHpIc5s1fXUhO40AibIBbtQVL2"
+        }
+    ]
+    
+    unverified_body = loads(b64decode(token.split(".")[1] + "==").decode())
+    
+    public_key = jwt_handler.parse_keys(keys=jwk_response, kid="mhRAPDi73xbe60PXUnlZ48OfoTm8VOJ9ePZ8KoL5Oto")
+    payload = await jwt_handler.auth_jwt(token, public_key)
+    
+    assert unverified_body == payload
+
+@pytest.mark.asyncio
+async def test_auth_jwt_rsa():
+    from base64 import b64decode
+    from json import loads
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    jwt_handler = JWTHandler()
+    # Deactivate expiration verification for testing purpose
+    jwt_handler.decode_options["verify_exp"] = False
+    
+    token = "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJXZUIta0M5bkR1LVpic0FjRVNPUUhDTnRZaVpsektvZ1BUQ1hhT1U0Y04wIn0.eyJleHAiOjE3MzEwMTcyMjIsImlhdCI6MTczMTAxNjkyMiwianRpIjoiOWJlNjBjZDctYzZiOS00NzRhLWI0YjMtMWRkYjkwZTJkYmMyIiwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwL3JlYWxtcy9saXRlbGxtLXRlc3QtcnNhMjU2Iiwic3ViIjoiZjYzZTQzYjAtNDQ1YS00MTlhLWFmM2UtODBhYWJlNjUzNzA5IiwidHlwIjoiQmVhcmVyIiwiYXpwIjoibGl0ZWxsbS10ZXN0LW9wZW5pZC1hcHAtcnNhMjU2IiwiYWNyIjoiMSIsImFsbG93ZWQtb3JpZ2lucyI6WyIvKiJdLCJzY29wZSI6Im9wZW5pZCBlbWFpbCBwcm9maWxlIiwiY2xpZW50SG9zdCI6IjE5Mi4xNjguNjUuMSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwicHJlZmVycmVkX3VzZXJuYW1lIjoic2VydmljZS1hY2NvdW50LWxpdGVsbG0tdGVzdC1vcGVuaWQtYXBwLXJzYTI1NiIsImNsaWVudEFkZHJlc3MiOiIxOTIuMTY4LjY1LjEiLCJjbGllbnRfaWQiOiJsaXRlbGxtLXRlc3Qtb3BlbmlkLWFwcC1yc2EyNTYifQ.Q9yKG-UTpJhvUFouzxdwOlqGZ7G-T99NE7svDZ_gPWJ2Jf1rKIJ_BxP7C7DzRpEscqZA1mARkDfWyurIu_1QS1tnQtsJBVkhX9sY1jBTJOYaZa-kxlhIBSaGn4DHj7FbNd9OJsd1BxE5OSK4Wji8eseycDiMdS26GhKXeLeazmK6Nu-LR625LpCRwZdG7EUMwMudrML8KD14eGO0G2zBncFOIlVdVrwyA8PE6ZIcR2WKW-SEGtE7nDAfDUHxL2WETt2bfAXl0UTs3UR-1HUoBLxU4LpaqmfFS2noO0KibtflhxvHZoQ9K5WUaj3_sMQV8crztE7unIiEwe89QykfgA"
+    jwk_response = [
+        {
+            "kid": "WeB-kC9nDu-ZbsAcESOQHCNtYiZlzKogPTCXaOU4cN0",
+            "kty": "RSA",
+            "alg": "RS256",
+            "use": "sig",
+            "n": "uyl8F8oNroKz6BgpMP-u0uxhrNbj3OS3SmTtdUYHwRxGv4FCTaoPGqpWgypnRqxY2n5N_r-ac0pJobprJrijNBXT9Egd6DX2MmvBcmJp5cBNq2LqCyAiY_p4EvAetba3YP3IEjaiHrwBg9jaorob22pO07vfvkvePJyvPuecUBlpqUgAigiHZ9uwfKQymEFYqJeZIlp0BnkBOLtC6iTQSxbDLaNF56pu3ifUEZZW5t2etz_RXR1Y7SKmtg_s-8tBi5A6M9G_JBqu630NRxMei_-h5bm37pm5R_afOmg-XBoWcS-cGu-5nTmJLPsw93DhLidiJbuILcvczq_SD4Xr0Q",
+            "e": "AQAB",
+            "x5c": [
+                "MIICtTCCAZ0CBgGS/srU1TANBgkqhkiG9w0BAQsFADAeMRwwGgYDVQQDDBNsaXRlbGxtLXRlc3QtcnNhMjU2MB4XDTI0MTEwNjAwMDQxOFoXDTM0MTEwNjAwMDU1OFowHjEcMBoGA1UEAwwTbGl0ZWxsbS10ZXN0LXJzYTI1NjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALspfBfKDa6Cs+gYKTD/rtLsYazW49zkt0pk7XVGB8EcRr+BQk2qDxqqVoMqZ0asWNp+Tf6/mnNKSaG6aya4ozQV0/RIHeg19jJrwXJiaeXATati6gsgImP6eBLwHrW2t2D9yBI2oh68AYPY2qK6G9tqTtO7375L3jycrz7nnFAZaalIAIoIh2fbsHykMphBWKiXmSJadAZ5ATi7Quok0EsWwy2jReeqbt4n1BGWVubdnrc/0V0dWO0iprYP7PvLQYuQOjPRvyQarut9DUcTHov/oeW5t+6ZuUf2nzpoPlwaFnEvnBrvuZ05iSz7MPdw4S4nYiW7iC3L3M6v0g+F69ECAwEAATANBgkqhkiG9w0BAQsFAAOCAQEAeDYgVfdXhyReUrZCOR/fpdvI3+Q3oxIS1oDYmstsuNRFyYMJzkwp5UXrwB5Yo9XPjvT/mnS2U+8Di8tps1gMA1jPmLj+kNhs+43Q6YcRDLek7GyVx/zq/ga/Rilbl66T6yKiFtxEEBIhbVRbbto+AmvycFvWTnTJRVNxT040lLqqDtUB663tfpUpZnnki9+k+mdJLdpu3zArqZA46ei7FeadU96ELbCkRY/+NDVcjrLnl+SPwjOBfDr3bM6C7nNmKOjMqsOIXOzxAfQEXVFSwqAFZaioS0vSirjcRWuE2PclEROSAfcmHMJhtBYDhkoRF0xqAr8iPdHOevRQCGwzKg=="
+            ],
+            "x5t": "DVcauG1QNemtqR6QUd3qH8tRyG8",
+            "x5t#S256": "2OZRfb74j2YhtYfAH8oJsTeXlDqke3bjSWapzvVpLqM"
+        }
+    ]
+    
+    unverified_body = loads(b64decode(token.split(".")[1] + "==").decode())
+    
+    public_key = jwt_handler.parse_keys(keys=jwk_response, kid="WeB-kC9nDu-ZbsAcESOQHCNtYiZlzKogPTCXaOU4cN0")
+    payload = await jwt_handler.auth_jwt(token, public_key)
+    
+    assert unverified_body == payload

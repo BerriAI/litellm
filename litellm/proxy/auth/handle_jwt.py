@@ -36,6 +36,7 @@ class JWTHandler:
         self,
     ) -> None:
         self.http_handler = HTTPHandler()
+        self.decode_options = {}
 
     def update_environment(
         self,
@@ -228,47 +229,56 @@ class JWTHandler:
         else:
             return False
 
-    async def auth_jwt(self, token: str) -> dict:
+    async def auth_jwt(self, token: str, public_key: Optional[dict] | None | str = None) -> dict:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
-        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
+        RSA_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
+        ECSDA_ALGORITHMS = ["ES256", "ES256K", "ES384", "ES512"]
 
         audience = os.getenv("JWT_AUDIENCE")
-        decode_options = None
+        decode_options = {
+            **self.decode_options
+        }
         if audience is None:
-            decode_options = {"verify_aud": False}
+            decode_options["verify_aud"]=False
 
         import jwt
-        from jwt.algorithms import RSAAlgorithm
-
         header = jwt.get_unverified_header(token)
 
         verbose_proxy_logger.debug("header: %s", header)
 
         kid = header.get("kid", None)
+        
+        alg = header.get("alg")
+        algClass = None
+        if alg in RSA_ALGORITHMS:
+            from jwt.algorithms import RSAAlgorithm
+            algClass = RSAAlgorithm
+        elif alg in ECSDA_ALGORITHMS:
+            from jwt.algorithms import ECAlgorithm
+            algClass = ECAlgorithm
+        else:
+            raise Exception(f"JWT Auth {alg} not implemented")
 
-        public_key = await self.get_public_key(kid=kid)
+        if public_key is None or (isinstance(public_key, dict) and public_key.get("kid", None) != kid) or (isinstance(public_key, str) and len(public_key)<=0):
+            public_key = await self.get_public_key(kid=kid)
 
         if public_key is not None and isinstance(public_key, dict):
             jwk = {}
-            if "kty" in public_key:
-                jwk["kty"] = public_key["kty"]
-            if "kid" in public_key:
-                jwk["kid"] = public_key["kid"]
-            if "n" in public_key:
-                jwk["n"] = public_key["n"]
-            if "e" in public_key:
-                jwk["e"] = public_key["e"]
+            supported_attributes = ["kty", "kid", "n", "e", "x", "y", "crv"]
+            for attribute in supported_attributes:
+                if attribute in public_key:
+                    jwk[attribute] = public_key[attribute]
 
-            public_key_rsa = RSAAlgorithm.from_jwk(json.dumps(jwk))
+            public_key = algClass.from_jwk(json.dumps(jwk))
 
             try:
                 # decode the token using the public key
                 payload = jwt.decode(
                     token,
-                    public_key_rsa,  # type: ignore
-                    algorithms=algorithms,
+                    public_key,  # type: ignore
+                    algorithms=[alg],
                     options=decode_options,
                     audience=audience,
                 )
@@ -286,7 +296,7 @@ class JWTHandler:
                 )
 
                 # Extract public key
-                key = cert.public_key().public_bytes(
+                public_key = cert.public_key().public_bytes(
                     serialization.Encoding.PEM,
                     serialization.PublicFormat.SubjectPublicKeyInfo,
                 )
@@ -294,8 +304,8 @@ class JWTHandler:
                 # decode the token using the public key
                 payload = jwt.decode(
                     token,
-                    key,
-                    algorithms=algorithms,
+                    public_key,
+                    algorithms=[alg],
                     audience=audience,
                     options=decode_options,
                 )
