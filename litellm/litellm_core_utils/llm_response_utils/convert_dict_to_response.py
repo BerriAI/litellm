@@ -14,11 +14,17 @@ from litellm.types.utils import (
     Delta,
     EmbeddingResponse,
     Function,
+    HiddenParams,
     ImageResponse,
+)
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
+from litellm.types.utils import (
     Message,
     ModelResponse,
     RerankResponse,
     StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
     TranscriptionResponse,
     Usage,
 )
@@ -234,6 +240,77 @@ class LiteLLMResponseObjectHandler:
             model_response_dict.update(response_object)
             model_response_object = ImageResponse(**model_response_dict)
             return model_response_object
+
+    @staticmethod
+    def convert_chat_to_text_completion(
+        response: ModelResponse,
+        text_completion_response: TextCompletionResponse,
+        custom_llm_provider: Optional[str] = None,
+    ) -> TextCompletionResponse:
+        """
+        Converts a chat completion response to a text completion response format.
+
+        Note: This is used for huggingface. For OpenAI / Azure Text the providers files directly return TextCompletionResponse which we then send to user
+
+        Args:
+            response (ModelResponse): The chat completion response to convert
+
+        Returns:
+            TextCompletionResponse: The converted text completion response
+
+        Example:
+            chat_response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi"}])
+            text_response = convert_chat_to_text_completion(chat_response)
+        """
+        transformed_logprobs = LiteLLMResponseObjectHandler._convert_provider_response_logprobs_to_text_completion_logprobs(
+            response=response,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        text_completion_response["id"] = response.get("id", None)
+        text_completion_response["object"] = "text_completion"
+        text_completion_response["created"] = response.get("created", None)
+        text_completion_response["model"] = response.get("model", None)
+        choices_list: List[TextChoices] = []
+
+        # Convert each choice to TextChoices
+        for choice in response["choices"]:
+            text_choices = TextChoices()
+            text_choices["text"] = choice["message"]["content"]
+            text_choices["index"] = choice["index"]
+            text_choices["logprobs"] = transformed_logprobs
+            text_choices["finish_reason"] = choice["finish_reason"]
+            choices_list.append(text_choices)
+
+        text_completion_response["choices"] = choices_list
+        text_completion_response["usage"] = response.get("usage", None)
+        text_completion_response._hidden_params = HiddenParams(
+            **response._hidden_params
+        )
+        return text_completion_response
+
+    @staticmethod
+    def _convert_provider_response_logprobs_to_text_completion_logprobs(
+        response: ModelResponse,
+        custom_llm_provider: Optional[str] = None,
+    ) -> Optional[TextCompletionLogprobs]:
+        """
+        Convert logprobs from provider to OpenAI.Completion() format
+
+        Only supported for HF TGI models
+        """
+        transformed_logprobs: Optional[TextCompletionLogprobs] = None
+        if custom_llm_provider == "huggingface":
+            # only supported for TGI models
+            try:
+                raw_response = response._hidden_params.get("original_response", None)
+                transformed_logprobs = litellm.huggingface._transform_logprobs(
+                    hf_response=raw_response
+                )
+            except Exception as e:
+                verbose_logger.exception(f"LiteLLM non blocking exception: {e}")
+
+        return transformed_logprobs
 
 
 def convert_to_model_response_object(  # noqa: PLR0915
