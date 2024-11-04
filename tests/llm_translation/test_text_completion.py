@@ -4,13 +4,15 @@ import sys
 from datetime import datetime
 
 sys.path.insert(
-    0, os.path.abspath("../../../")
+    0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
 import litellm
 import pytest
 
-from litellm.utils import LiteLLMResponseObjectHandler
+from litellm.utils import (
+    LiteLLMResponseObjectHandler,
+)
 
 
 from datetime import timedelta
@@ -20,6 +22,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TextChoices,
     Logprobs as TextCompletionLogprobs,
+    Usage,
 )
 
 
@@ -36,7 +39,7 @@ def test_convert_chat_to_text_completion():
                 "finish_reason": "stop",
             }
         ],
-        usage={"total_tokens": 10},
+        usage={"total_tokens": 10, "completion_tokens": 10},
         _hidden_params={"api_key": "test"},
     )
 
@@ -52,7 +55,13 @@ def test_convert_chat_to_text_completion():
     assert result.model == "gpt-3.5-turbo"
     assert result.choices[0].text == "Hello, world!"
     assert result.choices[0].finish_reason == "stop"
-    assert result.usage == {"total_tokens": 10}
+    assert result.usage == Usage(
+        completion_tokens=10,
+        prompt_tokens=0,
+        total_tokens=10,
+        completion_tokens_details=None,
+        prompt_tokens_details=None,
+    )
 
 
 def test_convert_provider_response_logprobs():
@@ -123,4 +132,10 @@ def test_convert_chat_to_text_completion_multiple_choices():
     assert result.choices[0].finish_reason == "stop"
     assert result.choices[1].text == "Second response"
     assert result.choices[1].finish_reason == "length"
-    assert result.usage == {"total_tokens": 20}
+    assert result.usage == Usage(
+        completion_tokens=0,
+        prompt_tokens=0,
+        total_tokens=20,
+        completion_tokens_details=None,
+        prompt_tokens_details=None,
+    )

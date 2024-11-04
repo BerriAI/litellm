@@ -62,7 +62,6 @@ from litellm.llms.prompt_templates.common_utils import get_content_from_model_re
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
-    LiteLLMResponseObjectHandler,
     Usage,
     async_mock_completion_streaming_obj,
     completion_with_fallbacks,
@@ -3876,12 +3875,10 @@ async def atext_completion(
                 response = await response
 
             text_completion_response = TextCompletionResponse()
-            text_completion_response = (
-                LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
-                    text_completion_response=text_completion_response,
-                    response=response,
-                    custom_llm_provider=custom_llm_provider,
-                )
+            text_completion_response = litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+                text_completion_response=text_completion_response,
+                response=response,
+                custom_llm_provider=custom_llm_provider,
             )
             return text_completion_response
     except Exception as e:
@@ -4149,7 +4146,7 @@ def text_completion(  # noqa: PLR0915
         return response
 
     text_completion_response = (
-        LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+        litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
             response=response,
             text_completion_response=text_completion_response,
         )
