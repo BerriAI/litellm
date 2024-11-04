@@ -1778,6 +1778,13 @@ def test_call_with_key_over_model_budget(prisma_client):
                     "model": "chatgpt-v-2",
                     "stream": False,
                     "standard_logging_object": standard_logging_payload,
+                    "litellm_params": {
+                        "metadata": {
+                            "user_api_key": hash_token(generated_key),
+                            "user_api_key_user_id": user_id,
+                        }
+                    },
+                    "response_cost": 0.00002,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
