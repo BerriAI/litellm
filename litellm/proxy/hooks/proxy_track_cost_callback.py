@@ -73,12 +73,10 @@ async def _PROXY_track_cost_callback(
         key_alias = standard_logging_payload.get("metadata", {}).get(
             "user_api_key_alias"
         )
-        response_cost: Optional[float] = standard_logging_payload.get("response_cost")
-
-        # end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
         end_user_max_budget = standard_logging_payload.get("metadata", {}).get(
             "user_api_end_user_max_budget"
         )
+        response_cost: Optional[float] = standard_logging_payload.get("response_cost")
 
         if response_cost is not None:
             if user_api_key is not None or user_id is not None or team_id is not None:

@@ -1416,7 +1416,28 @@ class AdapterCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
+class StandardLoggingBudgetMetadata(TypedDict, total=False):
+    """
+    Store Budget related metadata for Team, Internal User, End User etc
+    """
+
+    user_api_end_user_max_budget: Optional[float]
+
+
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    """
+    Store User API Key related metadata to identify the request
+
+    Example:
+    user_api_key_hash: "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+    user_api_key_alias: "litellm-key-123"
+    user_api_key_org_id: "123"
+    user_api_key_team_id: "456"
+    user_api_key_user_id: "789"
+    user_api_key_team_alias: "litellm-team-123"
+
+    """
+
     user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
     user_api_key_alias: Optional[str]
     user_api_key_org_id: Optional[str]
@@ -1425,7 +1446,9 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_alias: Optional[str]
 
 
-class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
+class StandardLoggingMetadata(
+    StandardLoggingUserAPIKeyMetadata, StandardLoggingBudgetMetadata
+):
     """
     Specific metadata k,v pairs logged to integration for easier cost tracking
     """
