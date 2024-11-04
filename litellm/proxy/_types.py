@@ -1419,6 +1419,8 @@ class UserAPIKeyAuth(
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
     tpm_limit_per_model: Optional[Dict[str, int]] = None
+    user_tpm_limit: Optional[int] = None
+    user_rpm_limit: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
