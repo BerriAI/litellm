@@ -157,6 +157,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
 from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
     VertexEmbedding,
 )
+from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
@@ -220,6 +221,7 @@ vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
+watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
 ####### COMPLETION ENDPOINTS ################
 
@@ -2607,6 +2609,26 @@ def completion(  # type: ignore # noqa: PLR0915
             ## RESPONSE OBJECT
             response = response
         elif custom_llm_provider == "watsonx":
+            response = watsonx_chat_completion.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=encoding,
+                custom_llm_provider="watsonx",
+            )
+        elif custom_llm_provider == "watsonx_text":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             response = watsonxai.completion(
                 model=model,

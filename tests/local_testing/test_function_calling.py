@@ -12,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-
+from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
@@ -619,3 +619,47 @@ def test_passing_tool_result_as_list(model):
 
     if model == "claude-3-5-sonnet-20241022":
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
+
+
+def test_watsonx_tool_choice():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import json
+
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What is the weather in San Francisco?"}]
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
+        resp = completion(
+            model="watsonx/meta-llama/llama-3-1-8b-instruct",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            client=client,
+        )
+        print(resp)
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs)
+        json_data = json.loads(mock_completion.call_args.kwargs["data"])
+        json_data["tool_choice_options"] == "auto"

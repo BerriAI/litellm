@@ -18,6 +18,7 @@ from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class IBMWatsonXChatConfig(OpenAIGPTConfig):
+
     def get_supported_openai_params(self, model: str) -> List:
         return [
             "temperature",  # equivalent to temperature
