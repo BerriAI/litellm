@@ -552,7 +552,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     await service_logger_obj.async_service_success_hook(
         service=ServiceTypes.PROXY_PRE_CALL,
         duration=end_time - start_time,
-        call_type="completion",
+        call_type="add_litellm_data_to_request",
         start_time=start_time,
         end_time=end_time,
         parent_otel_span=user_api_key_dict.parent_otel_span,
