@@ -8411,6 +8411,7 @@ def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
 
 
 from litellm.types.llms.openai import (
+    ChatCompletionAudioObject,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
@@ -8445,13 +8446,9 @@ def validate_chat_completion_user_messages(messages: List[dict]):
                         if not isinstance(item, dict):
                             raise Exception
                         else:
-                            content_type = item.get("type")
-                            if content_type == "text":
-                                ChatCompletionTextObject(**item)  # type: ignore
-                            elif content_type == "image_url":
-                                ChatCompletionImageObject(**item)  # type: ignore
-                            else:
-                                raise Exception
+                            valid_content_types = ["text", "image_url", "input_audio"]
+                            if item.get("type") not in valid_content_types:
+                                raise Exception("invalid content type")
                 else:
                     raise Exception
         except Exception:
