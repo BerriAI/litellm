@@ -139,6 +139,7 @@ async def test_check_blocked_team():
 def test_returned_user_api_key_auth(user_role, expected_role):
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    from datetime import datetime
 
     new_obj = _return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(
@@ -148,6 +149,7 @@ def test_returned_user_api_key_auth(user_role, expected_role):
         parent_otel_span=None,
         valid_token_dict={},
         route="/chat/completion",
+        start_time=datetime.now(),
     )
 
     assert new_obj.user_role == expected_role
@@ -306,6 +308,8 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/key/delete", "internal_user", True),
         ("/key/generate", "internal_user", True),
         ("/key/82akk800000000jjsk/regenerate", "internal_user", True),
+        # Internal User Viewer
+        ("/key/generate", "internal_user_viewer", False),
         # Internal User checks - disallowed routes
         ("/organization/member_add", "internal_user", False),
     ],
@@ -334,6 +338,44 @@ def test_is_ui_route_allowed(route, user_role, expected_result):
     }
     try:
         assert _is_ui_route_allowed(**received_args) == expected_result
+    except Exception as e:
+        # If expected result is False, we expect an error
+        if expected_result is False:
+            pass
+        else:
+            raise e
+
+
+@pytest.mark.parametrize(
+    "route, user_role, expected_result",
+    [
+        ("/key/generate", "internal_user_viewer", False),
+    ],
+)
+def test_is_api_route_allowed(route, user_role, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_api_route_allowed
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    user_obj = LiteLLM_UserTable(
+        user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+        max_budget=None,
+        spend=0.0,
+        model_max_budget={},
+        model_spend={},
+        user_email="my-test-email@1234.com",
+        models=[],
+        tpm_limit=None,
+        rpm_limit=None,
+        user_role=user_role,
+        organization_memberships=[],
+    )
+
+    received_args: dict = {
+        "route": route,
+        "user_obj": user_obj,
+    }
+    try:
+        assert _is_api_route_allowed(**received_args) == expected_result
     except Exception as e:
         # If expected result is False, we expect an error
         if expected_result is False:

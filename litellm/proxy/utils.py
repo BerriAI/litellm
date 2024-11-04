@@ -262,6 +262,18 @@ class InternalUsageCache:
             **kwargs,
         )
 
+    async def async_batch_get_cache(
+        self,
+        keys: list,
+        parent_otel_span: Optional[Span] = None,
+        local_only: bool = False,
+    ):
+        return await self.dual_cache.async_batch_get_cache(
+            keys=keys,
+            parent_otel_span=parent_otel_span,
+            local_only=local_only,
+        )
+
     async def async_increment_cache(
         self,
         key,
@@ -442,6 +454,8 @@ class ProxyLogging:
                 litellm._async_success_callback.append(callback)  # type: ignore
             if callback not in litellm._async_failure_callback:
                 litellm._async_failure_callback.append(callback)  # type: ignore
+            if callback not in litellm.service_callback:
+                litellm.service_callback.append(callback)  # type: ignore
 
         if (
             len(litellm.input_callback) > 0
@@ -667,13 +681,18 @@ class ProxyLogging:
                 raise e
         return data
 
-    async def failed_tracking_alert(self, error_message: str):
+    async def failed_tracking_alert(
+        self,
+        error_message: str,
+        failing_model: str,
+    ):
         if self.alerting is None:
             return
 
         if self.slack_alerting_instance:
             await self.slack_alerting_instance.failed_tracking_alert(
-                error_message=error_message
+                error_message=error_message,
+                failing_model=failing_model,
             )
 
     async def budget_alerts(

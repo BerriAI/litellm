@@ -173,6 +173,7 @@ cache: Optional[Cache] = (
 )
 default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
+default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
@@ -490,6 +491,7 @@ openai_compatible_endpoints: List = [
     "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
+    "api.x.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -507,6 +509,7 @@ openai_compatible_providers: List = [
     "deepinfra",
     "perplexity",
     "xinference",
+    "xai",
     "together_ai",
     "fireworks_ai",
     "empower",
@@ -515,6 +518,7 @@ openai_compatible_providers: List = [
     "github",
     "litellm_proxy",
     "hosted_vllm",
+    "lm_studio",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -717,6 +721,7 @@ class LlmProviders(str, Enum):
     OPENAI = "openai"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
+    XAI = "xai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -773,6 +778,7 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    LM_STUDIO = "lm_studio"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -1021,6 +1027,7 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from .llms.xai.chat.xai_transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.AzureOpenAI.azure import (
@@ -1030,6 +1037,7 @@ from .llms.AzureOpenAI.azure import (
 
 from .llms.AzureOpenAI.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.AzureOpenAI.chat.o1_transformation import AzureOpenAIO1Config
 from .llms.watsonx import IBMWatsonXAIConfig

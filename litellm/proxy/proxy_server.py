@@ -265,6 +265,7 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RouterGeneralSettings
+from litellm.types.utils import StandardLoggingPayload
 
 try:
     from litellm._version import version
@@ -778,7 +779,6 @@ async def _PROXY_track_cost_callback(
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = metadata.get("user_api_key", None)
-
             if kwargs.get("cache_hit", False) is True:
                 response_cost = 0.0
                 verbose_proxy_logger.info(
@@ -838,13 +838,14 @@ async def _PROXY_track_cost_callback(
                     f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                 )
     except Exception as e:
-        error_msg = f"error in tracking cost callback - {traceback.format_exc()}"
+        error_msg = f"Error in tracking cost callback - {str(e)}\n Traceback:{traceback.format_exc()}"
         model = kwargs.get("model", "")
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
         error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
         asyncio.create_task(
             proxy_logging_obj.failed_tracking_alert(
                 error_message=error_msg,
+                failing_model=model,
             )
         )
         verbose_proxy_logger.debug("error in tracking cost callback - %s", e)

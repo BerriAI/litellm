@@ -123,7 +123,7 @@ class AnthropicConfig:
         return headers
 
     def _map_tool_choice(
-        self, tool_choice: Optional[str], disable_parallel_tool_use: Optional[bool]
+        self, tool_choice: Optional[str], parallel_tool_use: Optional[bool]
     ) -> Optional[AnthropicMessagesToolChoice]:
         _tool_choice: Optional[AnthropicMessagesToolChoice] = None
         if tool_choice == "auto":
@@ -138,13 +138,15 @@ class AnthropicConfig:
             if _tool_name is not None:
                 _tool_choice["name"] = _tool_name
 
-        if disable_parallel_tool_use is not None:
+        if parallel_tool_use is not None:
+            # Anthropic uses 'disable_parallel_tool_use' flag to determine if parallel tool use is allowed
+            # this is the inverse of the openai flag.
             if _tool_choice is not None:
-                _tool_choice["disable_parallel_tool_use"] = disable_parallel_tool_use
+                _tool_choice["disable_parallel_tool_use"] = not parallel_tool_use
             else:  # use anthropic defaults and make sure to send the disable_parallel_tool_use flag
                 _tool_choice = AnthropicMessagesToolChoice(
                     type="auto",
-                    disable_parallel_tool_use=disable_parallel_tool_use,
+                    disable_parallel_tool_use=not parallel_tool_use,
                 )
         return _tool_choice
 
@@ -255,9 +257,7 @@ class AnthropicConfig:
                 _tool_choice: Optional[AnthropicMessagesToolChoice] = (
                     self._map_tool_choice(
                         tool_choice=non_default_params.get("tool_choice"),
-                        disable_parallel_tool_use=non_default_params.get(
-                            "parallel_tool_calls"
-                        ),
+                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                     )
                 )
 

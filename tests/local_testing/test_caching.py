@@ -59,12 +59,15 @@ async def test_dual_cache_async_batch_get_cache():
     redis_cache = RedisCache()  # get credentials from environment
     dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=redis_cache)
 
-    in_memory_cache.set_cache(key="test_value", value="hello world")
+    with patch.object(
+        dual_cache.redis_cache, "async_batch_get_cache", new=AsyncMock()
+    ) as mock_redis_cache:
+        mock_redis_cache.return_value = {"test_value_2": None, "test_value": "hello"}
 
-    result = await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+        await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+        await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
 
-    assert result[0] == "hello world"
-    assert result[1] == None
+        assert mock_redis_cache.call_count == 1
 
 
 def test_dual_cache_batch_get_cache():

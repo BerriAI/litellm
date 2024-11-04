@@ -839,7 +839,11 @@ def test_is_base64_encoded():
 
 
 @mock.patch("httpx.AsyncClient")
-@mock.patch.dict(os.environ, {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"}, clear=True)
+@mock.patch.dict(
+    os.environ,
+    {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"},
+    clear=True,
+)
 def test_async_http_handler(mock_async_client):
     import httpx
 
@@ -861,6 +865,7 @@ def test_async_http_handler(mock_async_client):
         verify="/certificate.pem",
     )
 
+
 @pytest.mark.parametrize(
     "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
 )
@@ -874,3 +879,15 @@ def test_supports_audio_input(model, expected_bool):
 
     assert supports_pc == expected_bool
 
+
+def test_is_base64_encoded_2():
+    from litellm.utils import is_base64_encoded
+
+    assert (
+        is_base64_encoded(
+            s="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/x+AAwMCAO+ip1sAAAAASUVORK5CYII="
+        )
+        is True
+    )
+
+    assert is_base64_encoded(s="Dog") is False
