@@ -15,7 +15,7 @@ RUN apk update && \
     apk add --no-cache gcc python3-dev musl-dev && \
     rm -rf /var/cache/apk/*
 
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip setuptools && \
     pip install build
 
 # Copy the current directory contents into the container at /app
@@ -38,6 +38,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Update dependencies and clean up
 RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
+
+# Upgrade pip and setuptools to the latest versions
+RUN pip install --no-cache-dir --upgrade pip setuptools
 
 WORKDIR /app
 
