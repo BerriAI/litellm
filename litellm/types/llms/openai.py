@@ -24,6 +24,9 @@ from openai.types.chat.chat_completion_content_part_input_audio_param import (
     ChatCompletionContentPartInputAudioParam,
 )
 from openai.types.chat.chat_completion_modality import ChatCompletionModality
+from openai.types.chat.chat_completion_prediction_content_param import (
+    ChatCompletionPredictionContentParam,
+)
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
