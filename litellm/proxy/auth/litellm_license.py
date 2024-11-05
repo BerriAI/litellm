@@ -21,7 +21,7 @@ class LicenseCheck:
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
         verbose_proxy_logger.debug("License Str value - {}".format(self.license_str))
-        self.http_handler = HTTPHandler()
+        self.http_handler = HTTPHandler(timeout=15)
         self.public_key = None
         self.read_public_key()
 
