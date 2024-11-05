@@ -5,7 +5,7 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
-
+import uuid
 
 LITELLM_MASTER_KEY = "sk-1234"
 
@@ -107,7 +107,7 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         "model": model,
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
+            {"role": "user", "content": f"Hello! {uuid.uuid4()}"},
         ],
     }
 
@@ -296,7 +296,6 @@ async def test_chat_completion():
         await chat_completion(session=session, key=key_2)
 
 
-# @pytest.mark.skip(reason="Local test. Proxy not concurrency safe yet. WIP.")
 @pytest.mark.asyncio
 async def test_chat_completion_ratelimit():
     """
