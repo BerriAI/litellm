@@ -719,14 +719,16 @@ async def get_key_object(
 
         return _response
     except httpx.ConnectError as e:
-        return _handle_failed_db_connection_for_get_key_object(e=e)
+        return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception as e:
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
 
 
-def _handle_failed_db_connection_for_get_key_object(e: Exception):
+async def _handle_failed_db_connection_for_get_key_object(
+    e: Exception,
+) -> UserAPIKeyAuth:
     """
     Handles httpx.ConnectError when reading a Virtual Key from LiteLLM DB
 
@@ -738,9 +740,26 @@ def _handle_failed_db_connection_for_get_key_object(e: Exception):
     Raises:
         - Orignal Exception in all other cases
     """
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
+    # If this flag is on, requests failing to connect to the DB will be allowed
     if general_settings.get("allow_failed_db_requests", True):
+        # log to prometheus
+        await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+            error=e,
+            service=ServiceTypes.ALLOW_FAILED_DB_REQUESTS,
+            call_type="get_key_object",
+            parent_otel_span=None,
+            duration=0.0,
+            start_time=None,
+            end_time=None,
+            event_metadata={
+                "function_name": "get_key_object",
+                "function_kwargs": {},
+                "function_args": [],
+            },
+        )
+
         return UserAPIKeyAuth(
             key_name="failed-to-connect-to-db", token="failed-to-connect-to-db"
         )
