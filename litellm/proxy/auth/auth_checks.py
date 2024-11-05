@@ -743,7 +743,7 @@ async def _handle_failed_db_connection_for_get_key_object(
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     # If this flag is on, requests failing to connect to the DB will be allowed
-    if general_settings.get("allow_failed_db_requests", True):
+    if general_settings.get("allow_failed_db_requests", False) is True:
         # log to prometheus
         await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
             error=e,
