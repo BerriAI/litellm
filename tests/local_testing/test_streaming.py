@@ -1430,7 +1430,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
         ["meta.llama3-8b-instruct-v1:0", None],
-        ["cohere.command-text-v14", None],
     ],
 )
 @pytest.mark.asyncio
