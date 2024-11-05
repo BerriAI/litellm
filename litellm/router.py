@@ -585,6 +585,7 @@ class Router:
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
+        verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
         if (
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY

@@ -1359,7 +1359,7 @@ class ProxyConfig:
     """
 
     def __init__(self) -> None:
-        pass
+        self.config: Dict[str, Any] = {}
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -1465,7 +1465,7 @@ class ProxyConfig:
         """
 
         # load existing config
-        config = await self.get_config()
+        config = self.config
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", {})
@@ -1518,7 +1518,18 @@ class ProxyConfig:
             dict: config
 
         """
+        global prisma_client, store_model_in_db
+        ## LOAD CONFIG WITH DB
+        if prisma_client is not None:
+            db_config = await self._update_config_from_db(
+                config={},
+                prisma_client=prisma_client,
+                store_model_in_db=store_model_in_db,
+            )
+        else:
+            db_config = {}
         # Load existing config
+
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
             bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
             object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
@@ -1540,12 +1551,15 @@ class ProxyConfig:
         else:
             # default to file
             config = await self._get_config_from_file(config_file_path=config_file_path)
+        db_config.update(config)
+        config = db_config
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
 
         config = self._check_for_os_environ_vars(config=config)
 
+        self.config = config
         return config
 
     async def load_config(  # noqa: PLR0915
@@ -2356,6 +2370,46 @@ class ProxyConfig:
             await initialize_pass_through_endpoints(
                 pass_through_endpoints=general_settings["pass_through_endpoints"]
             )
+
+    async def _update_config_from_db(
+        self,
+        prisma_client: PrismaClient,
+        config: dict,
+        store_model_in_db: Optional[bool],
+    ):
+        if store_model_in_db is not True:
+            return config
+
+        _tasks = []
+        keys = [
+            "general_settings",
+            "router_settings",
+            "litellm_settings",
+            "environment_variables",
+        ]
+        for k in keys:
+            response = prisma_client.get_generic_data(
+                key="param_name", value=k, table_name="config"
+            )
+            _tasks.append(response)
+
+        responses = await asyncio.gather(*_tasks)
+        for response in responses:
+            if response is not None:
+                param_name = getattr(response, "param_name", None)
+                param_value = getattr(response, "param_value", None)
+                if param_name is not None and param_value is not None:
+                    # check if param_name is already in the config
+                    if param_name in config:
+                        if isinstance(config[param_name], dict):
+                            config[param_name].update(param_value)
+                        else:
+                            config[param_name] = param_value
+                    else:
+                        # if it's not in the config - then add it
+                        config[param_name] = param_value
+
+        return config
 
     async def add_deployment(
         self,
