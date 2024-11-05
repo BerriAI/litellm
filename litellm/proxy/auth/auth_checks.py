@@ -13,6 +13,7 @@ import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Literal, Optional
 
+import httpx
 from pydantic import BaseModel
 
 import litellm
@@ -717,10 +718,34 @@ async def get_key_object(
         )
 
         return _response
-    except Exception:
+    except httpx.ConnectError as e:
+        return _handle_failed_db_connection_for_get_key_object(e=e)
+    except Exception as e:
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
+
+
+def _handle_failed_db_connection_for_get_key_object(e: Exception):
+    """
+    Handles httpx.ConnectError when reading a Virtual Key from LiteLLM DB
+
+    Use this if you don't want failed DB queries to block LLM API reqiests
+
+    Returns:
+        - UserAPIKeyAuth: If general_settings.allow_failed_db_requests is True
+
+    Raises:
+        - Orignal Exception in all other cases
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    if general_settings.get("allow_failed_db_requests", True):
+        return UserAPIKeyAuth(
+            key_name="failed-to-connect-to-db", token="failed-to-connect-to-db"
+        )
+    else:
+        raise e
 
 
 @log_to_opentelemetry
