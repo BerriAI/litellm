@@ -94,6 +94,7 @@ class OpenAIGPTConfig:
             "max_tokens",
             "max_completion_tokens",
             "modalities",
+            "prediction",
             "n",
             "presence_penalty",
             "seed",
