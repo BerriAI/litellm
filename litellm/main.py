@@ -3867,34 +3867,17 @@ async def atext_completion(
                 custom_llm_provider=custom_llm_provider,
             )
         else:
-            transformed_logprobs = None
-            # only supported for TGI models
-            try:
-                raw_response = response._hidden_params.get("original_response", None)
-                transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
-            except Exception as e:
-                print_verbose(f"LiteLLM non blocking exception: {e}")
-
-            ## TRANSLATE CHAT TO TEXT FORMAT ##
+            ## OpenAI / Azure Text Completion Returns here
             if isinstance(response, TextCompletionResponse):
                 return response
             elif asyncio.iscoroutine(response):
                 response = await response
 
             text_completion_response = TextCompletionResponse()
-            text_completion_response["id"] = response.get("id", None)
-            text_completion_response["object"] = "text_completion"
-            text_completion_response["created"] = response.get("created", None)
-            text_completion_response["model"] = response.get("model", None)
-            text_choices = TextChoices()
-            text_choices["text"] = response["choices"][0]["message"]["content"]
-            text_choices["index"] = response["choices"][0]["index"]
-            text_choices["logprobs"] = transformed_logprobs
-            text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
-            text_completion_response["choices"] = [text_choices]
-            text_completion_response["usage"] = response.get("usage", None)
-            text_completion_response._hidden_params = HiddenParams(
-                **response._hidden_params
+            text_completion_response = litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+                text_completion_response=text_completion_response,
+                response=response,
+                custom_llm_provider=custom_llm_provider,
             )
             return text_completion_response
     except Exception as e:
@@ -4156,29 +4139,17 @@ def text_completion(  # noqa: PLR0915
         return response
     elif isinstance(response, TextCompletionStreamWrapper):
         return response
-    transformed_logprobs = None
-    # only supported for TGI models
-    try:
-        raw_response = response._hidden_params.get("original_response", None)
-        transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
-    except Exception as e:
-        verbose_logger.exception(f"LiteLLM non blocking exception: {e}")
 
+    # OpenAI Text / Azure Text will return here
     if isinstance(response, TextCompletionResponse):
         return response
 
-    text_completion_response["id"] = response.get("id", None)
-    text_completion_response["object"] = "text_completion"
-    text_completion_response["created"] = response.get("created", None)
-    text_completion_response["model"] = response.get("model", None)
-    text_choices = TextChoices()
-    text_choices["text"] = response["choices"][0]["message"]["content"]
-    text_choices["index"] = response["choices"][0]["index"]
-    text_choices["logprobs"] = transformed_logprobs
-    text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
-    text_completion_response["choices"] = [text_choices]
-    text_completion_response["usage"] = response.get("usage", None)
-    text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
+    text_completion_response = (
+        litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+            response=response,
+            text_completion_response=text_completion_response,
+        )
+    )
 
     return text_completion_response
 

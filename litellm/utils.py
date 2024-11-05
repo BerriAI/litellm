@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    LiteLLMResponseObjectHandler,
     _handle_invalid_parallel_tool_calls,
     convert_to_model_response_object,
     convert_to_streaming_response,
@@ -8386,76 +8387,6 @@ def get_valid_models() -> List[str]:
         return valid_models
     except Exception:
         return []  # NON-Blocking
-
-
-# used for litellm.text_completion() to transform HF logprobs to OpenAI.Completion() format
-def transform_logprobs(hf_response):
-    # Initialize an empty list for the transformed logprobs
-    transformed_logprobs = []
-
-    # For each Hugging Face response, transform the logprobs
-    for response in hf_response:
-        # Extract the relevant information from the response
-        response_details = response["details"]
-        top_tokens = response_details.get("top_tokens", {})
-
-        # Initialize an empty list for the token information
-        token_info = {
-            "tokens": [],
-            "token_logprobs": [],
-            "text_offset": [],
-            "top_logprobs": [],
-        }
-
-        for i, token in enumerate(response_details["prefill"]):
-            # Extract the text of the token
-            token_text = token["text"]
-
-            # Extract the logprob of the token
-            token_logprob = token["logprob"]
-
-            # Add the token information to the 'token_info' list
-            token_info["tokens"].append(token_text)
-            token_info["token_logprobs"].append(token_logprob)
-
-            # stub this to work with llm eval harness
-            top_alt_tokens = {"": -1, "": -2, "": -3}  # noqa: F601
-            token_info["top_logprobs"].append(top_alt_tokens)
-
-        # For each element in the 'tokens' list, extract the relevant information
-        for i, token in enumerate(response_details["tokens"]):
-            # Extract the text of the token
-            token_text = token["text"]
-
-            # Extract the logprob of the token
-            token_logprob = token["logprob"]
-
-            top_alt_tokens = {}
-            temp_top_logprobs = []
-            if top_tokens != {}:
-                temp_top_logprobs = top_tokens[i]
-
-            # top_alt_tokens should look like this: { "alternative_1": -1, "alternative_2": -2, "alternative_3": -3 }
-            for elem in temp_top_logprobs:
-                text = elem["text"]
-                logprob = elem["logprob"]
-                top_alt_tokens[text] = logprob
-
-            # Add the token information to the 'token_info' list
-            token_info["tokens"].append(token_text)
-            token_info["token_logprobs"].append(token_logprob)
-            token_info["top_logprobs"].append(top_alt_tokens)
-
-            # Add the text offset of the token
-            # This is computed as the sum of the lengths of all previous tokens
-            token_info["text_offset"].append(
-                sum(len(t["text"]) for t in response_details["tokens"][:i])
-            )
-
-        # Add the 'token_info' list to the 'transformed_logprobs' list
-        transformed_logprobs = token_info
-
-    return transformed_logprobs
 
 
 def print_args_passed_to_litellm(original_function, args, kwargs):
