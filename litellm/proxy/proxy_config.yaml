@@ -6,6 +6,22 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
-general_settings: 
-    alerting: ["slack"]
-    alerting_threshold: 0.001
+
+general_settings:
+  disable_prisma_schema_update: true
+  # Temoporarily disable callbacks and key and budget constraints for large batch inference jobs
+  # alerting: ["slack"]
+  alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+
+litellm_settings: # module level litellm settings - https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py
+  success_callback: ["prometheus"]
+  service_callback: ["prometheus_system"]
+  # callbacks: ["otel"]
+  # upperbound_key_generate_params:
+  #   max_budget: 5000 # upperbound of $5000, for all /key/generate requests
+  #   duration: "7d" # upperbound of 7 days for all /key/generate requests
+  drop_params: True # Raise an exception if the openai param being passed in isn't supported.
+  # set_verbose: True
+  json_logs: true
+  cache: false
+router_settings:
+  routing_strategy: simple-shuffle # "simple-shuffle" shown to result in highest throughput. https://docs.litellm.ai/docs/proxy/configs#load-balancing

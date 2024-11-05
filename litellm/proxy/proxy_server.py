@@ -3023,20 +3023,24 @@ class ProxyStartupEvent:
         - Adds necessary views to proxy
         """
         prisma_client: Optional[PrismaClient] = None
-        if database_url is not None:
-            try:
-                prisma_client = PrismaClient(
-                    database_url=database_url, proxy_logging_obj=proxy_logging_obj
-                )
-            except Exception as e:
-                raise e
+        if database_url is None:
+            raise Exception("DATABASE_URL is not set. Got database_url=None")
+        print("in _setup_prisma_client, database_url", database_url)  # noqa
+        try:
+            prisma_client = PrismaClient(
+                database_url=database_url, proxy_logging_obj=proxy_logging_obj
+            )
+        except Exception as e:
+            raise e
 
-            await prisma_client.connect()
+        print("in _setup_prisma_client, about to connect to prisma client")  # noqa
+        await prisma_client.connect()
+        print("in _setup_prisma_client, done connecting to prisma client")  # noqa
 
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
+        ## Add necessary views to proxy ##
+        asyncio.create_task(
+            prisma_client.check_view_exists()
+        )  # check if all necessary views exist. Don't block execution
 
         return prisma_client
 
@@ -3052,13 +3056,15 @@ async def startup_event():
     # check if master key set in environment - load from there
     master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
     # check if DATABASE_URL in environment - load from there
-    if prisma_client is None:
-        _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
-        prisma_client = await ProxyStartupEvent._setup_prisma_client(
-            database_url=_db_url,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_cache=user_api_key_cache,
-        )
+    print(  # noqa
+        "in startup_event, about to setup prisma client. prisma_client", prisma_client
+    )  # noqa
+    _db_url: Optional[str] = get_secret_str("DATABASE_URL", None)
+    prisma_client = await ProxyStartupEvent._setup_prisma_client(
+        database_url=_db_url,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
