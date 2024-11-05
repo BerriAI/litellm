@@ -757,12 +757,6 @@ async def _PROXY_track_cost_callback(
     verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
     global prisma_client
     try:
-        # check if it has collected an entire stream response
-        verbose_proxy_logger.debug(
-            "Proxy: In track_cost_callback for: kwargs=%s and completion_response: %s",
-            kwargs,
-            completion_response,
-        )
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
@@ -1519,15 +1513,6 @@ class ProxyConfig:
 
         """
         global prisma_client, store_model_in_db
-        ## LOAD CONFIG WITH DB
-        if prisma_client is not None:
-            db_config = await self._update_config_from_db(
-                config={},
-                prisma_client=prisma_client,
-                store_model_in_db=store_model_in_db,
-            )
-        else:
-            db_config = {}
         # Load existing config
 
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
@@ -1551,8 +1536,14 @@ class ProxyConfig:
         else:
             # default to file
             config = await self._get_config_from_file(config_file_path=config_file_path)
-        db_config.update(config)
-        config = db_config
+        ## UPDATE CONFIG WITH DB
+        if prisma_client is not None:
+            config = await self._update_config_from_db(
+                config=config,
+                prisma_client=prisma_client,
+                store_model_in_db=store_model_in_db,
+            )
+
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
@@ -2377,7 +2368,11 @@ class ProxyConfig:
         config: dict,
         store_model_in_db: Optional[bool],
     ):
+
         if store_model_in_db is not True:
+            verbose_proxy_logger.info(
+                "'store_model_in_db' is not True, skipping db updates"
+            )
             return config
 
         _tasks = []
@@ -2397,6 +2392,11 @@ class ProxyConfig:
         for response in responses:
             if response is not None:
                 param_name = getattr(response, "param_name", None)
+                verbose_proxy_logger.info(f"loading {param_name} settings from db")
+                if param_name == "litellm_settings":
+                    verbose_proxy_logger.info(
+                        f"litellm_settings: {response.param_value}"
+                    )
                 param_value = getattr(response, "param_value", None)
                 if param_name is not None and param_value is not None:
                     # check if param_name is already in the config
