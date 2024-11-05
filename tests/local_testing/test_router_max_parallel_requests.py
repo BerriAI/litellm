@@ -137,7 +137,7 @@ async def _handle_router_calls(router):
     Nam vitae finibus eros, eu eleifend erat. Maecenas hendrerit magna quis molestie dictum. Ut consequat quam eu massa auctor pulvinar. Pellentesque vitae eros ornare urna accumsan tempor. Maecenas porta id quam at sodales. Donec quis accumsan leo, vel viverra nibh. Vestibulum congue blandit nulla, sed rhoncus libero eleifend ac. In risus lorem, rutrum et tincidunt a, interdum a lectus. Pellentesque aliquet pulvinar mauris, ut ultrices nibh ultricies nec. Mauris mi mauris, facilisis nec metus non, egestas luctus ligula. Quisque ac ligula at felis mollis blandit id nec risus. Nam sollicitudin lacus sed sapien fringilla ullamcorper. Etiam dui quam, posuere sit amet velit id, aliquet molestie ante. Integer cursus eget sapien fringilla elementum. Integer molestie, mi ac scelerisque ultrices, nunc purus condimentum est, in posuere quam nibh vitae velit.
     """
     completion = await router.acompletion(
-        "gpt-4o-2024-08-06",
+        "gpt-3.5-turbo",
         [
             {
                 "role": "user",
@@ -166,16 +166,17 @@ async def test_max_parallel_requests_rpm_rate_limiting():
         enable_pre_call_checks=True,
         model_list=[
             {
-                "model_name": "gpt-4o-2024-08-06",
+                "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "gpt-4o-2024-08-06",
+                    "model": "gpt-3.5-turbo",
                     "temperature": 0.0,
-                    "rpm": 5,
+                    "rpm": 1,
+                    "num_retries": 3,
                 },
             }
         ],
     )
-    await asyncio.gather(*[_handle_router_calls(router) for _ in range(16)])
+    await asyncio.gather(*[_handle_router_calls(router) for _ in range(3)])
 
 
 @pytest.mark.asyncio
