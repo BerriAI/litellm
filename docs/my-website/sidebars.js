@@ -205,6 +205,7 @@ const sidebars = {
         "completion/prompt_caching",
         "completion/audio",
         "completion/vision",
+        "completion/predict_outputs",
         "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",

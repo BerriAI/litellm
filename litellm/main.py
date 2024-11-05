@@ -162,6 +162,7 @@ from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
     ChatCompletionModality,
+    ChatCompletionPredictionContentParam,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
 )
@@ -304,6 +305,7 @@ async def acompletion(
     max_tokens: Optional[int] = None,
     max_completion_tokens: Optional[int] = None,
     modalities: Optional[List[ChatCompletionModality]] = None,
+    prediction: Optional[ChatCompletionPredictionContentParam] = None,
     audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -346,6 +348,7 @@ async def acompletion(
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request. You can use `["text", "audio"]`
+        prediction (ChatCompletionPredictionContentParam, optional): Configuration for a Predicted Output, which can greatly improve response times when large parts of the model response are known ahead of time. This is most common when you are regenerating a file with only minor changes to most of the content.
         audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
@@ -387,6 +390,7 @@ async def acompletion(
         "max_tokens": max_tokens,
         "max_completion_tokens": max_completion_tokens,
         "modalities": modalities,
+        "prediction": prediction,
         "audio": audio,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
@@ -693,6 +697,7 @@ def completion(  # type: ignore # noqa: PLR0915
     max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     modalities: Optional[List[ChatCompletionModality]] = None,
+    prediction: Optional[ChatCompletionPredictionContentParam] = None,
     audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -737,6 +742,7 @@ def completion(  # type: ignore # noqa: PLR0915
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request.. You can use `["text", "audio"]`
+        prediction (ChatCompletionPredictionContentParam, optional): Configuration for a Predicted Output, which can greatly improve response times when large parts of the model response are known ahead of time. This is most common when you are regenerating a file with only minor changes to most of the content.
         audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
@@ -843,6 +849,7 @@ def completion(  # type: ignore # noqa: PLR0915
         "stop",
         "max_completion_tokens",
         "modalities",
+        "prediction",
         "audio",
         "max_tokens",
         "presence_penalty",
@@ -994,6 +1001,7 @@ def completion(  # type: ignore # noqa: PLR0915
             max_tokens=max_tokens,
             max_completion_tokens=max_completion_tokens,
             modalities=modalities,
+            prediction=prediction,
             audio=audio,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
