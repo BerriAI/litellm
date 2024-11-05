@@ -205,7 +205,6 @@ async def check_view_exists():  # noqa: PLR0915
 
         print("Last30dTopEndUsersSpend Created!")  # noqa
 
-    await apply_db_fixes(db=db)
     return
 
 
