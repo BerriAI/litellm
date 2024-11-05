@@ -992,7 +992,7 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "friendliai/meta-llama-3-8b-instruct": {
+    "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
@@ -1002,7 +1002,7 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "friendliai/meta-llama-3-70b-instruct": {
+    "friendliai/meta-llama-3.1-70b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
