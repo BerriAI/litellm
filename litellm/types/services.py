@@ -12,7 +12,7 @@ class ServiceTypes(str, enum.Enum):
 
     REDIS = "redis"
     DB = "postgres"
-    ALLOW_FAILED_DB_REQUESTS = "allow_failed_db_requests"
+    ALLOW_REQUESTS_ON_DB_UNAVAILABLE = "allow_requests_on_db_unavailable"
     BATCH_WRITE_TO_DB = "batch_write_to_db"
     LITELLM = "self"
     ROUTER = "router"

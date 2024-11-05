@@ -735,7 +735,7 @@ async def _handle_failed_db_connection_for_get_key_object(
     Use this if you don't want failed DB queries to block LLM API reqiests
 
     Returns:
-        - UserAPIKeyAuth: If general_settings.allow_failed_db_requests is True
+        - UserAPIKeyAuth: If general_settings.allow_requests_on_db_unavailable is True
 
     Raises:
         - Orignal Exception in all other cases
@@ -743,21 +743,15 @@ async def _handle_failed_db_connection_for_get_key_object(
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     # If this flag is on, requests failing to connect to the DB will be allowed
-    if general_settings.get("allow_failed_db_requests", False) is True:
+    if general_settings.get("allow_requests_on_db_unavailable", False) is True:
         # log to prometheus
-        await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
-            error=e,
-            service=ServiceTypes.ALLOW_FAILED_DB_REQUESTS,
+        proxy_logging_obj.service_logging_obj.service_success_hook(
+            service=ServiceTypes.ALLOW_REQUESTS_ON_DB_UNAVAILABLE,
             call_type="get_key_object",
             parent_otel_span=None,
             duration=0.0,
             start_time=None,
             end_time=None,
-            event_metadata={
-                "function_name": "get_key_object",
-                "function_kwargs": {},
-                "function_args": [],
-            },
         )
 
         return UserAPIKeyAuth(
