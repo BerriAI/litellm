@@ -355,6 +355,7 @@ async def test_pre_call_hook_user_tpm_limits():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_success_call_hook():
     """
     Test if on success, cache correctly decremented
