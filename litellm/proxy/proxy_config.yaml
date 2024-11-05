@@ -9,3 +9,7 @@ model_list:
 litellm_settings:
   callbacks: ["prometheus"]
   service_callback: ["prometheus_system"]
+
+
+general_settings:
+  allow_requests_on_db_unavailable: true
