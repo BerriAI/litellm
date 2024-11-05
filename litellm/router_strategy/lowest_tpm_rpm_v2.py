@@ -180,7 +180,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 deployment_rpm = deployment.get("model_info", {}).get("rpm")
             if deployment_rpm is None:
                 deployment_rpm = float("inf")
-
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
                     message="Deployment over defined rpm limit={}. current usage={}".format(
@@ -195,7 +194,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             deployment_rpm,
                             local_result,
                         ),
-                        headers={"retry-after": 60},  # type: ignore
+                        headers={"retry-after": str(60)},  # type: ignore
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                 )
@@ -221,7 +220,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                                 deployment_rpm,
                                 result,
                             ),
-                            headers={"retry-after": 60},  # type: ignore
+                            headers={"retry-after": str(60)},  # type: ignore
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                     )
