@@ -146,3 +146,80 @@ async def test_openai_prediction_param_mock(respx_mock: MockRouter):
     # Verify the completion tokens details
     assert completion.usage.completion_tokens_details.accepted_prediction_tokens == 0
     assert completion.usage.completion_tokens_details.rejected_prediction_tokens == 80
+
+
+@pytest.mark.asyncio
+async def test_openai_prediction_param_with_caching():
+    """
+    Tests using `prediction` parameter with caching
+    """
+    from litellm.caching.caching import LiteLLMCacheType
+    import logging
+    from litellm._logging import verbose_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+    import time
+
+    litellm.set_verbose = True
+    litellm.cache = litellm.Cache(type=LiteLLMCacheType.LOCAL)
+    code = """
+    /// <summary>
+    /// Represents a user with a first name, last name, and username.
+    /// </summary>
+    public class User
+    {
+        /// <summary>
+        /// Gets or sets the user's first name.
+        /// </summary>
+        public string FirstName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the user's last name.
+        /// </summary>
+        public string LastName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the user's username.
+        /// </summary>
+        public string Username { get; set; }
+    }
+    """
+
+    completion_response_1 = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
+            },
+            {"role": "user", "content": code},
+        ],
+        prediction={"type": "content", "content": code},
+    )
+
+    time.sleep(0.5)
+
+    # cache hit
+    completion_response_2 = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
+            },
+            {"role": "user", "content": code},
+        ],
+        prediction={"type": "content", "content": code},
+    )
+
+    assert completion_response_1.id == completion_response_2.id
+
+    completion_response_3 = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": "What is the first name of the user?"},
+        ],
+        prediction={"type": "content", "content": code + "FirstName"},
+    )
+
+    assert completion_response_3.id != completion_response_1.id
