@@ -17,6 +17,7 @@ from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
+from unittest.mock import patch, MagicMock, AsyncMock
 
 load_dotenv()
 
@@ -155,3 +156,35 @@ def test_route_with_exception():
 
     result = router.route("openai/gpt-3.5-turbo")
     assert result is None
+
+
+def test_router_pattern_match_e2e():
+    """
+    Tests the end to end flow of the router
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "llmengine/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "test"},
+            }
+        ]
+    )
+
+    with patch.object(client, "post", new=MagicMock()) as mock_post:
+
+        router.completion(
+            model="llmengine/my-custom-model",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            client=client,
+            api_key="test",
+        )
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["data"])
+        mock_post.call_args.kwargs["data"] == {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        }

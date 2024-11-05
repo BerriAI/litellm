@@ -270,7 +270,12 @@ class ChunkProcessor:
                 usage_chunk = chunk._hidden_params.get("usage", None)
             if usage_chunk is not None:
                 if "prompt_tokens" in usage_chunk:
-                    prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
+                    usage_chunk_prompt_tokens = usage_chunk.get("prompt_tokens", 0)
+                    if (
+                        usage_chunk_prompt_tokens is not None
+                        and usage_chunk_prompt_tokens > 0
+                    ):
+                        prompt_tokens = usage_chunk_prompt_tokens
                 if "completion_tokens" in usage_chunk:
                     completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
                 if "cache_creation_input_tokens" in usage_chunk:
