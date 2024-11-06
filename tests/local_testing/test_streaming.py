@@ -1917,25 +1917,31 @@ def test_completion_sagemaker_stream():
 
 
 @pytest.mark.skip(reason="Account deleted by IBM.")
-def test_completion_watsonx_stream():
+@pytest.mark.asyncio
+async def test_completion_watsonx_stream():
     litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
     try:
-        response = completion(
-            model="watsonx/ibm/granite-13b-chat-v2",
+        response = await acompletion(
+            model="watsonx/meta-llama/llama-3-1-8b-instruct",
             messages=messages,
             temperature=0.5,
             max_tokens=20,
             stream=True,
+            # client=client
         )
         complete_response = ""
         has_finish_reason = False
         # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
+        idx = 0
+        async for chunk in response:
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finish_reason = finished
             if finished:
                 break
             complete_response += chunk
+            idx += 1
         if has_finish_reason is False:
             raise Exception("finish reason not set for last chunk")
         if complete_response.strip() == "":
