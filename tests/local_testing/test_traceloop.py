@@ -26,7 +26,7 @@ def exporter():
     return exporter
 
 
-@pytest.mark.parametrize("model", ["claude-instant-1.2", "gpt-3.5-turbo"])
+@pytest.mark.parametrize("model", ["claude-3-5-haiku-20241022", "gpt-3.5-turbo"])
 def test_traceloop_logging(exporter, model):
     litellm.completion(
         model=model,
