@@ -243,6 +243,49 @@ class ChunkProcessor:
             id=id,
         )
 
+    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
+        prompt_tokens = 0
+        completion_tokens = 0
+        ## anthropic prompt caching information ##
+        cache_creation_input_tokens: Optional[int] = None
+        cache_read_input_tokens: Optional[int] = None
+        completion_tokens_details: Optional[CompletionTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
+
+        if "prompt_tokens" in usage_chunk:
+            prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
+        if "completion_tokens" in usage_chunk:
+            completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
+        if "cache_creation_input_tokens" in usage_chunk:
+            cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
+        if "cache_read_input_tokens" in usage_chunk:
+            cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+        if hasattr(usage_chunk, "completion_tokens_details"):
+            if isinstance(usage_chunk.completion_tokens_details, dict):
+                completion_tokens_details = CompletionTokensDetails(
+                    **usage_chunk.completion_tokens_details
+                )
+            elif isinstance(
+                usage_chunk.completion_tokens_details, CompletionTokensDetails
+            ):
+                completion_tokens_details = usage_chunk.completion_tokens_details
+        if hasattr(usage_chunk, "prompt_tokens_details"):
+            if isinstance(usage_chunk.prompt_tokens_details, dict):
+                prompt_tokens_details = PromptTokensDetails(
+                    **usage_chunk.prompt_tokens_details
+                )
+            elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetails):
+                prompt_tokens_details = usage_chunk.prompt_tokens_details
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "completion_tokens_details": completion_tokens_details,
+            "prompt_tokens_details": prompt_tokens_details,
+        }
+
     def calculate_usage(
         self,
         chunks: List[Union[Dict[str, Any], ModelResponse]],
@@ -269,37 +312,30 @@ class ChunkProcessor:
             elif isinstance(chunk, ModelResponse) and hasattr(chunk, "_hidden_params"):
                 usage_chunk = chunk._hidden_params.get("usage", None)
             if usage_chunk is not None:
-                if "prompt_tokens" in usage_chunk:
-                    prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
-                if "completion_tokens" in usage_chunk:
-                    completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
-                if "cache_creation_input_tokens" in usage_chunk:
-                    cache_creation_input_tokens = usage_chunk.get(
+                usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
+                if (
+                    usage_chunk_dict["prompt_tokens"] is not None
+                    and usage_chunk_dict["prompt_tokens"] > 0
+                ):
+                    prompt_tokens = usage_chunk_dict["prompt_tokens"]
+                if (
+                    usage_chunk_dict["completion_tokens"] is not None
+                    and usage_chunk_dict["completion_tokens"] > 0
+                ):
+                    completion_tokens = usage_chunk_dict["completion_tokens"]
+                if usage_chunk_dict["cache_creation_input_tokens"] is not None:
+                    cache_creation_input_tokens = usage_chunk_dict[
                         "cache_creation_input_tokens"
-                    )
-                if "cache_read_input_tokens" in usage_chunk:
-                    cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
-                if hasattr(usage_chunk, "completion_tokens_details"):
-                    if isinstance(usage_chunk.completion_tokens_details, dict):
-                        completion_tokens_details = CompletionTokensDetails(
-                            **usage_chunk.completion_tokens_details
-                        )
-                    elif isinstance(
-                        usage_chunk.completion_tokens_details, CompletionTokensDetails
-                    ):
-                        completion_tokens_details = (
-                            usage_chunk.completion_tokens_details
-                        )
-                if hasattr(usage_chunk, "prompt_tokens_details"):
-                    if isinstance(usage_chunk.prompt_tokens_details, dict):
-                        prompt_tokens_details = PromptTokensDetails(
-                            **usage_chunk.prompt_tokens_details
-                        )
-                    elif isinstance(
-                        usage_chunk.prompt_tokens_details, PromptTokensDetails
-                    ):
-                        prompt_tokens_details = usage_chunk.prompt_tokens_details
-
+                    ]
+                if usage_chunk_dict["cache_read_input_tokens"] is not None:
+                    cache_read_input_tokens = usage_chunk_dict[
+                        "cache_read_input_tokens"
+                    ]
+                if usage_chunk_dict["completion_tokens_details"] is not None:
+                    completion_tokens_details = usage_chunk_dict[
+                        "completion_tokens_details"
+                    ]
+                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
                 model=model, messages=messages

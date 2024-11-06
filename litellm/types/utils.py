@@ -745,12 +745,12 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-class ModelResponse(OpenAIObject):
+from openai.types.chat import ChatCompletionChunk
+
+
+class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
-
-    choices: List[Union[Choices, StreamingChoices]]
-    """The list of completion choices the model generated for the input prompt."""
 
     created: int
     """The Unix timestamp (in seconds) of when the completion was created."""
@@ -771,6 +771,55 @@ class ModelResponse(OpenAIObject):
     _hidden_params: dict = {}
 
     _response_headers: Optional[dict] = None
+
+
+class ModelResponseStream(ModelResponseBase):
+    choices: List[StreamingChoices]
+
+    def __init__(
+        self,
+        choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
+        **kwargs,
+    ):
+        if choices is not None and isinstance(choices, list):
+            new_choices = []
+            for choice in choices:
+                _new_choice = None
+                if isinstance(choice, StreamingChoices):
+                    _new_choice = choice
+                elif isinstance(choice, dict):
+                    _new_choice = StreamingChoices(**choice)
+                elif isinstance(choice, BaseModel):
+                    _new_choice = StreamingChoices(**choice.model_dump())
+                new_choices.append(_new_choice)
+            kwargs["choices"] = new_choices
+        else:
+            kwargs["choices"] = [StreamingChoices()]
+        super().__init__(**kwargs)
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump()  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict()
+
+
+class ModelResponse(ModelResponseBase):
+    choices: List[Union[Choices, StreamingChoices]]
+    """The list of completion choices the model generated for the input prompt."""
 
     def __init__(
         self,
