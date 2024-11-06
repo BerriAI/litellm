@@ -436,15 +436,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     """
 
     admin_jwt_scope: str = "litellm_proxy_admin"
-    admin_allowed_routes: List[
-        Literal[
-            "openai_routes",
-            "info_routes",
-            "management_routes",
-            "spend_tracking_routes",
-            "global_spend_tracking_routes",
-        ]
-    ] = [
+    admin_allowed_routes: List[str] = [
         "management_routes",
         "spend_tracking_routes",
         "global_spend_tracking_routes",
