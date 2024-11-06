@@ -2345,11 +2345,7 @@ class PrismaClient:
         """
         start_time = time.time()
         try:
-            sql_query = """
-                SELECT 1
-                FROM "LiteLLM_VerificationToken"
-                LIMIT 1
-                """
+            sql_query = "SELECT 1"
 
             # Execute the raw query
             # The asterisk before `user_id_list` unpacks the list into separate arguments
