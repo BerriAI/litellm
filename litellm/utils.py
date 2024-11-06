@@ -111,6 +111,7 @@ from litellm.types.utils import (
     Message,
     ModelInfo,
     ModelResponse,
+    ModelResponseStream,
     ProviderField,
     StreamingChoices,
     TextChoices,
@@ -6809,13 +6810,14 @@ class CustomStreamWrapper:
         return is_empty
 
     def return_processed_chunk_logic(  # noqa
-        self, completion_obj: dict, model_response: ModelResponse, response_obj: dict
+        self,
+        completion_obj: dict,
+        model_response: ModelResponseStream,
+        response_obj: dict,
     ):
         print_verbose(
             f"completion_obj: {completion_obj}, model_response: {model_response}, response_obj: {response_obj}"
         )
-        model_response.choices[0] = cast(StreamingChoices, model_response.choices[0])
-
         if (
             "content" in completion_obj
             and (
@@ -6846,7 +6848,7 @@ class CustomStreamWrapper:
                     self.response_id = original_chunk.id
                     if len(original_chunk.choices) > 0:
                         choices = []
-                        for idx, choice in enumerate(original_chunk.choices):
+                        for choice in enumerate(original_chunk.choices):
                             try:
                                 if isinstance(choice, BaseModel):
                                     try:
@@ -7454,7 +7456,7 @@ class CustomStreamWrapper:
             ## RETURN ARG
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
-                model_response=model_response,
+                model_response=model_response,  # type: ignore
                 response_obj=response_obj,
             )
         except StopIteration:
