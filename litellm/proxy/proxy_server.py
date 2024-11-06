@@ -3050,15 +3050,15 @@ async def startup_event():
 
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
-    master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
+    master_key = get_secret_str("LITELLM_MASTER_KEY", None)
+
     # check if DATABASE_URL in environment - load from there
-    if prisma_client is None:
-        _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
-        prisma_client = await ProxyStartupEvent._setup_prisma_client(
-            database_url=_db_url,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_cache=user_api_key_cache,
-        )
+    _db_url: Optional[str] = get_secret_str("DATABASE_URL", None)
+    prisma_client = await ProxyStartupEvent._setup_prisma_client(
+        database_url=_db_url,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
