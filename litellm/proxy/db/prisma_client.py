@@ -7,13 +7,18 @@ import os
 import urllib
 import urllib.parse
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from litellm.secret_managers.main import str_to_bool
 
+if TYPE_CHECKING:
+    from prisma import Prisma
+else:
+    Prisma = Any
+
 
 class PrismaWrapper:
-    def __init__(self, original_prisma: Any, iam_token_db_auth: bool):
+    def __init__(self, original_prisma: Prisma, iam_token_db_auth: bool):
         self._original_prisma = original_prisma
         self.iam_token_db_auth = iam_token_db_auth
 

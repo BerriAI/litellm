@@ -2289,11 +2289,10 @@ class PrismaClient:
             verbose_proxy_logger.debug(
                 "PrismaClient: connect() called Attempting to Connect to DB"
             )
-            if self.db.is_connected() is False:
-                verbose_proxy_logger.debug(
-                    "PrismaClient: DB not connected, Attempting to Connect to DB"
-                )
-                await self.db.connect()
+            verbose_proxy_logger.debug(
+                "PrismaClient: DB not connected, Attempting to Connect to DB"
+            )
+            await self.db.connect()
         except Exception as e:
             import traceback
 
