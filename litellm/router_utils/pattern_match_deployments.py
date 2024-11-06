@@ -61,7 +61,7 @@ class PatternMatchRouter:
         # return f"^{regex}$"
         return re.escape(pattern).replace(r"\*", "(.*)")
 
-    def return_pattern_matched_deployments(
+    def _return_pattern_matched_deployments(
         self, matched_pattern: Match, deployments: List[Dict]
     ) -> List[Dict]:
         new_deployments = []
@@ -99,7 +99,7 @@ class PatternMatchRouter:
             for pattern, llm_deployments in self.patterns.items():
                 pattern_match = re.match(pattern, request)
                 if pattern_match:
-                    return self.return_pattern_matched_deployments(
+                    return self._return_pattern_matched_deployments(
                         matched_pattern=pattern_match, deployments=llm_deployments
                     )
         except Exception as e:
