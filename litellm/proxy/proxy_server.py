@@ -774,7 +774,9 @@ async def _PROXY_track_cost_callback(
             "standard_logging_object", None
         )
         response_cost = (
-            sl_object.get("response_cost", None) if sl_object is not None else None
+            sl_object.get("response_cost", None)
+            if sl_object is not None
+            else kwargs.get("response_cost", None)
         )
 
         if response_cost is not None:
