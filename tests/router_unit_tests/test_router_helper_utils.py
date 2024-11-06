@@ -999,3 +999,10 @@ def test_pattern_match_deployment_set_model_name(
 
     for model in updated_models:
         assert model["litellm_params"]["model"] == expected_model
+
+@pytest.mark.asyncio
+async def test_pass_through_moderation_endpoint_factory(model_list):
+    router = Router(model_list=model_list)
+    response = await router._pass_through_moderation_endpoint_factory(
+        original_function=litellm.amoderation, input="this is valid good text"
+    )
