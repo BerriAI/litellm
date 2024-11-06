@@ -3022,6 +3022,7 @@ class ProxyStartupEvent:
         - Sets up prisma client
         - Adds necessary views to proxy
         """
+        verbose_proxy_logger.debug("Setting up Prisma Client...")
         prisma_client: Optional[PrismaClient] = None
         if database_url is not None:
             try:
@@ -3032,6 +3033,8 @@ class ProxyStartupEvent:
                 raise e
 
             await prisma_client.connect()
+
+            verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
             ## Add necessary views to proxy ##
             asyncio.create_task(
@@ -3047,6 +3050,7 @@ async def startup_event():
     import json
 
     init_verbose_loggers()
+    verbose_proxy_logger.debug("Starting up LiteLLM Proxy...")
 
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
