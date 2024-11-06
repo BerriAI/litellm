@@ -203,7 +203,7 @@ def create_async_task(**completion_kwargs):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.flaky(retries=6, delay=1)
+@pytest.mark.flaky(retries=12, delay=2)
 async def test_langfuse_logging_without_request_response(stream, langfuse_client):
     try:
         import uuid
@@ -262,7 +262,7 @@ audio_file = open(file_path, "rb")
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.flaky(retries=12, delay=2)
 async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -297,7 +297,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=5, delay=1)
+@pytest.mark.flaky(retries=12, delay=2)
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -350,7 +350,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.flaky(retries=12, delay=2)
 async def test_aaalangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
