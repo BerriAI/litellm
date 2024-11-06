@@ -1,19 +1,13 @@
-import json
 import os
 import sys
+import threading
 from datetime import datetime
-
-from pydantic.main import Model
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
 
 import pytest
-import litellm
-import asyncio
-import logging
-from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.langfuse import (
     LangFuseLogger,
 )
@@ -217,3 +211,27 @@ def test_get_langfuse_logger_for_request_with_cached_logger():
 
     assert result == cached_logger
     mock_cache.get_cache.assert_called_once()
+
+@pytest.mark.parametrize("metadata", [
+    {'a': 1, 'b': 2, 'c': 3},
+    {'a': {'nested_a': 1}, 'b': {'nested_b': 2}},
+    {'a': [1, 2, 3], 'b': {4, 5, 6}},
+    {'a': (1, 2), 'b': frozenset([3, 4]), 'c': {'d': [5, 6]}},
+    {'lock': threading.Lock()},
+    {'func': lambda x: x + 1},
+    {
+        'int': 42,
+        'str': 'hello',
+        'list': [1, 2, 3],
+        'set': {4, 5},
+        'dict': {'nested': 'value'},
+        'non_copyable': threading.Lock(),
+        'function': print
+    },
+    ['list', 'not', 'a', 'dict'],
+    {'timestamp': datetime.now()},
+    {},
+    None,
+])
+def test_langfuse_logger_prepare_metadata(metadata):
+    global_langfuse_logger._prepare_metadata(metadata)

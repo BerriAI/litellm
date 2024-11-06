@@ -681,7 +681,7 @@ def test_completion_ollama_hosted_stream():
 @pytest.mark.parametrize(
     "model",
     [
-        # "claude-instant-1.2",
+        # "claude-3-5-haiku-20241022",
         # "claude-2",
         # "mistral/mistral-medium",
         "openrouter/openai/gpt-4o-mini",
@@ -1112,7 +1112,7 @@ def test_completion_claude_stream_bad_key():
             },
         ]
         response = completion(
-            model="claude-instant-1",
+            model="claude-3-5-haiku-20241022",
             messages=messages,
             stream=True,
             max_tokens=50,

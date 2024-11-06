@@ -480,28 +480,6 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
             print("generation_from_langfuse", generation)
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging():
-    try:
-        pre_langfuse_setup()
-        litellm.set_verbose = True
-        response = completion(
-            model="claude-instant-1.2",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
-            max_tokens=10,
-            temperature=0.2,
-        )
-        print(response)
-        # time.sleep(5)
-        # # check langfuse.log to see if there was a failed response
-        # search_logs("langfuse.log")
-
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-
-
 # test_langfuse_logging()
 
 
