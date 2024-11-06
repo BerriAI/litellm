@@ -30,7 +30,7 @@ This config would send langfuse logs to 2 different langfuse projects, based on 
 ```yaml
 litellm_settings:
   default_team_settings: 
-    - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
+    - team_id: dbe2f686-a686-4896-864a-4c3924458709
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
       langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
