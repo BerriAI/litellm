@@ -1410,6 +1410,7 @@ all_litellm_params = [
     "user_continue_message",
     "fallback_depth",
     "max_fallbacks",
+    "litellm_metadata",
 ]
 
 

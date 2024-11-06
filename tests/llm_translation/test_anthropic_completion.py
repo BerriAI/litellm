@@ -660,3 +660,7 @@ def test_pass_anthropic_user_metadata_router():
 
         print(f"call_json metadata: {call_json['metadata']}")
         assert call_json["metadata"] == {"user_id": "12345"}
+
+
+def test_pass_anthropic_user_metadata_proxy():
+    pass

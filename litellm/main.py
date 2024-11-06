@@ -784,6 +784,9 @@ def completion(  # type: ignore # noqa: PLR0915
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
     id = kwargs.get("id", None)
     metadata = kwargs.get("metadata", None)
+    litellm_metadata: dict = kwargs.get("litellm_metadata", None) or {}
+    if metadata is not None:
+        litellm_metadata.update(metadata)
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
@@ -877,6 +880,7 @@ def completion(  # type: ignore # noqa: PLR0915
         "logprobs",
         "top_logprobs",
         "extra_headers",
+        "metadata",
     ]
 
     default_params = openai_params + all_litellm_params
@@ -1026,6 +1030,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
+            metadata=metadata,
             **non_default_params,
         )
 
@@ -1051,7 +1056,7 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
-            metadata=metadata,
+            metadata=litellm_metadata,
             model_info=model_info,
             proxy_server_request=proxy_server_request,
             preset_cache_key=preset_cache_key,
