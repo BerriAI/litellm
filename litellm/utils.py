@@ -6815,8 +6815,9 @@ class CustomStreamWrapper:
         model_response: ModelResponseStream,
         response_obj: dict,
     ):
+
         print_verbose(
-            f"completion_obj: {completion_obj}, model_response: {model_response}, response_obj: {response_obj}"
+            f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
         )
         if (
             "content" in completion_obj
@@ -6848,13 +6849,10 @@ class CustomStreamWrapper:
                     self.response_id = original_chunk.id
                     if len(original_chunk.choices) > 0:
                         choices = []
-                        for choice in enumerate(original_chunk.choices):
+                        for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    try:
-                                        choice_json = choice.model_dump()
-                                    except Exception:
-                                        choice_json = choice.dict()
+                                    choice_json = choice.model_dump()
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
@@ -7459,6 +7457,7 @@ class CustomStreamWrapper:
                 model_response=model_response,  # type: ignore
                 response_obj=response_obj,
             )
+
         except StopIteration:
             raise StopIteration
         except Exception as e:
