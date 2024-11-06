@@ -3183,21 +3183,12 @@ def get_optional_params(  # noqa: PLR0915
                 optional_params["topP"] = top_p
             if stream:
                 optional_params["stream"] = stream
-        elif "anthropic" in model:
+        elif "anthropic" in model or "claude" in model:
             _check_valid_arg(supported_params=supported_params)
-            if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
-                if model.startswith("anthropic.claude-3"):
-                    optional_params = (
-                        litellm.AmazonAnthropicClaude3Config().map_openai_params(
-                            non_default_params=non_default_params,
-                            optional_params=optional_params,
-                        )
-                    )
-            else:
-                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
-                    non_default_params=non_default_params,
-                    optional_params=optional_params,
-                )
+            optional_params = litellm.AmazonAnthropicClaude3Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+            )
         elif "amazon" in model:  # amazon titan llms
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
@@ -4183,7 +4174,9 @@ def get_supported_openai_params(  # noqa: PLR0915
         except BadRequestError:
             return None
     if custom_llm_provider == "bedrock":
-        return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+        return litellm.AmazonBedrockGlobalConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params()
     elif custom_llm_provider == "ollama_chat":

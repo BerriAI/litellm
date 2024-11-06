@@ -1921,3 +1921,17 @@ def test_bedrock_completion_test_4(modify_params):
         with pytest.raises(Exception) as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
+
+
+def test_bedrock_anthropic_parallel_tool_calls():
+    """
+    Tests that the bedrock/anthropic model can handle parallel tool calls
+    """
+    from litellm import completion
+
+    litellm.set_verbose = True
+    completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        parallel_tool_calls=True,
+    )
