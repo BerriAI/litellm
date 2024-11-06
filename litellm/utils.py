@@ -1038,6 +1038,7 @@ def client(original_function):  # noqa: PLR0915
             if (
                 call_type != CallTypes.aimage_generation.value  # model optional
                 and call_type != CallTypes.atext_completion.value  # can also be engine
+                and call_type != CallTypes.amoderation.value
             ):
                 raise ValueError("model param not passed in.")
 

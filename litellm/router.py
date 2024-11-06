@@ -2542,7 +2542,22 @@ class Router:
 
         return final_results
 
-    #### ASSISTANTS API ####
+    #### PASSTHROUGH API ####
+
+    async def _pass_through_moderation_endpoint_factory(
+        self,
+        original_function: Callable,
+        **kwargs,
+    ):
+        if (
+            "model" in kwargs
+            and self.get_model_list(model_name=kwargs["model"]) is not None
+        ):
+            deployment = await self.async_get_available_deployment(
+                model=kwargs["model"]
+            )
+            kwargs["model"] = deployment["litellm_params"]["model"]
+        return await original_function(**kwargs)
 
     def factory_function(
         self,
@@ -2562,8 +2577,10 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "moderation":
-                return await original_function(  # type: ignore
-                    custom_llm_provider=custom_llm_provider, client=client, **kwargs
+
+                return await self._pass_through_moderation_endpoint_factory(  # type: ignore
+                    original_function=original_function,
+                    **kwargs,
                 )
 
         return new_function
