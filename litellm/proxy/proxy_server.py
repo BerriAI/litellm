@@ -831,9 +831,10 @@ async def _PROXY_track_cost_callback(
                 kwargs["stream"] is True and "complete_streaming_response" in kwargs
             ):
                 if sl_object is not None:
-                    cost_tracking_failure_debug_info = sl_object[
-                        "response_cost_failure_debug_info"
-                    ]
+                    cost_tracking_failure_debug_info: Union[dict, str] = (
+                        sl_object["response_cost_failure_debug_info"]  # type: ignore
+                        or "response_cost_failure_debug_info is None in standard_logging_object"
+                    )
                 else:
                     cost_tracking_failure_debug_info = (
                         "standard_logging_object not found"
