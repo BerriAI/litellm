@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-
+from unittest.mock import MagicMock, patch, AsyncMock
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
@@ -465,3 +465,48 @@ def test_update_internal_user_params():
         updated_data_json["budget_duration"]
         == litellm.default_internal_user_params["budget_duration"]
     )
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_update_from_db():
+    from litellm.proxy.proxy_server import ProxyConfig
+    from pydantic import BaseModel
+
+    proxy_config = ProxyConfig()
+
+    pc = AsyncMock()
+
+    test_config = {
+        "litellm_settings": {
+            "callbacks": ["prometheus", "otel"],
+        }
+    }
+
+    class ReturnValue(BaseModel):
+        param_name: str
+        param_value: dict
+
+    with patch.object(
+        pc,
+        "get_generic_data",
+        new=AsyncMock(
+            return_value=ReturnValue(
+                param_name="litellm_settings",
+                param_value={
+                    "success_callback": "langfuse",
+                },
+            )
+        ),
+    ):
+        new_config = await proxy_config._update_config_from_db(
+            prisma_client=pc,
+            config=test_config,
+            store_model_in_db=True,
+        )
+
+        assert new_config == {
+            "litellm_settings": {
+                "callbacks": ["prometheus", "otel"],
+                "success_callback": "langfuse",
+            }
+        }

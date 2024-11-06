@@ -775,7 +775,7 @@ def test_litellm_predibase_exception():
 
 
 @pytest.mark.parametrize(
-    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks"]
+    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx"]
 )
 def test_exception_mapping(provider):
     """

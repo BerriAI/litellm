@@ -61,6 +61,24 @@ class PatternMatchRouter:
         # return f"^{regex}$"
         return re.escape(pattern).replace(r"\*", "(.*)")
 
+    def _return_pattern_matched_deployments(
+        self, matched_pattern: Match, deployments: List[Dict]
+    ) -> List[Dict]:
+        new_deployments = []
+        for deployment in deployments:
+            new_deployment = copy.deepcopy(deployment)
+            new_deployment["litellm_params"]["model"] = (
+                PatternMatchRouter.set_deployment_model_name(
+                    matched_pattern=matched_pattern,
+                    litellm_deployment_litellm_model=deployment["litellm_params"][
+                        "model"
+                    ],
+                )
+            )
+            new_deployments.append(new_deployment)
+
+        return new_deployments
+
     def route(self, request: Optional[str]) -> Optional[List[Dict]]:
         """
         Route a requested model to the corresponding llm deployments based on the regex pattern
@@ -79,8 +97,11 @@ class PatternMatchRouter:
             if request is None:
                 return None
             for pattern, llm_deployments in self.patterns.items():
-                if re.match(pattern, request):
-                    return llm_deployments
+                pattern_match = re.match(pattern, request)
+                if pattern_match:
+                    return self._return_pattern_matched_deployments(
+                        matched_pattern=pattern_match, deployments=llm_deployments
+                    )
         except Exception as e:
             verbose_router_logger.debug(f"Error in PatternMatchRouter.route: {str(e)}")
 
@@ -102,6 +123,7 @@ class PatternMatchRouter:
 
         if model_name = "llmengine/foo" -> model = "openai/foo"
         """
+
         ## BASE CASE: if the deployment model name does not contain a wildcard, return the deployment model name
         if "*" not in litellm_deployment_litellm_model:
             return litellm_deployment_litellm_model
@@ -165,12 +187,7 @@ class PatternMatchRouter:
         """
         pattern_match = self.get_pattern(model, custom_llm_provider)
         if pattern_match:
-            provider_deployments = []
-            for deployment in pattern_match:
-                dep = copy.deepcopy(deployment)
-                dep["litellm_params"]["model"] = model
-                provider_deployments.append(dep)
-            return provider_deployments
+            return pattern_match
         return []
 
 

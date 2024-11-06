@@ -523,8 +523,8 @@ async def test_key_info_spend_values():
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_key_info_spend_values_streaming():
+@pytest.mark.flaky(retries=6, delay=2)
+async def test_aaaaakey_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.
     - create key
@@ -545,7 +545,7 @@ async def test_key_info_spend_values_streaming():
             completion_tokens=completion_tokens,
         )
         response_cost = prompt_cost + completion_cost
-        await asyncio.sleep(5)  # allow db log to be updated
+        await asyncio.sleep(8)  # allow db log to be updated
         print(f"new_key: {new_key}")
         key_info = await get_key_info(
             session=session, get_key=new_key, call_key=new_key

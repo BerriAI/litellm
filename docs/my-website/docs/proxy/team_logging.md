@@ -30,11 +30,11 @@ This config would send langfuse logs to 2 different langfuse projects, based on 
 ```yaml
 litellm_settings:
   default_team_settings: 
-    - team_id: my-secret-project
+    - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
       langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
-    - team_id: ishaans-secret-project
+    - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
       langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
@@ -46,7 +46,7 @@ Now, when you [generate keys](./virtual_keys.md) for this team-id
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--d '{"team_id": "ishaans-secret-project"}'
+-d '{"team_id": "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"}'
 ```
 
 All requests made with these keys will log data to their team-specific logging. -->
