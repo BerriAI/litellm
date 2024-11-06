@@ -116,7 +116,9 @@ def test_tokenizers():
         openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)
 
         # claude tokenizer
-        claude_tokens = token_counter(model="claude-instant-1", text=sample_text)
+        claude_tokens = token_counter(
+            model="claude-3-5-haiku-20241022", text=sample_text
+        )
 
         # cohere tokenizer
         cohere_tokens = token_counter(model="command-nightly", text=sample_text)
@@ -167,8 +169,10 @@ def test_encoding_and_decoding():
         assert openai_text == sample_text
 
         # claude encoding + decoding
-        claude_tokens = encode(model="claude-instant-1", text=sample_text)
-        claude_text = decode(model="claude-instant-1", tokens=claude_tokens.ids)
+        claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
+        claude_text = decode(
+            model="claude-3-5-haiku-20241022", tokens=claude_tokens.ids
+        )
 
         assert claude_text == sample_text
 

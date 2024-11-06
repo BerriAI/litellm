@@ -72,7 +72,7 @@
 # #         old_stdout = sys.stdout
 # #         sys.stdout = new_stdout = io.StringIO()
 
-# #         response = completion(model="claude-instant-1", messages=messages)
+# #         response = completion(model="claude-3-5-haiku-20241022", messages=messages)
 
 # #         # Restore stdout
 # #         sys.stdout = old_stdout
@@ -154,7 +154,7 @@
 #         old_stdout = sys.stdout
 #         sys.stdout = new_stdout = io.StringIO()
 
-#         response = completion(model="claude-instant-1", messages=messages, stream=True)
+#         response = completion(model="claude-3-5-haiku-20241022", messages=messages, stream=True)
 #         for idx, chunk in enumerate(response):
 #             pass
 
@@ -255,7 +255,7 @@
 # #     sys.stdout = new_stdout = io.StringIO()
 
 # #     try:
-# #         response = completion(model="claude-instant-1", messages=messages)
+# #         response = completion(model="claude-3-5-haiku-20241022", messages=messages)
 # #     except AuthenticationError:
 # #         pass
 
@@ -327,7 +327,7 @@
 # #     sys.stdout = new_stdout = io.StringIO()
 
 # #     try:
-# #         response = completion(model="claude-instant-1", messages=messages)
+# #         response = completion(model="claude-3-5-haiku-20241022", messages=messages)
 # #     except AuthenticationError:
 # #         pass
 
