@@ -3,8 +3,8 @@
 import copy
 import os
 import traceback
-from typing import TYPE_CHECKING, Any
-from collections.abc import MutableSequence, MutableSet, MutableMapping
+from collections.abc import MutableMapping, MutableSequence, MutableSet
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -361,11 +361,13 @@ class LangFuseLogger:
         except (TypeError, copy.Error) as e:
             verbose_logger.warning(f"Langfuse Layer Error - {e}")
 
-        new_metadata = {}
+        new_metadata: Dict[str, Any] = {}
 
         # if metadata is not a MutableMapping, return an empty dict since we can't call items() on it
         if not isinstance(metadata, MutableMapping):
-            verbose_logger.warning("Langfuse Layer Logging - metadata is not a MutableMapping, returning empty dict")
+            verbose_logger.warning(
+                "Langfuse Layer Logging - metadata is not a MutableMapping, returning empty dict"
+            )
             return new_metadata
 
         for key, value in metadata.items():
@@ -374,15 +376,23 @@ class LangFuseLogger:
                     new_metadata[key] = self._prepare_metadata(value)
                 elif isinstance(value, (MutableSequence, MutableSet)):
                     new_metadata[key] = type(value)(
-                        self._prepare_metadata(v) if isinstance(v, MutableMapping) else copy.deepcopy(v)
-                        for v in value
+                        *(
+                            (
+                                self._prepare_metadata(v)
+                                if isinstance(v, MutableMapping)
+                                else copy.deepcopy(v)
+                            )
+                            for v in value
+                        )
                     )
                 elif isinstance(value, BaseModel):
                     new_metadata[key] = value.model_dump()
                 else:
                     new_metadata[key] = copy.deepcopy(value)
             except (TypeError, copy.Error):
-                verbose_logger.warning(f"Langfuse Layer Error - Couldn't copy metadata key: {key} - {traceback.format_exc()}")
+                verbose_logger.warning(
+                    f"Langfuse Layer Error - Couldn't copy metadata key: {key} - {traceback.format_exc()}"
+                )
 
         return new_metadata
 
