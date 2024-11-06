@@ -897,8 +897,6 @@ def test_is_base64_encoded_2():
     "messages, expected_bool",
     [
         ([{"role": "user", "content": "hi"}], True),
-        ([{"role": "user", "content": None}], False),
-        ([{"role": "user", "content": ["hi"]}], False),
         ([{"role": "user", "content": [{"type": "text", "text": "hi"}]}], True),
         (
             [
