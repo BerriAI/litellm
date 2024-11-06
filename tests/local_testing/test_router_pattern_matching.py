@@ -158,6 +158,46 @@ def test_route_with_exception():
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_route_with_no_matching_pattern():
+    """
+    Tests that the router returns None when there is no matching pattern
+    """
+    from litellm.types.router import RouterErrors
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "*meta.llama3*",
+                "litellm_params": {"model": "bedrock/meta.llama3*"},
+            }
+        ]
+    )
+
+    ## WORKS
+    result = await router.acompletion(
+        model="bedrock/meta.llama3-70b",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Works",
+    )
+    assert result.choices[0].message.content == "Works"
+
+    ## FAILS
+    with pytest.raises(litellm.BadRequestError) as e:
+        await router.acompletion(
+            model="my-fake-model",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Works",
+        )
+
+    assert RouterErrors.no_deployments_available.value not in str(e.value)
+
+    with pytest.raises(litellm.BadRequestError):
+        await router.aembedding(
+            model="my-fake-model",
+            input="Hello, world!",
+        )
+
 def test_router_pattern_match_e2e():
     """
     Tests the end to end flow of the router
@@ -188,3 +228,4 @@ def test_router_pattern_match_e2e():
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "Hello, how are you?"}],
         }
+

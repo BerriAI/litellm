@@ -694,6 +694,9 @@ def run_server(  # noqa: PLR0915
 
         import litellm
 
+        if detailed_debug is True:
+            litellm._turn_on_debug()
+
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
 

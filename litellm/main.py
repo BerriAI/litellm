@@ -4319,9 +4319,9 @@ async def amoderation(
     else:
         _openai_client = openai_client
     if model is not None:
-        response = await openai_client.moderations.create(input=input, model=model)
+        response = await _openai_client.moderations.create(input=input, model=model)
     else:
-        response = await openai_client.moderations.create(input=input)
+        response = await _openai_client.moderations.create(input=input)
     return response
 
 

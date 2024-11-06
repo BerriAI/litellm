@@ -556,6 +556,10 @@ class Router:
 
         self.initialize_assistants_endpoint()
 
+        self.amoderation = self.factory_function(
+            litellm.amoderation, call_type="moderation"
+        )
+
     def initialize_assistants_endpoint(self):
         ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
         self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
@@ -1683,78 +1687,6 @@ class Router:
             )
             raise e
 
-    async def amoderation(self, model: str, input: str, **kwargs):
-        try:
-            kwargs["model"] = model
-            kwargs["input"] = input
-            kwargs["original_function"] = self._amoderation
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
-
-            response = await self.async_function_with_fallbacks(**kwargs)
-
-            return response
-        except Exception as e:
-            asyncio.create_task(
-                send_llm_exception_alert(
-                    litellm_router_instance=self,
-                    request_kwargs=kwargs,
-                    error_traceback_str=traceback.format_exc(),
-                    original_exception=e,
-                )
-            )
-            raise e
-
-    async def _amoderation(self, model: str, input: str, **kwargs):
-        model_name = None
-        try:
-            verbose_router_logger.debug(
-                f"Inside _moderation()- model: {model}; kwargs: {kwargs}"
-            )
-            deployment = await self.async_get_available_deployment(
-                model=model,
-                input=input,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-            )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
-            model_name = data["model"]
-            model_client = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
-            self.total_calls[model_name] += 1
-
-            timeout: Optional[Union[float, int]] = self._get_timeout(
-                kwargs=kwargs,
-                data=data,
-            )
-
-            response = await litellm.amoderation(
-                **{
-                    **data,
-                    "input": input,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    "timeout": timeout,
-                    **kwargs,
-                }
-            )
-
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info(
-                f"litellm.amoderation(model={model_name})\033[32m 200 OK\033[0m"
-            )
-            return response
-        except Exception as e:
-            verbose_router_logger.info(
-                f"litellm.amoderation(model={model_name})\033[31m Exception {str(e)}\033[0m"
-            )
-            if model_name is not None:
-                self.fail_calls[model_name] += 1
-            raise e
-
     async def arerank(self, model: str, **kwargs):
         try:
             kwargs["model"] = model
@@ -2610,20 +2542,46 @@ class Router:
 
         return final_results
 
-    #### ASSISTANTS API ####
+    #### PASSTHROUGH API ####
 
-    def factory_function(self, original_function: Callable):
+    async def _pass_through_moderation_endpoint_factory(
+        self,
+        original_function: Callable,
+        **kwargs,
+    ):
+        if (
+            "model" in kwargs
+            and self.get_model_list(model_name=kwargs["model"]) is not None
+        ):
+            deployment = await self.async_get_available_deployment(
+                model=kwargs["model"]
+            )
+            kwargs["model"] = deployment["litellm_params"]["model"]
+        return await original_function(**kwargs)
+
+    def factory_function(
+        self,
+        original_function: Callable,
+        call_type: Literal["assistants", "moderation"] = "assistants",
+    ):
         async def new_function(
             custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
             client: Optional["AsyncOpenAI"] = None,
             **kwargs,
         ):
-            return await self._pass_through_assistants_endpoint_factory(
-                original_function=original_function,
-                custom_llm_provider=custom_llm_provider,
-                client=client,
-                **kwargs,
-            )
+            if call_type == "assistants":
+                return await self._pass_through_assistants_endpoint_factory(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
+                    **kwargs,
+                )
+            elif call_type == "moderation":
+
+                return await self._pass_through_moderation_endpoint_factory(  # type: ignore
+                    original_function=original_function,
+                    **kwargs,
+                )
 
         return new_function
 
@@ -5052,10 +5010,12 @@ class Router:
         )
 
         if len(healthy_deployments) == 0:
-            raise ValueError(
-                "{}. You passed in model={}. There is no 'model_name' with this string ".format(
-                    RouterErrors.no_deployments_available.value, model
-                )
+            raise litellm.BadRequestError(
+                message="You passed in model={}. There is no 'model_name' with this string ".format(
+                    model
+                ),
+                model=model,
+                llm_provider="",
             )
 
         if litellm.model_alias_map and model in litellm.model_alias_map:
