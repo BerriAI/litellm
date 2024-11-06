@@ -29,7 +29,7 @@ else:
 class GCSLoggingConfig(TypedDict):
     bucket_name: str
     vertex_instance: VertexBase
-    path_service_account: str
+    path_service_account: Optional[str]
 
 
 class GCSBucketLogger(GCSBucketBase):
@@ -173,7 +173,7 @@ class GCSBucketLogger(GCSBucketBase):
         )
 
         bucket_name: str
-        path_service_account: str
+        path_service_account: Optional[str]
         if standard_callback_dynamic_params is not None:
             verbose_logger.debug("Using dynamic GCS logging")
             verbose_logger.debug(
@@ -193,10 +193,6 @@ class GCSBucketLogger(GCSBucketBase):
                 raise ValueError(
                     "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
                 )
-            if _path_service_account is None:
-                raise ValueError(
-                    "GCS_PATH_SERVICE_ACCOUNT is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_PATH_SERVICE_ACCOUNT' in the environment."
-                )
             bucket_name = _bucket_name
             path_service_account = _path_service_account
             vertex_instance = await self.get_or_create_vertex_instance(
@@ -207,10 +203,6 @@ class GCSBucketLogger(GCSBucketBase):
             if self.BUCKET_NAME is None:
                 raise ValueError(
                     "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-                )
-            if self.path_service_account_json is None:
-                raise ValueError(
-                    "GCS_PATH_SERVICE_ACCOUNT is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_PATH_SERVICE_ACCOUNT' in the environment."
                 )
             bucket_name = self.BUCKET_NAME
             path_service_account = self.path_service_account_json
@@ -224,7 +216,9 @@ class GCSBucketLogger(GCSBucketBase):
             path_service_account=path_service_account,
         )
 
-    async def get_or_create_vertex_instance(self, credentials: str) -> VertexBase:
+    async def get_or_create_vertex_instance(
+        self, credentials: Optional[str]
+    ) -> VertexBase:
         """
         This function is used to get the Vertex instance for the GCS Bucket Logger.
         It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
@@ -232,6 +226,9 @@ class GCSBucketLogger(GCSBucketBase):
         from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import (
             VertexBase,
         )
+
+        if credentials is None:
+            credentials = "IAM_AUTH"
 
         if credentials not in self.vertex_instances:
             vertex_instance = VertexBase()
