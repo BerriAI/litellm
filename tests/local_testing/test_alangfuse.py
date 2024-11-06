@@ -480,7 +480,7 @@ def test_langfuse_logging():
         pre_langfuse_setup()
         litellm.set_verbose = True
         response = completion(
-            model="claude-instant-1.2",
+            model="claude-3-5-haiku-20241022",
             messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
             max_tokens=10,
             temperature=0.2,

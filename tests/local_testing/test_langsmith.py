@@ -86,7 +86,7 @@ async def test_async_langsmith_logging():
         litellm.set_verbose = True
         litellm.callbacks = ["langsmith"]
         response = await litellm.acompletion(
-            model="claude-instant-1.2",
+            model="claude-3-5-haiku-20241022",
             messages=[{"role": "user", "content": "what llm are u"}],
             max_tokens=10,
             temperature=0.2,

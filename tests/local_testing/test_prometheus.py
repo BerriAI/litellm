@@ -43,7 +43,7 @@ async def test_async_prometheus_success_logging():
     litellm.callbacks = [pl]
 
     response = await litellm.acompletion(
-        model="claude-instant-1.2",
+        model="claude-3-5-haiku-20241022",
         messages=[{"role": "user", "content": "what llm are u"}],
         max_tokens=10,
         mock_response="hi",
@@ -107,7 +107,7 @@ async def test_async_prometheus_success_logging_with_callbacks():
             initial_metrics[sample.name] = sample.value
 
     response = await litellm.acompletion(
-        model="claude-instant-1.2",
+        model="claude-3-5-haiku-20241022",
         messages=[{"role": "user", "content": "what llm are u"}],
         max_tokens=10,
         mock_response="hi",
