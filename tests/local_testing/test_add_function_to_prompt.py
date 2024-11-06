@@ -13,7 +13,7 @@ import litellm
 ## case 1: set_function_to_prompt not set
 def test_function_call_non_openai_model():
     try:
-        model = "claude-instant-1"
+        model = "claude-3-5-haiku-20241022"
         messages = [{"role": "user", "content": "what's the weather in sf?"}]
         functions = [
             {
