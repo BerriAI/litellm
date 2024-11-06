@@ -6811,7 +6811,10 @@ class CustomStreamWrapper:
     def return_processed_chunk_logic(  # noqa
         self, completion_obj: dict, model_response: ModelResponse, response_obj: dict
     ):
-        _streaming_choices = cast(StreamingChoices, model_response.choices[0])
+        print_verbose(
+            f"completion_obj: {completion_obj}, model_response: {model_response}, response_obj: {response_obj}"
+        )
+        model_response.choices[0] = cast(StreamingChoices, model_response.choices[0])
 
         if (
             "content" in completion_obj
@@ -6871,16 +6874,16 @@ class CustomStreamWrapper:
                     )
                     print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                     if self.sent_first_chunk is False:
-                        _streaming_choices.delta["role"] = "assistant"
+                        model_response.choices[0].delta["role"] = "assistant"
                         self.sent_first_chunk = True
                     elif self.sent_first_chunk is True and hasattr(
-                        _streaming_choices.delta, "role"
+                        model_response.choices[0].delta, "role"
                     ):
-                        _initial_delta = _streaming_choices.delta.model_dump()
+                        _initial_delta = model_response.choices[0].delta.model_dump()
                         _initial_delta.pop("role", None)
-                        _streaming_choices.delta = Delta(**_initial_delta)
+                        model_response.choices[0].delta = Delta(**_initial_delta)
                     print_verbose(
-                        f"_streaming_choices.delta: {_streaming_choices.delta}"
+                        f"model_response.choices[0].delta: {model_response.choices[0].delta}"
                     )
                 else:
                     ## else
@@ -6889,7 +6892,7 @@ class CustomStreamWrapper:
                         completion_obj["role"] = "assistant"
                         self.sent_first_chunk = True
 
-                    _streaming_choices.delta = Delta(**completion_obj)
+                    model_response.choices[0].delta = Delta(**completion_obj)
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
@@ -6907,15 +6910,15 @@ class CustomStreamWrapper:
                 raise StopIteration
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
-                if _streaming_choices.delta.content is None:
-                    _streaming_choices.delta.content = self.holding_chunk
+                if model_response.choices[0].delta.content is None:
+                    model_response.choices[0].delta.content = self.holding_chunk
                 else:
-                    _streaming_choices.delta.content = (
-                        self.holding_chunk + _streaming_choices.delta.content
+                    model_response.choices[0].delta.content = (
+                        self.holding_chunk + model_response.choices[0].delta.content
                     )
                 self.holding_chunk = ""
             # if delta is None
-            _is_delta_empty = self.is_delta_empty(delta=_streaming_choices.delta)
+            _is_delta_empty = self.is_delta_empty(delta=model_response.choices[0].delta)
 
             if _is_delta_empty:
                 # get any function call arguments
@@ -6927,17 +6930,17 @@ class CustomStreamWrapper:
 
             return model_response
         elif (
-            _streaming_choices.delta.tool_calls is not None
-            or _streaming_choices.delta.function_call is not None
+            model_response.choices[0].delta.tool_calls is not None
+            or model_response.choices[0].delta.function_call is not None
         ):
             if self.sent_first_chunk is False:
-                _streaming_choices.delta["role"] = "assistant"
+                model_response.choices[0].delta["role"] = "assistant"
                 self.sent_first_chunk = True
             return model_response
         elif (
             len(model_response.choices) > 0
-            and hasattr(_streaming_choices.delta, "audio")
-            and _streaming_choices.delta.audio is not None
+            and hasattr(model_response.choices[0].delta, "audio")
+            and model_response.choices[0].delta.audio is not None
         ):
             return model_response
         else:
@@ -6947,7 +6950,7 @@ class CustomStreamWrapper:
 
     def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
-        response_obj = {}
+        response_obj: dict = {}
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -7704,7 +7707,6 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider in litellm._custom_providers
             ):
                 async for chunk in self.completion_stream:
-                    print_verbose(f"value of async chunk: {chunk}")
                     if chunk == "None" or chunk is None:
                         raise Exception
                     elif (
