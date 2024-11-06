@@ -170,9 +170,7 @@ def test_encoding_and_decoding():
 
         # claude encoding + decoding
         claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
-        claude_text = decode(
-            model="claude-3-5-haiku-20241022", tokens=claude_tokens.ids
-        )
+        claude_text = decode(model="claude-3-5-haiku-20241022", tokens=claude_tokens)
 
         assert claude_text == sample_text
 
