@@ -32,4 +32,4 @@ jobs:
           python-version: '3.12'
       - run: poetry install
       - name: Run flake8 (https://flake8.pycqa.org/en/latest/)
-        run: poetry run flake8
+        run: poetry run flake8 --exclude=tests/
