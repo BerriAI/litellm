@@ -6,6 +6,10 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
-general_settings: 
-    alerting: ["slack"]
-    alerting_threshold: 0.001
+litellm_settings:
+  callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]
+
+
+general_settings:
+  allow_requests_on_db_unavailable: true
