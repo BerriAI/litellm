@@ -1911,6 +1911,7 @@ async def test_proxy_server_prisma_setup():
         mock_client = mock_prisma_client.return_value  # This is the mocked instance
         mock_client.connect = AsyncMock()  # Mock the connect method
         mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
+        mock_client.health_check = AsyncMock()  # Mock the health_check method
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -1921,3 +1922,7 @@ async def test_proxy_server_prisma_setup():
         # Verify our mocked methods were called
         mock_client.connect.assert_called_once()
         mock_client.check_view_exists.assert_called_once()
+
+        # Note: This is REALLY IMPORTANT to check that the health check is called
+        # This is how we ensure the DB is ready before proceeding
+        mock_client.health_check.assert_called_once()
