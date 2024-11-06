@@ -137,6 +137,8 @@ safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
+### DEFAULT WATSONX API VERSION ###
+WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
 ### GUARDRAILS ###
@@ -282,7 +284,9 @@ priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 request_timeout: float = 6000  # time in seconds
-module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
+module_level_aclient = AsyncHTTPHandler(
+    timeout=request_timeout, client_alias="module level aclient"
+)
 module_level_client = HTTPHandler(timeout=request_timeout)
 num_retries: Optional[int] = None  # per model endpoint
 max_fallbacks: Optional[int] = None
@@ -527,7 +531,11 @@ openai_text_completion_compatible_providers: List = (
         "hosted_vllm",
     ]
 )
-
+_openai_like_providers: List = [
+    "predibase",
+    "databricks",
+    "watsonx",
+]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
 replicate_models: List = [
     # llama replicate supported LLMs
@@ -1040,7 +1048,8 @@ from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.AzureOpenAI.chat.o1_transformation import AzureOpenAIO1Config
-from .llms.watsonx import IBMWatsonXAIConfig
+from .llms.watsonx.completion.handler import IBMWatsonXAIConfig
+from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
