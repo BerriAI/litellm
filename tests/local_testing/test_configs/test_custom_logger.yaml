@@ -9,6 +9,10 @@ model_list:
       mode: chat
       input_cost_per_token: 0.0002
       id: gm
+  - model_name: claude-3-5-sonnet-20240620
+    litellm_params:
+      model: claude-3-5-sonnet-20240620
+      api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: azure-embedding-model
     litellm_params:
       model: azure/azure-embedding-model

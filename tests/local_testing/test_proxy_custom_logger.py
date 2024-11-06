@@ -297,3 +297,66 @@ def test_chat_completion_stream(client):
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
+def test_chat_completion_pass_user_metadata_proxy(client):
+    # Your test data
+    litellm.set_verbose = True
+    from litellm.proxy.utils import get_instance_fn
+
+    my_custom_logger = get_instance_fn(
+        value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
+    )
+
+    print("id of initialized custom logger", id(my_custom_logger))
+
+    litellm.callbacks = [my_custom_logger]
+    # import the initialized custom logger
+    print(litellm.callbacks)
+
+    # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
+
+    print("LiteLLM Callbacks", litellm.callbacks)
+    print("my_custom_logger", my_custom_logger)
+    assert my_custom_logger.async_success is False
+
+    test_data = {
+        "model": "claude-3-5-sonnet-20240620",
+        "messages": [
+            {"role": "user", "content": "write a litellm poem"},
+        ],
+        "max_tokens": 10,
+        "metadata": {"user_id": "12345"},
+    }
+
+    response = client.post("/chat/completions", json=test_data, headers=headers)
+    print("made request", response.status_code, response.text)
+    print("LiteLLM Callbacks", litellm.callbacks)
+    time.sleep(1)  # sleep while waiting for callback to run
+
+    print(
+        "my_custom_logger in /chat/completions",
+        my_custom_logger,
+        "id",
+        id(my_custom_logger),
+    )
+    print("vars my custom logger, ", vars(my_custom_logger))
+    assert (
+        my_custom_logger.async_success is True
+    )  # checks if the status of async_success is True, only the async_log_success_event can set this to true
+    assert (
+        my_custom_logger.async_completion_kwargs["model"]
+        == "claude-3-5-sonnet-20240620"
+    )  # checks if kwargs passed to async_log_success_event are correct
+    print(
+        "\n\n Custom Logger Async Completion args",
+        my_custom_logger.async_completion_kwargs,
+    )
+    litellm_params = my_custom_logger.async_completion_kwargs.get("litellm_params")
+    metadata = litellm_params.get("metadata", None)
+    print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
+    assert metadata is not None
+    assert "user_api_key" in metadata
+    assert "user_api_key_metadata" in metadata
+    assert "headers" in metadata
+    assert "user_id" in metadata

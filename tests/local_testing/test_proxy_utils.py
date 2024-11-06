@@ -53,25 +53,40 @@ async def test_add_litellm_data_to_request_thread_endpoint(endpoint, mock_reques
 
 
 @pytest.mark.parametrize(
-    "endpoint", ["/chat/completions", "/v1/completions", "/completions"]
+    "endpoint, is_metadata_llm_param",
+    [
+        ("/chat/completions", True),
+        ("/v1/completions", False),
+        ("/completions", False),
+    ],
 )
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_non_thread_endpoint(endpoint, mock_request):
+async def test_add_litellm_data_to_request_non_thread_endpoint(
+    endpoint, mock_request, is_metadata_llm_param
+):
     mock_request.url.path = endpoint
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
     )
     proxy_config = Mock()
 
-    data = {}
+    data = {
+        "metadata": {
+            "user_id": "12345",
+        }
+    }
     await add_litellm_data_to_request(
         data, mock_request, user_api_key_dict, proxy_config
     )
 
     print("DATA: ", data)
 
-    assert "metadata" in data
-    assert "litellm_metadata" not in data
+    if is_metadata_llm_param:
+        assert data["metadata"] == {"user_id": "12345"}
+        assert "litellm_metadata" in data
+    else:
+        assert "metadata" in data
+        assert "litellm_metadata" not in data
 
 
 # test adding traceparent

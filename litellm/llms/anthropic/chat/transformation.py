@@ -90,6 +90,7 @@ class AnthropicConfig:
             "extra_headers",
             "parallel_tool_calls",
             "response_format",
+            "metadata",
         ]
 
     def get_cache_control_headers(self) -> dict:
@@ -315,7 +316,11 @@ class AnthropicConfig:
                 optional_params["tools"] = [_tool]
                 optional_params["tool_choice"] = _tool_choice
                 optional_params["json_mode"] = True
-
+            elif param == "metadata":
+                if isinstance(value, dict) and "user_id" in value:
+                    optional_params["metadata"] = {
+                        "user_id": value.get("user_id", None)
+                    }
         ## VALIDATE REQUEST
         """
         Anthropic doesn't support tool calling without `tools=` param specified.
