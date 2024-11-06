@@ -158,18 +158,23 @@ async def test_proxy_server_prisma_setup_invalid_url():
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
     from litellm.caching import DualCache
+    from litellm._logging import verbose_proxy_logger
+    import logging
 
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     user_api_key_cache = DualCache()
     invalid_db_url = "postgresql://invalid:5432/nonexistent"
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 
-    # Test that it raises an exception with invalid URL
-    with pytest.raises(Exception) as exc_info:
+    try:
+        # Test that it raises an exception with invalid URL
         await ProxyStartupEvent._setup_prisma_client(
             database_url=invalid_db_url,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
 
-    # Verify the error message indicates a connection failure
-    assert "Could not connect to the query engine" in str(exc_info.value)
+        assert False, "Expected an exception to be raised"
+
+    except Exception as e:
+        assert "Could not connect to the query engine" in str(e)
