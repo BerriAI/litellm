@@ -683,6 +683,9 @@ class Router:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
+            if "metadata" in kwargs and isinstance(kwargs["metadata"], dict):
+                kwargs["user_to_llm_metadata"] = kwargs["metadata"]
+                del kwargs["metadata"]
             kwargs.get("request_timeout", self.timeout)
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
@@ -787,6 +790,10 @@ class Router:
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+
+            kwargs["user_to_llm_metadata"] = kwargs.get(
+                "metadata", {}
+            )  # metadata passed in by user to llm api ('metadata' is now an openai-supported param)
 
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
@@ -969,6 +976,7 @@ class Router:
         2 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
+        - Reset 'user_metadata' to 'metadata' and 'metadata' to 'litellm_metadata'
         """
         kwargs.setdefault("metadata", {}).update(
             {
@@ -978,7 +986,17 @@ class Router:
             }
         )
         kwargs["model_info"] = deployment.get("model_info", {})
+
+        # Reset 'user_metadata' to 'metadata' and 'metadata' to 'litellm_metadata'
+        litellm_metadata = kwargs.get("metadata", {})
+
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs)
+
+        if "user_to_llm_metadata" in kwargs:
+            kwargs["metadata"] = kwargs["user_to_llm_metadata"]
+            del kwargs["user_to_llm_metadata"]
+        if "metadata" in kwargs:
+            kwargs["litellm_metadata"] = litellm_metadata
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
