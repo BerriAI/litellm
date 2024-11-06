@@ -12,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-
+from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
@@ -619,3 +619,62 @@ def test_passing_tool_result_as_list(model):
 
     if model == "claude-3-5-sonnet-20241022":
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_watsonx_tool_choice(sync_mode):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    import json
+    from litellm import acompletion, completion
+
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What is the weather in San Francisco?"}]
+
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
+
+        if sync_mode:
+            resp = completion(
+                model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        else:
+            resp = await acompletion(
+                model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+                stream=True,
+            )
+
+        print(resp)
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs)
+        json_data = json.loads(mock_completion.call_args.kwargs["data"])
+        json_data["tool_choice_options"] == "auto"

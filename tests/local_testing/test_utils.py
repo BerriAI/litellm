@@ -891,3 +891,55 @@ def test_is_base64_encoded_2():
     )
 
     assert is_base64_encoded(s="Dog") is False
+
+
+@pytest.mark.parametrize(
+    "messages, expected_bool",
+    [
+        ([{"role": "user", "content": "hi"}], True),
+        ([{"role": "user", "content": [{"type": "text", "text": "hi"}]}], True),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "url": "https://example.com/image.png"}
+                    ],
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "1234",
+                                },
+                            },
+                        },
+                    ],
+                }
+            ],
+            False,
+        ),
+    ],
+)
+def test_validate_chat_completion_user_messages(messages, expected_bool):
+    from litellm.utils import validate_chat_completion_user_messages
+
+    if expected_bool:
+        ## Valid message
+        validate_chat_completion_user_messages(messages=messages)
+    else:
+        ## Invalid message
+        with pytest.raises(Exception):
+            validate_chat_completion_user_messages(messages=messages)

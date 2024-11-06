@@ -233,7 +233,7 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(
             model="databricks/dbrx-instruct-071224",
-            messages={"role": "user", "content": "How are you?"},
+            messages=[{"role": "user", "content": "How are you?"}],
         )
     assert err_msg in str(exc)
 

@@ -26,22 +26,12 @@ import requests  # type: ignore
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
-from .base import BaseLLM
-from .prompt_templates import factory as ptf
-
-
-class WatsonXAIError(Exception):
-    def __init__(self, status_code, message, url: Optional[str] = None):
-        self.status_code = status_code
-        self.message = message
-        url = url or "https://https://us-south.ml.cloud.ibm.com"
-        self.request = httpx.Request(method="POST", url=url)
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+from ...base import BaseLLM
+from ...prompt_templates import factory as ptf
+from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
 
 
 class IBMWatsonXAIConfig:
@@ -140,6 +130,29 @@ class IBMWatsonXAIConfig:
             and v is not None
         }
 
+    def is_watsonx_text_param(self, param: str) -> bool:
+        """
+        Determine if user passed in a watsonx.ai text generation param
+        """
+        text_generation_params = [
+            "decoding_method",
+            "max_new_tokens",
+            "min_new_tokens",
+            "length_penalty",
+            "stop_sequences",
+            "top_k",
+            "repetition_penalty",
+            "truncate_input_tokens",
+            "include_stop_sequences",
+            "return_options",
+            "random_seed",
+            "moderations",
+            "decoding_method",
+            "min_tokens",
+        ]
+
+        return param in text_generation_params
+
     def get_supported_openai_params(self):
         return [
             "temperature",  # equivalent to temperature
@@ -150,6 +163,44 @@ class IBMWatsonXAIConfig:
             "seed",  # equivalent to random_seed
             "stream",  # equivalent to stream
         ]
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict
+    ) -> dict:
+        extra_body = {}
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["max_new_tokens"] = v
+            elif k == "stream":
+                optional_params["stream"] = v
+            elif k == "temperature":
+                optional_params["temperature"] = v
+            elif k == "top_p":
+                optional_params["top_p"] = v
+            elif k == "frequency_penalty":
+                optional_params["repetition_penalty"] = v
+            elif k == "seed":
+                optional_params["random_seed"] = v
+            elif k == "stop":
+                optional_params["stop_sequences"] = v
+            elif k == "decoding_method":
+                extra_body["decoding_method"] = v
+            elif k == "min_tokens":
+                extra_body["min_new_tokens"] = v
+            elif k == "top_k":
+                extra_body["top_k"] = v
+            elif k == "truncate_input_tokens":
+                extra_body["truncate_input_tokens"] = v
+            elif k == "length_penalty":
+                extra_body["length_penalty"] = v
+            elif k == "time_limit":
+                extra_body["time_limit"] = v
+            elif k == "return_options":
+                extra_body["return_options"] = v
+
+        if extra_body:
+            optional_params["extra_body"] = extra_body
+        return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
         """
@@ -212,18 +263,6 @@ def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict) ->
     return prompt
 
 
-class WatsonXAIEndpoint(str, Enum):
-    TEXT_GENERATION = "/ml/v1/text/generation"
-    TEXT_GENERATION_STREAM = "/ml/v1/text/generation_stream"
-    DEPLOYMENT_TEXT_GENERATION = "/ml/v1/deployments/{deployment_id}/text/generation"
-    DEPLOYMENT_TEXT_GENERATION_STREAM = (
-        "/ml/v1/deployments/{deployment_id}/text/generation_stream"
-    )
-    EMBEDDINGS = "/ml/v1/text/embeddings"
-    PROMPTS = "/ml/v1/prompts"
-    AVAILABLE_MODELS = "/ml/v1/foundation_model_specs"
-
-
 class IBMWatsonXAI(BaseLLM):
     """
     Class to interface with IBM watsonx.ai API for text generation and embeddings.
@@ -247,10 +286,10 @@ class IBMWatsonXAI(BaseLLM):
         """
         Get the request parameters for text generation.
         """
-        api_params = self._get_api_params(optional_params, print_verbose=print_verbose)
+        api_params = _get_api_params(optional_params, print_verbose=print_verbose)
         # build auth headers
         api_token = api_params.get("token")
-
+        self.token = api_token
         headers = {
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
@@ -293,118 +332,6 @@ class IBMWatsonXAI(BaseLLM):
         return dict(
             method="POST", url=url, headers=headers, json=payload, params=request_params
         )
-
-    def _get_api_params(
-        self,
-        params: dict,
-        print_verbose: Optional[Callable] = None,
-        generate_token: Optional[bool] = True,
-    ) -> dict:
-        """
-        Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
-        """
-        # Load auth variables from params
-        url = params.pop("url", params.pop("api_base", params.pop("base_url", None)))
-        api_key = params.pop("apikey", None)
-        token = params.pop("token", None)
-        project_id = params.pop(
-            "project_id", params.pop("watsonx_project", None)
-        )  # watsonx.ai project_id - allow 'watsonx_project' to be consistent with how vertex project implementation works -> reduce provider-specific params
-        space_id = params.pop("space_id", None)  # watsonx.ai deployment space_id
-        region_name = params.pop("region_name", params.pop("region", None))
-        if region_name is None:
-            region_name = params.pop(
-                "watsonx_region_name", params.pop("watsonx_region", None)
-            )  # consistent with how vertex ai + aws regions are accepted
-        wx_credentials = params.pop(
-            "wx_credentials",
-            params.pop(
-                "watsonx_credentials", None
-            ),  # follow {provider}_credentials, same as vertex ai
-        )
-        api_version = params.pop("api_version", IBMWatsonXAI.api_version)
-        # Load auth variables from environment variables
-        if url is None:
-            url = (
-                get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
-                or get_secret_str("WATSONX_URL")
-                or get_secret_str("WX_URL")
-                or get_secret_str("WML_URL")
-            )
-        if api_key is None:
-            api_key = (
-                get_secret_str("WATSONX_APIKEY")
-                or get_secret_str("WATSONX_API_KEY")
-                or get_secret_str("WX_API_KEY")
-            )
-        if token is None:
-            token = get_secret_str("WATSONX_TOKEN") or get_secret_str("WX_TOKEN")
-        if project_id is None:
-            project_id = (
-                get_secret_str("WATSONX_PROJECT_ID")
-                or get_secret_str("WX_PROJECT_ID")
-                or get_secret_str("PROJECT_ID")
-            )
-        if region_name is None:
-            region_name = (
-                get_secret_str("WATSONX_REGION")
-                or get_secret_str("WX_REGION")
-                or get_secret_str("REGION")
-            )
-        if space_id is None:
-            space_id = (
-                get_secret_str("WATSONX_DEPLOYMENT_SPACE_ID")
-                or get_secret_str("WATSONX_SPACE_ID")
-                or get_secret_str("WX_SPACE_ID")
-                or get_secret_str("SPACE_ID")
-            )
-
-        # credentials parsing
-        if wx_credentials is not None:
-            url = wx_credentials.get("url", url)
-            api_key = wx_credentials.get(
-                "apikey", wx_credentials.get("api_key", api_key)
-            )
-            token = wx_credentials.get(
-                "token",
-                wx_credentials.get(
-                    "watsonx_token", token
-                ),  # follow format of {provider}_token, same as azure - e.g. 'azure_ad_token=..'
-            )
-
-        # verify that all required credentials are present
-        if url is None:
-            raise WatsonXAIError(
-                status_code=401,
-                message="Error: Watsonx URL not set. Set WX_URL in environment variables or pass in as a parameter.",
-            )
-        if token is None and api_key is not None and generate_token:
-            # generate the auth token
-            if print_verbose is not None:
-                print_verbose("Generating IAM token for Watsonx.ai")
-            token = self.generate_iam_token(api_key)
-        elif token is None and api_key is None:
-            raise WatsonXAIError(
-                status_code=401,
-                url=url,
-                message="Error: API key or token not found. Set WX_API_KEY or WX_TOKEN in environment variables or pass in as a parameter.",
-            )
-        if project_id is None:
-            raise WatsonXAIError(
-                status_code=401,
-                url=url,
-                message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
-            )
-
-        return {
-            "url": url,
-            "api_key": api_key,
-            "token": token,
-            "project_id": project_id,
-            "space_id": space_id,
-            "region_name": region_name,
-            "api_version": api_version,
-        }
 
     def _process_text_gen_response(
         self, json_resp: dict, model_response: Union[ModelResponse, None] = None
@@ -616,9 +543,10 @@ class IBMWatsonXAI(BaseLLM):
             input = [input]
         if api_key is not None:
             optional_params["api_key"] = api_key
-        api_params = self._get_api_params(optional_params)
+        api_params = _get_api_params(optional_params)
         # build auth headers
         api_token = api_params.get("token")
+        self.token = api_token
         headers = {
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
@@ -664,29 +592,9 @@ class IBMWatsonXAI(BaseLLM):
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
 
-    def generate_iam_token(self, api_key=None, **params):
-        headers = {}
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        if api_key is None:
-            api_key = get_secret_str("WX_API_KEY") or get_secret_str("WATSONX_API_KEY")
-        if api_key is None:
-            raise ValueError("API key is required")
-        headers["Accept"] = "application/json"
-        data = {
-            "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
-            "apikey": api_key,
-        }
-        response = httpx.post(
-            "https://iam.cloud.ibm.com/identity/token", data=data, headers=headers
-        )
-        response.raise_for_status()
-        json_data = response.json()
-        iam_access_token = json_data["access_token"]
-        self.token = iam_access_token
-        return iam_access_token
-
     def get_available_models(self, *, ids_only: bool = True, **params):
-        api_params = self._get_api_params(params)
+        api_params = _get_api_params(params)
+        self.token = api_params["token"]
         headers = {
             "Authorization": f"Bearer {api_params['token']}",
             "Content-Type": "application/json",
