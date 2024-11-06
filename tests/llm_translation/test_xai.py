@@ -144,3 +144,32 @@ def test_completion_xai(stream):
             assert response.choices[0].message.content is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_proxy_server_prisma_setup_invalid_url():
+    """
+    Test that proxy server setup raises an exception with invalid database URL
+
+    This is a PRODUCTION TEST. Think 2-3 times before modifying.
+
+    It's critical that this raises an exception, when unable to connect to the database.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.caching import DualCache
+
+    user_api_key_cache = DualCache()
+    invalid_db_url = "postgresql://invalid:5432/nonexistent"
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    # Test that it raises an exception with invalid URL
+    with pytest.raises(Exception) as exc_info:
+        await ProxyStartupEvent._setup_prisma_client(
+            database_url=invalid_db_url,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    # Verify the error message indicates a connection failure
+    assert "Could not connect to the query engine" in str(exc_info.value)
