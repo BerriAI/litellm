@@ -622,3 +622,39 @@ def test_anthropic_tool_helper(cache_control_location):
     tool = AnthropicConfig()._map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
+
+
+def test_pass_anthropic_user_metadata_router():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import json
+
+    client = HTTPHandler()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-3-5-sonnet-20241022",
+                "litellm_params": {
+                    "model": "claude-3-5-sonnet-20241022",
+                },
+            }
+        ]
+    )
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        resp = router.completion(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            metadata={"user_id": "12345"},
+            client=client,
+        )
+
+        print(resp)
+
+        mock_post.assert_called_once()
+
+        print(f"mock_post.call_args.kwargs: {mock_post.call_args.kwargs}")
+
+        call_json = json.loads(mock_post.call_args.kwargs["data"])
+
+        print(f"call_json metadata: {call_json['metadata']}")
+        assert call_json["metadata"] == {"user_id": "12345"}
