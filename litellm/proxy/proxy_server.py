@@ -770,8 +770,14 @@ async def _PROXY_track_cost_callback(
         org_id = metadata.get("user_api_key_org_id", None)
         key_alias = metadata.get("user_api_key_alias", None)
         end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
-        if kwargs.get("response_cost", None) is not None:
-            response_cost = kwargs["response_cost"]
+        sl_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+        response_cost = (
+            sl_object.get("response_cost", None) if sl_object is not None else None
+        )
+
+        if response_cost is not None:
             user_api_key = metadata.get("user_api_key", None)
             if kwargs.get("cache_hit", False) is True:
                 response_cost = 0.0
@@ -824,9 +830,14 @@ async def _PROXY_track_cost_callback(
             if kwargs["stream"] is not True or (
                 kwargs["stream"] is True and "complete_streaming_response" in kwargs
             ):
-                cost_tracking_failure_debug_info = kwargs.get(
-                    "response_cost_failure_debug_information"
-                )
+                if sl_object is not None:
+                    cost_tracking_failure_debug_info = sl_object[
+                        "response_cost_failure_debug_info"
+                    ]
+                else:
+                    cost_tracking_failure_debug_info = (
+                        "standard_logging_object not found"
+                    )
                 model = kwargs.get("model")
                 raise Exception(
                     f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
@@ -842,7 +853,7 @@ async def _PROXY_track_cost_callback(
                 failing_model=model,
             )
         )
-        verbose_proxy_logger.debug("error in tracking cost callback - %s", e)
+        verbose_proxy_logger.debug(error_msg)
 
 
 def error_tracking():
