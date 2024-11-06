@@ -309,6 +309,13 @@ jobs:
             pip install "prisma==0.11.0"
       # Run pytest and generate JUnit XML report
       - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      - run:
           name: Run tests
           command: |
             pwd
