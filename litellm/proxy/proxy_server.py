@@ -3060,6 +3060,15 @@ async def startup_event():
             user_api_key_cache=user_api_key_cache,
         )
 
+    ## CHECK PREMIUM USER
+    verbose_proxy_logger.debug(
+        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
+            premium_user
+        )
+    )
+    if premium_user is False:
+        premium_user = _license_check.is_premium()
+
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
     env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
@@ -3106,21 +3115,6 @@ async def startup_event():
             worker_config = json.loads(worker_config)
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
-
-    ## CHECK PREMIUM USER
-    verbose_proxy_logger.debug(
-        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
-            premium_user
-        )
-    )
-    if premium_user is False:
-        premium_user = _license_check.is_premium()
-
-    verbose_proxy_logger.debug(
-        "litellm.proxy.proxy_server.py::startup() - PREMIUM USER value - {}".format(
-            premium_user
-        )
-    )
 
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
