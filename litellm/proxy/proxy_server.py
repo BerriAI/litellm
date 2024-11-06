@@ -3022,7 +3022,9 @@ class ProxyStartupEvent:
         - Sets up prisma client
         - Adds necessary views to proxy
         """
-        verbose_proxy_logger.debug("Setting up Prisma Client...")
+        verbose_proxy_logger.debug(
+            "Setting up Prisma Client for db url %s...", database_url
+        )
         prisma_client: Optional[PrismaClient] = None
         if database_url is not None:
             try:

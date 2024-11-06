@@ -1095,7 +1095,7 @@ class PrismaClient:
             from prisma import Prisma  # type: ignore
         except Exception:
             raise Exception("Unable to find Prisma binaries.")
-        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
+        verbose_proxy_logger.debug("Creating Prisma Client..")
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -1114,7 +1114,7 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
-        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
+        verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
