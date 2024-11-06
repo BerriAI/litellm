@@ -5,6 +5,5 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-general_settings:
-  store_model_in_db: true
-  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/model/info"]
+litellm_settings:
+  callbacks: ["gcs_bucket"]

@@ -26,6 +26,9 @@ else:
     VertexBase = Any
 
 
+IAM_AUTH_KEY = "IAM_AUTH"
+
+
 class GCSLoggingConfig(TypedDict):
     bucket_name: str
     vertex_instance: VertexBase
@@ -227,18 +230,27 @@ class GCSBucketLogger(GCSBucketBase):
             VertexBase,
         )
 
-        if credentials is None:
-            credentials = "IAM_AUTH"
-
-        if credentials not in self.vertex_instances:
+        _in_memory_key = self._get_in_memory_key_for_vertex_instance(credentials)
+        if _in_memory_key not in self.vertex_instances:
             vertex_instance = VertexBase()
             await vertex_instance._ensure_access_token_async(
                 credentials=credentials,
                 project_id=None,
                 custom_llm_provider="vertex_ai",
             )
-            self.vertex_instances[credentials] = vertex_instance
-        return self.vertex_instances[credentials]
+            self.vertex_instances[_in_memory_key] = vertex_instance
+        return self.vertex_instances[_in_memory_key]
+
+    def _get_in_memory_key_for_vertex_instance(self, credentials: Optional[str]) -> str:
+        """
+        Returns key to use for caching the Vertex instance in-memory.
+
+        When using Vertex with Key based logging, we need to cache the Vertex instance in-memory.
+
+        - If a credentials string is provided, it is used as the key.
+        - If no credentials string is provided, "IAM_AUTH" is used as the key.
+        """
+        return credentials or IAM_AUTH_KEY
 
     async def download_gcs_object(self, object_name: str, **kwargs):
         """
