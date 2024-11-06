@@ -23,45 +23,12 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.utils import EmbeddingResponse
 
-from ..common_utils import OpenAILikeError
+from ..common_utils import OpenAILikeBase, OpenAILikeError
 
 
-class OpenAILikeEmbeddingHandler:
+class OpenAILikeEmbeddingHandler(OpenAILikeBase):
     def __init__(self, **kwargs):
         pass
-
-    def _validate_environment(
-        self,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        endpoint_type: Literal["chat_completions", "embeddings"],
-        headers: Optional[dict],
-    ) -> Tuple[str, dict]:
-        if api_key is None and headers is None:
-            raise OpenAILikeError(
-                status_code=400,
-                message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
-
-        if api_base is None:
-            raise OpenAILikeError(
-                status_code=400,
-                message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-            )
-
-        if headers is None:
-            headers = {
-                "Content-Type": "application/json",
-            }
-
-        if api_key is not None:
-            headers.update({"Authorization": "Bearer {}".format(api_key)})
-
-        if endpoint_type == "chat_completions":
-            api_base = "{}/chat/completions".format(api_base)
-        elif endpoint_type == "embeddings":
-            api_base = "{}/embeddings".format(api_base)
-        return api_base, headers
 
     async def aembedding(
         self,
@@ -133,6 +100,7 @@ class OpenAILikeEmbeddingHandler:
         model_response: Optional[litellm.utils.EmbeddingResponse] = None,
         client=None,
         aembedding=None,
+        custom_endpoint: Optional[bool] = None,
         headers: Optional[dict] = None,
     ) -> EmbeddingResponse:
         api_base, headers = self._validate_environment(
@@ -140,6 +108,7 @@ class OpenAILikeEmbeddingHandler:
             api_key=api_key,
             endpoint_type="embeddings",
             headers=headers,
+            custom_endpoint=custom_endpoint,
         )
         model = model
         data = {"model": model, "input": input, **optional_params}

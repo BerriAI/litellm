@@ -2,6 +2,7 @@ import json
 from typing import Optional
 
 import litellm
+from litellm import verbose_logger
 from litellm.types.llms.openai import (
     ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
@@ -109,7 +110,17 @@ class ModelResponseIterator:
         except StopIteration:
             raise StopIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            verbose_logger.debug(
+                f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here."
+            )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
 
     # Async iterator
     def __aiter__(self):
@@ -122,6 +133,8 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        except Exception as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
@@ -144,4 +157,14 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            verbose_logger.debug(
+                f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here."
+            )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )

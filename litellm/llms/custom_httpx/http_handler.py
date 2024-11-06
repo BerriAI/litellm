@@ -34,12 +34,14 @@ class AsyncHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
+        client_alias: Optional[str] = None,  # name for client in logs
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.client = self.create_client(
             timeout=timeout, concurrent_limit=concurrent_limit, event_hooks=event_hooks
         )
+        self.client_alias = client_alias
 
     def create_client(
         self,
@@ -112,6 +114,7 @@ class AsyncHTTPHandler:
         try:
             if timeout is None:
                 timeout = self.timeout
+
             req = self.client.build_request(
                 "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
             )

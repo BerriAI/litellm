@@ -20,6 +20,9 @@ from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
+from openai.types.chat.chat_completion_content_part_input_audio_param import (
+    ChatCompletionContentPartInputAudioParam,
+)
 from openai.types.chat.chat_completion_modality import ChatCompletionModality
 from openai.types.chat.chat_completion_prediction_content_param import (
     ChatCompletionPredictionContentParam,
@@ -355,8 +358,19 @@ class ChatCompletionImageObject(TypedDict):
     image_url: Union[str, ChatCompletionImageUrlObject]
 
 
+class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
+    pass
+
+
 OpenAIMessageContent = Union[
-    str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
+    str,
+    Iterable[
+        Union[
+            ChatCompletionTextObject,
+            ChatCompletionImageObject,
+            ChatCompletionAudioObject,
+        ]
+    ],
 ]
 
 # The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
@@ -411,6 +425,12 @@ class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
     cache_control: ChatCompletionCachedContent
 
+
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
 AllMessageValues = Union[
     ChatCompletionUserMessage,

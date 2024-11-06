@@ -69,6 +69,9 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     _is_non_openai_azure_model,
     get_llm_provider,
 )
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     LiteLLMResponseObjectHandler,
@@ -962,9 +965,10 @@ def client(original_function):  # noqa: PLR0915
                 result._hidden_params["additional_headers"] = process_response_headers(
                     result._hidden_params.get("additional_headers") or {}
                 )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            result._response_ms = (
-                end_time - start_time
-            ).total_seconds() * 1000  # return response latency in ms like openai
+            if result is not None:
+                result._response_ms = (
+                    end_time - start_time
+                ).total_seconds() * 1000  # return response latency in ms like openai
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -3622,43 +3626,30 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        if max_tokens is not None:
-            optional_params["max_new_tokens"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if frequency_penalty is not None:
-            optional_params["repetition_penalty"] = frequency_penalty
-        if seed is not None:
-            optional_params["random_seed"] = seed
-        if stop is not None:
-            optional_params["stop_sequences"] = stop
-
-        # WatsonX-only parameters
-        extra_body = {}
-        if "decoding_method" in passed_params:
-            extra_body["decoding_method"] = passed_params.pop("decoding_method")
-        if "min_tokens" in passed_params or "min_new_tokens" in passed_params:
-            extra_body["min_new_tokens"] = passed_params.pop(
-                "min_tokens", passed_params.pop("min_new_tokens")
-            )
-        if "top_k" in passed_params:
-            extra_body["top_k"] = passed_params.pop("top_k")
-        if "truncate_input_tokens" in passed_params:
-            extra_body["truncate_input_tokens"] = passed_params.pop(
-                "truncate_input_tokens"
-            )
-        if "length_penalty" in passed_params:
-            extra_body["length_penalty"] = passed_params.pop("length_penalty")
-        if "time_limit" in passed_params:
-            extra_body["time_limit"] = passed_params.pop("time_limit")
-        if "return_options" in passed_params:
-            extra_body["return_options"] = passed_params.pop("return_options")
-        optional_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
+        optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+        # WatsonX-text param check
+        for param in passed_params.keys():
+            if litellm.IBMWatsonXAIConfig().is_watsonx_text_param(param):
+                raise ValueError(
+                    f"LiteLLM now defaults to Watsonx's `/text/chat` endpoint. Please use the `watsonx_text` provider instead, to call the `/text/generation` endpoint. Param: {param}"
+                )
+    elif custom_llm_provider == "watsonx_text":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.IBMWatsonXAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
         )
     elif custom_llm_provider == "openai":
         supported_params = get_supported_openai_params(
@@ -4158,290 +4149,6 @@ def get_first_chars_messages(kwargs: dict) -> str:
         return _messages
     except Exception:
         return ""
-
-
-def get_supported_openai_params(  # noqa: PLR0915
-    model: str,
-    custom_llm_provider: Optional[str] = None,
-    request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
-) -> Optional[list]:
-    """
-    Returns the supported openai params for a given model + provider
-
-    Example:
-    ```
-    get_supported_openai_params(model="anthropic.claude-3", custom_llm_provider="bedrock")
-    ```
-
-    Returns:
-    - List if custom_llm_provider is mapped
-    - None if unmapped
-    """
-    if not custom_llm_provider:
-        try:
-            custom_llm_provider = litellm.get_llm_provider(model=model)[1]
-        except BadRequestError:
-            return None
-    if custom_llm_provider == "bedrock":
-        return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "ollama":
-        return litellm.OllamaConfig().get_supported_openai_params()
-    elif custom_llm_provider == "ollama_chat":
-        return litellm.OllamaChatConfig().get_supported_openai_params()
-    elif custom_llm_provider == "anthropic":
-        return litellm.AnthropicConfig().get_supported_openai_params()
-    elif custom_llm_provider == "fireworks_ai":
-        if request_type == "embeddings":
-            return litellm.FireworksAIEmbeddingConfig().get_supported_openai_params(
-                model=model
-            )
-        else:
-            return litellm.FireworksAIConfig().get_supported_openai_params()
-    elif custom_llm_provider == "nvidia_nim":
-        if request_type == "chat_completion":
-            return litellm.nvidiaNimConfig.get_supported_openai_params(model=model)
-        elif request_type == "embeddings":
-            return litellm.nvidiaNimEmbeddingConfig.get_supported_openai_params()
-    elif custom_llm_provider == "cerebras":
-        return litellm.CerebrasConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "xai":
-        return litellm.XAIChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "ai21_chat":
-        return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "volcengine":
-        return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "groq":
-        return litellm.GroqChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "hosted_vllm":
-        return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "deepseek":
-        return [
-            # https://platform.deepseek.com/api-docs/api/create-chat-completion
-            "frequency_penalty",
-            "max_tokens",
-            "presence_penalty",
-            "response_format",
-            "stop",
-            "stream",
-            "temperature",
-            "top_p",
-            "logprobs",
-            "top_logprobs",
-            "tools",
-            "tool_choice",
-        ]
-    elif custom_llm_provider == "cohere":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "logit_bias",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-            "extra_headers",
-        ]
-    elif custom_llm_provider == "cohere_chat":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-            "tools",
-            "tool_choice",
-            "seed",
-            "extra_headers",
-        ]
-    elif custom_llm_provider == "maritalk":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "presence_penalty",
-            "stop",
-        ]
-    elif custom_llm_provider == "openai":
-        return litellm.OpenAIConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
-            return litellm.AzureOpenAIO1Config().get_supported_openai_params(
-                model=model
-            )
-        else:
-            return litellm.AzureOpenAIConfig().get_supported_openai_params()
-    elif custom_llm_provider == "openrouter":
-        return [
-            "temperature",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "repetition_penalty",
-            "seed",
-            "max_tokens",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "response_format",
-            "stop",
-            "tools",
-            "tool_choice",
-        ]
-    elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
-        # mistal and codestral api have the exact same params
-        if request_type == "chat_completion":
-            return litellm.MistralConfig().get_supported_openai_params()
-        elif request_type == "embeddings":
-            return litellm.MistralEmbeddingConfig().get_supported_openai_params()
-    elif custom_llm_provider == "text-completion-codestral":
-        return litellm.MistralTextCompletionConfig().get_supported_openai_params()
-    elif custom_llm_provider == "replicate":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "seed",
-            "tools",
-            "tool_choice",
-            "functions",
-            "function_call",
-        ]
-    elif custom_llm_provider == "huggingface":
-        return litellm.HuggingfaceConfig().get_supported_openai_params()
-    elif custom_llm_provider == "together_ai":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "tools",
-            "tool_choice",
-            "response_format",
-        ]
-    elif custom_llm_provider == "ai21":
-        return [
-            "stream",
-            "n",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "presence_penalty",
-        ]
-    elif custom_llm_provider == "databricks":
-        if request_type == "chat_completion":
-            return litellm.DatabricksConfig().get_supported_openai_params()
-        elif request_type == "embeddings":
-            return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
-    elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
-        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params()
-    elif custom_llm_provider == "vertex_ai":
-        if request_type == "chat_completion":
-            if model.startswith("meta/"):
-                return litellm.VertexAILlama3Config().get_supported_openai_params()
-            if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params()
-            if model.startswith("codestral"):
-                return (
-                    litellm.MistralTextCompletionConfig().get_supported_openai_params()
-                )
-            if model.startswith("claude"):
-                return litellm.VertexAIAnthropicConfig().get_supported_openai_params()
-            return litellm.VertexAIConfig().get_supported_openai_params()
-        elif request_type == "embeddings":
-            return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
-    elif custom_llm_provider == "vertex_ai_beta":
-        if request_type == "chat_completion":
-            return litellm.VertexGeminiConfig().get_supported_openai_params()
-        elif request_type == "embeddings":
-            return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
-    elif custom_llm_provider == "sagemaker":
-        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
-    elif custom_llm_provider == "aleph_alpha":
-        return [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
-    elif custom_llm_provider == "cloudflare":
-        return ["max_tokens", "stream"]
-    elif custom_llm_provider == "nlp_cloud":
-        return [
-            "max_tokens",
-            "stream",
-            "temperature",
-            "top_p",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
-    elif custom_llm_provider == "petals":
-        return ["max_tokens", "temperature", "top_p", "stream"]
-    elif custom_llm_provider == "deepinfra":
-        return litellm.DeepInfraConfig().get_supported_openai_params()
-    elif custom_llm_provider == "perplexity":
-        return [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-        ]
-    elif custom_llm_provider == "anyscale":
-        return [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "stop",
-            "frequency_penalty",
-            "presence_penalty",
-        ]
-    elif custom_llm_provider == "watsonx":
-        return litellm.IBMWatsonXAIConfig().get_supported_openai_params()
-    elif custom_llm_provider == "custom_openai" or "text-completion-openai":
-        return [
-            "functions",
-            "function_call",
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stream_options",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "max_retries",
-            "logprobs",
-            "top_logprobs",
-            "extra_headers",
-        ]
-    return None
 
 
 def _count_characters(text: str) -> int:
@@ -8640,3 +8347,47 @@ def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
             ),
         )
     ]
+
+
+from litellm.types.llms.openai import (
+    ChatCompletionAudioObject,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+    ChatCompletionUserMessage,
+    OpenAIMessageContent,
+    ValidUserMessageContentTypes,
+)
+
+
+def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
+    """
+    Ensures all user messages are valid OpenAI chat completion messages.
+
+    Args:
+        messages: List of message dictionaries
+        message_content_type: Type to validate content against
+
+    Returns:
+        List[dict]: The validated messages
+
+    Raises:
+        ValueError: If any message is invalid
+    """
+    for idx, m in enumerate(messages):
+        try:
+            if m["role"] == "user":
+                user_content = m.get("content")
+                if user_content is not None:
+                    if isinstance(user_content, str):
+                        continue
+                    elif isinstance(user_content, list):
+                        for item in user_content:
+                            if isinstance(item, dict):
+                                if item.get("type") not in ValidUserMessageContentTypes:
+                                    raise Exception("invalid content type")
+        except Exception:
+            raise Exception(
+                f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
+            )
+
+    return messages
