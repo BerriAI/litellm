@@ -2534,13 +2534,10 @@ class StandardLoggingPayloadSetup:
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
-            clean_metadata = StandardLoggingMetadata(
-                **{  # type: ignore
-                    key: metadata[key]
-                    for key in StandardLoggingMetadata.__annotations__.keys()
-                    if key in metadata
-                }
-            )
+            supported_keys = StandardLoggingMetadata.__annotations__.keys()
+            for key in supported_keys:
+                if key in metadata:
+                    clean_metadata[key] = metadata[key]  # type: ignore
 
             if metadata.get("user_api_key") is not None:
                 if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
