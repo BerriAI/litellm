@@ -15,8 +15,9 @@ from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
 )
+from litellm.types.utils import Delta
+from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
-    Delta,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -2006,3 +2007,16 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     )
 
     return returned_usage_chunk
+
+
+def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
+    """
+    Checks if the provided chunk dictionary contains all required fields for GenericStreamingChunk.
+
+    :param chunk: The dictionary to check.
+    :return: True if all required fields are present, False otherwise.
+    """
+    _all_fields = GChunk.__annotations__
+
+    decision = all(key in _all_fields for key in chunk)
+    return decision
