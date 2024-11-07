@@ -960,6 +960,18 @@ def test_replace_model_in_jsonl(model_list):
             "openai/gpt-3.5-turbo",
             "openai/gpt-3.5-turbo",
         ),
+        (
+            "bedrock/meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "bedrock/meta.llama3-70b",
+        ),
+        (
+            "meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "meta.llama3-70b",
+        ),
     ],
 )
 def test_pattern_match_deployment_set_model_name(
@@ -999,6 +1011,7 @@ def test_pattern_match_deployment_set_model_name(
 
     for model in updated_models:
         assert model["litellm_params"]["model"] == expected_model
+
 
 @pytest.mark.asyncio
 async def test_pass_through_moderation_endpoint_factory(model_list):

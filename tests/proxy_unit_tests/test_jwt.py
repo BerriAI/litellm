@@ -147,7 +147,7 @@ async def test_valid_invalid_token(audience):
     # VALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     payload = {
         "sub": "user123",
@@ -175,7 +175,7 @@ async def test_valid_invalid_token(audience):
     # INVALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     payload = {
         "sub": "user123",
@@ -264,7 +264,7 @@ def team_token_tuple():
     # VALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     team_id = f"team123_{uuid.uuid4()}"
     payload = {
@@ -349,7 +349,7 @@ async def test_team_token_output(prisma_client, audience):
     # VALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     team_id = f"team123_{uuid.uuid4()}"
     payload = {
@@ -542,7 +542,7 @@ async def aaaatest_user_token_output(
     # VALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     team_id = f"team123_{uuid.uuid4()}"
     user_id = f"user123_{uuid.uuid4()}"
@@ -936,7 +936,7 @@ async def test_allow_access_by_email(public_jwt_key, user_email, should_work):
     # VALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     team_id = f"team123_{uuid.uuid4()}"
     payload = {
