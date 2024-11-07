@@ -5,5 +5,12 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
+
 litellm_settings:
-  callbacks: ["gcs_bucket"]
+  callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]
+
+
+general_settings:
+  allow_requests_on_db_unavailable: true
+
