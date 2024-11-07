@@ -531,6 +531,9 @@ async def test_get_gcs_logging_config_without_service_account():
     _old_gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
     os.environ.pop("GCS_BUCKET_NAME")
 
+    _old_gcs_service_acct = os.environ.get("GCS_PATH_SERVICE_ACCOUNT")
+    os.environ.pop("GCS_PATH_SERVICE_ACCOUNT")
+
     # Mock the load_auth function to avoid credential loading issues
     # Test 1: With standard_callback_dynamic_params (with service account)
     gcs_logger = GCSBucketLogger()
@@ -566,3 +569,6 @@ async def test_get_gcs_logging_config_without_service_account():
 
     if _old_gcs_bucket_name is not None:
         os.environ["GCS_BUCKET_NAME"] = _old_gcs_bucket_name
+
+    if _old_gcs_service_acct is not None:
+        os.environ["GCS_PATH_SERVICE_ACCOUNT"] = _old_gcs_service_acct
