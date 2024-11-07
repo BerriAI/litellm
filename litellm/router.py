@@ -241,6 +241,7 @@ class Router:
         router_general_settings: Optional[
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
+        default_model_region: Optional[str] = None, # default region for all models
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -272,6 +273,9 @@ class Router:
             routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy. Defaults to "simple-shuffle".
             routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
+            router_general_settings (RouterGeneralSettings): General settings for the router. Defaults to RouterGeneralSettings(),
+            default_model_region (Optional[str]): Default region for all models. Defaults to None.
+
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -325,6 +329,7 @@ class Router:
         self.router_general_settings: RouterGeneralSettings = (
             router_general_settings or RouterGeneralSettings()
         )
+        self.default_model_region = default_model_region
 
         self.assistants_config = assistants_config
         self.deployment_names: List = (

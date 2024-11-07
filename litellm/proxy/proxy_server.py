@@ -6138,6 +6138,10 @@ async def new_end_user(
 
         new_end_user_obj: Dict = {}
 
+        ## SET DEFAULT ALLOWED MODEL REGION ##
+        if data.allowed_model_region is None and hasattr(llm_router, "default_model_region"):
+            new_end_user_obj["allowed_model_region"] = llm_router.default_model_region
+
         ## CREATE BUDGET ## if set
         if data.max_budget is not None:
             budget_record = await prisma_client.db.litellm_budgettable.create(

@@ -851,6 +851,7 @@ router_settings:
   }
   content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
   fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
+  default_model_region: "us" # default region for all models
 ```
 
 | Name | Type | Description |
@@ -867,7 +868,16 @@ router_settings:
 | disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
 | retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
 | allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
-| allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
+| allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here]
+(reliability) |
+cooldown_time | integer | The duration (in seconds) to cooldown a model if it exceeds the allowed failures. [More information here](reliability) |
+disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
+routing_strategy | string | The strategy used for routing requests. Options: "simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing". Default is "simple-shuffle". [More information here](../routing) |
+routing_strategy_args | object | Additional arguments for latency-based routing. [More information here](reliability) |
+semaphore | object | Semaphore for limiting the number of concurrent requests. [More information here](reliability) |
+alerting_config | object | Configuration for alerting. [More information here](alerting) |
+router_general_settings | object | General settings for the router. [More information here](reliability) |
+default_model_region | string | The default region for all models. [More information here](region_filtering) |
 
 
 ### environment variables - Reference
