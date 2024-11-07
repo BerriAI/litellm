@@ -27,6 +27,7 @@ def setup_and_teardown():
 
     importlib.reload(litellm)
     importlib.reload(litellm.proxy.proxy_server)
+
     import asyncio
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
