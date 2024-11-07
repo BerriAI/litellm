@@ -2474,6 +2474,14 @@ class StandardLoggingPayloadSetup:
     ) -> Tuple[float, float, float]:
         """
         Convert datetime objects to floats
+
+        Args:
+            start_time: Union[dt_object, float]
+            end_time: Union[dt_object, float]
+            completion_start_time: Union[dt_object, float]
+
+        Returns:
+            Tuple[float, float, float]: A tuple containing the start time, end time, and completion start time as floats.
         """
 
         if isinstance(start_time, datetime.datetime):

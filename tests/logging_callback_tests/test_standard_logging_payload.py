@@ -13,10 +13,16 @@ from pydantic.main import Model
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
-
+from datetime import datetime as dt_object
+import time
 import pytest
 import litellm
-from litellm.types.utils import Usage, StandardLoggingMetadata
+from litellm.types.utils import (
+    Usage,
+    StandardLoggingMetadata,
+    StandardLoggingModelInformation,
+    StandardLoggingHiddenParams,
+)
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
 
@@ -169,3 +175,114 @@ def test_get_standard_logging_metadata_invalid_keys():
     assert result["user_api_key_alias"] == "test_alias"
     assert "invalid_key" not in result
     assert "another_invalid_key" not in result
+
+
+def test_cleanup_timestamps():
+    """Test cleanup_timestamps with different input types"""
+    # Test with datetime objects
+    now = dt_object.now()
+    start = now
+    end = now
+    completion = now
+
+    result = StandardLoggingPayloadSetup.cleanup_timestamps(start, end, completion)
+
+    assert all(isinstance(x, float) for x in result)
+    assert len(result) == 3
+
+    # Test with float timestamps
+    start_float = time.time()
+    end_float = start_float + 1
+    completion_float = end_float
+
+    result = StandardLoggingPayloadSetup.cleanup_timestamps(
+        start_float, end_float, completion_float
+    )
+
+    assert all(isinstance(x, float) for x in result)
+    assert result[0] == start_float
+    assert result[1] == end_float
+    assert result[2] == completion_float
+
+    # Test with mixed types
+    result = StandardLoggingPayloadSetup.cleanup_timestamps(
+        start_float, end, completion_float
+    )
+    assert all(isinstance(x, float) for x in result)
+
+    # Test invalid input
+    with pytest.raises(ValueError):
+        StandardLoggingPayloadSetup.cleanup_timestamps(
+            "invalid", end_float, completion_float
+        )
+
+
+def test_get_model_cost_information():
+    """Test get_model_cost_information with different inputs"""
+    # Test with None values
+    result = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model=None,
+        custom_pricing=None,
+        custom_llm_provider=None,
+        init_response_obj={},
+    )
+    assert result["model_map_key"] == ""
+    assert result["model_map_value"] is None  # this was not found in model cost map
+    # assert all fields in StandardLoggingModelInformation are present
+    assert all(
+        field in result for field in StandardLoggingModelInformation.__annotations__
+    )
+
+    # Test with valid model
+    result = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model="gpt-3.5-turbo",
+        custom_pricing=False,
+        custom_llm_provider="openai",
+        init_response_obj={},
+    )
+    litellm_info_gpt_3_5_turbo_model_map_value = litellm.get_model_info(
+        model="gpt-3.5-turbo", custom_llm_provider="openai"
+    )
+    print("result", result)
+    assert result["model_map_key"] == "gpt-3.5-turbo"
+    assert result["model_map_value"] is not None
+    assert result["model_map_value"] == litellm_info_gpt_3_5_turbo_model_map_value
+    # assert all fields in StandardLoggingModelInformation are present
+    assert all(
+        field in result for field in StandardLoggingModelInformation.__annotations__
+    )
+
+
+def test_get_hidden_params():
+    """Test get_hidden_params with different inputs"""
+    # Test with None
+    result = StandardLoggingPayloadSetup.get_hidden_params(None)
+    assert result["model_id"] is None
+    assert result["cache_key"] is None
+    assert result["api_base"] is None
+    assert result["response_cost"] is None
+    assert result["additional_headers"] is None
+
+    # assert all fields in StandardLoggingHiddenParams are present
+    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+
+    # Test with valid params
+    hidden_params = {
+        "model_id": "test-model",
+        "cache_key": "test-cache",
+        "api_base": "https://api.test.com",
+        "response_cost": 0.001,
+        "additional_headers": {
+            "x-ratelimit-limit-requests": "2000",
+            "x-ratelimit-remaining-requests": "1999",
+        },
+    }
+    result = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
+    assert result["model_id"] == "test-model"
+    assert result["cache_key"] == "test-cache"
+    assert result["api_base"] == "https://api.test.com"
+    assert result["response_cost"] == 0.001
+    assert result["additional_headers"] is not None
+    assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
+    # assert all fields in StandardLoggingHiddenParams are present
+    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
