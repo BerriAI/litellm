@@ -93,7 +93,9 @@ async def test_datadog_llm_obs_logging():
 
     for _ in range(2):
         response = await litellm.acompletion(
-            model="gpt-4o", messages=["Hello testing dd llm obs!"], mock_response="hi"
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello testing dd llm obs!"}],
+            mock_response="hi",
         )
 
         print(response)

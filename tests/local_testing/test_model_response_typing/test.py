@@ -3,7 +3,7 @@
 # BASE_URL = 'http://localhost:8080'
 
 # def test_hello_route():
-#     data = {"model": "claude-instant-1", "messages": [{"role": "user", "content": "hey, how's it going?"}]}
+#     data = {"model": "claude-3-5-haiku-20241022", "messages": [{"role": "user", "content": "hey, how's it going?"}]}
 #     headers = {'Content-Type': 'application/json'}
 #     response = requests.get(BASE_URL, headers=headers, data=json.dumps(data))
 #     print(response.text)

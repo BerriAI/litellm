@@ -77,6 +77,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
+    validate_chat_completion_user_messages,
 )
 
 from ._logging import verbose_logger
@@ -157,7 +158,8 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
 from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
     VertexEmbedding,
 )
-from .llms.watsonx import IBMWatsonXAI
+from .llms.watsonx.chat.handler import WatsonXChatHandler
+from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -221,6 +223,7 @@ vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
+watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
 ####### COMPLETION ENDPOINTS ################
 
@@ -920,6 +923,9 @@ def completion(  # type: ignore # noqa: PLR0915
             model_response._hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
+
+        ### VALIDATE USER MESSAGES ###
+        validate_chat_completion_user_messages(messages=messages)
 
         ### TIMEOUT LOGIC ###
         timeout = timeout or kwargs.get("request_timeout", 600) or 600
@@ -2615,6 +2621,26 @@ def completion(  # type: ignore # noqa: PLR0915
             ## RESPONSE OBJECT
             response = response
         elif custom_llm_provider == "watsonx":
+            response = watsonx_chat_completion.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=encoding,
+                custom_llm_provider="watsonx",
+            )
+        elif custom_llm_provider == "watsonx_text":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             response = watsonxai.completion(
                 model=model,
@@ -4293,9 +4319,9 @@ async def amoderation(
     else:
         _openai_client = openai_client
     if model is not None:
-        response = await openai_client.moderations.create(input=input, model=model)
+        response = await _openai_client.moderations.create(input=input, model=model)
     else:
-        response = await openai_client.moderations.create(input=input)
+        response = await _openai_client.moderations.create(input=input)
     return response
 
 

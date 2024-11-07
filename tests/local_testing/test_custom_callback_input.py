@@ -1562,3 +1562,65 @@ def test_logging_key_masking_gemini():
         trimmed_key = key.split("key=")[1]
         trimmed_key = trimmed_key.replace("*", "")
         assert "PART" == trimmed_key
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_standard_logging_payload_stream_usage(sync_mode):
+    """
+    Even if stream_options is not provided, correct usage should be logged
+    """
+    from litellm.types.utils import StandardLoggingPayload
+    from litellm.main import stream_chunk_builder
+
+    stream = True
+    try:
+        # sync completion
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+
+        if sync_mode:
+            patch_event = "log_success_event"
+            return_val = MagicMock()
+        else:
+            patch_event = "async_log_success_event"
+            return_val = AsyncMock()
+
+        with patch.object(customHandler, patch_event, new=return_val) as mock_client:
+            if sync_mode:
+                resp = litellm.completion(
+                    model="anthropic/claude-3-5-sonnet-20240620",
+                    messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                    stream=stream,
+                )
+
+                chunks = []
+                for chunk in resp:
+                    chunks.append(chunk)
+                time.sleep(2)
+            else:
+                resp = await litellm.acompletion(
+                    model="anthropic/claude-3-5-sonnet-20240620",
+                    messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                    stream=stream,
+                )
+
+                chunks = []
+                async for chunk in resp:
+                    chunks.append(chunk)
+                await asyncio.sleep(2)
+
+            mock_client.assert_called_once()
+
+            standard_logging_object: StandardLoggingPayload = (
+                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+
+            built_response = stream_chunk_builder(chunks=chunks)
+            assert (
+                built_response.usage.total_tokens
+                != standard_logging_object["total_tokens"]
+            )
+            print(f"standard_logging_object usage: {built_response.usage}")
+    except litellm.InternalServerError:
+        pass

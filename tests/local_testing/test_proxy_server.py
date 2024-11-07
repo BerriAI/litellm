@@ -1911,6 +1911,7 @@ async def test_proxy_server_prisma_setup():
         mock_client = mock_prisma_client.return_value  # This is the mocked instance
         mock_client.connect = AsyncMock()  # Mock the connect method
         mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
+        mock_client.health_check = AsyncMock()  # Mock the health_check method
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -1921,3 +1922,41 @@ async def test_proxy_server_prisma_setup():
         # Verify our mocked methods were called
         mock_client.connect.assert_called_once()
         mock_client.check_view_exists.assert_called_once()
+
+        # Note: This is REALLY IMPORTANT to check that the health check is called
+        # This is how we ensure the DB is ready before proceeding
+        mock_client.health_check.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_proxy_server_prisma_setup_invalid_db():
+    """
+    PROD TEST: Test that proxy server startup fails when it's unable to connect to the database
+
+    Think 2-3 times before editing / deleting this test, it's important for PROD
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.caching import DualCache
+
+    user_api_key_cache = DualCache()
+    invalid_db_url = "postgresql://invalid:invalid@localhost:5432/nonexistent"
+
+    _old_db_url = os.getenv("DATABASE_URL")
+    os.environ["DATABASE_URL"] = invalid_db_url
+
+    with pytest.raises(Exception) as exc_info:
+        await ProxyStartupEvent._setup_prisma_client(
+            database_url=invalid_db_url,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
+            user_api_key_cache=user_api_key_cache,
+        )
+        print("GOT EXCEPTION=", exc_info)
+
+        assert "httpx.ConnectError" in str(exc_info.value)
+
+    # # Verify the error message indicates a database connection issue
+    # assert any(x in str(exc_info.value).lower() for x in ["database", "connection", "authentication"])
+
+    if _old_db_url:
+        os.environ["DATABASE_URL"] = _old_db_url

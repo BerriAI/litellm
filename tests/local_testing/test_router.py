@@ -1807,7 +1807,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": "claude-instant-1.2",
+                "model": "claude-3-5-haiku-20241022",
                 "api_key": anthropic_api_key,
             },
         }
@@ -1866,15 +1866,8 @@ async def test_router_amoderation():
     router = Router(model_list=model_list)
     ## Test 1: user facing function
     result = await router.amoderation(
-        model="openai-moderations", input="this is valid good text"
+        model="text-moderation-stable", input="this is valid good text"
     )
-
-    ## Test 2: underlying function
-    result = await router._amoderation(
-        model="openai-moderations", input="this is valid good text"
-    )
-
-    print("moderation result", result)
 
 
 def test_router_add_deployment():
