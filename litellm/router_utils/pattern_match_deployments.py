@@ -117,11 +117,26 @@ class PatternMatchRouter:
 
         E.g.:
 
+        Case 1:
         model_name: llmengine/* (can be any regex pattern or wildcard pattern)
         litellm_params:
             model: openai/*
 
         if model_name = "llmengine/foo" -> model = "openai/foo"
+
+        Case 2:
+        model_name: llmengine/fo::*::static::*
+        litellm_params:
+            model: openai/fo::*::static::*
+
+        if model_name = "llmengine/foo::bar::static::baz" -> model = "openai/foo::bar::static::baz"
+
+        Case 3:
+        model_name: *meta.llama3*
+        litellm_params:
+            model: bedrock/meta.llama3*
+
+        if model_name = "hello-world-meta.llama3-70b" -> model = "bedrock/meta.llama3-70b"
         """
 
         ## BASE CASE: if the deployment model name does not contain a wildcard, return the deployment model name
@@ -134,10 +149,9 @@ class PatternMatchRouter:
         dynamic_segments = matched_pattern.groups()
 
         if len(dynamic_segments) > wildcard_count:
-            raise ValueError(
-                f"More wildcards in the deployment model name than the pattern. Wildcard count: {wildcard_count}, dynamic segments count: {len(dynamic_segments)}"
-            )
-
+            return (
+                matched_pattern.string
+            )  # default to the user input, if unable to map based on wildcards.
         # Replace the corresponding wildcards in the litellm model pattern with extracted segments
         for segment in dynamic_segments:
             litellm_deployment_litellm_model = litellm_deployment_litellm_model.replace(

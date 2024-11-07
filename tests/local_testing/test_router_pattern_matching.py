@@ -182,6 +182,14 @@ async def test_route_with_no_matching_pattern():
     )
     assert result.choices[0].message.content == "Works"
 
+    ## WORKS
+    result = await router.acompletion(
+        model="meta.llama3-70b-instruct-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Works",
+    )
+    assert result.choices[0].message.content == "Works"
+
     ## FAILS
     with pytest.raises(litellm.BadRequestError) as e:
         await router.acompletion(
@@ -197,6 +205,7 @@ async def test_route_with_no_matching_pattern():
             model="my-fake-model",
             input="Hello, world!",
         )
+
 
 def test_router_pattern_match_e2e():
     """
@@ -228,4 +237,3 @@ def test_router_pattern_match_e2e():
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "Hello, how are you?"}],
         }
-
