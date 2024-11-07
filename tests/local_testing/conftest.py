@@ -26,7 +26,8 @@ def setup_and_teardown():
     from litellm import Router
 
     importlib.reload(litellm)
-    importlib.reload(litellm.proxy.proxy_server)
+    if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+        importlib.reload(litellm.proxy.proxy_server)
 
     import asyncio
 
