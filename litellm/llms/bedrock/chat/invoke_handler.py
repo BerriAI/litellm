@@ -71,6 +71,7 @@ _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
+bedrock_model_providers = ["anthropic", "amazon", "mistral", "meta", "cohere", "ai21"]
 
 
 class AmazonCohereChatConfig:
@@ -322,7 +323,7 @@ class BedrockLLM(BaseAWSLLM):
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        provider = model.split(".")[0]
+        provider = _get_bedrock_provider(model=model)
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -608,7 +609,7 @@ class BedrockLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        provider = model.split(".")[0]
+        provider = _get_bedrock_provider(model=model)
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
@@ -1053,6 +1054,11 @@ def get_response_stream_shape():
 
     return _response_stream_shape_cache
 
+def _get_bedrock_provider(model: str) -> str:
+    for provider in bedrock_model_providers:
+        if provider in model:
+            return provider
+    return "undefined"
 
 class AWSEventStreamDecoder:
     def __init__(self, model: str) -> None:
