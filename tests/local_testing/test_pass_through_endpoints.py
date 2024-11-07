@@ -150,10 +150,9 @@ async def test_pass_through_endpoint_rerank(client):
     [(True, 0, 429), (True, 1, 200), (False, 0, 200)],
 )
 @pytest.mark.asyncio
-async def test_pass_through_endpoint_rpm_limit(auth, expected_error_code, rpm_limit):
-    from litellm.proxy.proxy_server import app
-
-    client = TestClient(app)
+async def test_pass_through_endpoint_rpm_limit(
+    client, auth, expected_error_code, rpm_limit
+):
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
