@@ -1283,6 +1283,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_proxy_unit_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_assistants_api_testing:
           filters:
               branches:
