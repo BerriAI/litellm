@@ -986,6 +986,41 @@ jobs:
       - store_test_results:
           path: test-results
 
+  test_bad_database_url:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t myapp . -f ./docker/Dockerfile.non_root
+      - run:
+          name: Run Docker container with bad DATABASE_URL
+          command: |
+            docker run --name my-app \
+              -p 4000:4000 \
+              -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
+              myapp:latest \
+              --port 4000 > docker_output.log 2>&1 || true
+      - run:
+          name: Display Docker logs
+          command: cat docker_output.log
+      - run:
+          name: Check for expected error
+          command: |
+            if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
+               grep -q "httpx.ConnectError: All connection attempts failed" docker_output.log && \
+               grep -q "ERROR:    Application startup failed. Exiting." docker_output.log; then
+              echo "Expected error found. Test passed."
+            else
+              echo "Expected error not found. Test failed."
+              cat docker_output.log
+              exit 1
+            fi
+
 workflows:
   version: 2
   build_and_test:
@@ -1082,11 +1117,18 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - test_bad_database_url:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - publish_to_pypi:
           requires:
             - local_testing
             - build_and_test
             - load_testing
+            - test_bad_database_url
             - llm_translation_testing
             - logging_testing
             - litellm_router_testing

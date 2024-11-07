@@ -3052,6 +3052,8 @@ class ProxyStartupEvent:
                 prisma_client.check_view_exists()
             )  # check if all necessary views exist. Don't block execution
 
+            # run a health check to ensure the DB is ready
+            await prisma_client.health_check()
         return prisma_client
 
 
