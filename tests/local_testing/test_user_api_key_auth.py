@@ -157,7 +157,7 @@ def test_returned_user_api_key_auth(user_role, expected_role):
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio
-async def test_aaaauser_personal_budgets(key_ownership):
+async def test_user_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
