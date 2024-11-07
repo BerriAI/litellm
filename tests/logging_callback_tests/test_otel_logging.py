@@ -268,6 +268,7 @@ def validate_redacted_message_span_attributes(span):
         "metadata.spend_logs_metadata",
         "metadata.user_api_key_alias",
         "metadata.user_api_key_user_id",
+        "metadata.user_api_key_org_id",
     ]
 
     _all_attributes = set([name for name in span.attributes.keys()])
