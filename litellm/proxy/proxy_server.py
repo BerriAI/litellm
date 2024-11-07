@@ -364,6 +364,24 @@ app = FastAPI(
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
 )
 
+# add background task to update end-user regions
+
+from fastapi import BackgroundTasks
+
+@app.on_event("startup")
+async def startup_event():
+    background_tasks = BackgroundTasks()
+    background_tasks.add_task(update_all_end_user_regions)
+
+    # Schedule the background task to run periodically
+    asyncio.create_task(run_periodic_task(background_tasks))
+
+
+async def run_periodic_task(background_tasks: BackgroundTasks):
+    while True:
+        await background_tasks()
+        # Wait for 24 hours before running again
+        await asyncio.sleep(24 * 60 * 60)
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
@@ -6466,6 +6484,50 @@ async def list_end_user(
     for item in response:
         returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
     return returned_response
+
+
+@router.post(
+    "/end_user/update_all_regions",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_all_end_user_regions():
+    """
+    Update all end-user regions to the default model region from router_settings.
+    """
+
+    global prisma_client, llm_router
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    
+    if llm_router is None or not hasattr(llm_router, 'default_model_region'):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "Router not configured or missing default_model_region"},
+        )
+    
+    try:
+        # get all end_users without any allowed_model_region
+        end_users = await prisma_client.db.litellm_endusertable.find_many(
+            where={"allowed_model_region": None}
+        )
+
+        updated_count = 0
+        for end_user in end_users:
+            _ = await prisma_client.db.litellm_endusertable.update(
+                where={"user_id": end_user.user_id},
+                data={"allowed_model_region": llm_router.default_model_region},
+            )
+            updated_count += 1
+
+        return {
+            "message": f"Updated {updated_count} end-users to default model region={llm_router.default_model_region}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 #### BUDGET TABLE MANAGEMENT ####
