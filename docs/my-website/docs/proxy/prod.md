@@ -90,7 +90,7 @@ Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 5. If running LiteLLM on VPC, set `allow_requests_on_db_unavailable` to `True`
+## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
 
 This will allow LiteLLM to continue to process requests even if the DB is unavailable. This is better handling for DB unavailability.
 
