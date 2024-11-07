@@ -33,7 +33,7 @@ class GCSBucketBase(CustomLogger):
 
     async def construct_request_headers(
         self,
-        service_account_json: str,
+        service_account_json: Optional[str],
         vertex_instance: Optional[VertexBase] = None,
     ) -> Dict[str, str]:
         from litellm import vertex_chat_completion
