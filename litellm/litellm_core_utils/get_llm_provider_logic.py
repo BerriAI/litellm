@@ -226,7 +226,7 @@ def get_llm_provider(  # noqa: PLR0915
         ## openrouter
         elif model in litellm.openrouter_models:
             custom_llm_provider = "openrouter"
-        ## openrouter
+        ## maritalk
         elif model in litellm.maritalk_models:
             custom_llm_provider = "maritalk"
         ## vertex - text + chat + language (gemini) models
