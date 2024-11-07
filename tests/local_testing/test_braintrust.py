@@ -33,14 +33,11 @@ def test_braintrust_logging():
 
     http_client = HTTPHandler()
 
-    setattr(
-        litellm.integrations.braintrust_logging,
-        "global_braintrust_sync_http_handler",
-        http_client,
-    )
-
-    with patch.object(http_client, "post", new=MagicMock()) as mock_client:
-
+    with patch.object(
+        litellm.integrations.braintrust_logging.global_braintrust_sync_http_handler,
+        "post",
+        new=MagicMock(),
+    ) as mock_client:
         # set braintrust as a callback, litellm will send the data to braintrust
         litellm.callbacks = ["braintrust"]
 
