@@ -769,6 +769,7 @@ class ModelResponseIterator:
                     message=message,
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
+
             returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,

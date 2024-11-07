@@ -519,3 +519,50 @@ async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
         object_name=gcs_log_id,
         standard_callback_dynamic_params=standard_callback_dynamic_params,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_gcs_logging_config_without_service_account():
+    """
+    Test the get_gcs_logging_config works for IAM auth on GCS
+    1. Key based logging without a service account
+    2. Default Callback without a service account
+    """
+    _old_gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
+    os.environ.pop("GCS_BUCKET_NAME")
+
+    # Mock the load_auth function to avoid credential loading issues
+    # Test 1: With standard_callback_dynamic_params (with service account)
+    gcs_logger = GCSBucketLogger()
+
+    dynamic_params = StandardCallbackDynamicParams(
+        gcs_bucket_name="dynamic-bucket",
+    )
+    config = await gcs_logger.get_gcs_logging_config(
+        {"standard_callback_dynamic_params": dynamic_params}
+    )
+
+    assert config["bucket_name"] == "dynamic-bucket"
+    assert config["path_service_account"] is None
+    assert config["vertex_instance"] is not None
+
+    # Test 2: With standard_callback_dynamic_params (without service account - this is IAM auth)
+    dynamic_params = StandardCallbackDynamicParams(
+        gcs_bucket_name="dynamic-bucket", gcs_path_service_account=None
+    )
+
+    config = await gcs_logger.get_gcs_logging_config(
+        {"standard_callback_dynamic_params": dynamic_params}
+    )
+
+    assert config["bucket_name"] == "dynamic-bucket"
+    assert config["path_service_account"] is None
+    assert config["vertex_instance"] is not None
+
+    # Test 5: With missing bucket name
+    with pytest.raises(ValueError, match="GCS_BUCKET_NAME is not set"):
+        gcs_logger = GCSBucketLogger(bucket_name=None)
+        await gcs_logger.get_gcs_logging_config({})
+
+    if _old_gcs_bucket_name is not None:
+        os.environ["GCS_BUCKET_NAME"] = _old_gcs_bucket_name

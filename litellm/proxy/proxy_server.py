@@ -757,12 +757,6 @@ async def _PROXY_track_cost_callback(
     verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
     global prisma_client
     try:
-        # check if it has collected an entire stream response
-        verbose_proxy_logger.debug(
-            "Proxy: In track_cost_callback for: kwargs=%s and completion_response: %s",
-            kwargs,
-            completion_response,
-        )
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
@@ -776,8 +770,16 @@ async def _PROXY_track_cost_callback(
         org_id = metadata.get("user_api_key_org_id", None)
         key_alias = metadata.get("user_api_key_alias", None)
         end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
-        if kwargs.get("response_cost", None) is not None:
-            response_cost = kwargs["response_cost"]
+        sl_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+        response_cost = (
+            sl_object.get("response_cost", None)
+            if sl_object is not None
+            else kwargs.get("response_cost", None)
+        )
+
+        if response_cost is not None:
             user_api_key = metadata.get("user_api_key", None)
             if kwargs.get("cache_hit", False) is True:
                 response_cost = 0.0
@@ -830,9 +832,15 @@ async def _PROXY_track_cost_callback(
             if kwargs["stream"] is not True or (
                 kwargs["stream"] is True and "complete_streaming_response" in kwargs
             ):
-                cost_tracking_failure_debug_info = kwargs.get(
-                    "response_cost_failure_debug_information"
-                )
+                if sl_object is not None:
+                    cost_tracking_failure_debug_info: Union[dict, str] = (
+                        sl_object["response_cost_failure_debug_info"]  # type: ignore
+                        or "response_cost_failure_debug_info is None in standard_logging_object"
+                    )
+                else:
+                    cost_tracking_failure_debug_info = (
+                        "standard_logging_object not found"
+                    )
                 model = kwargs.get("model")
                 raise Exception(
                     f"Cost tracking failed for model={model}.\nDebug info - {cost_tracking_failure_debug_info}\nAdd custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
@@ -848,7 +856,7 @@ async def _PROXY_track_cost_callback(
                 failing_model=model,
             )
         )
-        verbose_proxy_logger.debug("error in tracking cost callback - %s", e)
+        verbose_proxy_logger.debug(error_msg)
 
 
 def error_tracking():
@@ -1359,7 +1367,7 @@ class ProxyConfig:
     """
 
     def __init__(self) -> None:
-        pass
+        self.config: Dict[str, Any] = {}
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -1373,9 +1381,6 @@ class ProxyConfig:
     ) -> dict:
         """
         Given a config file path, load the config from the file.
-
-        If `store_model_in_db` is True, then read the DB and update the config with the DB values.
-
         Args:
             config_file_path (str): path to the config file
         Returns:
@@ -1400,40 +1405,6 @@ class ProxyConfig:
                 "router_settings": {},
                 "litellm_settings": {},
             }
-
-        ## DB
-        if prisma_client is not None and (
-            general_settings.get("store_model_in_db", False) is True
-            or store_model_in_db is True
-        ):
-            _tasks = []
-            keys = [
-                "general_settings",
-                "router_settings",
-                "litellm_settings",
-                "environment_variables",
-            ]
-            for k in keys:
-                response = prisma_client.get_generic_data(
-                    key="param_name", value=k, table_name="config"
-                )
-                _tasks.append(response)
-
-            responses = await asyncio.gather(*_tasks)
-            for response in responses:
-                if response is not None:
-                    param_name = getattr(response, "param_name", None)
-                    param_value = getattr(response, "param_value", None)
-                    if param_name is not None and param_value is not None:
-                        # check if param_name is already in the config
-                        if param_name in config:
-                            if isinstance(config[param_name], dict):
-                                config[param_name].update(param_value)
-                            else:
-                                config[param_name] = param_value
-                        else:
-                            # if it's not in the config - then add it
-                            config[param_name] = param_value
 
         return config
 
@@ -1500,8 +1471,10 @@ class ProxyConfig:
         - for a given team id
         - return the relevant completion() call params
         """
+
         # load existing config
-        config = await self.get_config()
+        config = self.config
+
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", {})
         all_teams_config = litellm_settings.get("default_team_settings", None)
@@ -1553,7 +1526,9 @@ class ProxyConfig:
             dict: config
 
         """
+        global prisma_client, store_model_in_db
         # Load existing config
+
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
             bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
             object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
@@ -1575,12 +1550,21 @@ class ProxyConfig:
         else:
             # default to file
             config = await self._get_config_from_file(config_file_path=config_file_path)
+        ## UPDATE CONFIG WITH DB
+        if prisma_client is not None:
+            config = await self._update_config_from_db(
+                config=config,
+                prisma_client=prisma_client,
+                store_model_in_db=store_model_in_db,
+            )
+
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
 
         config = self._check_for_os_environ_vars(config=config)
 
+        self.config = config
         return config
 
     async def load_config(  # noqa: PLR0915
@@ -2392,6 +2376,55 @@ class ProxyConfig:
                 pass_through_endpoints=general_settings["pass_through_endpoints"]
             )
 
+    async def _update_config_from_db(
+        self,
+        prisma_client: PrismaClient,
+        config: dict,
+        store_model_in_db: Optional[bool],
+    ):
+
+        if store_model_in_db is not True:
+            verbose_proxy_logger.info(
+                "'store_model_in_db' is not True, skipping db updates"
+            )
+            return config
+
+        _tasks = []
+        keys = [
+            "general_settings",
+            "router_settings",
+            "litellm_settings",
+            "environment_variables",
+        ]
+        for k in keys:
+            response = prisma_client.get_generic_data(
+                key="param_name", value=k, table_name="config"
+            )
+            _tasks.append(response)
+
+        responses = await asyncio.gather(*_tasks)
+        for response in responses:
+            if response is not None:
+                param_name = getattr(response, "param_name", None)
+                verbose_proxy_logger.info(f"loading {param_name} settings from db")
+                if param_name == "litellm_settings":
+                    verbose_proxy_logger.info(
+                        f"litellm_settings: {response.param_value}"
+                    )
+                param_value = getattr(response, "param_value", None)
+                if param_name is not None and param_value is not None:
+                    # check if param_name is already in the config
+                    if param_name in config:
+                        if isinstance(config[param_name], dict):
+                            config[param_name].update(param_value)
+                        else:
+                            config[param_name] = param_value
+                    else:
+                        # if it's not in the config - then add it
+                        config[param_name] = param_value
+
+        return config
+
     async def add_deployment(
         self,
         prisma_client: PrismaClient,
@@ -2993,7 +3026,7 @@ class ProxyStartupEvent:
         scheduler.start()
 
     @classmethod
-    def _setup_prisma_client(
+    async def _setup_prisma_client(
         cls,
         database_url: Optional[str],
         proxy_logging_obj: ProxyLogging,
@@ -3012,11 +3045,15 @@ class ProxyStartupEvent:
             except Exception as e:
                 raise e
 
+            await prisma_client.connect()
+
             ## Add necessary views to proxy ##
             asyncio.create_task(
                 prisma_client.check_view_exists()
             )  # check if all necessary views exist. Don't block execution
 
+            # run a health check to ensure the DB is ready
+            await prisma_client.health_check()
         return prisma_client
 
 
@@ -3033,11 +3070,20 @@ async def startup_event():
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
-        prisma_client = ProxyStartupEvent._setup_prisma_client(
+        prisma_client = await ProxyStartupEvent._setup_prisma_client(
             database_url=_db_url,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+    ## CHECK PREMIUM USER
+    verbose_proxy_logger.debug(
+        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
+            premium_user
+        )
+    )
+    if premium_user is False:
+        premium_user = _license_check.is_premium()
 
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
@@ -3086,21 +3132,6 @@ async def startup_event():
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
-    ## CHECK PREMIUM USER
-    verbose_proxy_logger.debug(
-        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
-            premium_user
-        )
-    )
-    if premium_user is False:
-        premium_user = _license_check.is_premium()
-
-    verbose_proxy_logger.debug(
-        "litellm.proxy.proxy_server.py::startup() - PREMIUM USER value - {}".format(
-            premium_user
-        )
-    )
-
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
@@ -3123,9 +3154,6 @@ async def startup_event():
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None:
-        await prisma_client.connect()
-
     if prisma_client is not None and master_key is not None:
         ProxyStartupEvent._add_master_key_hash_to_db(
             master_key=master_key,
@@ -8825,7 +8853,7 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 if k == "alert_to_webhook_url":
                     # check if slack is already enabled. if not, enable it
                     if "alerting" not in _existing_settings:
-                        _existing_settings["alerting"].append("slack")
+                        _existing_settings = {"alerting": ["slack"]}
                     elif isinstance(_existing_settings["alerting"], list):
                         if "slack" not in _existing_settings["alerting"]:
                             _existing_settings["alerting"].append("slack")

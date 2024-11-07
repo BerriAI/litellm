@@ -343,7 +343,7 @@ def test_completion_claude():
     try:
         # test without max tokens
         response = completion(
-            model="claude-instant-1", messages=messages, request_timeout=10
+            model="claude-3-5-haiku-20241022", messages=messages, request_timeout=10
         )
         # Add any assertions here to check response args
         print(response)
@@ -3543,7 +3543,6 @@ def response_format_tests(response: litellm.ModelResponse):
         "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])

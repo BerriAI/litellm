@@ -689,9 +689,10 @@ async def aaaatest_user_token_output(
     assert team_result.user_id == user_id
 
 
+@pytest.mark.parametrize("admin_allowed_routes", [None, ["ui_routes"]])
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
-async def test_allowed_routes_admin(prisma_client, audience):
+async def test_allowed_routes_admin(prisma_client, audience, admin_allowed_routes):
     """
     Add a check to make sure jwt proxy admin scope can access all allowed admin routes
 
@@ -754,12 +755,17 @@ async def test_allowed_routes_admin(prisma_client, audience):
 
     jwt_handler.user_api_key_cache = cache
 
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="client_id")
+    if admin_allowed_routes:
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+            team_id_jwt_field="client_id", admin_allowed_routes=admin_allowed_routes
+        )
+    else:
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_jwt_field="client_id")
 
     # VALID TOKEN
     ## GENERATE A TOKEN
     # Assuming the current time is in UTC
-    expiration_time = int((datetime.utcnow() + timedelta(minutes=10)).timestamp())
+    expiration_time = int((datetime.now() + timedelta(minutes=10)).timestamp())
 
     # Generate the JWT token
     # But before, you should convert bytes to string
@@ -777,6 +783,7 @@ async def test_allowed_routes_admin(prisma_client, audience):
 
     # verify token
 
+    print(f"admin_token: {admin_token}")
     response = await jwt_handler.auth_jwt(token=admin_token)
 
     ## RUN IT THROUGH USER API KEY AUTH

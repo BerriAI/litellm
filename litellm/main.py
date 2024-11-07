@@ -77,6 +77,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
+    validate_chat_completion_user_messages,
 )
 
 from ._logging import verbose_logger
@@ -157,11 +158,13 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
 from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
     VertexEmbedding,
 )
-from .llms.watsonx import IBMWatsonXAI
+from .llms.watsonx.chat.handler import WatsonXChatHandler
+from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
     ChatCompletionModality,
+    ChatCompletionPredictionContentParam,
     ChatCompletionUserMessage,
     HttpxBinaryResponseContent,
 )
@@ -220,6 +223,7 @@ vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
+watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
 ####### COMPLETION ENDPOINTS ################
 
@@ -304,6 +308,7 @@ async def acompletion(
     max_tokens: Optional[int] = None,
     max_completion_tokens: Optional[int] = None,
     modalities: Optional[List[ChatCompletionModality]] = None,
+    prediction: Optional[ChatCompletionPredictionContentParam] = None,
     audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -346,6 +351,7 @@ async def acompletion(
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request. You can use `["text", "audio"]`
+        prediction (ChatCompletionPredictionContentParam, optional): Configuration for a Predicted Output, which can greatly improve response times when large parts of the model response are known ahead of time. This is most common when you are regenerating a file with only minor changes to most of the content.
         audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
@@ -387,6 +393,7 @@ async def acompletion(
         "max_tokens": max_tokens,
         "max_completion_tokens": max_completion_tokens,
         "modalities": modalities,
+        "prediction": prediction,
         "audio": audio,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
@@ -693,6 +700,7 @@ def completion(  # type: ignore # noqa: PLR0915
     max_completion_tokens: Optional[int] = None,
     max_tokens: Optional[int] = None,
     modalities: Optional[List[ChatCompletionModality]] = None,
+    prediction: Optional[ChatCompletionPredictionContentParam] = None,
     audio: Optional[ChatCompletionAudioParam] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
@@ -737,6 +745,7 @@ def completion(  # type: ignore # noqa: PLR0915
         max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
         max_completion_tokens (integer, optional): An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
         modalities (List[ChatCompletionModality], optional): Output types that you would like the model to generate for this request.. You can use `["text", "audio"]`
+        prediction (ChatCompletionPredictionContentParam, optional): Configuration for a Predicted Output, which can greatly improve response times when large parts of the model response are known ahead of time. This is most common when you are regenerating a file with only minor changes to most of the content.
         audio (ChatCompletionAudioParam, optional): Parameters for audio output. Required when audio output is requested with modalities: ["audio"]
         presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
@@ -843,6 +852,7 @@ def completion(  # type: ignore # noqa: PLR0915
         "stop",
         "max_completion_tokens",
         "modalities",
+        "prediction",
         "audio",
         "max_tokens",
         "presence_penalty",
@@ -913,6 +923,9 @@ def completion(  # type: ignore # noqa: PLR0915
             model_response._hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
+
+        ### VALIDATE USER MESSAGES ###
+        validate_chat_completion_user_messages(messages=messages)
 
         ### TIMEOUT LOGIC ###
         timeout = timeout or kwargs.get("request_timeout", 600) or 600
@@ -994,6 +1007,7 @@ def completion(  # type: ignore # noqa: PLR0915
             max_tokens=max_tokens,
             max_completion_tokens=max_completion_tokens,
             modalities=modalities,
+            prediction=prediction,
             audio=audio,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
@@ -2607,6 +2621,26 @@ def completion(  # type: ignore # noqa: PLR0915
             ## RESPONSE OBJECT
             response = response
         elif custom_llm_provider == "watsonx":
+            response = watsonx_chat_completion.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=encoding,
+                custom_llm_provider="watsonx",
+            )
+        elif custom_llm_provider == "watsonx_text":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             response = watsonxai.completion(
                 model=model,
@@ -3868,34 +3902,17 @@ async def atext_completion(
                 custom_llm_provider=custom_llm_provider,
             )
         else:
-            transformed_logprobs = None
-            # only supported for TGI models
-            try:
-                raw_response = response._hidden_params.get("original_response", None)
-                transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
-            except Exception as e:
-                print_verbose(f"LiteLLM non blocking exception: {e}")
-
-            ## TRANSLATE CHAT TO TEXT FORMAT ##
+            ## OpenAI / Azure Text Completion Returns here
             if isinstance(response, TextCompletionResponse):
                 return response
             elif asyncio.iscoroutine(response):
                 response = await response
 
             text_completion_response = TextCompletionResponse()
-            text_completion_response["id"] = response.get("id", None)
-            text_completion_response["object"] = "text_completion"
-            text_completion_response["created"] = response.get("created", None)
-            text_completion_response["model"] = response.get("model", None)
-            text_choices = TextChoices()
-            text_choices["text"] = response["choices"][0]["message"]["content"]
-            text_choices["index"] = response["choices"][0]["index"]
-            text_choices["logprobs"] = transformed_logprobs
-            text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
-            text_completion_response["choices"] = [text_choices]
-            text_completion_response["usage"] = response.get("usage", None)
-            text_completion_response._hidden_params = HiddenParams(
-                **response._hidden_params
+            text_completion_response = litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+                text_completion_response=text_completion_response,
+                response=response,
+                custom_llm_provider=custom_llm_provider,
             )
             return text_completion_response
     except Exception as e:
@@ -4157,29 +4174,17 @@ def text_completion(  # noqa: PLR0915
         return response
     elif isinstance(response, TextCompletionStreamWrapper):
         return response
-    transformed_logprobs = None
-    # only supported for TGI models
-    try:
-        raw_response = response._hidden_params.get("original_response", None)
-        transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
-    except Exception as e:
-        verbose_logger.exception(f"LiteLLM non blocking exception: {e}")
 
+    # OpenAI Text / Azure Text will return here
     if isinstance(response, TextCompletionResponse):
         return response
 
-    text_completion_response["id"] = response.get("id", None)
-    text_completion_response["object"] = "text_completion"
-    text_completion_response["created"] = response.get("created", None)
-    text_completion_response["model"] = response.get("model", None)
-    text_choices = TextChoices()
-    text_choices["text"] = response["choices"][0]["message"]["content"]
-    text_choices["index"] = response["choices"][0]["index"]
-    text_choices["logprobs"] = transformed_logprobs
-    text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
-    text_completion_response["choices"] = [text_choices]
-    text_completion_response["usage"] = response.get("usage", None)
-    text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
+    text_completion_response = (
+        litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
+            response=response,
+            text_completion_response=text_completion_response,
+        )
+    )
 
     return text_completion_response
 
@@ -4315,9 +4320,9 @@ async def amoderation(
     else:
         _openai_client = openai_client
     if model is not None:
-        response = await openai_client.moderations.create(input=input, model=model)
+        response = await _openai_client.moderations.create(input=input, model=model)
     else:
-        response = await openai_client.moderations.create(input=input)
+        response = await _openai_client.moderations.create(input=input)
     return response
 
 
