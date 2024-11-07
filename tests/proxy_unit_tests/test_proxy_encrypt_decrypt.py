@@ -33,6 +33,7 @@ def test_encrypt_decrypt_with_master_key():
 
 def test_encrypt_decrypt_with_salt_key():
     os.environ["LITELLM_SALT_KEY"] = "sk-salt-key2222"
+    print(f"LITELLM_SALT_KEY: {os.environ['LITELLM_SALT_KEY']}")
     assert decrypt_value_helper(encrypt_value_helper("test")) == "test"
     assert decrypt_value_helper(encrypt_value_helper(10)) == 10
     assert decrypt_value_helper(encrypt_value_helper(True)) is True
