@@ -720,7 +720,7 @@ async def get_key_object(
         return _response
     except httpx.ConnectError as e:
         return await _handle_failed_db_connection_for_get_key_object(e=e)
-    except Exception as e:
+    except Exception:
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
