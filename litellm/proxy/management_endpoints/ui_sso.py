@@ -57,6 +57,7 @@ async def google_login(request: Request):  # noqa: PLR0915
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    generic_client_uses_pkce = os.getenv("GENERIC_CLIENT_USES_PKCE", "False")
 
     ####### Check if UI is disabled #######
     _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
@@ -193,6 +194,8 @@ async def google_login(request: Request):  # noqa: PLR0915
             allow_insecure_http=True,
             scope=generic_scope,
         )
+        if generic_client_uses_pkce == "True":
+            generic_sso.uses_pkce = True
         with generic_sso:
             # TODO: state should be a random string and added to the user session with cookie
             # or a cryptographicly signed state that we can verify stateless
@@ -302,6 +305,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
         from fastapi_sso.sso.base import DiscoveryDocument, OpenID
         from fastapi_sso.sso.generic import create_provider
 
+        generic_client_uses_pkce = os.getenv("GENERIC_CLIENT_USES_PKCE", "False")
         generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
         generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
         generic_authorization_endpoint = os.getenv(
@@ -402,6 +406,8 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             allow_insecure_http=True,
             scope=generic_scope,
         )
+        if generic_client_uses_pkce == "True":
+            generic_sso.uses_pkce = True
         verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
         result = await generic_sso.verify_and_process(
             request, params={"include_client_id": generic_include_client_id}

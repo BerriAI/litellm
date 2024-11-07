@@ -932,6 +932,7 @@ router_settings:
 | GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
+| GENERIC_CLIENT_USES_PKCE | Support PKCE for generic OAuth providers
 | GENERIC_CLIENT_STATE | State parameter for generic client authentication
 | GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
 | GENERIC_SCOPE | Scope settings for generic OAuth providers

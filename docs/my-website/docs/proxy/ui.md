@@ -174,6 +174,7 @@ GENERIC_USERINFO_ENDPOINT = "http://localhost:9090/me"
 The following can be used to customize attribute names when interacting with the generic OAuth provider. We will read these attributes from the SSO Provider result
 
 ```shell
+GENERIC_CLIENT_USES_PKCE = "True"
 GENERIC_USER_ID_ATTRIBUTE = "given_name"
 GENERIC_USER_EMAIL_ATTRIBUTE = "family_name"
 GENERIC_USER_DISPLAY_NAME_ATTRIBUTE = "display_name"
