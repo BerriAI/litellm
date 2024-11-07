@@ -742,6 +742,21 @@ async def info_key_fn(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": "No keys found"},
             )
+
+        if (
+            _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=key,
+                key_info=key_info,
+            )
+            is not True
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
+            )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
             key_info = key_info.model_dump()  # noqa
@@ -1538,6 +1553,27 @@ async def key_health(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+def _can_user_query_key_info(
+    user_api_key_dict: UserAPIKeyAuth,
+    key: Optional[str],
+    key_info: LiteLLM_VerificationToken,
+) -> bool:
+    """
+    Helper to check if the user has access to the key's info
+    """
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
+        return True
+    elif user_api_key_dict.api_key == key:
+        return True
+    # user can query their own key info
+    elif key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return False
 
 
 async def test_key_logging(
