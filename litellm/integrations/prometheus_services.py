@@ -137,7 +137,10 @@ class PrometheusServicesLogger:
     ):
         assert isinstance(counter, self.Counter)
 
-        counter.labels(labels, *additional_labels).inc(amount)
+        if additional_labels:
+            counter.labels(labels, *additional_labels).inc(amount)
+        else:
+            counter.labels(labels).inc(amount)
 
     def service_success_hook(self, payload: ServiceLoggerPayload):
         if self.mock_testing:
