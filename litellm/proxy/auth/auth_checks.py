@@ -740,7 +740,11 @@ async def _handle_failed_db_connection_for_get_key_object(
     Raises:
         - Orignal Exception in all other cases
     """
-    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        litellm_proxy_admin_name,
+        proxy_logging_obj,
+    )
 
     # If this flag is on, requests failing to connect to the DB will be allowed
     if general_settings.get("allow_requests_on_db_unavailable", False) is True:
@@ -755,7 +759,9 @@ async def _handle_failed_db_connection_for_get_key_object(
         )
 
         return UserAPIKeyAuth(
-            key_name="failed-to-connect-to-db", token="failed-to-connect-to-db"
+            key_name="failed-to-connect-to-db",
+            token="failed-to-connect-to-db",
+            user_id=litellm_proxy_admin_name,
         )
     else:
         raise e
