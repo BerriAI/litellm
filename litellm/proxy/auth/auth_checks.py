@@ -748,14 +748,12 @@ async def _handle_failed_db_connection_for_get_key_object(
 
     # If this flag is on, requests failing to connect to the DB will be allowed
     if general_settings.get("allow_requests_on_db_unavailable", False) is True:
-        # log to prometheus
-        proxy_logging_obj.service_logging_obj.service_success_hook(
-            service=ServiceTypes.ALLOW_REQUESTS_ON_DB_UNAVAILABLE,
+        # log this as a DB failure on prometheus
+        proxy_logging_obj.service_logging_obj.service_failure_hook(
+            service=ServiceTypes.DB,
             call_type="get_key_object",
-            parent_otel_span=None,
+            error=e,
             duration=0.0,
-            start_time=None,
-            end_time=None,
         )
 
         return UserAPIKeyAuth(
@@ -764,6 +762,7 @@ async def _handle_failed_db_connection_for_get_key_object(
             user_id=litellm_proxy_admin_name,
         )
     else:
+        # raise the original exception, the wrapper on `get_key_object` handles logging db failure to prometheus
         raise e
 
 
