@@ -31,6 +31,8 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 def test_braintrust_logging():
     import litellm
 
+    litellm.set_verbose = True
+
     http_client = HTTPHandler()
 
     with patch.object(
@@ -47,4 +49,5 @@ def test_braintrust_logging():
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
         )
 
+        time.sleep(2)
         mock_client.assert_called()
