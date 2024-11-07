@@ -5,7 +5,5 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-
-general_settings: 
-    alerting: ["slack"]
-    alerting_threshold: 0.001
+litellm_settings:
+  callbacks: ["gcs_bucket"]

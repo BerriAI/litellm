@@ -26,10 +26,13 @@ else:
     VertexBase = Any
 
 
+IAM_AUTH_KEY = "IAM_AUTH"
+
+
 class GCSLoggingConfig(TypedDict):
     bucket_name: str
     vertex_instance: VertexBase
-    path_service_account: str
+    path_service_account: Optional[str]
 
 
 class GCSBucketLogger(GCSBucketBase):
@@ -173,7 +176,7 @@ class GCSBucketLogger(GCSBucketBase):
         )
 
         bucket_name: str
-        path_service_account: str
+        path_service_account: Optional[str]
         if standard_callback_dynamic_params is not None:
             verbose_logger.debug("Using dynamic GCS logging")
             verbose_logger.debug(
@@ -193,10 +196,6 @@ class GCSBucketLogger(GCSBucketBase):
                 raise ValueError(
                     "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
                 )
-            if _path_service_account is None:
-                raise ValueError(
-                    "GCS_PATH_SERVICE_ACCOUNT is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_PATH_SERVICE_ACCOUNT' in the environment."
-                )
             bucket_name = _bucket_name
             path_service_account = _path_service_account
             vertex_instance = await self.get_or_create_vertex_instance(
@@ -207,10 +206,6 @@ class GCSBucketLogger(GCSBucketBase):
             if self.BUCKET_NAME is None:
                 raise ValueError(
                     "GCS_BUCKET_NAME is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_BUCKET_NAME' in the environment."
-                )
-            if self.path_service_account_json is None:
-                raise ValueError(
-                    "GCS_PATH_SERVICE_ACCOUNT is not set in the environment, but GCS Bucket is being used as a logging callback. Please set 'GCS_PATH_SERVICE_ACCOUNT' in the environment."
                 )
             bucket_name = self.BUCKET_NAME
             path_service_account = self.path_service_account_json
@@ -224,7 +219,9 @@ class GCSBucketLogger(GCSBucketBase):
             path_service_account=path_service_account,
         )
 
-    async def get_or_create_vertex_instance(self, credentials: str) -> VertexBase:
+    async def get_or_create_vertex_instance(
+        self, credentials: Optional[str]
+    ) -> VertexBase:
         """
         This function is used to get the Vertex instance for the GCS Bucket Logger.
         It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
@@ -233,15 +230,27 @@ class GCSBucketLogger(GCSBucketBase):
             VertexBase,
         )
 
-        if credentials not in self.vertex_instances:
+        _in_memory_key = self._get_in_memory_key_for_vertex_instance(credentials)
+        if _in_memory_key not in self.vertex_instances:
             vertex_instance = VertexBase()
             await vertex_instance._ensure_access_token_async(
                 credentials=credentials,
                 project_id=None,
                 custom_llm_provider="vertex_ai",
             )
-            self.vertex_instances[credentials] = vertex_instance
-        return self.vertex_instances[credentials]
+            self.vertex_instances[_in_memory_key] = vertex_instance
+        return self.vertex_instances[_in_memory_key]
+
+    def _get_in_memory_key_for_vertex_instance(self, credentials: Optional[str]) -> str:
+        """
+        Returns key to use for caching the Vertex instance in-memory.
+
+        When using Vertex with Key based logging, we need to cache the Vertex instance in-memory.
+
+        - If a credentials string is provided, it is used as the key.
+        - If no credentials string is provided, "IAM_AUTH" is used as the key.
+        """
+        return credentials or IAM_AUTH_KEY
 
     async def download_gcs_object(self, object_name: str, **kwargs):
         """
