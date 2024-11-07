@@ -528,6 +528,8 @@ async def test_get_gcs_logging_config_without_service_account():
     1. Key based logging without a service account
     2. Default Callback without a service account
     """
+    _old_gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
+    os.environ.pop("GCS_BUCKET_NAME")
 
     # Mock the load_auth function to avoid credential loading issues
     # Test 1: With standard_callback_dynamic_params (with service account)
@@ -559,10 +561,8 @@ async def test_get_gcs_logging_config_without_service_account():
 
     # Test 5: With missing bucket name
     with pytest.raises(ValueError, match="GCS_BUCKET_NAME is not set"):
-        _old_gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
-        os.environ.pop("GCS_BUCKET_NAME")
         gcs_logger = GCSBucketLogger(bucket_name=None)
         await gcs_logger.get_gcs_logging_config({})
 
-        if _old_gcs_bucket_name is not None:
-            os.environ["GCS_BUCKET_NAME"] = _old_gcs_bucket_name
+    if _old_gcs_bucket_name is not None:
+        os.environ["GCS_BUCKET_NAME"] = _old_gcs_bucket_name
