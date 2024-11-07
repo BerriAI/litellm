@@ -1,0 +1,7 @@
+model_list: 
+  - model_name: "openai-model"
+    litellm_params: 
+      model: "gpt-3.5-turbo"
+
+litellm_settings:
+  cache: True
