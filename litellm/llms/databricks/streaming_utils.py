@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import List, Optional
 
 import litellm
 from litellm import verbose_logger
@@ -10,7 +10,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
 
 
 class ModelResponseIterator:

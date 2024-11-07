@@ -3470,6 +3470,86 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
             continue
 
 
+def test_unit_test_gemini_streaming_content_filter():
+    chunks = [
+        {
+            "text": "##",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 1, "total_tokens": 38},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": " Downsides of Prompt Hacking in a Customer Portal\n\nWhile prompt engineering can be incredibly",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": "",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "content_filter",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+    ]
+
+    completion_stream = ModelResponseListIterator(model_responses=chunks)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gemini/gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        logging_obj=litellm.Logging(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    stream_finish_reason: Optional[str] = None
+    idx = 0
+    for chunk in response:
+        print(f"chunk: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            stream_finish_reason = chunk.choices[0].finish_reason
+        idx += 1
+    print(f"num chunks: {idx}")
+    assert stream_finish_reason == "content_filter"
+
+
 def test_unit_test_custom_stream_wrapper_openai():
     """
     Test if last streaming chunk ends with '?', if the message repeats itself.
@@ -4016,3 +4096,28 @@ def test_streaming_tool_calls_valid_json_str(model):
     for k, v in tool_call_id_arg_map.items():
         print("k={}, v={}".format(k, v))
         json.loads(v)  # valid json str
+
+
+@pytest.mark.asyncio
+async def test_gemini_streaming_incomplete_chunk():
+    from litellm import stream_chunk_builder
+
+    litellm.set_verbose = True
+    response = await acompletion(
+        model="gemini/gemini-1.5-pro",
+        messages=[
+            {
+                "role": "user",
+                "content": "What are the downsides of prompt-hacking? For example, if you have a customer portal that is helping answer questions about the companies products, what are the possible risks here?",
+            }
+        ],
+        stream=True,
+    )
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+
+    response = stream_chunk_builder(chunks)
+    assert response.choices[0].message.content is not None
+
+    print(f"response: {response.choices[0].message.content}")
