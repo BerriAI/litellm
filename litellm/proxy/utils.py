@@ -137,7 +137,7 @@ def safe_deep_copy(data):
     return new_data
 
 
-def log_to_opentelemetry(func):
+def log_db_metrics(func):
     """
     Decorator to log the duration of a DB related function to ServiceLogger()
 
@@ -1397,7 +1397,7 @@ class PrismaClient:
 
         return
 
-    @log_to_opentelemetry
+    @log_db_metrics
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
@@ -1463,7 +1463,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    @log_to_opentelemetry
+    @log_db_metrics
     async def get_data(  # noqa: PLR0915
         self,
         token: Optional[Union[str, list]] = None,

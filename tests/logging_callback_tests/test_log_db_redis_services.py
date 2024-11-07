@@ -17,23 +17,23 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.proxy.utils import log_to_opentelemetry, ServiceTypes
+from litellm.proxy.utils import log_db_metrics, ServiceTypes
 from datetime import datetime
 
 
 # Test async function to decorate
-@log_to_opentelemetry
+@log_db_metrics
 async def sample_db_function(*args, **kwargs):
     return "success"
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def sample_proxy_function(*args, **kwargs):
     return "success"
 
 
 @pytest.mark.asyncio
-async def test_log_to_opentelemetry_success():
+async def test_log_db_metrics_success():
     # Mock the proxy_logging_obj
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         # Setup mock
@@ -61,14 +61,14 @@ async def test_log_to_opentelemetry_success():
 
 
 @pytest.mark.asyncio
-async def test_log_to_opentelemetry_duration():
+async def test_log_db_metrics_duration():
     # Mock the proxy_logging_obj
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         # Setup mock
         mock_proxy_logging.service_logging_obj.async_service_success_hook = AsyncMock()
 
         # Add a delay to the function to test duration
-        @log_to_opentelemetry
+        @log_db_metrics
         async def delayed_function(**kwargs):
             await asyncio.sleep(1)  # 1 second delay
             return "success"
@@ -95,14 +95,14 @@ async def test_log_to_opentelemetry_duration():
 
 
 @pytest.mark.asyncio
-async def test_log_to_opentelemetry_failure():
+async def test_log_db_metrics_failure():
     # Mock the proxy_logging_obj
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         # Setup mock
         mock_proxy_logging.service_logging_obj.async_service_failure_hook = AsyncMock()
 
         # Create a failing function
-        @log_to_opentelemetry
+        @log_db_metrics
         async def failing_function(**kwargs):
             raise ValueError("Test error")
 
