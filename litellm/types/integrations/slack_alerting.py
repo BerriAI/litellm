@@ -191,3 +191,34 @@ DEFAULT_ALERT_TYPES: List[AlertType] = [
     # Fallback alerts
     AlertType.fallback_reports,
 ]
+
+
+class BudgetAlertType(str, Enum):
+    """
+    Enum for different types of budget alerts
+    """
+
+    token_budget = "token_budget"
+    user_budget = "user_budget"
+    team_budget = "team_budget"
+    proxy_budget = "proxy_budget"
+    projected_limit_exceeded = "projected_limit_exceeded"
+
+
+class BudgetAlertInfo(BaseModel):
+    """
+    Information about a budget alert
+
+    Internal type used for sending budget alerts on slack
+
+    Args:
+        event_group: Indicates if it's a team, internal user, key, proxy, or customer budget alert
+        event_message: The message to display in the alert
+        event: The event type
+        event_id: The id of the event (e.g. user_id, team_id, token)
+    """
+
+    event_group: Optional[Literal["internal_user", "team", "key", "proxy", "customer"]]
+    event_message: str
+    event: Optional[str]
+    event_id: Optional[str]
