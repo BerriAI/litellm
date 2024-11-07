@@ -286,3 +286,36 @@ def test_get_hidden_params():
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
     # assert all fields in StandardLoggingHiddenParams are present
     assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+
+
+def test_get_final_response_obj():
+    """Test get_final_response_obj with different input types and redaction scenarios"""
+    # Test with direct response_obj
+    response_obj = {"choices": [{"message": {"content": "test content"}}]}
+    result = StandardLoggingPayloadSetup.get_final_response_obj(
+        response_obj=response_obj, init_response_obj=None, kwargs={}
+    )
+    assert result == response_obj
+
+    # Test redaction when litellm.turn_off_message_logging is True
+    litellm.turn_off_message_logging = True
+    try:
+        model_response = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(message=litellm.Message(content="sensitive content"))
+            ]
+        )
+        kwargs = {"messages": [{"role": "user", "content": "original message"}]}
+        result = StandardLoggingPayloadSetup.get_final_response_obj(
+            response_obj=model_response, init_response_obj=model_response, kwargs=kwargs
+        )
+
+        print("result", result)
+        print("type(result)", type(result))
+        # Verify response message content was redacted
+        assert result["choices"][0]["message"]["content"] == "redacted-by-litellm"
+        # Verify that redaction occurred in kwargs
+        assert kwargs["messages"][0]["content"] == "redacted-by-litellm"
+    finally:
+        # Reset litellm.turn_off_message_logging to its original value
+        litellm.turn_off_message_logging = False
