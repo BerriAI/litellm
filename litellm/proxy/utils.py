@@ -1083,19 +1083,16 @@ class PrismaClient:
         proxy_logging_obj: ProxyLogging,
         http_client: Optional[Any] = None,
     ):
-        verbose_proxy_logger.debug(
-            "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
-        )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
+        verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
         except Exception:
             raise Exception("Unable to find Prisma binaries.")
-        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -1114,7 +1111,7 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
-        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
+        verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -2348,11 +2345,7 @@ class PrismaClient:
         """
         start_time = time.time()
         try:
-            sql_query = """
-                SELECT 1
-                FROM "LiteLLM_VerificationToken"
-                LIMIT 1
-                """
+            sql_query = "SELECT 1"
 
             # Execute the raw query
             # The asterisk before `user_id_list` unpacks the list into separate arguments
