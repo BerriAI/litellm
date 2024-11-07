@@ -45,6 +45,7 @@ def test_active_callbacks(client):
     print("response.status_code", response.status_code)
 
     json_response = response.json()
+    print(f"json_response={json_response}")
     _active_callbacks = json_response["litellm.callbacks"]
 
     expected_callback_names = [
