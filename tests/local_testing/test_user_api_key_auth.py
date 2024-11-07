@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from starlette.datastructures import URL
@@ -157,7 +157,7 @@ def test_returned_user_api_key_auth(user_role, expected_role):
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio
-async def test_user_personal_budgets(key_ownership):
+async def test_aaaauser_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
@@ -169,6 +169,9 @@ async def test_user_personal_budgets(key_ownership):
 
     from fastapi import Request
     from starlette.datastructures import URL
+    import litellm
+
+    litellm._turn_on_debug()
 
     from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -193,7 +196,7 @@ async def test_user_personal_budgets(key_ownership):
             team_max_budget=100,
             spend=20,
         )
-    await asyncio.sleep(1)
+
     user_obj = LiteLLM_UserTable(
         user_id=_user_id, spend=11, max_budget=10, user_email=""
     )
@@ -206,6 +209,10 @@ async def test_user_personal_budgets(key_ownership):
 
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
+
+    test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
+
+    assert test_user_cache.get_cache(key=hash_token(user_key)) == valid_token
 
     try:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
