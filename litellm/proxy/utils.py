@@ -84,7 +84,10 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
+from litellm.types.integrations.slack_alerting import (
+    DEFAULT_ALERT_TYPES,
+    BudgetAlertType,
+)
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -697,13 +700,7 @@ class ProxyLogging:
 
     async def budget_alerts(
         self,
-        type: Literal[
-            "token_budget",
-            "user_budget",
-            "team_budget",
-            "proxy_budget",
-            "projected_limit_exceeded",
-        ],
+        type: BudgetAlertType,
         user_info: CallInfo,
     ):
         if self.alerting is None:
