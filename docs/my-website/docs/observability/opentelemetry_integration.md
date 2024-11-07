@@ -35,7 +35,7 @@ OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
 
 ```shell
 OTEL_EXPORTER="otlp_http"
-OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_ENDPOINT="http://0.0.0.0:4318"
 ```
 
 </TabItem>
@@ -44,7 +44,7 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 
 ```shell
 OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_ENDPOINT="http://0.0.0.0:4317"
 ```
 
 </TabItem>
