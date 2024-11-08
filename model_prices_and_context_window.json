@@ -1141,6 +1141,30 @@
         "mode": "chat",
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview"
     },    
+    "azure_ai/Llama-3.2-11B-Vision-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.00000037,
+        "output_cost_per_token": 0.00000037,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-11b-vision-instruct-offer?tab=Overview"
+    },
+    "azure_ai/Llama-3.2-90B-Vision-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.00000204,
+        "output_cost_per_token": 0.00000204,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-90b-vision-instruct-offer?tab=Overview"
+    },
     "azure_ai/Meta-Llama-3-70B-Instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
