@@ -323,8 +323,8 @@ class OpenTelemetry(CustomLogger):
 
         span.end(end_time=self._to_ns(end_time))
 
-        # if parent_otel_span is not None:
-        #     parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+        if parent_otel_span is not None:
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -704,10 +704,10 @@ class OpenTelemetry(CustomLogger):
             TraceContextTextMapPropagator,
         )
 
-        verbose_logger.debug("OpenTelemetry: GOT A TRACEPARENT {}".format(_traceparent))
         propagator = TraceContextTextMapPropagator()
-        _parent_context = propagator.extract(carrier={"traceparent": _traceparent})
-        verbose_logger.debug("OpenTelemetry: PARENT CONTEXT {}".format(_parent_context))
+        carrier = {"traceparent": _traceparent}
+        _parent_context = propagator.extract(carrier=carrier)
+
         return _parent_context
 
     def _get_span_context(self, kwargs):
