@@ -16,6 +16,10 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter as _InMemorySpanExporter,
+    )
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy._types import (
@@ -24,10 +28,14 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span
+    SpanExporter = _SpanExporter
+    InMemorySpanExporter = _InMemorySpanExporter
     UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
 else:
     Span = Any
+    SpanExporter = Any
+    InMemorySpanExporter = Any
     UserAPIKeyAuth = Any
     ManagementEndpointLoggingPayload = Any
 
@@ -44,7 +52,6 @@ LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 @dataclass
 class OpenTelemetryConfig:
-    from opentelemetry.sdk.trace.export import SpanExporter
 
     exporter: Union[str, SpanExporter] = "console"
     endpoint: Optional[str] = None
@@ -59,9 +66,6 @@ class OpenTelemetryConfig:
 
         OTEL_HEADERS gets sent as headers = {"x-honeycomb-team": "B85YgLm96******"}
         """
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-            InMemorySpanExporter,
-        )
 
         if os.getenv("OTEL_EXPORTER") == "in_memory":
             return cls(exporter=InMemorySpanExporter())
