@@ -6698,5 +6698,121 @@
         "mode": "embedding",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."}
+    },
+    "glm-4": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00005, 
+        "output_cost_per_token": 0.00005,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
+    "glm-4-plus": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00005, 
+        "output_cost_per_token": 0.00005,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
+    "glm-4v-plus": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00005, 
+        "output_cost_per_token": 0.00005,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "glm-4-alltools": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000005,
+        "input_cost_per_token_cache_hit": 0.00000005,
+        "output_cost_per_token": 0.00000005,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "glm-4-0520": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0001, 
+        "output_cost_per_token": 0.0001,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
+    "glm-4-air": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000001, 
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
+    "glm-4-airx": {
+        "max_tokens": 8000,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001,
+        "litellm_provider": "zhipu",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
+    },
+    "glm-4-flash": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0, 
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "zhipu",
+        "mode": "chat", 
+        "supports_tool_choice": true
+    },
+    "glm-4-flashx": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000001, 
+        "output_cost_per_token": 0.00000001,
+        "litellm_provider": "zhipu",
+        "mode": "chat", 
+        "supports_tool_choice": true
+    },
+    "glm-4-long": {
+        "max_tokens": 1024000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000001, 
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "zhipu",
+        "mode": "chat"
     }
 }

@@ -496,6 +496,7 @@ openai_compatible_endpoints: List = [
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "open.bigmodel.cn/api/paas/v4",
 ]
 
 # this is maintained for Exception Mapping
@@ -523,6 +524,7 @@ openai_compatible_providers: List = [
     "litellm_proxy",
     "hosted_vllm",
     "lm_studio",
+    "zhipu",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -787,6 +789,7 @@ class LlmProviders(str, Enum):
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
+    ZHIPU = "zhipu"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)

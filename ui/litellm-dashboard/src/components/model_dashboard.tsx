@@ -151,6 +151,7 @@ enum Providers {
   Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
+  Zhipu = "Zhipu",
 }
 
 const provider_map: Record<string, string> = {
@@ -168,6 +169,7 @@ const provider_map: Record<string, string> = {
   Databricks: "databricks",
   Deepseek: "deepseek",
   Ollama: "ollama",
+  Zhipu: "zhipu",
 
 };
 

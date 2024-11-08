@@ -83,9 +83,16 @@ class InitalizeOpenAISDKClient:
 
         ####  for OpenAI / Azure we need to initalize the Client for High Traffic ########
         custom_llm_provider = litellm_params.get("custom_llm_provider")
+        ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
+        if custom_llm_provider is not None:
+            model_name = (
+                custom_llm_provider + "/" + model_name
+            )
+            
         custom_llm_provider = custom_llm_provider or model_name.split("/", 1)[0] or ""
         default_api_base = None
         default_api_key = None
+       
         if custom_llm_provider in litellm.openai_compatible_providers:
             _, custom_llm_provider, api_key, api_base = litellm.get_llm_provider(
                 model=model_name
