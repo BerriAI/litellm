@@ -8252,3 +8252,22 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
             )
 
     return messages
+
+
+from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+
+
+class ProviderConfigManager:
+    @staticmethod
+    def get_provider_config(
+        model: str, provider: litellm.LlmProviders
+    ) -> OpenAIGPTConfig:
+        """
+        Returns the provider config for a given provider.
+        """
+        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+            return litellm.OpenAIO1Config()
+        elif litellm.LlmProviders.DEEPSEEK == provider:
+            return litellm.DeepSeekChatConfig()
+
+        return OpenAIGPTConfig()

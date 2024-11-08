@@ -24,6 +24,19 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 )
 
 
+def handle_messages_with_content_list_to_str_conversion(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    """
+    Handles messages with content list conversion
+    """
+    for message in messages:
+        texts = convert_content_list_to_str(message=message)
+        if texts:
+            message["content"] = texts
+    return messages
+
+
 def convert_content_list_to_str(message: AllMessageValues) -> str:
     """
     - handles scenario where content is list and not string
