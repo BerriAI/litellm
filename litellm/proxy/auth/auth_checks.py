@@ -32,7 +32,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
+from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
@@ -290,7 +290,7 @@ def get_actual_routes(allowed_routes: list) -> list:
     return actual_routes
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -415,7 +415,7 @@ def _update_last_db_access_time(
     last_db_access_time[key] = (value, time.time())
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def get_user_object(
     user_id: str,
     prisma_client: Optional[PrismaClient],
@@ -562,7 +562,7 @@ async def _delete_cache_key_object(
         )
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def _get_team_db_check(team_id: str, prisma_client: PrismaClient):
     return await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
@@ -658,7 +658,7 @@ async def get_team_object(
         )
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def get_key_object(
     hashed_token: str,
     prisma_client: Optional[PrismaClient],
@@ -766,7 +766,7 @@ async def _handle_failed_db_connection_for_get_key_object(
         raise e
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],

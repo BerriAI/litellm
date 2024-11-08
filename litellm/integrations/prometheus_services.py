@@ -9,6 +9,7 @@ import subprocess
 import sys
 import traceback
 import uuid
+from typing import List, Optional, Union
 
 import dotenv
 import requests  # type: ignore
@@ -51,7 +52,9 @@ class PrometheusServicesLogger:
             for service in self.services:
                 histogram = self.create_histogram(service, type_of_request="latency")
                 counter_failed_request = self.create_counter(
-                    service, type_of_request="failed_requests"
+                    service,
+                    type_of_request="failed_requests",
+                    additional_labels=["error_class", "function_name"],
                 )
                 counter_total_requests = self.create_counter(
                     service, type_of_request="total_requests"
@@ -99,7 +102,12 @@ class PrometheusServicesLogger:
             buckets=LATENCY_BUCKETS,
         )
 
-    def create_counter(self, service: str, type_of_request: str):
+    def create_counter(
+        self,
+        service: str,
+        type_of_request: str,
+        additional_labels: Optional[List[str]] = None,
+    ):
         metric_name = "litellm_{}_{}".format(service, type_of_request)
         is_registered = self.is_metric_registered(metric_name)
         if is_registered:
@@ -107,7 +115,7 @@ class PrometheusServicesLogger:
         return self.Counter(
             metric_name,
             "Total {} for {} service".format(type_of_request, service),
-            labelnames=[service],
+            labelnames=[service] + (additional_labels or []),
         )
 
     def observe_histogram(
@@ -125,10 +133,14 @@ class PrometheusServicesLogger:
         counter,
         labels: str,
         amount: float,
+        additional_labels: Optional[List[str]] = [],
     ):
         assert isinstance(counter, self.Counter)
 
-        counter.labels(labels).inc(amount)
+        if additional_labels:
+            counter.labels(labels, *additional_labels).inc(amount)
+        else:
+            counter.labels(labels).inc(amount)
 
     def service_success_hook(self, payload: ServiceLoggerPayload):
         if self.mock_testing:
@@ -187,16 +199,25 @@ class PrometheusServicesLogger:
                         amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
                     )
 
-    async def async_service_failure_hook(self, payload: ServiceLoggerPayload):
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Union[str, Exception],
+    ):
         if self.mock_testing:
             self.mock_testing_failure_calls += 1
+        error_class = error.__class__.__name__
+        function_name = payload.call_type
 
         if payload.service.value in self.payload_to_prometheus_map:
             prom_objects = self.payload_to_prometheus_map[payload.service.value]
             for obj in prom_objects:
+                # increment both failed and total requests
                 if isinstance(obj, self.Counter):
                     self.increment_counter(
                         counter=obj,
                         labels=payload.service.value,
+                        # log additional_labels=["error_class", "function_name"], used for debugging what's going wrong with the DB
+                        additional_labels=[error_class, function_name],
                         amount=1,  # LOG ERROR COUNT TO PROMETHEUS
                     )
