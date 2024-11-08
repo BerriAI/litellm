@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 
 import pytest
-
+from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
@@ -64,6 +64,106 @@ def load_vertex_ai_credentials():
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GCS_PATH_SERVICE_ACCOUNT"] = os.path.abspath(temp_file.name)
     print("created gcs path service account=", os.environ["GCS_PATH_SERVICE_ACCOUNT"])
+
+
+@pytest.mark.parametrize(
+    "is_error",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_basic_gcs_logger_mock(is_error: bool):
+    load_vertex_ai_credentials()
+    from typing import Optional
+
+    gcs_logger = GCSBucketLogger()
+    print("GCSBucketLogger", gcs_logger)
+
+    litellm.callbacks = [gcs_logger]
+
+    if is_error:
+        patch_event = "async_log_failure_event"
+        mock_response = litellm.BadRequestError(
+            model="gpt-3.5-turbo",
+            message="Error: 400: Bad Request: Invalid API key, please check your API key and try again.",
+            llm_provider="openai",
+        )
+    else:
+        patch_event = "async_log_success_event"
+        mock_response = "Hi!"
+    with patch.object(gcs_logger, patch_event, new=AsyncMock()) as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                temperature=0.7,
+                messages=[{"role": "user", "content": "This is a test"}],
+                max_tokens=10,
+                user="ishaan-2",
+                mock_response=mock_response,
+                litellm_metadata={
+                    "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+                    "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+                    "user_api_key_alias": None,
+                    "user_api_end_user_max_budget": None,
+                    "litellm_api_version": "0.0.0",
+                    "global_max_parallel_requests": None,
+                    "user_api_key_user_id": "116544810872468347480",
+                    "user_api_key_org_id": None,
+                    "user_api_key_team_id": None,
+                    "user_api_key_team_alias": None,
+                    "user_api_key_metadata": {},
+                    "requester_ip_address": "127.0.0.1",
+                    "requester_metadata": {"foo": "bar"},
+                    "spend_logs_metadata": {"hello": "world"},
+                    "headers": {
+                        "content-type": "application/json",
+                        "user-agent": "PostmanRuntime/7.32.3",
+                        "accept": "*/*",
+                        "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",
+                        "host": "localhost:4000",
+                        "accept-encoding": "gzip, deflate, br",
+                        "connection": "keep-alive",
+                        "content-length": "163",
+                    },
+                    "endpoint": "http://localhost:4000/chat/completions",
+                    "model_group": "gpt-3.5-turbo",
+                    "deployment": "azure/chatgpt-v-2",
+                    "model_info": {
+                        "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
+                        "db_model": False,
+                    },
+                    "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+                    "caching_groups": None,
+                    "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+                },
+            )
+        except Exception as e:
+            pass
+        await asyncio.sleep(1)
+
+        mock_client.assert_called_once()
+
+        print(
+            "mock_client.call_args.kwargs['kwargs'].keys()",
+            mock_client.call_args.kwargs["kwargs"].keys(),
+        )
+
+        print(
+            f"received payload: {mock_client.call_args.kwargs['kwargs']['standard_logging_object']}"
+        )
+
+        sl_object: Optional[StandardLoggingPayload] = mock_client.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+
+        assert sl_object is not None
+
+        assert (
+            sl_object["metadata"]["user_api_key_hash"]
+            == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+        )
+        assert sl_object["metadata"]["user_api_key_user_id"] == "116544810872468347480"
+
+        assert sl_object["metadata"]["requester_metadata"] == {"foo": "bar"}
 
 
 @pytest.mark.asyncio

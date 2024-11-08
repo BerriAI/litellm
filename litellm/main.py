@@ -414,6 +414,7 @@ async def acompletion(
         "model_list": model_list,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
+        "metadata": metadata,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -881,7 +882,6 @@ def completion(  # type: ignore # noqa: PLR0915
         "logprobs",
         "top_logprobs",
         "extra_headers",
-        "metadata",
     ]
 
     default_params = openai_params + all_litellm_params
@@ -1031,7 +1031,6 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
-            metadata=metadata,
             **non_default_params,
         )
 
@@ -1046,6 +1045,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         # For logging - save the values of the litellm-specific params passed in
+
         litellm_params = get_litellm_params(
             acompletion=acompletion,
             api_key=api_key,
@@ -1072,6 +1072,7 @@ def completion(  # type: ignore # noqa: PLR0915
             user_continue_message=kwargs.get("user_continue_message"),
             base_model=base_model,
         )
+
         logging.update_environment_variables(
             model=model,
             user=user,

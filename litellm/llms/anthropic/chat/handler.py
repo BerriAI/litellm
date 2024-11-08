@@ -440,7 +440,7 @@ class AnthropicChatCompletion(BaseLLM):
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         acompletion=None,
-        litellm_params=None,
+        litellm_params: Optional[dict] = None,
         logger_fn=None,
         headers={},
         client=None,
@@ -466,6 +466,7 @@ class AnthropicChatCompletion(BaseLLM):
             headers=headers,
             _is_function_call=_is_function_call,
             is_vertex_request=is_vertex_request,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING

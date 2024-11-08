@@ -329,11 +329,7 @@ class AnthropicConfig:
                 optional_params["tools"] = [_tool]
                 optional_params["tool_choice"] = _tool_choice
                 optional_params["json_mode"] = True
-            elif param == "metadata":
-                if isinstance(value, dict) and "user_id" in value:
-                    optional_params["metadata"] = {
-                        "user_id": value.get("user_id", None)
-                    }
+
         ## VALIDATE REQUEST
         """
         Anthropic doesn't support tool calling without `tools=` param specified.
@@ -444,6 +440,7 @@ class AnthropicConfig:
         headers: dict,
         _is_function_call: bool,
         is_vertex_request: bool,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         """
         Translate messages to anthropic format.
@@ -473,6 +470,22 @@ class AnthropicConfig:
                 k not in optional_params
             ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 optional_params[k] = v
+
+        ## check for user-id in metadata
+
+        if (
+            litellm_params is not None
+            and "metadata" in litellm_params
+            and model
+            in litellm.anthropic_models  # only for Anthropic's `/v1/messages` API. not sure if supported by Vertex/Bedrock.
+        ):
+            if (
+                isinstance(litellm_params["metadata"], dict)
+                and "user_id" in litellm_params["metadata"]
+            ):
+                optional_params["metadata"] = {
+                    "user_id": litellm_params["metadata"]["user_id"]
+                }
 
         ## Handle Tool Calling
         if "tools" in optional_params:
