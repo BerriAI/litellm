@@ -241,6 +241,31 @@ class AnthropicConfig:
                 anthropic_tools.append(new_tool)
         return anthropic_tools
 
+    def _handle_stop_param(
+        self, value: Optional[Union[str, List[str]]]
+    ) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            if (
+                value == "\n"
+            ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                return None
+            value = [value]
+        elif isinstance(value, list):
+            new_v = []
+            for v in value:
+                if (
+                    v == "\n"
+                ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                    continue
+                new_v.append(v)
+            if len(new_v) > 0:
+                value = new_v
+            else:
+                return None
+        return value
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -266,26 +291,14 @@ class AnthropicConfig:
                     optional_params["tool_choice"] = _tool_choice
             if param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    if (
-                        value == "\n"
-                    ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
-                        continue
-                    value = [value]
-                elif isinstance(value, list):
-                    new_v = []
-                    for v in value:
-                        if (
-                            v == "\n"
-                        ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
-                            continue
-                        new_v.append(v)
-                    if len(new_v) > 0:
-                        value = new_v
-                    else:
-                        continue
-                optional_params["stop_sequences"] = value
+            if (
+                param == "stop"
+                and value is not None
+                and (isinstance(value, str) or isinstance(value, list))
+            ):
+                stop_sequences = self._handle_stop_param(value=value)
+                if stop_sequences is not None:
+                    optional_params["stop_sequences"] = stop_sequences
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
