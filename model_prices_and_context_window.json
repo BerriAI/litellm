@@ -108,7 +108,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "o1-mini-2024-09-12": {
@@ -122,7 +122,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "o1-preview": {
@@ -136,7 +136,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "o1-preview-2024-09-12": {
@@ -150,7 +150,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "chatgpt-4o-latest": {
@@ -190,6 +190,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true
     },
@@ -461,6 +462,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "ft:gpt-4o-mini-2024-07-18": {
@@ -652,7 +654,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "azure/o1-mini-2024-09-12": {
@@ -666,7 +668,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "azure/o1-preview": {
@@ -680,7 +682,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "azure/o1-preview-2024-09-12": {
@@ -694,7 +696,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_prompt_caching": true
     },
     "azure/gpt-4o": {
@@ -721,6 +723,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "azure/gpt-4o-2024-05-13": {
@@ -746,6 +749,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "azure/global-standard/gpt-4o-mini": {
@@ -3790,7 +3794,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "openrouter/openai/o1-mini-2024-09-12": {
         "max_tokens": 65536,
@@ -3802,7 +3806,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "openrouter/openai/o1-preview": {
         "max_tokens": 32768,
@@ -3814,7 +3818,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "openrouter/openai/o1-preview-2024-09-12": {
         "max_tokens": 32768,
@@ -3826,7 +3830,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "openrouter/openai/gpt-4o": {
         "max_tokens": 4096,
