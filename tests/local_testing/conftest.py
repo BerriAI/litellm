@@ -23,11 +23,15 @@ def setup_and_teardown():
     )  # Adds the project directory to the system path
 
     import litellm
-    import litellm.proxy.proxy_server
     from litellm import Router
 
     importlib.reload(litellm)
-    importlib.reload(litellm.proxy.proxy_server)
+
+    if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+        import litellm.proxy.proxy_server
+
+        importlib.reload(litellm.proxy.proxy_server)
+
     import asyncio
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
