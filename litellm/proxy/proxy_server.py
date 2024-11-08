@@ -256,7 +256,7 @@ from litellm.secret_managers.main import (
     get_secret_str,
     str_to_bool,
 )
-from litellm.types.integrations.slack_alerting import SlackAlertingArgs
+from litellm.types.integrations.slack_alerting import BudgetAlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicResponse,
@@ -1139,7 +1139,7 @@ async def update_cache(  # noqa: PLR0915
             # alert user
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
-                    type="projected_limit_exceeded",
+                    type=BudgetAlertType.projected_limit_exceeded,
                     user_info=call_info,
                 )
             )
