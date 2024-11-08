@@ -988,6 +988,7 @@ from .llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
 )
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
+from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
 from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
     AmazonTitanMultimodalEmbeddingG1Config,
