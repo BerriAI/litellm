@@ -64,14 +64,19 @@ RUN pip install PyJWT==2.9.0 --no-cache-dir
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-# Generate prisma client
+### Prisma Handling for Non-Root #################################################
+# Prisma allows you to specify the binary cache directory to use 
 ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
-RUN mkdir -p /.cache
-RUN chmod -R 777 /.cache
 RUN pip install nodejs-bin
 RUN pip install prisma
+
+# Make a /non-existent folder and assign chown to nobody
+RUN mkdir -p /nonexistent && chown -R nobody:nogroup /nonexistent
+# Run Prisma generate
 RUN prisma generate
+
 RUN chmod +x docker/entrypoint.sh
+### End of Prisma Handling for Non-Root #########################################
 
 EXPOSE 4000/tcp
 
