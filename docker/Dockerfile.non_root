@@ -67,6 +67,11 @@ RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 ### Prisma Handling for Non-Root #################################################
 # Prisma allows you to specify the binary cache directory to use 
 ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
+
+# Set the TMPDIR environment variable, when this does not exist prisma raises "Error: ENOENT: no such file or directory, lstat '/var/folders'""
+ENV TMPDIR=/tmp 
+RUN mkdir -p /tmp && chmod 1777 /tmp
+
 RUN pip install nodejs-bin
 RUN pip install prisma
 
