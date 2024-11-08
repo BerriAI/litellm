@@ -163,12 +163,17 @@ async def test_async_image_generation_azure():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_image_generation_bedrock():
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/stability.sd3-large-v1:0", "bedrock/stability.stable-diffusion-xl-v1"],
+)
+def test_image_generation_bedrock(model):
     try:
         litellm.set_verbose = True
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
-            model="bedrock/stability.stable-diffusion-xl-v1",
+            model=model,
             aws_region_name="us-west-2",
         )
 
