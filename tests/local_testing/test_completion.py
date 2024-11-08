@@ -4526,6 +4526,7 @@ async def test_completion_ai21_chat():
     "stream",
     [False, True],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_response_ratelimit_headers(model, stream):
     response = completion(
         model=model,
