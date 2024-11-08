@@ -320,6 +320,7 @@ async def acompletion(
     tools: Optional[List] = None,
     tool_choice: Optional[str] = None,
     parallel_tool_calls: Optional[bool] = None,
+    metadata: Optional[dict] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
