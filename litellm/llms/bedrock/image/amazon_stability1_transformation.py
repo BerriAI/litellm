@@ -67,3 +67,21 @@ class AmazonStabilityConfig:
             )
             and v is not None
         }
+
+    @classmethod
+    def get_supported_openai_params(cls, model: Optional[str] = None) -> List:
+        return ["size"]
+
+    @classmethod
+    def map_openai_params(
+        cls,
+        non_default_params: dict,
+        optional_params: dict,
+    ):
+        _size = non_default_params.get("size")
+        if _size is not None:
+            width, height = _size.split("x")
+            optional_params["width"] = int(width)
+            optional_params["height"] = int(height)
+
+        return optional_params
