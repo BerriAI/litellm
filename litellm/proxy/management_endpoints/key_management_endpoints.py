@@ -32,7 +32,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import _duration_in_seconds
+from litellm.proxy.utils import _duration_in_seconds, _hash_token_if_needed
 from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
@@ -734,8 +734,11 @@ async def info_key_fn(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if key is None:
-            key = user_api_key_dict.api_key
+
+        # default to using Auth token if no key is passed in
+        key = key or user_api_key_dict.api_key
+        if key is not None:
+            key = _hash_token_if_needed(token=key)
         key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
             where={"token": key},  # type: ignore
             include={"litellm_budget_table": True},
