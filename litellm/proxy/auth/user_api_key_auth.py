@@ -1174,7 +1174,6 @@ async def user_api_key_auth(  # noqa: PLR0915
         if valid_token_dict is not None:
             return _return_user_api_key_auth_obj(
                 user_obj=user_obj,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
                 valid_token_dict=valid_token_dict,
@@ -1237,6 +1236,7 @@ def _return_user_api_key_auth_obj(
     start_time: datetime,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
+    traceback.print_stack()
     end_time = datetime.now()
     user_api_key_service_logger_obj.service_success_hook(
         service=ServiceTypes.AUTH,
