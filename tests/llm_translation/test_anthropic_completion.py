@@ -628,6 +628,8 @@ def test_anthropic_tool_helper(cache_control_location):
 
 def test_pass_anthropic_user_metadata_router():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm.set_verbose = True
     import json
 
     client = HTTPHandler()

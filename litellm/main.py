@@ -784,9 +784,7 @@ def completion(  # type: ignore # noqa: PLR0915
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
     id = kwargs.get("id", None)
-    metadata = kwargs.get("metadata", None)
     litellm_metadata: dict = kwargs.get("litellm_metadata", None) or {}
-
     if metadata is not None:
         litellm_metadata.update(metadata)
     model_info = kwargs.get("model_info", None)
