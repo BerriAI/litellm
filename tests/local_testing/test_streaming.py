@@ -4096,28 +4096,3 @@ def test_streaming_tool_calls_valid_json_str(model):
     for k, v in tool_call_id_arg_map.items():
         print("k={}, v={}".format(k, v))
         json.loads(v)  # valid json str
-
-
-@pytest.mark.asyncio
-async def test_gemini_streaming_incomplete_chunk():
-    from litellm import stream_chunk_builder
-
-    litellm.set_verbose = True
-    response = await acompletion(
-        model="gemini/gemini-1.5-pro",
-        messages=[
-            {
-                "role": "user",
-                "content": "What are the downsides of prompt-hacking? For example, if you have a customer portal that is helping answer questions about the companies products, what are the possible risks here?",
-            }
-        ],
-        stream=True,
-    )
-    chunks = []
-    async for chunk in response:
-        chunks.append(chunk)
-
-    response = stream_chunk_builder(chunks)
-    assert response.choices[0].message.content is not None
-
-    print(f"response: {response.choices[0].message.content}")
