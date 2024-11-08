@@ -736,11 +736,16 @@ async def info_key_fn(
             )
         if key is None:
             key = user_api_key_dict.api_key
-        key_info = await prisma_client.get_data(token=key)
+        key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": key},  # type: ignore
+            include={"litellm_budget_table": True},
+        )
         if key_info is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "No keys found"},
+            raise ProxyException(
+                message="Key not found in database",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
             )
 
         if (
