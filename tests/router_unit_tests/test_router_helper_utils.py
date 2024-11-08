@@ -1027,8 +1027,11 @@ def test_pattern_match_deployment_set_model_name(
 async def test_pass_through_moderation_endpoint_factory(model_list):
     router = Router(model_list=model_list)
     response = await router._pass_through_moderation_endpoint_factory(
-        original_function=litellm.amoderation, input="this is valid good text"
+        original_function=litellm.amoderation,
+        input="this is valid good text",
+        model=None,
     )
+    assert response is not None
 
 
 @pytest.mark.parametrize(

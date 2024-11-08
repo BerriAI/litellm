@@ -2549,10 +2549,7 @@ class Router:
         original_function: Callable,
         **kwargs,
     ):
-        if (
-            "model" in kwargs
-            and self.get_model_list(model_name=kwargs["model"]) is not None
-        ):
+        if kwargs.get("model") and self.get_model_list(model_name=kwargs["model"]):
             deployment = await self.async_get_available_deployment(
                 model=kwargs["model"]
             )
