@@ -270,19 +270,53 @@ async def test_router_make_call(model_list):
     assert response.data[0].url == "https://example.com/image.png"
 
 
-def test_update_kwargs_with_deployment(model_list):
+from litellm.types.utils import CallTypes
+
+
+@pytest.mark.parametrize(
+    "call_type, expected_litellm_metadata_field",
+    [
+        (CallTypes.acompletion, "litellm_metadata"),
+        (CallTypes.aembedding, "metadata"),
+    ],
+)
+@pytest.mark.parametrize(
+    "user_to_llm_metadata",
+    [True, False],
+)
+def test_update_kwargs_with_deployment(
+    model_list, call_type, user_to_llm_metadata, expected_litellm_metadata_field
+):
     """Test if the '_update_kwargs_with_deployment' function is working correctly"""
+
     router = Router(model_list=model_list)
-    kwargs: dict = {"metadata": {}}
+    _user_to_llm_metadata = {"user_id": "123"}
+    if user_to_llm_metadata:
+        kwargs: dict = {"user_to_llm_metadata": _user_to_llm_metadata}
+    else:
+        kwargs: dict = {"metadata": {}}
     deployment = router.get_deployment_by_model_group_name(
         model_group_name="gpt-3.5-turbo"
     )
     router._update_kwargs_with_deployment(
         deployment=deployment,
         kwargs=kwargs,
+        call_type=call_type,
     )
     set_fields = ["deployment", "api_base", "model_info"]
-    assert all(field in kwargs["metadata"] for field in set_fields)
+
+    assert all(field in kwargs[expected_litellm_metadata_field] for field in set_fields)
+
+    if (
+        not user_to_llm_metadata
+        and expected_litellm_metadata_field == "litellm_metadata"
+    ):
+        assert "metadata" not in kwargs
+    elif expected_litellm_metadata_field == "litellm_metadata":
+        assert kwargs["metadata"] == _user_to_llm_metadata
+    elif user_to_llm_metadata:
+        for k, v in _user_to_llm_metadata.items():
+            assert kwargs["metadata"][k] == v
 
 
 def test_update_kwargs_with_default_litellm_params(model_list):

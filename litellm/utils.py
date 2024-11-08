@@ -8355,3 +8355,30 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
             )
 
     return messages
+
+
+def _get_metadata_variable_name(call_type: Union[str, CallTypes]) -> str:
+    """
+    Helper to return what the "metadata" field should be called in the request data
+
+    For all /thread or /assistant endpoints we need to call this "litellm_metadata"
+
+    For ALL other endpoints we call this "metadata
+    """
+
+    litellm_metadata_routes = [
+        "thread",
+        "assistant",
+        "batches",
+        CallTypes.completion.value,
+        CallTypes.atext_completion.value,
+        CallTypes.text_completion.value,
+        CallTypes.acompletion.value,
+    ]
+
+    call_type_str = call_type.value if isinstance(call_type, CallTypes) else call_type
+
+    if any(route_part in call_type_str for route_part in litellm_metadata_routes):
+        return "litellm_metadata"
+    else:
+        return "metadata"
