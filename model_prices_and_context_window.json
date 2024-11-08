@@ -1152,6 +1152,105 @@
         "mode": "chat",
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice"
     },
+    "azure_ai/Phi-3.5-mini-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000052,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3.5-vision-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000052,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": true,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3.5-MoE-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000016,
+        "output_cost_per_token": 0.00000064,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3-mini-4k-instruct": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000052,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3-mini-128k-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000052,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3-small-8k-instruct": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3-small-128k-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3-medium-4k-instruct": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000017,
+        "output_cost_per_token": 0.00000068,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
+    "azure_ai/Phi-3-medium-128k-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000017,
+        "output_cost_per_token": 0.00000068,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_vision": false,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
+    },
     "azure_ai/cohere-rerank-v3-multilingual": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
