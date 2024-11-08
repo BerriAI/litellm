@@ -1894,6 +1894,7 @@ class ProxyErrorTypes(str, enum.Enum):
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
+    not_found_error = "not_found_error"
 
 
 class SSOUserDefinedValues(TypedDict):
