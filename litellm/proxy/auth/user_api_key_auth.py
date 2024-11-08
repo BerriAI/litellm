@@ -75,6 +75,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
+from litellm.types.integrations.slack_alerting import BudgetAlertType
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -479,7 +480,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                         )
                         asyncio.create_task(
                             proxy_logging_obj.budget_alerts(
-                                type="proxy_budget",
+                                type=BudgetAlertType.proxy_budget,
                                 user_info=user_info,
                             )
                         )
@@ -964,7 +965,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
-                        type="token_budget",
+                        type=BudgetAlertType.token_budget,
                         user_info=call_info,
                     )
                 )
@@ -1040,7 +1041,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
-                        type="team_budget",
+                        type=BudgetAlertType.team_budget,
                         user_info=call_info,
                     )
                 )
@@ -1106,7 +1107,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     )
                     asyncio.create_task(
                         proxy_logging_obj.budget_alerts(
-                            type="proxy_budget",
+                            type=BudgetAlertType.proxy_budget,
                             user_info=call_info,
                         )
                     )
