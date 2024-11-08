@@ -703,12 +703,17 @@ async def user_api_key_auth(  # noqa: PLR0915
             )
 
         if is_master_key_valid:
-            _user_api_key_obj = UserAPIKeyAuth(
-                api_key=master_key,
+            _user_api_key_obj = _return_user_api_key_auth_obj(
+                user_obj=None,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                user_id=litellm_proxy_admin_name,
+                api_key=master_key,
                 parent_otel_span=parent_otel_span,
-                **end_user_params,
+                valid_token_dict={
+                    **end_user_params,
+                    "user_id": litellm_proxy_admin_name,
+                },
+                route=route,
+                start_time=start_time,
             )
             await _cache_key_object(
                 hashed_token=hash_token(master_key),
@@ -1229,7 +1234,9 @@ def _return_user_api_key_auth_obj(
     valid_token_dict: dict,
     route: str,
     start_time: datetime,
+    user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
+    traceback.print_stack()
     end_time = datetime.now()
     user_api_key_service_logger_obj.service_success_hook(
         service=ServiceTypes.AUTH,
@@ -1240,7 +1247,7 @@ def _return_user_api_key_auth_obj(
         parent_otel_span=parent_otel_span,
     )
     retrieved_user_role = (
-        _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
+        user_role or _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
     )
 
     user_api_key_kwargs = {

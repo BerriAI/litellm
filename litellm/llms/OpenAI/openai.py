@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from typing_extensions import overload, override
 
 import litellm
+from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
@@ -24,6 +25,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     Message,
     ModelResponse,
+    ProviderConfigManager,
     TextCompletionResponse,
     Usage,
     convert_to_model_response_object,
@@ -701,13 +703,11 @@ class OpenAIChatCompletion(BaseLLM):
                         messages=messages,
                         custom_llm_provider=custom_llm_provider,
                     )
-            if (
-                litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
-                and messages is not None
-            ):
-                messages = litellm.openAIO1Config.o1_prompt_factory(
-                    messages=messages,
+            if messages is not None and custom_llm_provider is not None:
+                provider_config = ProviderConfigManager.get_provider_config(
+                    model=model, provider=LlmProviders(custom_llm_provider)
                 )
+                messages = provider_config._transform_messages(messages)
 
             for _ in range(
                 2

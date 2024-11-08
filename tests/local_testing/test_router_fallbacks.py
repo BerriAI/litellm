@@ -1120,9 +1120,10 @@ async def test_client_side_fallbacks_list(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("content_filter_response_exception", [True, False])
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
 async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception
+    sync_mode, content_filter_response_exception, fallback_type
 ):
     os.environ["LITELLM_LOG"] = "DEBUG"
 
@@ -1153,6 +1154,14 @@ async def test_router_content_policy_fallbacks(
                 },
             },
             {
+                "model_name": "my-default-fallback-model",
+                "litellm_params": {
+                    "model": "openai/my-fake-model",
+                    "api_key": "",
+                    "mock_response": "This works 2!",
+                },
+            },
+            {
                 "model_name": "my-general-model",
                 "litellm_params": {
                     "model": "claude-2",
@@ -1169,9 +1178,14 @@ async def test_router_content_policy_fallbacks(
                 },
             },
         ],
-        content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}],
-        fallbacks=[{"claude-2": ["my-general-model"]}],
-        context_window_fallbacks=[{"claude-2": ["my-context-window-model"]}],
+        content_policy_fallbacks=(
+            [{"claude-2": ["my-fallback-model"]}]
+            if fallback_type == "model-specific"
+            else None
+        ),
+        default_fallbacks=(
+            ["my-default-fallback-model"] if fallback_type == "default" else None
+        ),
     )
 
     if sync_mode is True:
