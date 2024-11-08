@@ -17,9 +17,6 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-        InMemorySpanExporter as _InMemorySpanExporter,
-    )
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy._types import (
@@ -29,13 +26,11 @@ if TYPE_CHECKING:
 
     Span = _Span
     SpanExporter = _SpanExporter
-    InMemorySpanExporter = _InMemorySpanExporter
     UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
 else:
     Span = Any
     SpanExporter = Any
-    InMemorySpanExporter = Any
     UserAPIKeyAuth = Any
     ManagementEndpointLoggingPayload = Any
 
@@ -66,6 +61,9 @@ class OpenTelemetryConfig:
 
         OTEL_HEADERS gets sent as headers = {"x-honeycomb-team": "B85YgLm96******"}
         """
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         if os.getenv("OTEL_EXPORTER") == "in_memory":
             return cls(exporter=InMemorySpanExporter())
@@ -81,13 +79,16 @@ class OpenTelemetryConfig:
 class OpenTelemetry(CustomLogger):
     def __init__(
         self,
-        config: OpenTelemetryConfig = OpenTelemetryConfig.from_env(),
+        config: Optional[OpenTelemetryConfig] = None,
         callback_name: Optional[str] = None,
         **kwargs,
     ):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
+
+        if config is None:
+            config = OpenTelemetryConfig.from_env()
 
         self.config = config
         self.OTEL_EXPORTER = self.config.exporter
