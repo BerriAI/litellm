@@ -1,6 +1,10 @@
 import types
 from typing import List, Optional
 
+from openai.types.image import Image
+
+from litellm.types.utils import ImageResponse
+
 
 class AmazonStabilityConfig:
     """
@@ -85,3 +89,16 @@ class AmazonStabilityConfig:
             optional_params["height"] = int(height)
 
         return optional_params
+
+    @classmethod
+    def transform_response_dict_to_openai_response(
+        cls, model_response: ImageResponse, response_dict: dict
+    ) -> ImageResponse:
+        image_list: List[Image] = []
+        for artifact in response_dict["artifacts"]:
+            _image = Image(b64_json=artifact["base64"])
+            image_list.append(_image)
+
+        model_response.data = image_list
+
+        return model_response

@@ -291,11 +291,14 @@ class BedrockImageGeneration(BaseAWSLLM):
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
-        image_list: List[Image] = []
-        for artifact in response_dict["artifacts"]:
-            _image = Image(b64_json=artifact["base64"])
-            image_list.append(_image)
-
-        model_response.data = image_list
+        config_class = (
+            litellm.AmazonStability3Config
+            if litellm.AmazonStability3Config._is_stability_3_model(model=model)
+            else litellm.AmazonStabilityConfig
+        )
+        config_class.transform_response_dict_to_openai_response(
+            model_response=model_response,
+            response_dict=response_dict,
+        )
 
         return model_response

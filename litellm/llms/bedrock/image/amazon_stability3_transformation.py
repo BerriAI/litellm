@@ -1,7 +1,13 @@
 import types
 from typing import List, Optional
 
-from litellm.types.llms.bedrock import AmazonStability3TextToImageRequest
+from openai.types.image import Image
+
+from litellm.types.llms.bedrock import (
+    AmazonStability3TextToImageRequest,
+    AmazonStability3TextToImageResponse,
+)
+from litellm.types.utils import ImageResponse
 
 
 class AmazonStability3Config:
@@ -70,3 +76,19 @@ class AmazonStability3Config:
         No OpenAI params are mapped for Stability 3, so directly return the optional_params
         """
         return optional_params
+
+    @classmethod
+    def transform_response_dict_to_openai_response(
+        cls, model_response: ImageResponse, response_dict: dict
+    ) -> ImageResponse:
+        """
+        Transform the response dict to the OpenAI response
+        """
+
+        stability_3_response = AmazonStability3TextToImageResponse(**response_dict)
+        openai_images: List[Image] = []
+        for _img in stability_3_response.get("images", []):
+            openai_images.append(Image(b64_json=_img))
+
+        model_response.data = openai_images
+        return model_response
