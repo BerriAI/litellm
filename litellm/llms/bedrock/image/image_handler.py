@@ -183,28 +183,9 @@ class BedrockImageGeneration(BaseAWSLLM):
             boto3_credentials_info.aws_region_name,
         )
 
-        # transform request
-        ### FORMAT IMAGE GENERATION INPUT ###
-        provider = model.split(".")[0]
-        inference_params = copy.deepcopy(optional_params)
-        inference_params.pop(
-            "user", None
-        )  # make sure user is not passed in for bedrock call
-        data = {}
-        if provider == "stability":
-            prompt = prompt.replace(os.linesep, " ")
-            ## LOAD CONFIG
-            config = litellm.AmazonStabilityConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-            data = {"text_prompts": [{"text": prompt, "weight": 1}], **inference_params}
-        else:
-            raise BedrockError(
-                status_code=422, message=f"Unsupported model={model}, passed in"
-            )
+        data = self._get_request_body(
+            model=model, prompt=prompt, optional_params=optional_params
+        )
 
         # Make POST Request
         body = json.dumps(data).encode("utf-8")
@@ -238,6 +219,51 @@ class BedrockImageGeneration(BaseAWSLLM):
             body=body,
             data=data,
         )
+
+    def _get_request_body(
+        self,
+        model: str,
+        prompt: str,
+        optional_params: dict,
+    ) -> dict:
+        """
+        Get the request body for the Bedrock Image Generation API
+
+        Checks the model/provider and transforms the request body accordingly
+
+        Returns:
+            dict: The request body to use for the Bedrock Image Generation API
+        """
+        provider = model.split(".")[0]
+        inference_params = copy.deepcopy(optional_params)
+        inference_params.pop(
+            "user", None
+        )  # make sure user is not passed in for bedrock call
+        data = {}
+        if provider == "stability":
+            if litellm.AmazonStability3Config._is_stability_3_model(model):
+                request_body = litellm.AmazonStability3Config.transform_request_body(
+                    prompt=prompt, optional_params=optional_params
+                )
+                return dict(request_body)
+            else:
+                prompt = prompt.replace(os.linesep, " ")
+                ## LOAD CONFIG
+                config = litellm.AmazonStabilityConfig.get_config()
+                for k, v in config.items():
+                    if (
+                        k not in inference_params
+                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                        inference_params[k] = v
+                data = {
+                    "text_prompts": [{"text": prompt, "weight": 1}],
+                    **inference_params,
+                }
+        else:
+            raise BedrockError(
+                status_code=422, message=f"Unsupported model={model}, passed in"
+            )
+        return data
 
     def _transform_response_dict_to_openai_response(
         self,
