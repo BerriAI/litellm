@@ -190,6 +190,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true
     },
@@ -461,6 +462,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "ft:gpt-4o-mini-2024-07-18": {
@@ -721,6 +723,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "azure/gpt-4o-2024-05-13": {
@@ -746,6 +749,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true
     },
     "azure/global-standard/gpt-4o-mini": {
