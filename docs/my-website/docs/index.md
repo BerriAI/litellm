@@ -178,6 +178,22 @@ response = completion(
 
 </TabItem>
 
+<TabItem value="or" label="Zhipu">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["ZHIPU_API_KEY"] = "zhipu_api_key"
+
+response = completion(
+  model="glm-4",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+)
+```
+
+</TabItem>
 </Tabs>
 
 ### Streaming
@@ -305,6 +321,23 @@ os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key"
 
 response = completion(
   model="openrouter/google/palm-2-chat-bison",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+<TabItem value="or" label="Zhipu">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["ZHIPU_API_KEY"] = "zhipu_api_key"
+
+response = completion(
+  model="glm-4",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
