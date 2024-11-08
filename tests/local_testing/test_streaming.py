@@ -3470,6 +3470,86 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
             continue
 
 
+def test_unit_test_gemini_streaming_content_filter():
+    chunks = [
+        {
+            "text": "##",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 1, "total_tokens": 38},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": " Downsides of Prompt Hacking in a Customer Portal\n\nWhile prompt engineering can be incredibly",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": "",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "content_filter",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+    ]
+
+    completion_stream = ModelResponseListIterator(model_responses=chunks)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gemini/gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        logging_obj=litellm.Logging(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    stream_finish_reason: Optional[str] = None
+    idx = 0
+    for chunk in response:
+        print(f"chunk: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            stream_finish_reason = chunk.choices[0].finish_reason
+        idx += 1
+    print(f"num chunks: {idx}")
+    assert stream_finish_reason == "content_filter"
+
+
 def test_unit_test_custom_stream_wrapper_openai():
     """
     Test if last streaming chunk ends with '?', if the message repeats itself.
