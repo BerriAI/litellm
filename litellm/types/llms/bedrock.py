@@ -275,3 +275,14 @@ AmazonEmbeddingRequest = Union[
     AmazonTitanV2EmbeddingRequest,
     AmazonTitanG1EmbeddingRequest,
 ]
+
+
+class AmazonStability3TextToImageRequest(TypedDict, total=False):
+    prompt: str
+    aspect_ratio: Literal[
+        "16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"
+    ]
+    mode: Literal["image-to-image", "text-to-image"]
+    output_format: Literal["JPEG", "PNG"]
+    seed: int
+    negative_prompt: str
