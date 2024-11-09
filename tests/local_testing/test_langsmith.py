@@ -80,6 +80,23 @@ async def test_langsmith_queue_logging():
 # test_langsmith_logging()
 
 
+@pytest.mark.asyncio
+async def test_langsmith_key_based_logging():
+    litellm.callbacks = ["langsmith"]
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Test message"}],
+        max_tokens=10,
+        temperature=0.2,
+        mock_response="This is a mock response",
+        langsmith_api_key=os.getenv("LANGSMITH_API_KEY_PROJECT2"),
+        langsmith_project=os.getenv("LANGSMITH_PROJECT_PROJECT2"),
+    )
+
+    print("response", response)
+    await asyncio.sleep(10)
+
+
 @pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 def test_async_langsmith_logging_with_metadata():
     try:

@@ -108,7 +108,12 @@ class LangsmithLogger(CustomBatchLogger):
         )
 
     def _prepare_log_data(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
+        self,
+        kwargs,
+        response_obj,
+        start_time,
+        end_time,
+        credentials: LangsmithCredentialsObject,
     ):
         import json
         from datetime import datetime as dt
@@ -142,7 +147,7 @@ class LangsmithLogger(CustomBatchLogger):
             )
 
             project_name = metadata.get(
-                "project_name", self.default_credentials["LANGSMITH_PROJECT"]
+                "project_name", credentials["LANGSMITH_PROJECT"]
             )
             run_name = metadata.get("run_name", self.langsmith_default_run_name)
             run_id = metadata.get("id", None)
@@ -239,11 +244,18 @@ class LangsmithLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
+            data = self._prepare_log_data(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+                credentials=credentials,
+            )
             self.log_queue.append(
                 LangsmithQueueObject(
                     data=data,
-                    credentials=self._get_credentials_to_use_for_request(kwargs=kwargs),
+                    credentials=credentials,
                 )
             )
             verbose_logger.debug(
@@ -272,11 +284,18 @@ class LangsmithLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
+            data = self._prepare_log_data(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+                credentials=credentials,
+            )
             self.log_queue.append(
                 LangsmithQueueObject(
                     data=data,
-                    credentials=self._get_credentials_to_use_for_request(kwargs=kwargs),
+                    credentials=credentials,
                 )
             )
             verbose_logger.debug(
@@ -303,11 +322,18 @@ class LangsmithLogger(CustomBatchLogger):
             return  # Skip logging
         verbose_logger.info("Langsmith Failure Event Logging!")
         try:
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
+            data = self._prepare_log_data(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+                credentials=credentials,
+            )
             self.log_queue.append(
                 LangsmithQueueObject(
                     data=data,
-                    credentials=self._get_credentials_to_use_for_request(kwargs=kwargs),
+                    credentials=credentials,
                 )
             )
             verbose_logger.debug(
