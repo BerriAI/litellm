@@ -4448,6 +4448,7 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
         optional_params = get_optional_params_image_gen(
+            model=model,
             n=n,
             quality=quality,
             response_format=response_format,
@@ -4540,7 +4541,7 @@ def image_generation(  # noqa: PLR0915
         elif custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
-            model_response = bedrock_image_generation.image_generation(
+            model_response = bedrock_image_generation.image_generation(  # type: ignore
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
