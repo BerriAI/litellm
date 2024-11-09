@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, NamedTuple, Optional, TypedDict
 
 from pydantic import BaseModel
 
@@ -42,3 +43,19 @@ class LangsmithQueueObject(TypedDict):
 
     data: Dict
     credentials: LangsmithCredentialsObject
+
+
+class CredentialsKey(NamedTuple):
+    """Immutable key for grouping credentials"""
+
+    api_key: str
+    project: str
+    base_url: str
+
+
+@dataclass
+class BatchGroup:
+    """Groups credentials with their associated queue objects"""
+
+    credentials: LangsmithCredentialsObject
+    queue_objects: List[LangsmithQueueObject]

@@ -342,9 +342,12 @@ class LangsmithLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        log_queue_by_credentials = self._group_batches_by_credentials()
-        for credentials, queue_objects in log_queue_by_credentials.items():
-            await self._log_batch_on_langsmith(credentials, queue_objects)
+        batch_groups = self._group_batches_by_credentials()
+        for batch_group in batch_groups.values():
+            await self._log_batch_on_langsmith(
+                credentials=batch_group.credentials,
+                queue_objects=batch_group.queue_objects,
+            )
 
     async def _log_batch_on_langsmith(
         self,
@@ -394,21 +397,25 @@ class LangsmithLogger(CustomBatchLogger):
                 f"Langsmith Layer Error - {traceback.format_exc()}"
             )
 
-    def _group_batches_by_credentials(
-        self,
-    ) -> Dict[LangsmithCredentialsObject, List[LangsmithQueueObject]]:
-        """
-        Groups queue objects by credentials
+    def _group_batches_by_credentials(self) -> Dict[CredentialsKey, BatchGroup]:
+        """Groups queue objects by credentials using a proper key structure"""
+        log_queue_by_credentials: Dict[CredentialsKey, BatchGroup] = {}
 
-        """
-        log_queue_by_credentials: Dict[
-            LangsmithCredentialsObject, List[LangsmithQueueObject]
-        ] = {}
         for queue_object in self.log_queue:
             credentials = queue_object["credentials"]
-            if credentials not in log_queue_by_credentials:
-                log_queue_by_credentials[credentials] = []
-            log_queue_by_credentials[credentials].append(queue_object)
+            key = CredentialsKey(
+                api_key=credentials["LANGSMITH_API_KEY"],
+                project=credentials["LANGSMITH_PROJECT"],
+                base_url=credentials["LANGSMITH_BASE_URL"],
+            )
+
+            if key not in log_queue_by_credentials:
+                log_queue_by_credentials[key] = BatchGroup(
+                    credentials=credentials, queue_objects=[]
+                )
+
+            log_queue_by_credentials[key].queue_objects.append(queue_object)
+
         return log_queue_by_credentials
 
     def _get_credentials_to_use_for_request(
@@ -441,9 +448,7 @@ class LangsmithLogger(CustomBatchLogger):
         return credentials
 
     def _send_batch(self):
-        """
-        Calls async_send_batch in an event loop
-        """
+        """Calls async_send_batch in an event loop"""
         if not self.log_queue:
             return
 
