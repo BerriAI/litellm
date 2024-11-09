@@ -415,7 +415,7 @@ async def test_async_log_failure_event(prometheus_logger):
     user_id,
     """
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
-        None,
+        "end-user",
         "test_hash",
         "test_alias",
         "gpt-3.5-turbo",

@@ -665,14 +665,12 @@ class PrometheusLogger(CustomLogger):
         )
 
         # unpack kwargs
-        model = kwargs.get("model", "")
-        litellm_params = kwargs.get("litellm_params", {}) or {}
         standard_logging_payload: StandardLoggingPayload = kwargs.get(
             "standard_logging_object", {}
         )
-        proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
-        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        model = standard_logging_payload["model"]
+        end_user_id = standard_logging_payload["metadata"]["user_api_key_end_user_id"]
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -680,7 +678,6 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
-        kwargs.get("exception", None)
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
