@@ -25,6 +25,10 @@ def cost_calculator(
         # Reference pricing by steps for stability 1: https://aws.amazon.com/bedrock/pricing/
         _steps = optional_params.get("steps", 50)
         steps = "max-steps" if _steps > 50 else "50-steps"
+
+        # size is stored in model_prices_and_context_window.json as 1024-x-1024
+        # current size has 1024x1024
+        size = size.replace("x", "-x-") if size else "1024-x-1024"
         model = f"{size}/{steps}/{model}"
 
     _model_info = litellm.get_model_info(
