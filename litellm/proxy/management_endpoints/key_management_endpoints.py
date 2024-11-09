@@ -1600,7 +1600,7 @@ async def test_key_logging(
         )
 
     await asyncio.sleep(
-        21
+        2
     )  # wait for callbacks to run, callbacks use batching so wait for the flush event
 
     # Check if any logger exceptions were triggered
