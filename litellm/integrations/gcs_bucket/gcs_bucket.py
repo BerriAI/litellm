@@ -76,28 +76,18 @@ class GCSBucketLogger(GCSBucketBase):
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
-            json_logged_payload = json.dumps(logging_payload, default=str)
-
             # Get the current date
             current_date = datetime.now().strftime("%Y-%m-%d")
 
             # Modify the object_name to include the date-based folder
             object_name = f"{current_date}/{response_obj['id']}"
-            try:
-                response = await self.async_httpx_client.post(
-                    headers=headers,
-                    url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
-                    data=json_logged_payload,
-                )
-            except httpx.HTTPStatusError as e:
-                raise Exception(f"GCS Bucket logging error: {e.response.text}")
 
-            if response.status_code != 200:
-                verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
-
-            verbose_logger.debug("GCS Bucket response %s", response)
-            verbose_logger.debug("GCS Bucket status code %s", response.status_code)
-            verbose_logger.debug("GCS Bucket response.text %s", response.text)
+            await self._log_json_data_on_gcs(
+                headers=headers,
+                bucket_name=bucket_name,
+                object_name=object_name,
+                logging_payload=logging_payload,
+            )
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
@@ -134,8 +124,6 @@ class GCSBucketLogger(GCSBucketBase):
             _litellm_params = kwargs.get("litellm_params") or {}
             metadata = _litellm_params.get("metadata") or {}
 
-            json_logged_payload = json.dumps(logging_payload, default=str)
-
             # Get the current date
             current_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -145,20 +133,66 @@ class GCSBucketLogger(GCSBucketBase):
             if "gcs_log_id" in metadata:
                 object_name = metadata["gcs_log_id"]
 
-            response = await self.async_httpx_client.post(
+            await self._log_json_data_on_gcs(
                 headers=headers,
-                url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
-                data=json_logged_payload,
+                bucket_name=bucket_name,
+                object_name=object_name,
+                logging_payload=logging_payload,
             )
 
-            if response.status_code != 200:
-                verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
-
-            verbose_logger.debug("GCS Bucket response %s", response)
-            verbose_logger.debug("GCS Bucket status code %s", response.status_code)
-            verbose_logger.debug("GCS Bucket response.text %s", response.text)
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
+
+    def _handle_folders_in_bucket_name(
+        self,
+        bucket_name: str,
+        object_name: str,
+    ) -> Tuple[str, str]:
+        """
+        Handles when the user passes a bucket name with a folder postfix
+
+
+        Example:
+            - Bucket name: "my-bucket/my-folder/dev"
+            - Object name: "my-object"
+            - Returns: bucket_name="my-bucket", object_name="my-folder/dev/my-object"
+
+        """
+        if "/" in bucket_name:
+            bucket_name, prefix = bucket_name.split("/", 1)
+            object_name = f"{prefix}/{object_name}"
+            return bucket_name, object_name
+        return bucket_name, object_name
+
+    async def _log_json_data_on_gcs(
+        self,
+        headers: Dict[str, str],
+        bucket_name: str,
+        object_name: str,
+        logging_payload: StandardLoggingPayload,
+    ):
+        """
+        Helper function to make POST request to GCS Bucket in the specified bucket.
+        """
+        json_logged_payload = json.dumps(logging_payload, default=str)
+
+        bucket_name, object_name = self._handle_folders_in_bucket_name(
+            bucket_name=bucket_name,
+            object_name=object_name,
+        )
+
+        response = await self.async_httpx_client.post(
+            headers=headers,
+            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
+            data=json_logged_payload,
+        )
+
+        if response.status_code != 200:
+            verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
+
+        verbose_logger.debug("GCS Bucket response %s", response)
+        verbose_logger.debug("GCS Bucket status code %s", response.status_code)
+        verbose_logger.debug("GCS Bucket response.text %s", response.text)
 
     async def get_gcs_logging_config(
         self, kwargs: Optional[Dict[str, Any]] = {}
@@ -267,6 +301,11 @@ class GCSBucketLogger(GCSBucketBase):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name, object_name = self._handle_folders_in_bucket_name(
+                bucket_name=bucket_name,
+                object_name=object_name,
+            )
+
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
 
             # Send the GET request to download the object
@@ -302,6 +341,11 @@ class GCSBucketLogger(GCSBucketBase):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name, object_name = self._handle_folders_in_bucket_name(
+                bucket_name=bucket_name,
+                object_name=object_name,
+            )
+
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}"
 
             # Send the DELETE request to delete the object
