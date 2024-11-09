@@ -143,6 +143,27 @@ class GCSBucketLogger(GCSBucketBase):
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
+    def _handle_folders_in_bucket_name(
+        self,
+        bucket_name: str,
+        object_name: str,
+    ) -> Tuple[str, str]:
+        """
+        Handles when the user passes a bucket name with a folder postfix
+
+
+        Example:
+            - Bucket name: "my-bucket/my-folder/dev"
+            - Object name: "my-object"
+            - Returns: bucket_name="my-bucket", object_name="my-folder/dev/my-object"
+
+        """
+        if "/" in bucket_name:
+            bucket_name, prefix = bucket_name.split("/", 1)
+            object_name = f"{prefix}/{object_name}"
+            return bucket_name, object_name
+        return bucket_name, object_name
+
     async def _log_json_data_on_gcs(
         self,
         headers: Dict[str, str],
@@ -154,6 +175,12 @@ class GCSBucketLogger(GCSBucketBase):
         Helper function to make POST request to GCS Bucket in the specified bucket.
         """
         json_logged_payload = json.dumps(logging_payload, default=str)
+
+        bucket_name, object_name = self._handle_folders_in_bucket_name(
+            bucket_name=bucket_name,
+            object_name=object_name,
+        )
+
         response = await self.async_httpx_client.post(
             headers=headers,
             url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
@@ -274,6 +301,11 @@ class GCSBucketLogger(GCSBucketBase):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name, object_name = self._handle_folders_in_bucket_name(
+                bucket_name=bucket_name,
+                object_name=object_name,
+            )
+
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
 
             # Send the GET request to download the object
@@ -309,6 +341,11 @@ class GCSBucketLogger(GCSBucketBase):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name, object_name = self._handle_folders_in_bucket_name(
+                bucket_name=bucket_name,
+                object_name=object_name,
+            )
+
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}"
 
             # Send the DELETE request to delete the object
