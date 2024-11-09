@@ -2174,6 +2174,7 @@ def get_optional_params_transcription(
 
 
 def get_optional_params_image_gen(
+    model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[str] = None,
     response_format: Optional[str] = None,
@@ -2186,6 +2187,7 @@ def get_optional_params_image_gen(
 ):
     # retrieve all parameters passed to the function
     passed_params = locals()
+    model = passed_params.pop("model", None)
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
@@ -2232,7 +2234,7 @@ def get_optional_params_image_gen(
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -2243,12 +2245,17 @@ def get_optional_params_image_gen(
     ):
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
-        supported_params = ["size"]
+        # use stability3 config class if model is a stability3 model
+        config_class = (
+            litellm.AmazonStability3Config
+            if litellm.AmazonStability3Config._is_stability_3_model(model=model)
+            else litellm.AmazonStabilityConfig
+        )
+        supported_params = config_class.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
-        if size is not None:
-            width, height = size.split("x")
-            optional_params["width"] = int(width)
-            optional_params["height"] = int(height)
+        optional_params = config_class.map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
     elif custom_llm_provider == "vertex_ai":
         supported_params = ["n"]
         """
