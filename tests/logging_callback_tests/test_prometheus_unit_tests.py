@@ -55,6 +55,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         startTime=1234567890.0,
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
+        api_call_start_time=1234567890.25,
         model_map_information=StandardLoggingModelInformation(
             model_map_key="gpt-3.5-turbo", model_map_value=None
         ),
@@ -72,6 +73,11 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             spend_logs_metadata=None,
             requester_ip_address="127.0.0.1",
             requester_metadata=None,
+            user_api_key_end_user_id="end-user",
+            user_api_key_team_spend=None,
+            user_api_key_spend=None,
+            user_api_key_team_max_budget=None,
+            user_api_key_max_budget=None,
         ),
         cache_hit=False,
         cache_key=None,
@@ -112,10 +118,6 @@ async def test_async_log_success_event(prometheus_logger):
                 "user_api_key_team_id": "test_team",
             }
         },
-        "start_time": datetime.now(),
-        "completion_start_time": datetime.now(),
-        "api_call_start_time": datetime.now(),
-        "end_time": datetime.now() + timedelta(seconds=1),
         "standard_logging_object": standard_logging_object,
     }
     response_obj = MagicMock()
@@ -145,7 +147,7 @@ async def test_async_log_success_event(prometheus_logger):
     prometheus_logger.litellm_request_total_latency_metric = MagicMock()
 
     await prometheus_logger.async_log_success_event(
-        kwargs, response_obj, kwargs["start_time"], kwargs["end_time"]
+        kwargs, response_obj, datetime.now(), datetime.now()
     )
 
     # Assert that the metrics were incremented
@@ -226,21 +228,15 @@ def test_increment_remaining_budget_metrics(prometheus_logger):
     prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
     prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
 
-    litellm_params = {
-        "metadata": {
-            "user_api_key_team_spend": 50,
-            "user_api_key_team_max_budget": 100,
-            "user_api_key_spend": 25,
-            "user_api_key_max_budget": 75,
-        }
-    }
-
     prometheus_logger._increment_remaining_budget_metrics(
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         user_api_key="key1",
         user_api_key_alias="alias1",
-        litellm_params=litellm_params,
+        team_spend=50,
+        team_max_budget=100,
+        api_key_spend=25,
+        api_key_max_budget=75,
     )
 
     prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
@@ -266,51 +262,84 @@ def test_set_latency_metrics(prometheus_logger):
     """
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_parameters"] = {"stream": True}
+    now = datetime.now()
+    standard_logging_payload["startTime"] = (now - timedelta(seconds=2)).timestamp()
+    standard_logging_payload["api_call_start_time"] = (
+        now - timedelta(seconds=1.5)
+    ).timestamp()
+    standard_logging_payload["completionStartTime"] = (
+        now - timedelta(seconds=1)
+    ).timestamp()
+    standard_logging_payload["endTime"] = now.timestamp()
+
     prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
     prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
     prometheus_logger.litellm_request_total_latency_metric = MagicMock()
 
-    now = datetime.now()
-    kwargs = {
-        "end_time": now,  # when the request ends
-        "start_time": now - timedelta(seconds=2),  # when the request starts
-        "api_call_start_time": now - timedelta(seconds=1.5),  # when the api call starts
-        "completion_start_time": now
-        - timedelta(seconds=1),  # when the completion starts
-    }
-
     prometheus_logger._set_latency_metrics(
-        kwargs=kwargs,
         model="gpt-3.5-turbo",
         user_api_key="key1",
         user_api_key_alias="alias1",
         user_api_team="team1",
         user_api_team_alias="team_alias1",
-        standard_logging_payload=standard_logging_payload,
+        model_parameters=standard_logging_payload["model_parameters"],
+        end_time=standard_logging_payload["endTime"],
+        start_time=standard_logging_payload["startTime"],
+        api_call_start_time=standard_logging_payload["api_call_start_time"],
+        completion_start_time=standard_logging_payload["completionStartTime"],
     )
 
     # completion_start_time - api_call_start_time
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels.assert_called_once_with(
         "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
     )
-    prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
-        0.5
+    print(
+        prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.call_args[
+            0
+        ][
+            0
+        ]
+    )
+    assert (
+        round(
+            prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.call_args[
+                0
+            ][
+                0
+            ],
+            2,
+        )
+        == 0.5
     )
 
     # end_time - api_call_start_time
     prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once_with(
         "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
     )
-    prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
-        1.5
+    assert (
+        round(
+            prometheus_logger.litellm_llm_api_latency_metric.labels().observe.call_args[
+                0
+            ][0],
+            2,
+        )
+        == 1.5
     )
 
     # total latency for the request
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once_with(
         "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
     )
-    prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
-        2.0
+    assert (
+        round(
+            prometheus_logger.litellm_request_total_latency_metric.labels().observe.call_args[
+                0
+            ][
+                0
+            ],
+            2,
+        )
+        == 2.0
     )
 
 

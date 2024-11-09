@@ -214,9 +214,6 @@ class LiteLLMProxyRequestSetup:
         - Checks request headers for forwardable headers
         - Checks if user information should be added to the headers
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            get_standard_logging_metadata,
-        )
 
         returned_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(headers)
 
@@ -271,6 +268,11 @@ class LiteLLMProxyRequestSetup:
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_team_spend=user_api_key_dict.team_spend,
+            user_api_key_spend=user_api_key_dict.spend,
+            user_api_key_team_max_budget=user_api_key_dict.team_max_budget,
+            user_api_key_max_budget=user_api_key_dict.max_budget,
         )
         return user_api_key_logged_metadata
 

@@ -2536,6 +2536,11 @@ class StandardLoggingPayloadSetup:
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
+            user_api_key_team_max_budget=None,
+            user_api_key_end_user_id=None,
+            user_api_key_team_spend=None,
+            user_api_key_spend=None,
+            user_api_key_max_budget=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
@@ -2747,7 +2752,7 @@ def get_standard_logging_object_payload(
             response_obj=response_obj
         )
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
-
+        api_call_start_time: Optional[float] = kwargs.get("api_call_start_time")
         _model_id = metadata.get("model_info", {}).get("id", "")
         _model_group = metadata.get("model_group", "")
 
@@ -2816,6 +2821,7 @@ def get_standard_logging_object_payload(
             status=status,
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
+            api_call_start_time=api_call_start_time,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
             model=kwargs.get("model", "") or "",
@@ -2848,52 +2854,6 @@ def get_standard_logging_object_payload(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
-
-
-def get_standard_logging_metadata(
-    metadata: Optional[Dict[str, Any]]
-) -> StandardLoggingMetadata:
-    """
-    Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
-
-    Args:
-        metadata (Optional[Dict[str, Any]]): The original metadata dictionary.
-
-    Returns:
-        StandardLoggingMetadata: A StandardLoggingMetadata object containing the cleaned metadata.
-
-    Note:
-        - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
-        - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
-    """
-    # Initialize with default values
-    clean_metadata = StandardLoggingMetadata(
-        user_api_key_hash=None,
-        user_api_key_alias=None,
-        user_api_key_team_id=None,
-        user_api_key_org_id=None,
-        user_api_key_user_id=None,
-        user_api_key_team_alias=None,
-        spend_logs_metadata=None,
-        requester_ip_address=None,
-        requester_metadata=None,
-    )
-    if isinstance(metadata, dict):
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = StandardLoggingMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in StandardLoggingMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
-
-        if metadata.get("user_api_key") is not None:
-            if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                clean_metadata["user_api_key_hash"] = metadata.get(
-                    "user_api_key"
-                )  # this is the hash
-    return clean_metadata
 
 
 def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):

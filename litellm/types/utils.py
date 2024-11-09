@@ -1472,6 +1472,11 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]
+    user_api_key_end_user_id: Optional[str]
+    user_api_key_team_spend: Optional[float]
+    user_api_key_spend: Optional[float]
+    user_api_key_team_max_budget: Optional[float]
+    user_api_key_max_budget: Optional[float]
 
 
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
@@ -1538,6 +1543,7 @@ class StandardLoggingPayload(TypedDict):
     prompt_tokens: int
     completion_tokens: int
     startTime: float
+    api_call_start_time: Optional[float]
     endTime: float
     completionStartTime: float
     model_map_information: StandardLoggingModelInformation

@@ -335,30 +335,50 @@ class PrometheusLogger(CustomLogger):
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        # Define prometheus client
-        from litellm.types.utils import StandardLoggingPayload
-
         verbose_logger.debug(
             f"prometheus Logging - Enters success logging function for kwargs {kwargs}"
         )
 
-        # unpack kwargs
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+        _standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
         )
 
-        if standard_logging_payload is None or not isinstance(
-            standard_logging_payload, dict
+        if _standard_logging_payload is None or not isinstance(
+            _standard_logging_payload, dict
         ):
             raise ValueError(
-                f"standard_logging_object is required, got={standard_logging_payload}"
+                f"standard_logging_object is required, got={_standard_logging_payload}"
             )
 
-        model = kwargs.get("model", "")
+        self._success_helper(_standard_logging_payload)  # type: ignore
+
+        ## [TODO] MOVE THESE TO _success_helper
+
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
-        proxy_server_request = litellm_params.get("proxy_server_request") or {}
-        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+
+        # set proxy virtual key rpm/tpm metrics
+        self._set_virtual_key_rate_limit_metrics(
+            user_api_key=_standard_logging_payload["metadata"]["user_api_key_hash"],
+            user_api_key_alias=_standard_logging_payload["metadata"][
+                "user_api_key_alias"
+            ],
+            kwargs=kwargs,
+            metadata=_metadata,
+        )
+
+        # set x-ratelimit headers
+        output_tokens = _standard_logging_payload["completion_tokens"]
+        self.set_llm_deployment_success_metrics(
+            kwargs, start_time, end_time, output_tokens
+        )
+
+        return
+
+    def _success_helper(self, standard_logging_payload: StandardLoggingPayload):
+
+        model = standard_logging_payload["model"]
+        end_user_id = standard_logging_payload["metadata"]["user_api_key_end_user_id"]
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -366,7 +386,17 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
-        output_tokens = standard_logging_payload["completion_tokens"]
+        user_api_key_team_spend = standard_logging_payload["metadata"][
+            "user_api_key_team_spend"
+        ]
+        user_api_key_team_max_budget = standard_logging_payload["metadata"][
+            "user_api_key_team_max_budget"
+        ]
+        user_api_key_spend = standard_logging_payload["metadata"]["user_api_key_spend"]
+        user_api_key_max_budget = standard_logging_payload["metadata"][
+            "user_api_key_max_budget"
+        ]
+
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
 
@@ -416,35 +446,29 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias=user_api_team_alias,
             user_api_key=user_api_key,
             user_api_key_alias=user_api_key_alias,
-            litellm_params=litellm_params,
-        )
-
-        # set proxy virtual key rpm/tpm metrics
-        self._set_virtual_key_rate_limit_metrics(
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
-            kwargs=kwargs,
-            metadata=_metadata,
+            team_spend=user_api_key_team_spend,
+            team_max_budget=user_api_key_team_max_budget,
+            api_key_spend=user_api_key_spend,
+            api_key_max_budget=user_api_key_max_budget,
         )
 
         # set latency metrics
         self._set_latency_metrics(
-            kwargs=kwargs,
             model=model,
             user_api_key=user_api_key,
             user_api_key_alias=user_api_key_alias,
             user_api_team=user_api_team,
             user_api_team_alias=user_api_team_alias,
+            model_parameters=standard_logging_payload["model_parameters"],
+            end_time=standard_logging_payload["endTime"],
+            start_time=standard_logging_payload["startTime"],
+            api_call_start_time=standard_logging_payload["api_call_start_time"],
+            completion_start_time=standard_logging_payload["completionStartTime"],
             # why type ignore below?
             # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
-            standard_logging_payload=standard_logging_payload,  # type: ignore
         )
 
-        # set x-ratelimit headers
-        self.set_llm_deployment_success_metrics(
-            kwargs, start_time, end_time, output_tokens
-        )
         pass
 
     def _increment_token_metrics(
@@ -495,26 +519,18 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias: Optional[str],
         user_api_key: Optional[str],
         user_api_key_alias: Optional[str],
-        litellm_params: dict,
+        team_spend: Optional[float],
+        team_max_budget: Optional[float],
+        api_key_spend: Optional[float],
+        api_key_max_budget: Optional[float],
     ):
-        _team_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_spend", None
-        )
-        _team_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_max_budget", None
-        )
+
         _remaining_team_budget = self._safe_get_remaining_budget(
-            max_budget=_team_max_budget, spend=_team_spend
+            max_budget=team_max_budget, spend=team_spend
         )
 
-        _api_key_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_spend", None
-        )
-        _api_key_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_max_budget", None
-        )
         _remaining_api_key_budget = self._safe_get_remaining_budget(
-            max_budget=_api_key_max_budget, spend=_api_key_spend
+            max_budget=api_key_max_budget, spend=api_key_spend
         )
         # Remaining Budget Metrics
         self.litellm_remaining_team_budget_metric.labels(
@@ -587,66 +603,59 @@ class PrometheusLogger(CustomLogger):
 
     def _set_latency_metrics(
         self,
-        kwargs: dict,
         model: Optional[str],
         user_api_key: Optional[str],
         user_api_key_alias: Optional[str],
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
-        standard_logging_payload: StandardLoggingPayload,
+        model_parameters: dict,
+        end_time: float,
+        start_time: float,
+        api_call_start_time: Optional[float],
+        completion_start_time: float,
     ):
         # latency metrics
-        model_parameters: dict = standard_logging_payload["model_parameters"]
-        end_time: datetime = kwargs.get("end_time") or datetime.now()
-        start_time: Optional[datetime] = kwargs.get("start_time")
-        api_call_start_time = kwargs.get("api_call_start_time", None)
 
-        completion_start_time = kwargs.get("completion_start_time", None)
+        if api_call_start_time is not None:
+            if (
+                completion_start_time is not None
+                and model_parameters.get("stream")
+                is True  # only emit for streaming requests
+            ):
+                time_to_first_token_seconds = (
+                    completion_start_time - api_call_start_time
+                )
+                self.litellm_llm_api_time_to_first_token_metric.labels(
+                    model,
+                    user_api_key,
+                    user_api_key_alias,
+                    user_api_team,
+                    user_api_team_alias,
+                ).observe(time_to_first_token_seconds)
+            else:
+                verbose_logger.debug(
+                    "Time to first token metric not emitted, stream option in model_parameters is not True"
+                )
 
-        if (
-            completion_start_time is not None
-            and isinstance(completion_start_time, datetime)
-            and model_parameters.get("stream")
-            is True  # only emit for streaming requests
-        ):
-            time_to_first_token_seconds = (
-                completion_start_time - api_call_start_time
-            ).total_seconds()
-            self.litellm_llm_api_time_to_first_token_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
-            ).observe(time_to_first_token_seconds)
-        else:
-            verbose_logger.debug(
-                "Time to first token metric not emitted, stream option in model_parameters is not True"
-            )
-        if api_call_start_time is not None and isinstance(
-            api_call_start_time, datetime
-        ):
-            api_call_total_time: timedelta = end_time - api_call_start_time
-            api_call_total_time_seconds = api_call_total_time.total_seconds()
+            api_call_total_time: float = end_time - api_call_start_time
             self.litellm_llm_api_latency_metric.labels(
                 model,
                 user_api_key,
                 user_api_key_alias,
                 user_api_team,
                 user_api_team_alias,
-            ).observe(api_call_total_time_seconds)
+            ).observe(api_call_total_time)
 
         # total request latency
-        if start_time is not None and isinstance(start_time, datetime):
-            total_time: timedelta = end_time - start_time
-            total_time_seconds = total_time.total_seconds()
+        if start_time is not None:
+            total_time: float = end_time - start_time
             self.litellm_request_total_latency_metric.labels(
                 model,
                 user_api_key,
                 user_api_key_alias,
                 user_api_team,
                 user_api_team_alias,
-            ).observe(total_time_seconds)
+            ).observe(total_time)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
