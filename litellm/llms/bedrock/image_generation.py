@@ -13,6 +13,7 @@ import litellm
 from litellm.types.utils import ImageResponse
 
 from .common_utils import BedrockError, init_bedrock_client
+from .image_gen.sd3_transformation import AmazonStabilitySD3Config
 
 
 def image_generation(
@@ -68,7 +69,13 @@ def image_generation(
                 k not in inference_params
             ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 inference_params[k] = v
-        data = {"text_prompts": [{"text": prompt, "weight": 1}], **inference_params}
+
+        if model == "stability.stable-diffusion-xl-v1":
+            data = {"text_prompts": [{"text": prompt, "weight": 1}], **inference_params}
+        else:
+            data = AmazonStabilitySD3Config()._transform_request(
+                prompt, inference_params
+            )
     else:
         raise BedrockError(
             status_code=422, message=f"Unsupported model={model}, passed in"
@@ -117,11 +124,13 @@ def image_generation(
 
     if model_response is None:
         model_response = ImageResponse()
+    elif model == "stability.stable-diffusion-xl-v1":
+        image_list: List[Image] = []
+        for artifact in response_body["artifacts"]:
+            _image = Image(b64_json=artifact["base64"])
+            image_list.append(_image)
 
-    image_list: List[Image] = []
-    for artifact in response_body["artifacts"]:
-        _image = Image(b64_json=artifact["base64"])
-        image_list.append(_image)
-
-    model_response.data = image_list
+        model_response.data = image_list
+    else:
+        model_response = AmazonStabilitySD3Config()._transform_response(response_body)
     return model_response

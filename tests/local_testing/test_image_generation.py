@@ -187,6 +187,30 @@ def test_image_generation_bedrock():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+def test_image_generation_bedrock_sd3():
+    try:
+        litellm.set_verbose = True
+        response = litellm.image_generation(
+            prompt="A cute baby sea otter",
+            model="bedrock/stability.sd3-large-v1:0",
+            aws_region_name="us-west-2",
+        )
+
+        print(f"response: {response}")
+        from openai.types.images_response import ImagesResponse
+
+        ImagesResponse.model_validate(response.model_dump())
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.ContentPolicyViolationError:
+        pass  # Azure randomly raises these errors - skip when they occur
+    except Exception as e:
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
+
+
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:
