@@ -31,16 +31,6 @@ OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
 
 </TabItem>
 
-<TabItem value="laminar" label="Log to Laminar">
-
-```shell
-OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="https://api.lmnr.ai:8443"
-OTEL_HEADERS="authorization=Bearer <project-api-key>"
-```
-
-</TabItem>
-
 <TabItem value="otel-col" label="Log to OTEL HTTP Collector">
 
 ```shell
@@ -55,6 +45,16 @@ OTEL_ENDPOINT="http://0.0.0.0:4318"
 ```shell
 OTEL_EXPORTER="otlp_grpc"
 OTEL_ENDPOINT="http://0.0.0.0:4317"
+```
+
+</TabItem>
+
+<TabItem value="laminar" label="Log to Laminar">
+
+```shell
+OTEL_EXPORTER="otlp_grpc"
+OTEL_ENDPOINT="https://api.lmnr.ai:8443"
+OTEL_HEADERS="authorization=Bearer <project-api-key>"
 ```
 
 </TabItem>
