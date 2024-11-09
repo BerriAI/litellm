@@ -528,6 +528,7 @@ async def test_get_gcs_logging_config_without_service_account():
     1. Key based logging without a service account
     2. Default Callback without a service account
     """
+    load_vertex_ai_credentials()
     _old_gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
     os.environ.pop("GCS_BUCKET_NAME")
 
