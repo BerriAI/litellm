@@ -5611,7 +5611,7 @@
         "litellm_provider": "bedrock",
         "mode": "image_generation"
     },
-    "stability.stability.sd3-large-v1:0": {
+    "stability.sd3-large-v1:0": {
         "max_tokens": 77, 
         "max_input_tokens": 77, 
         "output_cost_per_image": 0.08,
