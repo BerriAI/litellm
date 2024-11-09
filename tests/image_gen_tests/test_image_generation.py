@@ -218,7 +218,9 @@ from openai.types.image import Image
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_aimage_generation_vertex_ai(sync_mode):
-    from test_amazing_vertex_completion import load_vertex_ai_credentials
+    from ..local_testing.test_amazing_vertex_completion import (
+        load_vertex_ai_credentials,
+    )
 
     litellm.set_verbose = True
 
