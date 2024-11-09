@@ -23,34 +23,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.utils import StandardLoggingPayload
-
-
-class LangsmithInputs(BaseModel):
-    model: Optional[str] = None
-    messages: Optional[List[Any]] = None
-    stream: Optional[bool] = None
-    call_type: Optional[str] = None
-    litellm_call_id: Optional[str] = None
-    completion_start_time: Optional[datetime] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    custom_llm_provider: Optional[str] = None
-    input: Optional[List[Any]] = None
-    log_event_type: Optional[str] = None
-    original_response: Optional[Any] = None
-    response_cost: Optional[float] = None
-
-    # LiteLLM Virtual Key specific fields
-    user_api_key: Optional[str] = None
-    user_api_key_user_id: Optional[str] = None
-    user_api_key_team_alias: Optional[str] = None
-
-
-class LangsmithCredentialsObject(TypedDict):
-    LANGSMITH_API_KEY: str
-    LANGSMITH_PROJECT: str
-    LANGSMITH_BASE_URL: str
+from litellm.types.integrations.langsmith import *
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 
 def is_serializable(value):
@@ -93,15 +67,16 @@ class LangsmithLogger(CustomBatchLogger):
         )
         if _batch_size:
             self.batch_size = int(_batch_size)
+        self.log_queue: List[LangsmithQueueObject] = []
         asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def get_credentials_from_env(
         self,
-        langsmith_api_key: Optional[str],
-        langsmith_project: Optional[str],
-        langsmith_base_url: Optional[str],
+        langsmith_api_key: Optional[str] = None,
+        langsmith_project: Optional[str] = None,
+        langsmith_base_url: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
 
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
@@ -243,37 +218,6 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             raise
 
-    def _send_batch(self):
-        if not self.log_queue:
-            return
-
-        langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
-        langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
-
-        url = f"{langsmith_api_base}/runs/batch"
-
-        headers = {"x-api-key": langsmith_api_key}
-
-        try:
-            response = requests.post(
-                url=url,
-                json=self.log_queue,
-                headers=headers,
-            )
-
-            if response.status_code >= 300:
-                verbose_logger.error(
-                    f"Langsmith Error: {response.status_code} - {response.text}"
-                )
-            else:
-                verbose_logger.debug(
-                    f"Batch of {len(self.log_queue)} runs successfully created"
-                )
-
-            self.log_queue.clear()
-        except Exception:
-            verbose_logger.exception("Langsmith Layer Error - Error sending batch.")
-
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             sampling_rate = (
@@ -296,7 +240,12 @@ class LangsmithLogger(CustomBatchLogger):
                 response_obj,
             )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
-            self.log_queue.append(data)
+            self.log_queue.append(
+                LangsmithQueueObject(
+                    data=data,
+                    credentials=self._get_credentials_to_use_for_request(kwargs=kwargs),
+                )
+            )
             verbose_logger.debug(
                 f"Langsmith, event added to queue. Will flush in {self.flush_interval} seconds..."
             )
@@ -324,7 +273,12 @@ class LangsmithLogger(CustomBatchLogger):
                 response_obj,
             )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
-            self.log_queue.append(data)
+            self.log_queue.append(
+                LangsmithQueueObject(
+                    data=data,
+                    credentials=self._get_credentials_to_use_for_request(kwargs=kwargs),
+                )
+            )
             verbose_logger.debug(
                 "Langsmith logging: queue length %s, batch size %s",
                 len(self.log_queue),
@@ -350,7 +304,12 @@ class LangsmithLogger(CustomBatchLogger):
         verbose_logger.info("Langsmith Failure Event Logging!")
         try:
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
-            self.log_queue.append(data)
+            self.log_queue.append(
+                LangsmithQueueObject(
+                    data=data,
+                    credentials=self._get_credentials_to_use_for_request(kwargs=kwargs),
+                )
+            )
             verbose_logger.debug(
                 "Langsmith logging: queue length %s, batch size %s",
                 len(self.log_queue),
@@ -365,31 +324,55 @@ class LangsmithLogger(CustomBatchLogger):
 
     async def async_send_batch(self):
         """
-        sends runs to /batch endpoint
+        Handles sending batches of runs to Langsmith
 
-        Sends runs from self.log_queue
+        self.log_queue contains LangsmithQueueObjects
+            Each LangsmithQueueObject has the following:
+                - "credentials" - credentials to use for the request (langsmith_api_key, langsmith_project, langsmith_base_url)
+                - "data" - data to log on to langsmith for the request
+
+
+        This function
+         - groups the queue objects by credentials
+         - loops through each unique credentials and sends batches to Langsmith
+
+
+        This was added to support key/team based logging on langsmith
+        """
+        if not self.log_queue:
+            return
+
+        log_queue_by_credentials = self._group_batches_by_credentials()
+        for credentials, queue_objects in log_queue_by_credentials.items():
+            await self._log_batch_on_langsmith(credentials, queue_objects)
+
+    async def _log_batch_on_langsmith(
+        self,
+        credentials: LangsmithCredentialsObject,
+        queue_objects: List[LangsmithQueueObject],
+    ):
+        """
+        Logs a batch of runs to Langsmith
+        sends runs to /batch endpoint for the given credentials
+
+        Args:
+            credentials: LangsmithCredentialsObject
+            queue_objects: List[LangsmithQueueObject]
 
         Returns: None
 
         Raises: Does not raise an exception, will only verbose_logger.exception()
         """
-        if not self.log_queue:
-            return
-
-        langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
-
+        langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
+        langsmith_api_key = credentials["LANGSMITH_API_KEY"]
         url = f"{langsmith_api_base}/runs/batch"
-
-        langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
-
         headers = {"x-api-key": langsmith_api_key}
+        elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 
         try:
             response = await self.async_httpx_client.post(
                 url=url,
-                json={
-                    "post": self.log_queue,
-                },
+                json={"post": elements_to_log},
                 headers=headers,
             )
             response.raise_for_status()
@@ -410,6 +393,72 @@ class LangsmithLogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"Langsmith Layer Error - {traceback.format_exc()}"
             )
+
+    def _group_batches_by_credentials(
+        self,
+    ) -> Dict[LangsmithCredentialsObject, List[LangsmithQueueObject]]:
+        """
+        Groups queue objects by credentials
+
+        """
+        log_queue_by_credentials: Dict[
+            LangsmithCredentialsObject, List[LangsmithQueueObject]
+        ] = {}
+        for queue_object in self.log_queue:
+            credentials = queue_object["credentials"]
+            if credentials not in log_queue_by_credentials:
+                log_queue_by_credentials[credentials] = []
+            log_queue_by_credentials[credentials].append(queue_object)
+        return log_queue_by_credentials
+
+    def _get_credentials_to_use_for_request(
+        self, kwargs: Dict[str, Any]
+    ) -> LangsmithCredentialsObject:
+        """
+        Handles key/team based logging
+
+        If standard_callback_dynamic_params are provided, use those credentials.
+
+        Otherwise, use the default credentials.
+        """
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
+        if standard_callback_dynamic_params is not None:
+            credentials = self.get_credentials_from_env(
+                langsmith_api_key=standard_callback_dynamic_params.get(
+                    "langsmith_api_key", None
+                ),
+                langsmith_project=standard_callback_dynamic_params.get(
+                    "langsmith_project", None
+                ),
+                langsmith_base_url=standard_callback_dynamic_params.get(
+                    "langsmith_base_url", None
+                ),
+            )
+        else:
+            credentials = self.default_credentials
+        return credentials
+
+    def _send_batch(self):
+        """
+        Calls async_send_batch in an event loop
+        """
+        if not self.log_queue:
+            return
+
+        try:
+            # Try to get the existing event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're already in an event loop, create a task
+                asyncio.create_task(self.async_send_batch())
+            else:
+                # If no event loop is running, run the coroutine directly
+                loop.run_until_complete(self.async_send_batch())
+        except RuntimeError:
+            # If we can't get an event loop, create a new one
+            asyncio.run(self.async_send_batch())
 
     def get_run_by_id(self, run_id):
 
