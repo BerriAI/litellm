@@ -530,6 +530,7 @@ def completion_cost(  # noqa: PLR0915
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
+    optional_params: Optional[dict] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -676,6 +677,7 @@ def completion_cost(  # noqa: PLR0915
                         model=model,
                         size=size,
                         image_response=completion_response,
+                        optional_params=optional_params,
                     )
                 raise TypeError(
                     "completion_response must be of type ImageResponse for bedrock image cost calculation"
@@ -856,6 +858,7 @@ def response_cost_calculator(
                     model=model,
                     call_type=call_type,
                     custom_llm_provider=custom_llm_provider,
+                    optional_params=optional_params,
                 )
             else:
                 if custom_pricing is True:  # override defaults if custom pricing is set

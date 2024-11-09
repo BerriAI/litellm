@@ -8,7 +8,25 @@ def cost_calculator(
     model: str,
     size: Optional[str],
     image_response: ImageResponse,
+    optional_params: Optional[dict] = None,
 ) -> float:
+    """
+    Bedrock image generation cost calculator
+
+    Handles both Stability 1 and Stability 3 models
+    """
+    if litellm.AmazonStability3Config()._is_stability_3_model(model=model):
+        pass
+    else:
+        # Stability 1 models
+        optional_params = optional_params or {}
+
+        # see model_prices_and_context_window.json for details on how steps is used
+        # Reference pricing by steps for stability 1: https://aws.amazon.com/bedrock/pricing/
+        _steps = optional_params.get("steps", 50)
+        steps = "max-steps" if _steps > 50 else "50-steps"
+        model = f"{size}/{steps}/{model}"
+
     _model_info = litellm.get_model_info(
         model=model,
         custom_llm_provider="bedrock",
@@ -16,5 +34,4 @@ def cost_calculator(
 
     output_cost_per_image: float = _model_info.get("output_cost_per_image") or 0.0
     num_images: int = len(image_response.data)
-
     return output_cost_per_image * num_images
