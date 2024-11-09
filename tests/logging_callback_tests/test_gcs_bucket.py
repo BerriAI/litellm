@@ -580,6 +580,8 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
     gcs_logger = GCSBucketLogger()
 
     bucket_name = "litellm-testing-bucket/test-folder-logs"
+
+    old_bucket_name = os.environ.get("GCS_BUCKET_NAME")
     os.environ["GCS_BUCKET_NAME"] = bucket_name
     print("GCSBucketLogger", gcs_logger)
 
@@ -675,3 +677,7 @@ async def test_basic_gcs_logger_with_folder_in_bucket_name():
     # Delete Object from GCS
     print("deleting object from GCS")
     await gcs_logger.delete_gcs_object(object_name=object_name)
+
+    # clean up
+    if old_bucket_name is not None:
+        os.environ["GCS_BUCKET_NAME"] = old_bucket_name
