@@ -28,6 +28,9 @@ from litellm.llms.azure_ai.cost_calculator import (
 from litellm.llms.AzureOpenAI.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.bedrock.image.cost_calculator import (
+    cost_calculator as bedrock_image_cost_calculator,
+)
 from litellm.llms.cohere.cost_calculator import (
     cost_per_query as cohere_rerank_cost_per_query,
 )
@@ -521,7 +524,7 @@ def completion_cost(  # noqa: PLR0915
     custom_llm_provider=None,
     region_name=None,  # used for bedrock pricing
     ### IMAGE GEN ###
-    size=None,
+    size: Optional[str] = None,
     quality=None,
     n=None,  # number of images
     ### CUSTOM PRICING ###
@@ -667,7 +670,16 @@ def completion_cost(  # noqa: PLR0915
                 # https://cloud.google.com/vertex-ai/generative-ai/pricing
                 # Vertex Charges Flat $0.20 per image
                 return 0.020
-
+            elif custom_llm_provider == "bedrock":
+                if isinstance(completion_response, ImageResponse):
+                    return bedrock_image_cost_calculator(
+                        model=model,
+                        size=size,
+                        image_response=completion_response,
+                    )
+                raise TypeError(
+                    "completion_response must be of type ImageResponse for bedrock image cost calculation"
+                )
             if size is None:
                 size = "1024-x-1024"  # openai default
             # fix size to match naming convention
@@ -677,9 +689,9 @@ def completion_cost(  # noqa: PLR0915
             image_gen_model_name_with_quality = image_gen_model_name
             if quality is not None:
                 image_gen_model_name_with_quality = f"{quality}/{image_gen_model_name}"
-            size = size.split("-x-")
-            height = int(size[0])  # if it's 1024-x-1024 vs. 1024x1024
-            width = int(size[1])
+            size_parts = size.split("-x-")
+            height = int(size_parts[0])  # if it's 1024-x-1024 vs. 1024x1024
+            width = int(size_parts[1])
             verbose_logger.debug(f"image_gen_model_name: {image_gen_model_name}")
             verbose_logger.debug(
                 f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}"
