@@ -115,37 +115,9 @@ class LangsmithLogger(CustomBatchLogger):
         end_time,
         credentials: LangsmithCredentialsObject,
     ):
-        import json
-        from datetime import datetime as dt
-
         try:
             _litellm_params = kwargs.get("litellm_params", {}) or {}
             metadata = _litellm_params.get("metadata", {}) or {}
-            new_metadata = {}
-            for key, value in metadata.items():
-                if (
-                    isinstance(value, list)
-                    or isinstance(value, str)
-                    or isinstance(value, int)
-                    or isinstance(value, float)
-                ):
-                    new_metadata[key] = value
-                elif isinstance(value, BaseModel):
-                    new_metadata[key] = value.model_dump_json()
-                elif isinstance(value, dict):
-                    for k, v in value.items():
-                        if isinstance(v, dt):
-                            value[k] = v.isoformat()
-                    new_metadata[key] = value
-
-            metadata = new_metadata
-
-            kwargs["user_api_key"] = metadata.get("user_api_key", None)
-            kwargs["user_api_key_user_id"] = metadata.get("user_api_key_user_id", None)
-            kwargs["user_api_key_team_alias"] = metadata.get(
-                "user_api_key_team_alias", None
-            )
-
             project_name = metadata.get(
                 "project_name", credentials["LANGSMITH_PROJECT"]
             )
@@ -155,16 +127,10 @@ class LangsmithLogger(CustomBatchLogger):
             trace_id = metadata.get("trace_id", None)
             session_id = metadata.get("session_id", None)
             dotted_order = metadata.get("dotted_order", None)
-            tags = metadata.get("tags", []) or []
             verbose_logger.debug(
                 f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
             )
 
-            # filter out kwargs to not include any dicts, langsmith throws an erros when trying to log kwargs
-            # logged_kwargs = LangsmithInputs(**kwargs)
-            # kwargs = logged_kwargs.model_dump()
-
-            # new_kwargs = {}
             # Ensure everything in the payload is converted to str
             payload: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
@@ -173,7 +139,6 @@ class LangsmithLogger(CustomBatchLogger):
             if payload is None:
                 raise Exception("Error logging request payload. Payload=none.")
 
-            new_kwargs = payload
             metadata = payload[
                 "metadata"
             ]  # ensure logged metadata is json serializable
@@ -181,12 +146,12 @@ class LangsmithLogger(CustomBatchLogger):
             data = {
                 "name": run_name,
                 "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
-                "inputs": new_kwargs,
-                "outputs": new_kwargs["response"],
+                "inputs": payload,
+                "outputs": payload["response"],
                 "session_name": project_name,
-                "start_time": new_kwargs["startTime"],
-                "end_time": new_kwargs["endTime"],
-                "tags": tags,
+                "start_time": payload["startTime"],
+                "end_time": payload["endTime"],
+                "tags": payload["request_tags"],
                 "extra": metadata,
             }
 
