@@ -107,7 +107,7 @@ class LangsmithLogger(CustomBatchLogger):
             LANGSMITH_PROJECT=_credentials_project,
         )
 
-    def _prepare_log_data(  # noqa: PLR0915
+    def _prepare_log_data(
         self,
         kwargs,
         response_obj,
