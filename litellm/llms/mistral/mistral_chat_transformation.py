@@ -151,9 +151,7 @@ class MistralConfig:
         return api_base, dynamic_api_key
 
     @classmethod
-    def _transform_messages(
-        cls, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
+    def _transform_messages(cls, messages: List[AllMessageValues]):
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images
