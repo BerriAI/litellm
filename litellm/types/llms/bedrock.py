@@ -275,3 +275,32 @@ AmazonEmbeddingRequest = Union[
     AmazonTitanV2EmbeddingRequest,
     AmazonTitanG1EmbeddingRequest,
 ]
+
+
+class AmazonStability3TextToImageRequest(TypedDict, total=False):
+    """
+    Request for Amazon Stability 3 Text to Image API
+
+    Ref here: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-diffusion-3-text-image.html
+    """
+
+    prompt: str
+    aspect_ratio: Literal[
+        "16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"
+    ]
+    mode: Literal["image-to-image", "text-to-image"]
+    output_format: Literal["JPEG", "PNG"]
+    seed: int
+    negative_prompt: str
+
+
+class AmazonStability3TextToImageResponse(TypedDict, total=False):
+    """
+    Response for Amazon Stability 3 Text to Image API
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-diffusion-3-text-image.html
+    """
+
+    images: List[str]
+    seeds: List[str]
+    finish_reasons: List[str]

@@ -104,6 +104,7 @@ class AnthropicConfig:
         anthropic_version: Optional[str] = None,
         computer_tool_used: bool = False,
         prompt_caching_set: bool = False,
+        pdf_used: bool = False,
     ) -> dict:
         import json
 
@@ -112,6 +113,8 @@ class AnthropicConfig:
             betas.append("prompt-caching-2024-07-31")
         if computer_tool_used:
             betas.append("computer-use-2024-10-22")
+        if pdf_used:
+            betas.append("pdfs-2024-09-25")
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
@@ -363,6 +366,21 @@ class AnthropicConfig:
         for tool in tools:
             if "type" in tool and tool["type"].startswith("computer_"):
                 return True
+        return False
+
+    def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
+        """
+        Set to true if media passed into messages.
+        """
+        for message in messages:
+            if (
+                "content" in message
+                and message["content"] is not None
+                and isinstance(message["content"], list)
+            ):
+                for content in message["content"]:
+                    if "type" in content:
+                        return True
         return False
 
     def translate_system_message(

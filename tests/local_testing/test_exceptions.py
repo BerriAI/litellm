@@ -163,7 +163,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model == "azure/chatgpt-v-2":
             temporary_key = os.environ["AZURE_API_KEY"]
             os.environ["AZURE_API_KEY"] = "bad-key"
-        elif model == "claude-instant-1":
+        elif model == "claude-3-5-haiku-20241022":
             temporary_key = os.environ["ANTHROPIC_API_KEY"]
             os.environ["ANTHROPIC_API_KEY"] = "bad-key"
         elif model == "command-nightly":
@@ -213,7 +213,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model == "chatgpt-test":
             os.environ["AZURE_API_KEY"] = temporary_key
             azure = True
-        elif model == "claude-instant-1":
+        elif model == "claude-3-5-haiku-20241022":
             os.environ["ANTHROPIC_API_KEY"] = temporary_key
         elif model == "command-nightly":
             os.environ["COHERE_API_KEY"] = temporary_key
@@ -775,7 +775,7 @@ def test_litellm_predibase_exception():
 
 
 @pytest.mark.parametrize(
-    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks"]
+    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx"]
 )
 def test_exception_mapping(provider):
     """

@@ -1599,7 +1599,9 @@ async def test_key_logging(
             details=f"Logging test failed: {str(e)}",
         )
 
-    await asyncio.sleep(1)  # wait for callbacks to run
+    await asyncio.sleep(
+        2
+    )  # wait for callbacks to run, callbacks use batching so wait for the flush event
 
     # Check if any logger exceptions were triggered
     log_contents = log_capture_string.getvalue()

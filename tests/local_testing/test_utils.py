@@ -891,3 +891,76 @@ def test_is_base64_encoded_2():
     )
 
     assert is_base64_encoded(s="Dog") is False
+
+
+@pytest.mark.parametrize(
+    "messages, expected_bool",
+    [
+        ([{"role": "user", "content": "hi"}], True),
+        ([{"role": "user", "content": [{"type": "text", "text": "hi"}]}], True),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "url": "https://example.com/image.png"}
+                    ],
+                }
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "1234",
+                                },
+                            },
+                        },
+                    ],
+                }
+            ],
+            False,
+        ),
+    ],
+)
+def test_validate_chat_completion_user_messages(messages, expected_bool):
+    from litellm.utils import validate_chat_completion_user_messages
+
+    if expected_bool:
+        ## Valid message
+        validate_chat_completion_user_messages(messages=messages)
+    else:
+        ## Invalid message
+        with pytest.raises(Exception):
+            validate_chat_completion_user_messages(messages=messages)
+
+
+def test_models_by_provider():
+    """
+    Make sure all providers from model map are in the valid providers list
+    """
+    from litellm import models_by_provider
+
+    providers = set()
+    for k, v in litellm.model_cost.items():
+        if "_" in v["litellm_provider"] and "-" in v["litellm_provider"]:
+            continue
+        elif k == "sample_spec":
+            continue
+        elif v["litellm_provider"] == "sagemaker":
+            continue
+        else:
+            providers.add(v["litellm_provider"])
+
+    for provider in providers:
+        assert provider in models_by_provider.keys()

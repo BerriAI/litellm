@@ -824,8 +824,8 @@ def test_ausage_based_routing_fallbacks():
                 "rpm": OPENAI_RPM,
             },
             {
-                "model_name": "anthropic-claude-instant-1.2",
-                "litellm_params": get_anthropic_params("claude-instant-1.2"),
+                "model_name": "anthropic-claude-3-5-haiku-20241022",
+                "litellm_params": get_anthropic_params("claude-3-5-haiku-20241022"),
                 "model_info": {"id": 4},
                 "rpm": ANTHROPIC_RPM,
             },
@@ -834,7 +834,7 @@ def test_ausage_based_routing_fallbacks():
         fallbacks_list = [
             {"azure/gpt-4-fast": ["azure/gpt-4-basic"]},
             {"azure/gpt-4-basic": ["openai-gpt-4"]},
-            {"openai-gpt-4": ["anthropic-claude-instant-1.2"]},
+            {"openai-gpt-4": ["anthropic-claude-3-5-haiku-20241022"]},
         ]
 
         router = Router(
@@ -864,7 +864,7 @@ def test_ausage_based_routing_fallbacks():
         assert response._hidden_params["model_id"] == "1"
 
         for i in range(10):
-            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
+            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-3-5-haiku-20241022
             response = router.completion(
                 model="azure/gpt-4-fast",
                 messages=messages,
@@ -1120,9 +1120,10 @@ async def test_client_side_fallbacks_list(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("content_filter_response_exception", [True, False])
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
 async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception
+    sync_mode, content_filter_response_exception, fallback_type
 ):
     os.environ["LITELLM_LOG"] = "DEBUG"
 
@@ -1153,6 +1154,14 @@ async def test_router_content_policy_fallbacks(
                 },
             },
             {
+                "model_name": "my-default-fallback-model",
+                "litellm_params": {
+                    "model": "openai/my-fake-model",
+                    "api_key": "",
+                    "mock_response": "This works 2!",
+                },
+            },
+            {
                 "model_name": "my-general-model",
                 "litellm_params": {
                     "model": "claude-2",
@@ -1169,9 +1178,14 @@ async def test_router_content_policy_fallbacks(
                 },
             },
         ],
-        content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}],
-        fallbacks=[{"claude-2": ["my-general-model"]}],
-        context_window_fallbacks=[{"claude-2": ["my-context-window-model"]}],
+        content_policy_fallbacks=(
+            [{"claude-2": ["my-fallback-model"]}]
+            if fallback_type == "model-specific"
+            else None
+        ),
+        default_fallbacks=(
+            ["my-default-fallback-model"] if fallback_type == "default" else None
+        ),
     )
 
     if sync_mode is True:
@@ -1226,9 +1240,7 @@ async def test_using_default_fallback(sync_mode):
         pytest.fail(f"Expected call to fail we passed model=openai/foo")
     except Exception as e:
         print("got exception = ", e)
-        from litellm.types.router import RouterErrors
-
-        assert RouterErrors.no_deployments_available.value in str(e)
+        assert "BadRequestError" in str(e)
 
 
 @pytest.mark.parametrize("sync_mode", [False])

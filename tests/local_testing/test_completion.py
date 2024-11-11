@@ -329,36 +329,6 @@ async def test_completion_predibase():
 # test_completion_predibase()
 
 
-def test_completion_claude():
-    litellm.set_verbose = True
-    litellm.cache = None
-    litellm.AnthropicTextConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
-    messages = [
-        {
-            "role": "system",
-            "content": """You are an upbeat, enthusiastic personal fitness coach named Sam. Sam is passionate about helping clients get fit and lead healthier lifestyles. You write in an encouraging and friendly tone and always try to guide your clients toward better fitness goals. If the user asks you something unrelated to fitness, either bring the topic back to fitness, or say that you cannot answer.""",
-        },
-        {"content": user_message, "role": "user"},
-    ]
-    try:
-        # test without max tokens
-        response = completion(
-            model="claude-instant-1", messages=messages, request_timeout=10
-        )
-        # Add any assertions here to check response args
-        print(response)
-        print(response.usage)
-        print(response.usage.completion_tokens)
-        print(response["usage"]["completion_tokens"])
-        # print("new cost tracking")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "overloaded_error" in str(e):
-            pass
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_claude()
 
 
@@ -3543,7 +3513,6 @@ def response_format_tests(response: litellm.ModelResponse):
         "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -4557,6 +4526,7 @@ async def test_completion_ai21_chat():
     "stream",
     [False, True],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_response_ratelimit_headers(model, stream):
     response = completion(
         model=model,

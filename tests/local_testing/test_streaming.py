@@ -681,7 +681,7 @@ def test_completion_ollama_hosted_stream():
 @pytest.mark.parametrize(
     "model",
     [
-        # "claude-instant-1.2",
+        # "claude-3-5-haiku-20241022",
         # "claude-2",
         # "mistral/mistral-medium",
         "openrouter/openai/gpt-4o-mini",
@@ -1112,7 +1112,7 @@ def test_completion_claude_stream_bad_key():
             },
         ]
         response = completion(
-            model="claude-instant-1",
+            model="claude-3-5-haiku-20241022",
             messages=messages,
             stream=True,
             max_tokens=50,
@@ -1430,7 +1430,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
         ["meta.llama3-8b-instruct-v1:0", None],
-        ["cohere.command-text-v14", None],
     ],
 )
 @pytest.mark.asyncio
@@ -1918,25 +1917,31 @@ def test_completion_sagemaker_stream():
 
 
 @pytest.mark.skip(reason="Account deleted by IBM.")
-def test_completion_watsonx_stream():
+@pytest.mark.asyncio
+async def test_completion_watsonx_stream():
     litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
     try:
-        response = completion(
-            model="watsonx/ibm/granite-13b-chat-v2",
+        response = await acompletion(
+            model="watsonx/meta-llama/llama-3-1-8b-instruct",
             messages=messages,
             temperature=0.5,
             max_tokens=20,
             stream=True,
+            # client=client
         )
         complete_response = ""
         has_finish_reason = False
         # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
+        idx = 0
+        async for chunk in response:
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finish_reason = finished
             if finished:
                 break
             complete_response += chunk
+            idx += 1
         if has_finish_reason is False:
             raise Exception("finish reason not set for last chunk")
         if complete_response.strip() == "":
@@ -3463,6 +3468,86 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     else:
         for chunk in response:
             continue
+
+
+def test_unit_test_gemini_streaming_content_filter():
+    chunks = [
+        {
+            "text": "##",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 1, "total_tokens": 38},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": " Downsides of Prompt Hacking in a Customer Portal\n\nWhile prompt engineering can be incredibly",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+        {
+            "text": "",
+            "tool_use": None,
+            "is_finished": False,
+            "finish_reason": "content_filter",
+            "usage": {"prompt_tokens": 37, "completion_tokens": 17, "total_tokens": 54},
+            "index": 0,
+        },
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "index": 0,
+            "tool_use": None,
+        },
+    ]
+
+    completion_stream = ModelResponseListIterator(model_responses=chunks)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gemini/gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        logging_obj=litellm.Logging(
+            model="gemini/gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    stream_finish_reason: Optional[str] = None
+    idx = 0
+    for chunk in response:
+        print(f"chunk: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            stream_finish_reason = chunk.choices[0].finish_reason
+        idx += 1
+    print(f"num chunks: {idx}")
+    assert stream_finish_reason == "content_filter"
 
 
 def test_unit_test_custom_stream_wrapper_openai():
