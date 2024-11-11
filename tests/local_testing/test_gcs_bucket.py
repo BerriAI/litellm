@@ -28,6 +28,7 @@ verbose_logger.setLevel(logging.DEBUG)
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
+    os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
 
