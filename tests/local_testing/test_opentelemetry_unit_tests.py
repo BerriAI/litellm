@@ -39,3 +39,38 @@ async def test_opentelemetry_integration():
     await asyncio.sleep(1)
 
     parent_otel_span.end.assert_called_once()
+
+
+def test_parallel_tool_calls():
+    from litellm.types.llms.openai import (
+        ChatCompletionToolCallChunk,
+        ChatCompletionToolCallFunctionChunk,
+    )
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy._types import SpanAttributes
+
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            function=ChatCompletionToolCallFunctionChunk(
+                arguments='{"city": "New York"}', name="get_weather"
+            ),
+            id="call_Gv7JsMgS7YRV3rEb5wYsI0fg",
+            type="function",
+        ),
+        ChatCompletionToolCallChunk(
+            function=ChatCompletionToolCallFunctionChunk(
+                arguments='{"city": "New York"}', name="get_news"
+            ),
+            id="call_nqac3t38Sth3rThr71xyEARH",
+            type="function",
+        ),
+    ]
+
+    kv_pair_dict = OpenTelemetry._tool_calls_kv_pair(tool_calls)
+
+    assert kv_pair_dict == {
+        f"{SpanAttributes.LLM_COMPLETIONS}.0.function_call.arguments": '{"city": "New York"}',
+        f"{SpanAttributes.LLM_COMPLETIONS}.0.function_call.name": "get_weather",
+        f"{SpanAttributes.LLM_COMPLETIONS}.1.function_call.arguments": '{"city": "New York"}',
+        f"{SpanAttributes.LLM_COMPLETIONS}.1.function_call.name": "get_news",
+    }
