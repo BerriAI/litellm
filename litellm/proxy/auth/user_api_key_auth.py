@@ -1236,7 +1236,6 @@ def _return_user_api_key_auth_obj(
     start_time: datetime,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
-    traceback.print_stack()
     end_time = datetime.now()
     user_api_key_service_logger_obj.service_success_hook(
         service=ServiceTypes.AUTH,

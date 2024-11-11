@@ -1322,11 +1322,6 @@ class TranscriptionResponse(OpenAIObject):
 
 
 class GenericImageParsingChunk(TypedDict):
-    # {
-    #         "type": "base64",
-    #         "media_type": f"image/{image_format}",
-    #         "data": base64_data,
-    #     }
     type: str
     media_type: str
     data: str

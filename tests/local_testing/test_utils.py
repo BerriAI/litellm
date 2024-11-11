@@ -943,3 +943,24 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
         ## Invalid message
         with pytest.raises(Exception):
             validate_chat_completion_user_messages(messages=messages)
+
+
+def test_models_by_provider():
+    """
+    Make sure all providers from model map are in the valid providers list
+    """
+    from litellm import models_by_provider
+
+    providers = set()
+    for k, v in litellm.model_cost.items():
+        if "_" in v["litellm_provider"] and "-" in v["litellm_provider"]:
+            continue
+        elif k == "sample_spec":
+            continue
+        elif v["litellm_provider"] == "sagemaker":
+            continue
+        else:
+            providers.add(v["litellm_provider"])
+
+    for provider in providers:
+        assert provider in models_by_provider.keys()
