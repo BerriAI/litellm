@@ -169,3 +169,11 @@ def test_get_llm_provider_hosted_vllm():
     assert custom_llm_provider == "hosted_vllm"
     assert model == "llama-3.1-70b-instruct"
     assert dynamic_api_key == ""
+
+
+def test_get_llm_provider_watson_text():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="watsonx_text/watson-text-to-speech",
+    )
+    assert custom_llm_provider == "watsonx_text"
+    assert model == "watson-text-to-speech"
