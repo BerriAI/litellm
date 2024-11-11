@@ -36,6 +36,7 @@ from litellm.types.llms.anthropic import AnthropicResponse
 
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from httpx import Headers
+from base_llm_unit_tests import BaseLLMChatTest
 
 
 def test_anthropic_completion_messages_translation():
@@ -624,3 +625,40 @@ def test_anthropic_tool_helper(cache_control_location):
     tool = AnthropicConfig()._map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
+
+
+from litellm import completion
+
+
+class TestAnthropicCompletion(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {"model": "claude-3-haiku-20240307"}
+
+    def test_pdf_handling(self, pdf_messages):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.types.llms.anthropic import AnthropicMessagesDocumentParam
+        import json
+
+        client = HTTPHandler()
+
+        with patch.object(client, "post", new=MagicMock()) as mock_client:
+            response = completion(
+                model="claude-3-5-sonnet-20241022",
+                messages=pdf_messages,
+                client=client,
+            )
+
+            mock_client.assert_called_once()
+
+            json_data = json.loads(mock_client.call_args.kwargs["data"])
+            headers = mock_client.call_args.kwargs["headers"]
+
+            assert headers["anthropic-beta"] == "pdfs-2024-09-25"
+
+            json_data["messages"][0]["role"] == "user"
+            _document_validation = AnthropicMessagesDocumentParam(
+                **json_data["messages"][0]["content"][1]
+            )
+            assert _document_validation["type"] == "document"
+            assert _document_validation["source"]["media_type"] == "application/pdf"
+            assert _document_validation["source"]["type"] == "base64"
