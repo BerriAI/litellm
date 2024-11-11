@@ -6,11 +6,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
+
 litellm_settings:
-  callbacks: ["prometheus"]
-  service_callback: ["prometheus_system"]
-
-
-general_settings:
-  allow_requests_on_db_unavailable: true
+  callbacks: ["gcs_bucket"]
 
