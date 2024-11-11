@@ -226,8 +226,10 @@ async def test_langsmith_key_based_logging(mocker):
             langsmith_api_key="fake_key_project2",
             langsmith_project="fake_project2",
         )
+        print("Waiting for logs to be flushed to Langsmith.....")
+        await asyncio.sleep(15)
 
-        await asyncio.sleep(8)
+        print("done sleeping 15 seconds...")
 
         # Verify the post request was made with correct parameters
         mock_post.assert_called_once()
