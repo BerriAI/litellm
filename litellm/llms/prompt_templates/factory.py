@@ -1330,7 +1330,10 @@ def convert_to_anthropic_tool_invoke(
 
 def add_cache_control_to_content(
     anthropic_content_element: Union[
-        dict, AnthropicMessagesImageParam, AnthropicMessagesTextParam
+        dict,
+        AnthropicMessagesImageParam,
+        AnthropicMessagesTextParam,
+        AnthropicMessagesDocumentParam,
     ],
     orignal_content_element: Union[dict, AllMessageValues],
 ):
@@ -1341,6 +1344,32 @@ def add_cache_control_to_content(
         anthropic_content_element["cache_control"] = transformed_param
 
     return anthropic_content_element
+
+
+def _anthropic_content_element_factory(
+    image_chunk: GenericImageParsingChunk,
+) -> Union[AnthropicMessagesImageParam, AnthropicMessagesDocumentParam]:
+    if image_chunk["media_type"] == "application/pdf":
+        _anthropic_content_element: Union[
+            AnthropicMessagesDocumentParam, AnthropicMessagesImageParam
+        ] = AnthropicMessagesDocumentParam(
+            type="document",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+    else:
+        _anthropic_content_element = AnthropicMessagesImageParam(
+            type="image",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+    return _anthropic_content_element
 
 
 def anthropic_messages_pt(  # noqa: PLR0915
@@ -1400,15 +1429,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                                     openai_image_url=m["image_url"]["url"]
                                 )
 
-                            _anthropic_content_element = AnthropicMessagesImageParam(
-                                type="image",
-                                source=AnthropicImageParamSource(
-                                    type="base64",
-                                    media_type=image_chunk["media_type"],
-                                    data=image_chunk["data"],
-                                ),
+                            _anthropic_content_element = (
+                                _anthropic_content_element_factory(image_chunk)
                             )
-
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
                                 orignal_content_element=dict(m),
