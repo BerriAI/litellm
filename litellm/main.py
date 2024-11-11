@@ -108,9 +108,9 @@ from .llms.azure_text import AzureTextCompletion
 from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
 from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.AzureOpenAI.chat.o1_handler import AzureOpenAIO1ChatCompletion
-from .llms.bedrock import image_generation as bedrock_image_generation  # type: ignore
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
+from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
@@ -214,6 +214,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
+bedrock_image_generation = BedrockImageGeneration()
 vertex_chat_completion = VertexLLM()
 vertex_embedding = VertexEmbedding()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
@@ -4447,6 +4448,7 @@ def image_generation(  # noqa: PLR0915
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
         optional_params = get_optional_params_image_gen(
+            model=model,
             n=n,
             quality=quality,
             response_format=response_format,
@@ -4539,7 +4541,7 @@ def image_generation(  # noqa: PLR0915
         elif custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
-            model_response = bedrock_image_generation.image_generation(
+            model_response = bedrock_image_generation.image_generation(  # type: ignore
                 model=model,
                 prompt=prompt,
                 timeout=timeout,

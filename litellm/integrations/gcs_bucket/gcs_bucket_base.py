@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -21,8 +21,8 @@ else:
     VertexBase = Any
 
 
-class GCSBucketBase(CustomLogger):
-    def __init__(self, bucket_name: Optional[str] = None) -> None:
+class GCSBucketBase(CustomBatchLogger):
+    def __init__(self, bucket_name: Optional[str] = None, **kwargs) -> None:
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -30,6 +30,7 @@ class GCSBucketBase(CustomLogger):
         _bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME")
         self.path_service_account_json: Optional[str] = _path_service_account
         self.BUCKET_NAME: Optional[str] = _bucket_name
+        super().__init__(**kwargs)
 
     async def construct_request_headers(
         self,

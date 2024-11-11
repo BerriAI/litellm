@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -10,10 +11,12 @@ from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CommonProxyErrors, SpendLogsMetadata, SpendLogsPayload
+from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingMetadata,
@@ -27,12 +30,8 @@ else:
 
 
 IAM_AUTH_KEY = "IAM_AUTH"
-
-
-class GCSLoggingConfig(TypedDict):
-    bucket_name: str
-    vertex_instance: VertexBase
-    path_service_account: Optional[str]
+GCS_DEFAULT_BATCH_SIZE = 2048
+GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
 
 
 class GCSBucketLogger(GCSBucketBase):
@@ -41,6 +40,21 @@ class GCSBucketLogger(GCSBucketBase):
 
         super().__init__(bucket_name=bucket_name)
         self.vertex_instances: Dict[str, VertexBase] = {}
+
+        # Init Batch logging settings
+        self.log_queue: List[GCSLogQueueItem] = []
+        self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
+        self.flush_interval = int(
+            os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS)
+        )
+        asyncio.create_task(self.periodic_flush())
+        self.flush_lock = asyncio.Lock()
+        super().__init__(
+            flush_lock=self.flush_lock,
+            batch_size=self.batch_size,
+            flush_interval=self.flush_interval,
+        )
+
         if premium_user is not True:
             raise ValueError(
                 f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
@@ -60,54 +74,23 @@ class GCSBucketLogger(GCSBucketBase):
                 kwargs,
                 response_obj,
             )
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs
-            )
-            headers = await self.construct_request_headers(
-                vertex_instance=gcs_logging_config["vertex_instance"],
-                service_account_json=gcs_logging_config["path_service_account"],
-            )
-            bucket_name = gcs_logging_config["bucket_name"]
-
             logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
             )
-
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
-            json_logged_payload = json.dumps(logging_payload, default=str)
-
-            # Get the current date
-            current_date = datetime.now().strftime("%Y-%m-%d")
-
-            # Modify the object_name to include the date-based folder
-            object_name = f"{current_date}/{response_obj['id']}"
-            try:
-                response = await self.async_httpx_client.post(
-                    headers=headers,
-                    url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
-                    data=json_logged_payload,
+            # Add to logging queue - this will be flushed periodically
+            self.log_queue.append(
+                GCSLogQueueItem(
+                    payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
-            except httpx.HTTPStatusError as e:
-                raise Exception(f"GCS Bucket logging error: {e.response.text}")
+            )
 
-            if response.status_code != 200:
-                verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
-
-            verbose_logger.debug("GCS Bucket response %s", response)
-            verbose_logger.debug("GCS Bucket status code %s", response.status_code)
-            verbose_logger.debug("GCS Bucket response.text %s", response.text)
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.proxy.proxy_server import premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
-            )
         try:
             verbose_logger.debug(
                 "GCS Logger: async_log_failure_event logging kwargs: %s, response_obj: %s",
@@ -115,50 +98,137 @@ class GCSBucketLogger(GCSBucketBase):
                 response_obj,
             )
 
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs
-            )
-            headers = await self.construct_request_headers(
-                vertex_instance=gcs_logging_config["vertex_instance"],
-                service_account_json=gcs_logging_config["path_service_account"],
-            )
-            bucket_name = gcs_logging_config["bucket_name"]
-
             logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
             )
-
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
-            _litellm_params = kwargs.get("litellm_params") or {}
-            metadata = _litellm_params.get("metadata") or {}
-
-            json_logged_payload = json.dumps(logging_payload, default=str)
-
-            # Get the current date
-            current_date = datetime.now().strftime("%Y-%m-%d")
-
-            # Modify the object_name to include the date-based folder
-            object_name = f"{current_date}/failure-{uuid.uuid4().hex}"
-
-            if "gcs_log_id" in metadata:
-                object_name = metadata["gcs_log_id"]
-
-            response = await self.async_httpx_client.post(
-                headers=headers,
-                url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
-                data=json_logged_payload,
+            # Add to logging queue - this will be flushed periodically
+            self.log_queue.append(
+                GCSLogQueueItem(
+                    payload=logging_payload, kwargs=kwargs, response_obj=response_obj
+                )
             )
 
-            if response.status_code != 200:
-                verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
-
-            verbose_logger.debug("GCS Bucket response %s", response)
-            verbose_logger.debug("GCS Bucket status code %s", response.status_code)
-            verbose_logger.debug("GCS Bucket response.text %s", response.text)
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
+
+    async def async_send_batch(self):
+        """
+        Process queued logs in batch - sends logs to GCS Bucket
+
+
+        GCS Bucket does not have a Batch endpoint to batch upload logs
+
+        Instead, we
+            - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
+            - during async_send_batch, we make 1 POST request per log to GCS Bucket
+
+        """
+        if not self.log_queue:
+            return
+
+        try:
+            for log_item in self.log_queue:
+                logging_payload = log_item["payload"]
+                kwargs = log_item["kwargs"]
+                response_obj = log_item.get("response_obj", None) or {}
+
+                gcs_logging_config: GCSLoggingConfig = (
+                    await self.get_gcs_logging_config(kwargs)
+                )
+                headers = await self.construct_request_headers(
+                    vertex_instance=gcs_logging_config["vertex_instance"],
+                    service_account_json=gcs_logging_config["path_service_account"],
+                )
+                bucket_name = gcs_logging_config["bucket_name"]
+                object_name = self._get_object_name(
+                    kwargs, logging_payload, response_obj
+                )
+                await self._log_json_data_on_gcs(
+                    headers=headers,
+                    bucket_name=bucket_name,
+                    object_name=object_name,
+                    logging_payload=logging_payload,
+                )
+
+            # Clear the queue after processing
+            self.log_queue.clear()
+
+        except Exception as e:
+            verbose_logger.exception(f"GCS Bucket batch logging error: {str(e)}")
+
+    def _get_object_name(
+        self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
+    ) -> str:
+        """
+        Get the object name to use for the current payload
+        """
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        if logging_payload.get("error_str", None) is not None:
+            object_name = f"{current_date}/failure-{uuid.uuid4().hex}"
+        else:
+            object_name = f"{current_date}/{response_obj.get('id', '')}"
+
+        # used for testing
+        _litellm_params = kwargs.get("litellm_params", None) or {}
+        _metadata = _litellm_params.get("metadata", None) or {}
+        if "gcs_log_id" in _metadata:
+            object_name = _metadata["gcs_log_id"]
+
+        return object_name
+
+    def _handle_folders_in_bucket_name(
+        self,
+        bucket_name: str,
+        object_name: str,
+    ) -> Tuple[str, str]:
+        """
+        Handles when the user passes a bucket name with a folder postfix
+
+
+        Example:
+            - Bucket name: "my-bucket/my-folder/dev"
+            - Object name: "my-object"
+            - Returns: bucket_name="my-bucket", object_name="my-folder/dev/my-object"
+
+        """
+        if "/" in bucket_name:
+            bucket_name, prefix = bucket_name.split("/", 1)
+            object_name = f"{prefix}/{object_name}"
+            return bucket_name, object_name
+        return bucket_name, object_name
+
+    async def _log_json_data_on_gcs(
+        self,
+        headers: Dict[str, str],
+        bucket_name: str,
+        object_name: str,
+        logging_payload: StandardLoggingPayload,
+    ):
+        """
+        Helper function to make POST request to GCS Bucket in the specified bucket.
+        """
+        json_logged_payload = json.dumps(logging_payload, default=str)
+
+        bucket_name, object_name = self._handle_folders_in_bucket_name(
+            bucket_name=bucket_name,
+            object_name=object_name,
+        )
+
+        response = await self.async_httpx_client.post(
+            headers=headers,
+            url=f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}",
+            data=json_logged_payload,
+        )
+
+        if response.status_code != 200:
+            verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
+
+        verbose_logger.debug("GCS Bucket response %s", response)
+        verbose_logger.debug("GCS Bucket status code %s", response.status_code)
+        verbose_logger.debug("GCS Bucket response.text %s", response.text)
 
     async def get_gcs_logging_config(
         self, kwargs: Optional[Dict[str, Any]] = {}
@@ -267,6 +337,11 @@ class GCSBucketLogger(GCSBucketBase):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name, object_name = self._handle_folders_in_bucket_name(
+                bucket_name=bucket_name,
+                object_name=object_name,
+            )
+
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
 
             # Send the GET request to download the object
@@ -302,6 +377,11 @@ class GCSBucketLogger(GCSBucketBase):
                 service_account_json=gcs_logging_config["path_service_account"],
             )
             bucket_name = gcs_logging_config["bucket_name"]
+            bucket_name, object_name = self._handle_folders_in_bucket_name(
+                bucket_name=bucket_name,
+                object_name=object_name,
+            )
+
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}"
 
             # Send the DELETE request to delete the object
