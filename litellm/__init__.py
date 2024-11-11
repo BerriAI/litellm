@@ -778,6 +778,7 @@ class LlmProviders(str, Enum):
     FIREWORKS_AI = "fireworks_ai"
     FRIENDLIAI = "friendliai"
     WATSONX = "watsonx"
+    WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"
