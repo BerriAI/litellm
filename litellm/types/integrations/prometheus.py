@@ -1,3 +1,6 @@
+import datetime
+from typing import Required, TypedDict
+
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
@@ -40,3 +43,11 @@ LATENCY_BUCKETS = (
     300.0,
     float("inf"),
 )
+
+
+class ModelMetricsData(TypedDict):
+    api_base: str
+    model_group: str
+    model: str
+    day: datetime.date
+    avg_latency_per_token: float

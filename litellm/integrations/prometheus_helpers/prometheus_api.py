@@ -5,18 +5,20 @@ Helper functions to query prometheus API
 import asyncio
 import os
 import time
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional, TypedDict
 
 import litellm
-from litellm import get_secret
+from litellm import Router, get_secret
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.prometheus import ModelMetricsData
 
 PROMETHEUS_URL: Optional[str] = get_secret("PROMETHEUS_URL")  # type: ignore
+
 PROMETHEUS_SELECTED_INSTANCE: Optional[str] = get_secret("PROMETHEUS_SELECTED_INSTANCE")  # type: ignore
 async_http_handler = get_async_httpx_client(
     llm_provider=httpxSpecialProvider.LoggingCallback
@@ -137,4 +139,80 @@ async def get_daily_spend_from_prometheus(api_key: Optional[str]):
             spend = float(value)
             formatted_results.append({"date": date, "spend": spend})
 
+    return formatted_results
+
+
+async def get_model_metrics_from_prometheus(
+    router: Router,
+    model_group: str,
+    start_time: datetime,
+    end_time: datetime,
+    step: str = "1h",
+) -> List[ModelMetricsData]:
+    if PROMETHEUS_URL is None:
+        raise ValueError(
+            "PROMETHEUS_URL not set please set 'PROMETHEUS_URL=<>' in .env"
+        )
+
+    model_ids = router.get_model_ids(model_group)
+    model_ids_str = "|".join(model_ids)
+    query = """histogram_quantile(0.95, 
+    avg by (le, model_id, api_base) (
+        litellm_deployment_latency_per_output_token_bucket{{
+        model_id=~"{model_ids}"
+        }}
+    )
+    )""".format(
+        model_ids=model_ids_str
+    )
+
+    # Parameters for the query
+    params: Dict[str, Any] = {"query": query}
+
+    if start_time and end_time:
+        # Range query
+        url = f"{PROMETHEUS_URL}/query_range"
+        params.update(
+            {"start": start_time.timestamp(), "end": end_time.timestamp(), "step": step}
+        )
+    else:
+        # Instant query
+        url = f"{PROMETHEUS_URL}/query"
+    response = await async_http_handler.get(url, params=params)
+    response_json = response.json()
+
+    if response_json.get("status") != "success":
+        raise ValueError(f"Error querying prometheus: {response_json}")
+
+    results = response_json["data"]["result"]
+    formatted_results: List[ModelMetricsData] = []
+    for result in results:
+        metric_data = result["values"]
+        model_id = result["metric"]["model_id"]
+        api_base = result["metric"]["api_base"]
+        model_info = router.get_model_info(model_id)
+        for model_metric in metric_data:
+            day: Optional[date] = None
+            avg_latency_per_token: Optional[float] = None
+            timestamp, avg_latency_per_token_str = model_metric
+            day = datetime.fromtimestamp(timestamp).date()
+            avg_latency_per_token = float(avg_latency_per_token_str)
+            if day is None:
+                raise ValueError(f"Day not found for model_id: {model_id}")
+
+            if avg_latency_per_token is None:
+                raise ValueError(
+                    f"Avg latency per token not found for model_id: {model_id}"
+                )
+
+            if model_info is None:
+                raise ValueError(f"Model info not found for model_id: {model_id}")
+            model_metrics_data = ModelMetricsData(
+                api_base=api_base,
+                model_group=model_info["model_name"],
+                model=model_info["litellm_params"].get("model") or "",
+                day=day,
+                avg_latency_per_token=avg_latency_per_token,
+            )
+            formatted_results.append(model_metrics_data)
     return formatted_results

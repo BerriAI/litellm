@@ -115,6 +115,9 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
+from litellm.integrations.prometheus_helpers.prometheus_api import (
+    get_model_metrics_from_prometheus,
+)
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -256,6 +259,7 @@ from litellm.secret_managers.main import (
     get_secret_str,
     str_to_bool,
 )
+from litellm.types.integrations.prometheus import ModelMetricsData
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -7128,8 +7132,8 @@ async def model_streaming_metrics(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def model_metrics(
+    _selected_model_group: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    _selected_model_group: Optional[str] = "gpt-4-32k",
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
     api_key: Optional[str] = None,
@@ -7152,44 +7156,54 @@ async def model_metrics(
     if customer is None or customer == "undefined":
         customer = "null"
 
-    sql_query = """
-        SELECT
-            api_base,
-            model_group,
-            model,
-            DATE_TRUNC('day', "startTime")::DATE AS day,
-            AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / NULLIF("completion_tokens", 0)) AS avg_latency_per_token
-        FROM
-            "LiteLLM_SpendLogs"
-        WHERE
-            "startTime" >= $2::timestamp AND "startTime" <= $3::timestamp
-            AND "model_group" = $1 AND "cache_hit" != 'True'
-            AND (
-                CASE
-                    WHEN $4 != 'null' THEN "api_key" = $4
-                    ELSE TRUE
-                END
-            )
-            AND (
-                CASE
-                    WHEN $5 != 'null' THEN "end_user" = $5
-                    ELSE TRUE
-                END
-            )
-        GROUP BY
-            api_base,
-            model_group,
-            model,
-            day
-        HAVING
-            SUM(completion_tokens) > 0
-        ORDER BY
-            avg_latency_per_token DESC;
-    """
+    prometheus_url = get_secret_str("PROMETHEUS_URL")
     _all_api_bases = set()
-    db_response = await prisma_client.db.query_raw(
-        sql_query, _selected_model_group, startTime, endTime, api_key, customer
-    )
+    if prometheus_url is not None and llm_router is not None:
+        db_response: List[ModelMetricsData] = await get_model_metrics_from_prometheus(
+            router=llm_router,
+            start_time=startTime,
+            end_time=endTime,
+            model_group=_selected_model_group,
+        )
+    else:
+        sql_query = """
+            SELECT
+                api_base,
+                model_group,
+                model,
+                DATE_TRUNC('day', "startTime")::DATE AS day,
+                AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / NULLIF("completion_tokens", 0)) AS avg_latency_per_token
+            FROM
+                "LiteLLM_SpendLogs"
+            WHERE
+                "startTime" >= $2::timestamp AND "startTime" <= $3::timestamp
+                AND "model_group" = $1 AND "cache_hit" != 'True'
+                AND (
+                    CASE
+                        WHEN $4 != 'null' THEN "api_key" = $4
+                        ELSE TRUE
+                    END
+                )
+                AND (
+                    CASE
+                        WHEN $5 != 'null' THEN "end_user" = $5
+                        ELSE TRUE
+                    END
+                )
+            GROUP BY
+                api_base,
+                model_group,
+                model,
+                day
+            HAVING
+                SUM(completion_tokens) > 0
+            ORDER BY
+                avg_latency_per_token DESC;
+        """
+
+        db_response = await prisma_client.db.query_raw(
+            sql_query, _selected_model_group, startTime, endTime, api_key, customer
+        )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
 
     if db_response is not None:

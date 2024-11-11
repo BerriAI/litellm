@@ -4161,7 +4161,7 @@ class Router:
 
         return model_info
 
-    def get_model_info(self, id: str) -> Optional[dict]:
+    def get_model_info(self, id: str) -> Optional[DeploymentTypedDict]:
         """
         For a given model id, return the model info
 
@@ -4172,7 +4172,7 @@ class Router:
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
                 if id == model["model_info"]["id"]:
-                    return model
+                    return DeploymentTypedDict(**model)
         return None
 
     def get_model_group(self, id: str) -> Optional[List]:
