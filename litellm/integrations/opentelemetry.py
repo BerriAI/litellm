@@ -2,14 +2,16 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     EmbeddingResponse,
+    Function,
     ImageResponse,
     ModelResponse,
     StandardLoggingPayload,
@@ -403,6 +405,28 @@ class OpenTelemetry(CustomLogger):
         except Exception:
             return ""
 
+    @staticmethod
+    def _tool_calls_kv_pair(
+        tool_calls: List[ChatCompletionMessageToolCall],
+    ) -> Dict[str, Any]:
+        from litellm.proxy._types import SpanAttributes
+
+        kv_pairs: Dict[str, Any] = {}
+        for idx, tool_call in enumerate(tool_calls):
+            _function = tool_call.get("function")
+            if not _function:
+                continue
+
+            keys = Function.__annotations__.keys()
+            for key in keys:
+                _value = _function.get(key)
+                if _value:
+                    kv_pairs[
+                        f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.{key}"
+                    ] = _value
+
+        return kv_pairs
+
     def set_attributes(  # noqa: PLR0915
         self, span: Span, kwargs, response_obj: Optional[Any]
     ):
@@ -597,18 +621,13 @@ class OpenTelemetry(CustomLogger):
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
-                                    value=tool_calls[0].get("function").get("name"),
-                                )
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
-                                    value=tool_calls[0]
-                                    .get("function")
-                                    .get("arguments"),
-                                )
+                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
+                                for key, value in kv_pairs.items():
+                                    self.safe_set_attribute(
+                                        span=span,
+                                        key=key,
+                                        value=value,
+                                    )
 
         except Exception as e:
             verbose_logger.exception(

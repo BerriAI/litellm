@@ -1898,7 +1898,8 @@
         "supports_function_calling": true,
         "tool_use_system_prompt_tokens": 264,
         "supports_assistant_prefill": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_pdf_input": true
     },
     "claude-3-opus-20240229": {
         "max_tokens": 4096,
