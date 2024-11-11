@@ -282,6 +282,51 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
   ```
 
 </TabItem>
+
+<TabItem label="Langsmith" value="langsmith">
+
+1. Create Virtual Key to log to a specific Langsmith Project
+
+  ```bash
+  curl -X POST 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+      "metadata": {
+          "logging": [{
+              "callback_name": "langsmith", # "otel", "gcs_bucket"
+              "callback_type": "success", # "success", "failure", "success_and_failure"
+              "callback_vars": {
+                  "langsmith_api_key": "os.environ/LANGSMITH_API_KEY", # API Key for Langsmith logging
+                  "langsmith_project": "pr-brief-resemblance-72", # project name on langsmith
+                  "langsmith_base_url": "https://api.smith.langchain.com"
+              }
+          }]
+      }
+  }'
+
+  ```
+
+2. Test it - `/chat/completions` request
+
+  Use the virtual key from step 3 to make a `/chat/completions` request
+
+  You should see your logs on your Langsmith project on a successful request
+
+  ```shell
+  curl -i http://localhost:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-Fxq5XSyWKeXDKfPdqXZhPg" \
+    -d '{
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {"role": "user", "content": "Hello, Claude"}
+      ],
+      "user": "hello",
+    }'
+  ```
+
+</TabItem>
 </Tabs>
 
 ---
