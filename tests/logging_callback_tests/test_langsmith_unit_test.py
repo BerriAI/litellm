@@ -215,8 +215,9 @@ async def test_langsmith_key_based_logging(mocker):
         )
         mock_post.return_value.status_code = 200
         mock_post.return_value.raise_for_status = lambda: None
+        litellm.set_verbose = True
 
-        litellm.callbacks = ["langsmith"]
+        litellm.callbacks = [LangsmithLogger()]
         response = await litellm.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Test message"}],
