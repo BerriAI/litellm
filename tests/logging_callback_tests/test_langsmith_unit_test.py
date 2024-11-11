@@ -20,6 +20,8 @@ from litellm.integrations.langsmith import (
     BatchGroup,
 )
 
+import litellm
+
 
 # Test get_credentials_from_env
 @pytest.mark.asyncio
@@ -199,3 +201,133 @@ async def test_async_send_batch():
     call_args = logger.async_httpx_client.post.call_args
     assert "runs/batch" in call_args[1]["url"]
     assert "x-api-key" in call_args[1]["headers"]
+
+
+@pytest.mark.asyncio
+async def test_langsmith_key_based_logging(mocker):
+    try:
+        # Mock the httpx post request
+        mock_post = mocker.patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+        )
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.raise_for_status = lambda: None
+
+        litellm.callbacks = ["langsmith"]
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Test message"}],
+            max_tokens=10,
+            temperature=0.2,
+            mock_response="This is a mock response",
+            langsmith_api_key="fake_key_project2",
+            langsmith_project="fake_project2",
+        )
+
+        await asyncio.sleep(6)  # Reduced sleep time since we're mocking
+
+        # Verify the post request was made with correct parameters
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+
+        print("call_args", call_args)
+
+        # Check URL contains /runs/batch
+        assert "/runs/batch" in call_args[1]["url"]
+
+        # Check headers contain the correct API key
+        assert call_args[1]["headers"]["x-api-key"] == "fake_key_project2"
+
+        # Verify the request body contains the expected data
+        request_body = call_args[1]["json"]
+        assert "post" in request_body
+        assert len(request_body["post"]) == 1  # Should contain one run
+
+        # EXPECTED BODY
+        expected_body = {
+            "post": [
+                {
+                    "name": "LLMRun",
+                    "run_type": "llm",
+                    "inputs": {
+                        "id": "chatcmpl-82699ee4-7932-4fc0-9585-76abc8caeafa",
+                        "call_type": "acompletion",
+                        "model": "gpt-3.5-turbo",
+                        "messages": [{"role": "user", "content": "Test message"}],
+                        "model_parameters": {
+                            "temperature": 0.2,
+                            "max_tokens": 10,
+                            "extra_body": {},
+                        },
+                    },
+                    "outputs": {
+                        "id": "chatcmpl-82699ee4-7932-4fc0-9585-76abc8caeafa",
+                        "model": "gpt-3.5-turbo",
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "index": 0,
+                                "message": {
+                                    "content": "This is a mock response",
+                                    "role": "assistant",
+                                    "tool_calls": None,
+                                    "function_call": None,
+                                },
+                            }
+                        ],
+                        "usage": {
+                            "completion_tokens": 20,
+                            "prompt_tokens": 10,
+                            "total_tokens": 30,
+                        },
+                    },
+                    "session_name": "fake_project2",
+                }
+            ]
+        }
+
+        # Print both bodies for debugging
+        actual_body = call_args[1]["json"]
+        print("\nExpected body:")
+        print(json.dumps(expected_body, indent=2))
+        print("\nActual body:")
+        print(json.dumps(actual_body, indent=2))
+
+        assert len(actual_body["post"]) == 1
+
+        # Assert only the critical parts we care about
+        assert actual_body["post"][0]["name"] == expected_body["post"][0]["name"]
+        assert (
+            actual_body["post"][0]["run_type"] == expected_body["post"][0]["run_type"]
+        )
+        assert (
+            actual_body["post"][0]["inputs"]["messages"]
+            == expected_body["post"][0]["inputs"]["messages"]
+        )
+        assert (
+            actual_body["post"][0]["inputs"]["model_parameters"]
+            == expected_body["post"][0]["inputs"]["model_parameters"]
+        )
+        assert (
+            actual_body["post"][0]["outputs"]["choices"]
+            == expected_body["post"][0]["outputs"]["choices"]
+        )
+        assert (
+            actual_body["post"][0]["outputs"]["usage"]["completion_tokens"]
+            == expected_body["post"][0]["outputs"]["usage"]["completion_tokens"]
+        )
+        assert (
+            actual_body["post"][0]["outputs"]["usage"]["prompt_tokens"]
+            == expected_body["post"][0]["outputs"]["usage"]["prompt_tokens"]
+        )
+        assert (
+            actual_body["post"][0]["outputs"]["usage"]["total_tokens"]
+            == expected_body["post"][0]["outputs"]["usage"]["total_tokens"]
+        )
+        assert (
+            actual_body["post"][0]["session_name"]
+            == expected_body["post"][0]["session_name"]
+        )
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
