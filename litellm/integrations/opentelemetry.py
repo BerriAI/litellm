@@ -7,13 +7,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.openai import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-)
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     EmbeddingResponse,
+    Function,
     ImageResponse,
     ModelResponse,
     StandardLoggingPayload,
@@ -409,7 +407,7 @@ class OpenTelemetry(CustomLogger):
 
     @staticmethod
     def _tool_calls_kv_pair(
-        tool_calls: List[ChatCompletionToolCallChunk],
+        tool_calls: List[ChatCompletionMessageToolCall],
     ) -> Dict[str, Any]:
         from litellm.proxy._types import SpanAttributes
 
@@ -419,7 +417,7 @@ class OpenTelemetry(CustomLogger):
             if not _function:
                 continue
 
-            keys = ChatCompletionToolCallFunctionChunk.__annotations__.keys()
+            keys = Function.__annotations__.keys()
             for key in keys:
                 _value = _function.get(key)
                 if _value:
