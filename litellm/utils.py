@@ -6137,10 +6137,13 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
                                     raise Exception("invalid content type")
-        except Exception:
-            raise Exception(
-                f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
-            )
+        except Exception as e:
+            if "invalid content type" in str(e):
+                raise Exception(
+                    f"Invalid user message={m} at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
+                )
+            else:
+                raise e
 
     return messages
 
