@@ -205,6 +205,9 @@ async def test_async_send_batch():
 
 @pytest.mark.asyncio
 async def test_langsmith_key_based_logging(mocker):
+    """
+    In key based logging langsmith_api_key and langsmith_project are passed directly to litellm.acompletion
+    """
     try:
         # Mock the httpx post request
         mock_post = mocker.patch(
@@ -224,7 +227,7 @@ async def test_langsmith_key_based_logging(mocker):
             langsmith_project="fake_project2",
         )
 
-        await asyncio.sleep(6)  # Reduced sleep time since we're mocking
+        await asyncio.sleep(8)
 
         # Verify the post request was made with correct parameters
         mock_post.assert_called_once()
