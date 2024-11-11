@@ -259,43 +259,6 @@ def mistral_instruct_pt(messages):
     return prompt
 
 
-def mistral_api_pt(messages):
-    """
-    - handles scenario where content is list and not string
-    - content list is just text, and no images
-    - if image passed in, then just return as is (user-intended)
-
-    Motivation: mistral api doesn't support content as a list
-    """
-    new_messages = []
-    for m in messages:
-        special_keys = ["role", "content", "tool_calls", "function_call"]
-        extra_args = {}
-        if isinstance(m, dict):
-            for k, v in m.items():
-                if k not in special_keys:
-                    extra_args[k] = v
-        texts = ""
-        if m.get("content", None) is not None and isinstance(m["content"], list):
-            for c in m["content"]:
-                if c["type"] == "image_url":
-                    return messages
-                elif c["type"] == "text" and isinstance(c["text"], str):
-                    texts += c["text"]
-        elif m.get("content", None) is not None and isinstance(m["content"], str):
-            texts = m["content"]
-
-        new_m = {"role": m["role"], "content": texts, **extra_args}
-
-        if new_m["role"] == "tool" and m.get("name"):
-            new_m["name"] = m["name"]
-        if m.get("tool_calls"):
-            new_m["tool_calls"] = m["tool_calls"]
-
-        new_messages.append(new_m)
-    return new_messages
-
-
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def falcon_instruct_pt(messages):
     prompt = ""
@@ -2853,7 +2816,7 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     elif custom_llm_provider == "mistral":
-        return mistral_api_pt(messages=messages)
+        return litellm.MistralConfig._transform_messages(messages=messages)
     elif custom_llm_provider == "bedrock":
         if "amazon.titan-text" in model:
             return amazon_titan_pt(messages=messages)
