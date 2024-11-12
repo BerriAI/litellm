@@ -737,10 +737,11 @@ async def info_key_fn(
 
         # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
+        hashed_key: Optional[str] = key
         if key is not None:
-            key = _hash_token_if_needed(token=key)
+            hashed_key = _hash_token_if_needed(token=key)
         key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": key},  # type: ignore
+            where={"token": hashed_key},  # type: ignore
             include={"litellm_budget_table": True},
         )
         if key_info is None:
