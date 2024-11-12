@@ -497,7 +497,7 @@ class LLMCachingHandler:
             tasks = []
             for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(
-                    *args, **{**new_kwargs, "input": i}
+                    **{**new_kwargs, "input": i}
                 )
                 tasks.append(litellm.cache.async_get_cache(cache_key=preset_cache_key))
             cached_result = await asyncio.gather(*tasks)

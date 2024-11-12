@@ -238,7 +238,6 @@ class Cache:
         Get the cache key for the given arguments.
 
         Args:
-            *args: args to litellm.completion() or embedding()
             **kwargs: kwargs to litellm.completion() or embedding()
 
         Returns:
