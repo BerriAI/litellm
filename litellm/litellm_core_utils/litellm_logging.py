@@ -865,6 +865,24 @@ class Logging:
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
+    @staticmethod
+    def _get_success_callback_list(self):
+        if self.dynamic_success_callbacks is not None and isinstance(
+            self.dynamic_success_callbacks, list
+        ):
+            callbacks = self.dynamic_success_callbacks + litellm.success_callback
+            # ## keep the internal functions ##
+            # for callback in litellm.success_callback:
+            #     if (
+            #         isinstance(callback, CustomLogger)
+            #         and "_PROXY_" in callback.__class__.__name__
+            #     ):
+            #         callbacks.append(callback)
+        else:
+            callbacks = litellm.success_callback
+
+        return callbacks
+
     def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
@@ -923,19 +941,8 @@ class Logging:
                         status="success",
                     )
                 )
-            if self.dynamic_success_callbacks is not None and isinstance(
-                self.dynamic_success_callbacks, list
-            ):
-                callbacks = self.dynamic_success_callbacks
-                ## keep the internal functions ##
-                for callback in litellm.success_callback:
-                    if (
-                        isinstance(callback, CustomLogger)
-                        and "_PROXY_" in callback.__class__.__name__
-                    ):
-                        callbacks.append(callback)
-            else:
-                callbacks = litellm.success_callback
+
+            callbacks = self._get_success_callback_list(self=self)
 
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
