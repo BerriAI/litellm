@@ -13,15 +13,15 @@ spec:
     spec:
       containers:
         - name: prisma-migrations
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          command: ["python", "/path/to/prisma_migration.py"]
+          image: "ghcr.io/berriai/litellm:main-stable"
+          command: ["python", "/litellm/proxy/prisma_migration.py"]
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.databaseSecret }}
-                  key: database_url
+                  name: {{ .Values.db.secret.name }}
+                  key: url
             - name: DISABLE_SCHEMA_UPDATE
-              value: "False" # Toggle this for environments like review labs
+              value: "{{ .Values.migrationJob.disableSchemaUpdate }}"
       restartPolicy: OnFailure
-  backoffLimit: 3
+  backoffLimit: {{ .Values.migrationJob.backoffLimit }}
