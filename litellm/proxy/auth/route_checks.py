@@ -44,14 +44,8 @@ class RouteChecks:
             route in LiteLLMRoutes.info_routes.value
         ):  # check if user allowed to call an info route
             if route == "/key/info":
-                # check if user can access this route
-                query_params = request.query_params
-                key = query_params.get("key")
-                if key is not None and hash_token(token=key) != api_key:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="user not allowed to access this key's info",
-                    )
+                # handled by function itself
+                pass
             elif route == "/user/info":
                 # check if user can access this route
                 query_params = request.query_params
