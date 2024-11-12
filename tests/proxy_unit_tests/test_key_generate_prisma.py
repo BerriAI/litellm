@@ -456,7 +456,10 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         print("result from user auth with new key", result)
 
         # call /key/info for key - models == "all-proxy-models"
-        key_info = await info_key_fn(key=generated_key)
+        key_info = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
         print("key_info", key_info)
         models = key_info["info"]["models"]
         assert models == ["all-team-models"]
