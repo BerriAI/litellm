@@ -581,7 +581,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result, *args, **kwargs):
+    def _add_cache_logic(self, result, **kwargs):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -589,7 +589,7 @@ class Cache:
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
-                cache_key = self.get_cache_key(*args, **kwargs)
+                cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
                     result = result.model_dump_json()
@@ -611,7 +611,7 @@ class Cache:
         except Exception as e:
             raise e
 
-    def add_cache(self, result, *args, **kwargs):
+    def add_cache(self, result, **kwargs):
         """
         Adds a result to the cache.
 
@@ -623,42 +623,42 @@ class Cache:
             None
         """
         try:
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
             cache_key, cached_data, kwargs = self._add_cache_logic(
-                result=result, *args, **kwargs
+                result=result, **kwargs
             )
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    async def async_add_cache(self, result, *args, **kwargs):
+    async def async_add_cache(self, result, **kwargs):
         """
         Async implementation of add_cache
         """
         try:
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
             if self.type == "redis" and self.redis_flush_size is not None:
                 # high traffic - fill in results in memory and then flush
-                await self.batch_cache_write(result, *args, **kwargs)
+                await self.batch_cache_write(result, **kwargs)
             else:
                 cache_key, cached_data, kwargs = self._add_cache_logic(
-                    result=result, *args, **kwargs
+                    result=result, **kwargs
                 )
 
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    async def async_add_cache_pipeline(self, result, *args, **kwargs):
+    async def async_add_cache_pipeline(self, result, **kwargs):
         """
         Async implementation of add_cache for Embedding calls
 
         Does a bulk write, to prevent using too many clients
         """
         try:
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
 
             # set default ttl if not set
@@ -667,12 +667,11 @@ class Cache:
 
             cache_list = []
             for idx, i in enumerate(kwargs["input"]):
-                preset_cache_key = self.get_cache_key(*args, **{**kwargs, "input": i})
+                preset_cache_key = self.get_cache_key(**{**kwargs, "input": i})
                 kwargs["cache_key"] = preset_cache_key
                 embedding_response = result.data[idx]
                 cache_key, cached_data, kwargs = self._add_cache_logic(
                     result=embedding_response,
-                    *args,
                     **kwargs,
                 )
                 cache_list.append((cache_key, cached_data))
@@ -689,7 +688,7 @@ class Cache:
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    def should_use_cache(self, *args, **kwargs):
+    def should_use_cache(self, **kwargs):
         """
         Returns true if we should use the cache for LLM API calls
 
@@ -707,10 +706,8 @@ class Cache:
                 return True
         return False
 
-    async def batch_cache_write(self, result, *args, **kwargs):
-        cache_key, cached_data, kwargs = self._add_cache_logic(
-            result=result, *args, **kwargs
-        )
+    async def batch_cache_write(self, result, **kwargs):
+        cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
     async def ping(self):
