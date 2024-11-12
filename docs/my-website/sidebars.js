@@ -266,6 +266,7 @@ const sidebars = {
       type: "category",
       label: "Load Testing",
       items: [
+        "benchmarks",
         "load_test",
         "load_test_advanced",
         "load_test_sdk",
