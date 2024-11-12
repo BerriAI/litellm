@@ -253,6 +253,9 @@ def test_image_generation_bedrock(model):
         )
 
         print(f"response: {response}")
+        print("response hidden params", response._hidden_params)
+
+        assert response._hidden_params["response_cost"] is not None
         from openai.types.images_response import ImagesResponse
 
         ImagesResponse.model_validate(response.model_dump())
