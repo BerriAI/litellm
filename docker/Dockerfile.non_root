@@ -77,12 +77,12 @@ RUN pip install prisma
 
 # Make a /non-existent folder and assign chown to nobody
 RUN mkdir -p /nonexistent && chown -R nobody:nogroup /nonexistent
-# Run Prisma generate
-RUN prisma generate
-
 RUN chmod +x docker/entrypoint.sh
+# Run Prisma generate as user = nobody
+USER nobody
+RUN prisma generate
 ### End of Prisma Handling for Non-Root #########################################
-
+USER root
 EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
