@@ -53,6 +53,32 @@ class BaseLLMChatTest(ABC):
         response = litellm.completion(**base_completion_call_args, messages=messages)
         assert response is not None
 
+    def test_json_response_format(self):
+        """
+        Test that the JSON response format is supported by the LLM API
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your output should be a JSON object with no additional properties.  ",
+            },
+            {
+                "role": "user",
+                "content": "Respond with this in json. city=San Francisco, state=CA, weather=sunny, temp=60",
+            },
+        ]
+
+        response = litellm.completion(
+            **base_completion_call_args,
+            messages=messages,
+            response_format={"type": "json_object"},
+        )
+
+        print(response)
+
     @pytest.fixture
     def pdf_messages(self):
         import base64
