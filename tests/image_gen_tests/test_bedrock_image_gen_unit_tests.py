@@ -250,3 +250,16 @@ def test_cost_calculator_with_no_optional_params():
 
     assert isinstance(cost, float)
     assert cost > 0
+
+
+def test_cost_calculator_basic():
+    image_response = ImageResponse(data=[ImageObject(b64_json="base64_image_1")])
+
+    cost = cost_calculator(
+        model="stability.stable-diffusion-xl-v1",
+        image_response=image_response,
+        optional_params=None,
+    )
+
+    assert isinstance(cost, float)
+    assert cost > 0
