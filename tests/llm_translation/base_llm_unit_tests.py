@@ -44,3 +44,38 @@ class BaseLLMChatTest(ABC):
             messages=messages,
         )
         assert response is not None
+
+    def test_message_with_name(self):
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {"role": "user", "content": "Hello", "name": "test_name"},
+        ]
+        response = litellm.completion(**base_completion_call_args, messages=messages)
+        assert response is not None
+
+    @pytest.fixture
+    def pdf_messages(self):
+        import base64
+
+        import requests
+
+        # URL of the file
+        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+
+        response = requests.get(url)
+        file_data = response.content
+
+        encoded_file = base64.b64encode(file_data).decode("utf-8")
+        url = f"data:application/pdf;base64,{encoded_file}"
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": url},
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
+
+        return image_messages

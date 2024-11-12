@@ -115,7 +115,17 @@ class GCSBucketLogger(GCSBucketBase):
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
     async def async_send_batch(self):
-        """Process queued logs in batch - sends logs to GCS Bucket"""
+        """
+        Process queued logs in batch - sends logs to GCS Bucket
+
+
+        GCS Bucket does not have a Batch endpoint to batch upload logs
+
+        Instead, we
+            - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
+            - during async_send_batch, we make 1 POST request per log to GCS Bucket
+
+        """
         if not self.log_queue:
             return
 

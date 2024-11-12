@@ -458,7 +458,9 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         # call /key/info for key - models == "all-proxy-models"
         key_info = await info_key_fn(
             key=generated_key,
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token=bearer_token
+            ),
         )
         print("key_info", key_info)
         models = key_info["info"]["models"]
@@ -1185,7 +1187,7 @@ def test_generate_and_call_key_info(prisma_client):
             result = await info_key_fn(
                 key=generated_key,
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
                 ),
             )
             print("result from info_key_fn", result)
@@ -1282,7 +1284,7 @@ def test_generate_and_update_key(prisma_client):
             result = await info_key_fn(
                 key=generated_key,
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
                 ),
             )
             print("result from info_key_fn", result)
@@ -1319,7 +1321,7 @@ def test_generate_and_update_key(prisma_client):
             result = await info_key_fn(
                 key=generated_key,
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
                 ),
             )
             print("result from info_key_fn", result)
@@ -2009,7 +2011,9 @@ async def test_key_name_null(prisma_client):
         generated_key = key.key
         result = await info_key_fn(
             key=generated_key,
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+            ),
         )
         print("result from info_key_fn", result)
         assert result["info"]["key_name"] is None
@@ -2037,7 +2041,9 @@ async def test_key_name_set(prisma_client):
         generated_key = key.key
         result = await info_key_fn(
             key=generated_key,
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+            ),
         )
         print("result from info_key_fn", result)
         assert isinstance(result["info"]["key_name"], str)
@@ -2064,7 +2070,9 @@ async def test_default_key_params(prisma_client):
         generated_key = key.key
         result = await info_key_fn(
             key=generated_key,
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+            ),
         )
         print("result from info_key_fn", result)
         assert result["info"]["max_budget"] == 0.000122
@@ -2833,7 +2841,9 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     # use generated key to auth in
     result = await info_key_fn(
         key=generated_key,
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
     )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
@@ -2857,7 +2867,9 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     await update_key_fn(data=request, request=_request)
     result = await info_key_fn(
         key=generated_key,
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
     )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
@@ -2898,7 +2910,9 @@ async def test_generate_key_with_guardrails(prisma_client):
     # use generated key to auth in
     result = await info_key_fn(
         key=generated_key,
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
     )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
@@ -2920,7 +2934,9 @@ async def test_generate_key_with_guardrails(prisma_client):
     await update_key_fn(data=request, request=_request)
     result = await info_key_fn(
         key=generated_key,
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
     )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key

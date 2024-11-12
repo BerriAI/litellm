@@ -1322,11 +1322,6 @@ class TranscriptionResponse(OpenAIObject):
 
 
 class GenericImageParsingChunk(TypedDict):
-    # {
-    #         "type": "base64",
-    #         "media_type": f"image/{image_format}",
-    #         "data": base64_data,
-    #     }
     type: str
     media_type: str
     data: str
@@ -1600,3 +1595,8 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # GCS dynamic params
     gcs_bucket_name: Optional[str]
     gcs_path_service_account: Optional[str]
+
+    # Langsmith dynamic params
+    langsmith_api_key: Optional[str]
+    langsmith_project: Optional[str]
+    langsmith_base_url: Optional[str]
