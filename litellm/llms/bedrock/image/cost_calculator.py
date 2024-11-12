@@ -28,7 +28,7 @@ def cost_calculator(
 
         # size is stored in model_prices_and_context_window.json as 1024-x-1024
         # current size has 1024x1024
-        size = size.replace("x", "-x-") if size else "1024-x-1024"
+        size = size or "1024-x-1024"
         model = f"{size}/{steps}/{model}"
 
     _model_info = litellm.get_model_info(
