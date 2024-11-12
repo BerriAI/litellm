@@ -379,8 +379,8 @@ async def update_key_fn(
     )
 
     try:
-        data_json: dict = data.json()
-        key = data_json.pop("key")
+        non_default_values: dict = data.model_dump(exclude_unset=True)
+        key = non_default_values.pop("key")
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
@@ -394,10 +394,6 @@ async def update_key_fn(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
-
-        non_default_values = await prepare_key_update_data(
-            data=data, existing_key_row=existing_key_row
-        )
 
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
@@ -413,7 +409,7 @@ async def update_key_fn(
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(data_json, default=str)
+            _updated_values = json.dumps(non_default_values, default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
