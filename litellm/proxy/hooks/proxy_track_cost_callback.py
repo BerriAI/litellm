@@ -13,15 +13,12 @@ from typing import Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.utils import (
-    _get_parent_otel_span_from_kwargs,
-    get_litellm_metadata_from_kwargs,
-    log_to_opentelemetry,
-)
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.proxy.utils import log_db_metrics
 from litellm.types.utils import StandardLoggingPayload
 
 
-@log_to_opentelemetry
+@log_db_metrics
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion

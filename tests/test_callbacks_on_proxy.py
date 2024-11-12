@@ -147,7 +147,6 @@ async def test_check_num_callbacks():
 
 @pytest.mark.asyncio
 @pytest.mark.order2
-@pytest.mark.skip(reason="skipping this test for now")
 async def test_check_num_callbacks_on_lowest_latency():
     """
     Test 1:  num callbacks should NOT increase over time
