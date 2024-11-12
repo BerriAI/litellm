@@ -243,7 +243,7 @@ def test_cost_calculator_with_no_optional_params():
 
     cost = cost_calculator(
         model="stability.stable-diffusion-xl-v0",
-        size="1024x1024",
+        size="512x512",
         image_response=image_response,
         optional_params=None,
     )
