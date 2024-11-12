@@ -13,12 +13,8 @@ spec:
       containers:
         - name: prisma-migrations
           image: "ghcr.io/berriai/litellm:main-stable"
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              pwd
-              ls -la
-              python ../../../litellm/proxy/prisma_migration.py
+          command: ["python", "litellm/proxy/prisma_migration.py"]
+          workingDir: "/app"
           env:
             {{- if .Values.db.deployStandalone }}
             - name: DATABASE_URL
