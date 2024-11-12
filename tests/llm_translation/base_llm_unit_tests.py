@@ -45,6 +45,14 @@ class BaseLLMChatTest(ABC):
         )
         assert response is not None
 
+    def test_message_with_name(self):
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {"role": "user", "content": "Hello", "name": "test_name"},
+        ]
+        response = litellm.completion(**base_completion_call_args, messages=messages)
+        assert response is not None
+
     @pytest.fixture
     def pdf_messages(self):
         import base64
