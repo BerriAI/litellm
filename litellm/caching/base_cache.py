@@ -8,6 +8,7 @@ Has 4 methods:
     - async_get_cache
 """
 
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ else:
     Span = Any
 
 
-class BaseCache:
+class BaseCache(ABC):
     def __init__(self, default_ttl: int = 60):
         self.default_ttl = default_ttl
 
@@ -36,6 +37,10 @@ class BaseCache:
 
     async def async_set_cache(self, key, value, **kwargs):
         raise NotImplementedError
+
+    @abstractmethod
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        pass
 
     def get_cache(self, key, **kwargs):
         raise NotImplementedError

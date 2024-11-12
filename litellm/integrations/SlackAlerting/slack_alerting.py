@@ -423,7 +423,7 @@ class SlackAlerting(CustomBatchLogger):
         latency_cache_keys = [(key, 0) for key in latency_keys]
         failed_request_cache_keys = [(key, 0) for key in failed_request_keys]
         combined_metrics_cache_keys = latency_cache_keys + failed_request_cache_keys
-        await self.internal_usage_cache.async_batch_set_cache(
+        await self.internal_usage_cache.async_set_cache_pipeline(
             cache_list=combined_metrics_cache_keys
         )
 

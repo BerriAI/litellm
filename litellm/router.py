@@ -339,11 +339,7 @@ class Router:
         cache_config: Dict[str, Any] = {}
 
         self.client_ttl = client_ttl
-        if redis_url is not None or (
-            redis_host is not None
-            and redis_port is not None
-            and redis_password is not None
-        ):
+        if redis_url is not None or (redis_host is not None and redis_port is not None):
             cache_type = "redis"
 
             if redis_url is not None:
