@@ -24,7 +24,6 @@ class DiskCache(BaseCache):
             self.disk_cache = dc.Cache(disk_cache_dir)
 
     def set_cache(self, key, value, **kwargs):
-        print_verbose("DiskCache: set_cache")
         if "ttl" in kwargs:
             self.disk_cache.set(key, value, expire=kwargs["ttl"])
         else:

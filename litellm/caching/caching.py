@@ -233,7 +233,7 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
-    def get_cache_key(self, *args, **kwargs) -> str:
+    def get_cache_key(self, **kwargs) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -245,7 +245,7 @@ class Cache:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
         cache_key = ""
-        verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
+        # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
         preset_cache_key = self._get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
@@ -521,7 +521,7 @@ class Cache:
             return cached_response
         return cached_result
 
-    def get_cache(self, *args, **kwargs):
+    def get_cache(self, **kwargs):
         """
         Retrieves the cached result for the given arguments.
 
@@ -533,13 +533,13 @@ class Cache:
             The cached result if it exists, otherwise None.
         """
         try:  # never block execution
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
             messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
-                cache_key = self.get_cache_key(*args, **kwargs)
+                cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 cache_control_args = kwargs.get("cache", {})
                 max_age = cache_control_args.get(
@@ -553,29 +553,28 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    async def async_get_cache(self, *args, **kwargs):
+    async def async_get_cache(self, **kwargs):
         """
         Async get cache implementation.
 
         Used for embedding calls in async wrapper
         """
+
         try:  # never block execution
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
 
             kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
-                cache_key = self.get_cache_key(*args, **kwargs)
+                cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 cache_control_args = kwargs.get("cache", {})
                 max_age = cache_control_args.get(
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
-                cached_result = await self.cache.async_get_cache(
-                    cache_key, *args, **kwargs
-                )
+                cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
@@ -648,6 +647,7 @@ class Cache:
                 cache_key, cached_data, kwargs = self._add_cache_logic(
                     result=result, *args, **kwargs
                 )
+
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")

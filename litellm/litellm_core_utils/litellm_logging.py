@@ -2774,10 +2774,10 @@ def get_standard_logging_object_payload(
             metadata=metadata
         )
 
-        if litellm.cache is not None:
-            cache_key = litellm.cache.get_cache_key(**kwargs)
-        else:
-            cache_key = None
+        # if litellm.cache is not None:
+        #     cache_key = litellm.cache.get_cache_key(**kwargs)
+        # else:
+        cache_key = None
 
         saved_cache_cost: float = 0.0
         if cache_hit is True:

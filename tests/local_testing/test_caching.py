@@ -1103,8 +1103,10 @@ async def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
-def test_disk_cache_completion():
-    litellm.set_verbose = False
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_disk_cache_completion(sync_mode):
+    litellm._turn_on_debug()
 
     random_number = random.randint(
         1, 100000
@@ -1116,32 +1118,70 @@ def test_disk_cache_completion():
         type="disk",
     )
 
-    response1 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        max_tokens=20,
-        mock_response="This number is so great!",
-    )
+    if sync_mode:
+        response1 = completion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is so great!",
+        )
+    else:
+        response1 = await litellm.acompletion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is so great!",
+        )
     # response2 is mocked to a different response from response1,
     # but the completion from the cache should be used instead of the mock
     # response since the input is the same as response1
-    response2 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        max_tokens=20,
-        mock_response="This number is awful!",
-    )
+    await asyncio.sleep(0.5)
+    if sync_mode:
+        response2 = completion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is great!",
+        )
+    else:
+        response2 = await litellm.acompletion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is great!",
+        )
+    if (
+        response1["choices"][0]["message"]["content"]
+        != response2["choices"][0]["message"]["content"]
+    ):  # 1 and 2 should be the same
+        # 1&2 have the exact same input params. This MUST Be a CACHE HIT
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        pytest.fail(
+            f"Error occurred: response1 - {response1['choices'][0]['message']['content']} != response2 - {response2['choices'][0]['message']['content']}"
+        )
     # Since the parameters are not the same as response1, response3 should actually
     # be the mock response
-    response3 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        temperature=0.5,
-        mock_response="This number is awful!",
-    )
+    if sync_mode:
+        response3 = completion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            temperature=0.5,
+            mock_response="This number is awful!",
+        )
+    else:
+        response3 = await litellm.acompletion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            temperature=0.5,
+            mock_response="This number is awful!",
+        )
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
@@ -1153,14 +1193,7 @@ def test_disk_cache_completion():
 
     # 1 & 2 should be exactly the same
     # 1 & 3 should be different, since input params are diff
-    if (
-        response1["choices"][0]["message"]["content"]
-        != response2["choices"][0]["message"]["content"]
-    ):  # 1 and 2 should be the same
-        # 1&2 have the exact same input params. This MUST Be a CACHE HIT
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Error occurred:")
+
     if (
         response1["choices"][0]["message"]["content"]
         == response3["choices"][0]["message"]["content"]
