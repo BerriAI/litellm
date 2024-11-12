@@ -164,11 +164,7 @@ class AnthropicConfig:
                 tool["function"].get("parameters", None) or {}
             )
             _tool_input_schema: AnthropicInputSchema = AnthropicInputSchema(
-                type=_input_function_parameters.get("type", "object"),
-                properties=_input_function_parameters.get("properties", {}),
-                additionalProperties=_input_function_parameters.get(
-                    "additionalProperties", True
-                ),
+                **_input_function_parameters
             )
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
