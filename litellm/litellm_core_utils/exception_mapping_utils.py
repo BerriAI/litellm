@@ -612,19 +612,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         url="https://api.replicate.com/v1/deployments",
                     ),
                 )
-            elif custom_llm_provider == "watsonx":
-                if "token_quota_reached" in error_str:
-                    exception_mapping_worked = True
-                    raise RateLimitError(
-                        message=f"WatsonxException: Rate Limit Errror - {error_str}",
-                        llm_provider="watsonx",
-                        model=model,
-                        response=original_exception.response,
-                    )
-            elif (
-                custom_llm_provider == "predibase"
-                or custom_llm_provider == "databricks"
-            ):
+            elif custom_llm_provider in litellm._openai_like_providers:
                 if "authorization denied for" in error_str:
                     exception_mapping_worked = True
 
@@ -645,6 +633,24 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=original_exception.response,
                         litellm_debug_info=extra_information,
+                    )
+                elif "token_quota_reached" in error_str:
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"{custom_llm_provider}Exception: Rate Limit Errror - {error_str}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "The server received an invalid response from an upstream server."
+                    in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise litellm.InternalServerError(
+                        message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
                     )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:

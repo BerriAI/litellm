@@ -241,7 +241,8 @@ class ServiceLogging(CustomLogger):
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
                 await self.prometheusServicesLogger.async_service_failure_hook(
-                    payload=payload
+                    payload=payload,
+                    error=error,
                 )
             elif callback == "datadog":
                 await self.init_datadog_logger_if_none()

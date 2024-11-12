@@ -1,10 +1,11 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import copy
-import inspect
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, Optional
+import types
+from collections.abc import MutableMapping, MutableSequence, MutableSet
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -14,7 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
@@ -355,6 +356,73 @@ class LangFuseLogger:
             )
         )
 
+    def is_base_type(self, value: Any) -> bool:
+        # Check if the value is of a base type
+        base_types = (int, float, str, bool, list, dict, tuple)
+        return isinstance(value, base_types)
+
+    def _prepare_metadata(self, metadata: Optional[dict]) -> Any:
+        try:
+            if metadata is None:
+                return None
+
+            #  Filter out function types from the metadata
+            sanitized_metadata = {k: v for k, v in metadata.items() if not callable(v)}
+
+            return copy.deepcopy(sanitized_metadata)
+        except Exception as e:
+            verbose_logger.debug(f"Langfuse Layer Error - {e}, metadata: {metadata}")
+
+        new_metadata: Dict[str, Any] = {}
+
+        # if metadata is not a MutableMapping, return an empty dict since we can't call items() on it
+        if not isinstance(metadata, MutableMapping):
+            verbose_logger.debug(
+                "Langfuse Layer Logging - metadata is not a MutableMapping, returning empty dict"
+            )
+            return new_metadata
+
+        for key, value in metadata.items():
+            try:
+                if isinstance(value, MutableMapping):
+                    new_metadata[key] = self._prepare_metadata(cast(dict, value))
+                elif isinstance(value, MutableSequence):
+                    # For lists or other mutable sequences
+                    new_metadata[key] = list(
+                        (
+                            self._prepare_metadata(cast(dict, v))
+                            if isinstance(v, MutableMapping)
+                            else copy.deepcopy(v)
+                        )
+                        for v in value
+                    )
+                elif isinstance(value, MutableSet):
+                    # For sets specifically, create a new set by passing an iterable
+                    new_metadata[key] = set(
+                        (
+                            self._prepare_metadata(cast(dict, v))
+                            if isinstance(v, MutableMapping)
+                            else copy.deepcopy(v)
+                        )
+                        for v in value
+                    )
+                elif isinstance(value, BaseModel):
+                    new_metadata[key] = value.model_dump()
+                elif self.is_base_type(value):
+                    new_metadata[key] = value
+                else:
+                    verbose_logger.debug(
+                        f"Langfuse Layer Error - Unsupported metadata type: {type(value)} for key: {key}"
+                    )
+                    continue
+
+            except (TypeError, copy.Error):
+                verbose_logger.debug(
+                    f"Langfuse Layer Error - Couldn't copy metadata key: {key}, type of key: {type(key)}, type of value: {type(value)} - {traceback.format_exc()}"
+                )
+
+        return new_metadata
+
     def _log_langfuse_v2(  # noqa: PLR0915
         self,
         user_id,
@@ -373,40 +441,19 @@ class LangFuseLogger:
     ) -> tuple:
         import langfuse
 
+        print_verbose("Langfuse Layer Logging - logging to langfuse v2")
+
         try:
-            tags = []
-            try:
-                optional_params.pop("metadata")
-                metadata = copy.deepcopy(
-                    metadata
-                )  # Avoid modifying the original metadata
-            except Exception:
-                new_metadata = {}
-                for key, value in metadata.items():
-                    if (
-                        isinstance(value, list)
-                        or isinstance(value, dict)
-                        or isinstance(value, str)
-                        or isinstance(value, int)
-                        or isinstance(value, float)
-                    ):
-                        new_metadata[key] = copy.deepcopy(value)
-                    elif isinstance(value, BaseModel):
-                        new_metadata[key] = value.model_dump()
-                metadata = new_metadata
+            metadata = self._prepare_metadata(metadata)
 
-            supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
-            supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
-            supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
-            supports_completion_start_time = Version(
-                langfuse.version.__version__
-            ) >= Version("2.7.3")
+            langfuse_version = Version(langfuse.version.__version__)
 
-            print_verbose("Langfuse Layer Logging - logging to langfuse v2 ")
+            supports_tags = langfuse_version >= Version("2.6.3")
+            supports_prompt = langfuse_version >= Version("2.7.3")
+            supports_costs = langfuse_version >= Version("2.7.3")
+            supports_completion_start_time = langfuse_version >= Version("2.7.3")
 
-            if supports_tags:
-                metadata_tags = metadata.pop("tags", [])
-                tags = metadata_tags
+            tags = metadata.pop("tags", []) if supports_tags else []
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion

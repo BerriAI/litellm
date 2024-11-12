@@ -3,7 +3,7 @@ Support for gpt model family
 """
 
 import types
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
@@ -94,6 +94,7 @@ class OpenAIGPTConfig:
             "max_tokens",
             "max_completion_tokens",
             "modalities",
+            "prediction",
             "n",
             "presence_penalty",
             "seed",
@@ -162,3 +163,8 @@ class OpenAIGPTConfig:
             model=model,
             drop_params=drop_params,
         )
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        return messages

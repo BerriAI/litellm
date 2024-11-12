@@ -28,6 +28,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
+import httpx
 
 load_dotenv()
 import io
@@ -51,6 +52,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_info,
     user_update,
 )
+from litellm.proxy.auth.auth_checks import get_key_object
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
@@ -512,7 +514,12 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         print("result from user auth with new key", result)
 
         # call /key/info for key - models == "all-proxy-models"
-        key_info = await info_key_fn(key=generated_key)
+        key_info = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token=bearer_token
+            ),
+        )
         print("key_info", key_info)
         models = key_info["info"]["models"]
         assert models == ["all-team-models"]
@@ -1232,7 +1239,12 @@ def test_generate_and_call_key_info(prisma_client):
             generated_key = key.key
 
             # use generated key to auth in
-            result = await info_key_fn(key=generated_key)
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+                ),
+            )
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
@@ -1324,7 +1336,12 @@ def test_generate_and_update_key(prisma_client):
             generated_key = key.key
 
             # use generated key to auth in
-            result = await info_key_fn(key=generated_key)
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+                ),
+            )
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
@@ -1356,7 +1373,12 @@ def test_generate_and_update_key(prisma_client):
             print("response2=", response2)
 
             # get info on key after update
-            result = await info_key_fn(key=generated_key)
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+                ),
+            )
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
@@ -2049,7 +2071,12 @@ async def test_key_name_null(prisma_client):
         key = await generate_key_fn(request)
         print("generated key=", key)
         generated_key = key.key
-        result = await info_key_fn(key=generated_key)
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+            ),
+        )
         print("result from info_key_fn", result)
         assert result["info"]["key_name"] is None
     except Exception as e:
@@ -2074,7 +2101,12 @@ async def test_key_name_set(prisma_client):
         request = GenerateKeyRequest()
         key = await generate_key_fn(request)
         generated_key = key.key
-        result = await info_key_fn(key=generated_key)
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+            ),
+        )
         print("result from info_key_fn", result)
         assert isinstance(result["info"]["key_name"], str)
     except Exception as e:
@@ -2098,7 +2130,12 @@ async def test_default_key_params(prisma_client):
         request = GenerateKeyRequest()
         key = await generate_key_fn(request)
         generated_key = key.key
-        result = await info_key_fn(key=generated_key)
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+            ),
+        )
         print("result from info_key_fn", result)
         assert result["info"]["max_budget"] == 0.000122
     except Exception as e:
@@ -2779,7 +2816,7 @@ async def test_update_user_role(prisma_client):
         )
     )
 
-    await asyncio.sleep(2)
+    # await asyncio.sleep(3)
 
     # use generated key to auth in
     print("\n\nMAKING NEW REQUEST WITH UPDATED USER ROLE\n\n")
@@ -2864,7 +2901,12 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     generated_key = key.key
 
     # use generated key to auth in
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -2885,7 +2927,12 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     _request._url = URL(url="/update/key")
 
     await update_key_fn(data=request, request=_request)
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -2923,7 +2970,12 @@ async def test_generate_key_with_guardrails(prisma_client):
     generated_key = key.key
 
     # use generated key to auth in
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -2942,7 +2994,12 @@ async def test_generate_key_with_guardrails(prisma_client):
     _request._url = URL(url="/update/key")
 
     await update_key_fn(data=request, request=_request)
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, token="sk-1234"
+        ),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -3369,3 +3426,106 @@ async def test_service_accounts(prisma_client):
     print("response from user_api_key_auth", result)
 
     setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_db_unavailable():
+    """
+    Test that user_api_key_auth handles DB connection failures appropriately when:
+    1. DB connection fails during token validation
+    2. allow_requests_on_db_unavailable=True
+    """
+    litellm.set_verbose = True
+
+    # Mock dependencies
+    class MockPrismaClient:
+        async def get_data(self, *args, **kwargs):
+            print("MockPrismaClient.get_data() called")
+            raise httpx.ConnectError("Failed to connect to DB")
+
+        async def connect(self):
+            print("MockPrismaClient.connect() called")
+            pass
+
+    class MockDualCache:
+        async def async_get_cache(self, *args, **kwargs):
+            return None
+
+        async def async_set_cache(self, *args, **kwargs):
+            pass
+
+        async def set_cache(self, *args, **kwargs):
+            pass
+
+    # Set up test environment
+    setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    # Create test request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    # Run test with a sample API key
+    result = await user_api_key_auth(
+        request=request,
+        api_key="Bearer sk-123456789",
+    )
+
+    # Verify results
+    assert isinstance(result, UserAPIKeyAuth)
+    assert result.key_name == "failed-to-connect-to-db"
+    assert result.user_id == litellm.proxy.proxy_server.litellm_proxy_admin_name
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_db_unavailable_not_allowed():
+    """
+    Test that user_api_key_auth raises an exception when:
+    This is default behavior
+
+    1. DB connection fails during token validation
+    2. allow_requests_on_db_unavailable=False (default behavior)
+    """
+
+    # Mock dependencies
+    class MockPrismaClient:
+        async def get_data(self, *args, **kwargs):
+            print("MockPrismaClient.get_data() called")
+            raise httpx.ConnectError("Failed to connect to DB")
+
+        async def connect(self):
+            print("MockPrismaClient.connect() called")
+            pass
+
+    class MockDualCache:
+        async def async_get_cache(self, *args, **kwargs):
+            return None
+
+        async def async_set_cache(self, *args, **kwargs):
+            pass
+
+        async def set_cache(self, *args, **kwargs):
+            pass
+
+    # Set up test environment
+    setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    setattr(litellm.proxy.proxy_server, "general_settings", {})
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    # Create test request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    # Run test with a sample API key
+    with pytest.raises(litellm.proxy._types.ProxyException):
+        await user_api_key_auth(
+            request=request,
+            api_key="Bearer sk-123456789",
+        )

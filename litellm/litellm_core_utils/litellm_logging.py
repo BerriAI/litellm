@@ -2474,6 +2474,14 @@ class StandardLoggingPayloadSetup:
     ) -> Tuple[float, float, float]:
         """
         Convert datetime objects to floats
+
+        Args:
+            start_time: Union[dt_object, float]
+            end_time: Union[dt_object, float]
+            completion_start_time: Union[dt_object, float]
+
+        Returns:
+            Tuple[float, float, float]: A tuple containing the start time, end time, and completion start time as floats.
         """
 
         if isinstance(start_time, datetime.datetime):
@@ -2534,13 +2542,10 @@ class StandardLoggingPayloadSetup:
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
-            clean_metadata = StandardLoggingMetadata(
-                **{  # type: ignore
-                    key: metadata[key]
-                    for key in StandardLoggingMetadata.__annotations__.keys()
-                    if key in metadata
-                }
-            )
+            supported_keys = StandardLoggingMetadata.__annotations__.keys()
+            for key in supported_keys:
+                if key in metadata:
+                    clean_metadata[key] = metadata[key]  # type: ignore
 
             if metadata.get("user_api_key") is not None:
                 if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
@@ -2769,11 +2774,6 @@ def get_standard_logging_object_payload(
             metadata=metadata
         )
 
-        if litellm.cache is not None:
-            cache_key = litellm.cache.get_cache_key(**kwargs)
-        else:
-            cache_key = None
-
         saved_cache_cost: float = 0.0
         if cache_hit is True:
 
@@ -2815,7 +2815,7 @@ def get_standard_logging_object_payload(
             completionStartTime=completion_start_time_float,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
-            cache_key=cache_key,
+            cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
             total_tokens=usage.total_tokens,
             prompt_tokens=usage.prompt_tokens,

@@ -412,7 +412,7 @@ async def test_key_info():
     Get key info
     - as admin -> 200
     - as key itself -> 200
-    - as random key -> 403
+    - as non existent key -> 404
     """
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session, i=0)
@@ -425,10 +425,9 @@ async def test_key_info():
         # as key itself, use the auth param, and no query key needed
         await get_key_info(session=session, call_key=key)
         # as random key #
-        key_gen = await generate_key(session=session, i=0)
-        random_key = key_gen["key"]
-        status = await get_key_info(session=session, get_key=key, call_key=random_key)
-        assert status == 403
+        random_key = f"sk-{uuid.uuid4()}"
+        status = await get_key_info(session=session, get_key=random_key, call_key=key)
+        assert status == 404
 
 
 @pytest.mark.asyncio
@@ -523,8 +522,8 @@ async def test_key_info_spend_values():
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_key_info_spend_values_streaming():
+@pytest.mark.flaky(retries=6, delay=2)
+async def test_aaaaakey_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.
     - create key
@@ -545,7 +544,7 @@ async def test_key_info_spend_values_streaming():
             completion_tokens=completion_tokens,
         )
         response_cost = prompt_cost + completion_cost
-        await asyncio.sleep(5)  # allow db log to be updated
+        await asyncio.sleep(8)  # allow db log to be updated
         print(f"new_key: {new_key}")
         key_info = await get_key_info(
             session=session, get_key=new_key, call_key=new_key

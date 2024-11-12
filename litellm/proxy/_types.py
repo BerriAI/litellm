@@ -436,15 +436,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     """
 
     admin_jwt_scope: str = "litellm_proxy_admin"
-    admin_allowed_routes: List[
-        Literal[
-            "openai_routes",
-            "info_routes",
-            "management_routes",
-            "spend_tracking_routes",
-            "global_spend_tracking_routes",
-        ]
-    ] = [
+    admin_allowed_routes: List[str] = [
         "management_routes",
         "spend_tracking_routes",
         "global_spend_tracking_routes",
@@ -1902,6 +1894,7 @@ class ProxyErrorTypes(str, enum.Enum):
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
+    not_found_error = "not_found_error"
 
 
 class SSOUserDefinedValues(TypedDict):

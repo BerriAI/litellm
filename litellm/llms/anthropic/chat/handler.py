@@ -71,11 +71,12 @@ def validate_environment(
 
     prompt_caching_set = AnthropicConfig().is_cache_control_set(messages=messages)
     computer_tool_used = AnthropicConfig().is_computer_tool_used(tools=tools)
-
+    pdf_used = AnthropicConfig().is_pdf_used(messages=messages)
     headers = AnthropicConfig().get_anthropic_headers(
         anthropic_version=anthropic_version,
         computer_tool_used=computer_tool_used,
         prompt_caching_set=prompt_caching_set,
+        pdf_used=pdf_used,
         api_key=api_key,
     )
 
@@ -769,6 +770,7 @@ class ModelResponseIterator:
                     message=message,
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
+
             returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,

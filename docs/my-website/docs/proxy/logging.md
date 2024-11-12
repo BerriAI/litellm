@@ -107,7 +107,7 @@ class StandardLoggingModelInformation(TypedDict):
     model_map_value: Optional[ModelInfo]
 ```
 
-## Logging Proxy Input/Output - Langfuse
+## Langfuse
 
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
@@ -463,7 +463,7 @@ You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL comma
 
 <Image img={require('../../img/debug_langfuse.png')} />
 
-## Logging Proxy Input/Output in OpenTelemetry format
+## OpenTelemetry format
 
 :::info 
 
@@ -1216,7 +1216,7 @@ litellm_settings:
 
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
-## Logging LLM IO to Langsmith
+## Langsmith
 
 1. Set `success_callback: ["langsmith"]` on litellm config.yaml
 
@@ -1261,7 +1261,7 @@ Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
 
 
-## Logging LLM IO to Arize AI
+## Arize AI
 
 1. Set `success_callback: ["arize"]` on litellm config.yaml
 
@@ -1309,7 +1309,7 @@ Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
 
 
-## Logging LLM IO to Langtrace
+## Langtrace
 
 1. Set `success_callback: ["langtrace"]` on litellm config.yaml
 
@@ -1351,7 +1351,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
-## Logging LLM IO to Galileo
+## Galileo
 
 [BETA]
 
@@ -1466,7 +1466,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 <Image img={require('../../img/openmeter_img_2.png')} />
 
-## Logging Proxy Input/Output - DataDog
+## DataDog
 
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
@@ -1543,7 +1543,7 @@ Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
 
-## Logging Proxy Input/Output - DynamoDB
+## DynamoDB
 
 We will use the `--config` to set 
 
@@ -1669,7 +1669,7 @@ Your logs should be available on DynamoDB
 }
 ```
 
-## Logging Proxy Input/Output - Sentry
+## Sentry
 
 If api calls fail (llm/database) you can log those to Sentry: 
 
@@ -1711,7 +1711,7 @@ Test Request
 litellm --test
 ```
 
-## Logging Proxy Input/Output Athina
+## Athina
 
 [Athina](https://athina.ai/) allows you to log LLM Input/Output for monitoring, analytics, and observability.
 

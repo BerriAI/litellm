@@ -205,6 +205,7 @@ const sidebars = {
         "completion/prompt_caching",
         "completion/audio",
         "completion/vision",
+        "completion/predict_outputs",
         "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",
@@ -265,6 +266,7 @@ const sidebars = {
       type: "category",
       label: "Load Testing",
       items: [
+        "benchmarks",
         "load_test",
         "load_test_advanced",
         "load_test_sdk",

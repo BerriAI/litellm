@@ -70,7 +70,7 @@ class DualCache(BaseCache):
         self.redis_batch_cache_expiry = (
             default_redis_batch_cache_expiry
             or litellm.default_redis_batch_cache_expiry
-            or 5
+            or 10
         )
         self.default_in_memory_ttl = (
             default_in_memory_ttl or litellm.default_in_memory_ttl
@@ -314,7 +314,8 @@ class DualCache(BaseCache):
                 f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
             )
 
-    async def async_batch_set_cache(
+    # async_batch_set_cache
+    async def async_set_cache_pipeline(
         self, cache_list: list, local_only: bool = False, **kwargs
     ):
         """

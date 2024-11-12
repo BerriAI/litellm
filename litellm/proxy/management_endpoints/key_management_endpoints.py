@@ -32,7 +32,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import _duration_in_seconds
+from litellm.proxy.utils import _duration_in_seconds, _hash_token_if_needed
 from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
@@ -734,13 +734,37 @@ async def info_key_fn(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if key is None:
-            key = user_api_key_dict.api_key
-        key_info = await prisma_client.get_data(token=key)
+
+        # default to using Auth token if no key is passed in
+        key = key or user_api_key_dict.api_key
+        hashed_key: Optional[str] = key
+        if key is not None:
+            hashed_key = _hash_token_if_needed(token=key)
+        key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_key},  # type: ignore
+            include={"litellm_budget_table": True},
+        )
         if key_info is None:
+            raise ProxyException(
+                message="Key not found in database",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if (
+            _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=key,
+                key_info=key_info,
+            )
+            is not True
+        ):
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "No keys found"},
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
@@ -1540,6 +1564,27 @@ async def key_health(
         )
 
 
+def _can_user_query_key_info(
+    user_api_key_dict: UserAPIKeyAuth,
+    key: Optional[str],
+    key_info: LiteLLM_VerificationToken,
+) -> bool:
+    """
+    Helper to check if the user has access to the key's info
+    """
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
+        return True
+    elif user_api_key_dict.api_key == key:
+        return True
+    # user can query their own key info
+    elif key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return False
+
+
 async def test_key_logging(
     user_api_key_dict: UserAPIKeyAuth,
     request: Request,
@@ -1599,7 +1644,9 @@ async def test_key_logging(
             details=f"Logging test failed: {str(e)}",
         )
 
-    await asyncio.sleep(1)  # wait for callbacks to run
+    await asyncio.sleep(
+        2
+    )  # wait for callbacks to run, callbacks use batching so wait for the flush event
 
     # Check if any logger exceptions were triggered
     log_contents = log_capture_string.getvalue()
