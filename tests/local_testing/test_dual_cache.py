@@ -146,7 +146,7 @@ async def test_dual_cache_batch_operations(is_async):
 
     # Set values
     if is_async:
-        await dual_cache.async_batch_set_cache(cache_list)
+        await dual_cache.async_set_cache_pipeline(cache_list)
     else:
         for key, value in cache_list:
             dual_cache.set_cache(key, value)

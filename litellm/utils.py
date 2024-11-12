@@ -796,7 +796,7 @@ def client(original_function):  # noqa: PLR0915
                 and kwargs.get("_arealtime", False) is not True
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
-                print_verbose("INSIDE CHECKING CACHE")
+                verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
                 caching_handler_response: CachingHandlerResponse = (
                     _llm_caching_handler._sync_get_cache(
                         model=model or "",
@@ -808,6 +808,7 @@ def client(original_function):  # noqa: PLR0915
                         args=args,
                     )
                 )
+
                 if caching_handler_response.cached_result is not None:
                     return caching_handler_response.cached_result
 
