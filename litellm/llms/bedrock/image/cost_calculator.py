@@ -6,8 +6,8 @@ from litellm.types.utils import ImageResponse
 
 def cost_calculator(
     model: str,
-    size: Optional[str],
     image_response: ImageResponse,
+    size: Optional[str] = None,
     optional_params: Optional[dict] = None,
 ) -> float:
     """
