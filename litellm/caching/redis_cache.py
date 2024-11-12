@@ -404,7 +404,7 @@ class RedisCache(BaseCache):
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
-            return results
+            return None
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()

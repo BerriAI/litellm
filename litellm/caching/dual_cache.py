@@ -314,7 +314,8 @@ class DualCache(BaseCache):
                 f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
             )
 
-    async def async_batch_set_cache(
+    # async_batch_set_cache
+    async def async_set_cache_pipeline(
         self, cache_list: list, local_only: bool = False, **kwargs
     ):
         """

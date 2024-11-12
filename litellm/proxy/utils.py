@@ -175,7 +175,7 @@ class InternalUsageCache:
         local_only: bool = False,
         **kwargs,
     ) -> None:
-        return await self.dual_cache.async_batch_set_cache(
+        return await self.dual_cache.async_set_cache_pipeline(
             cache_list=cache_list,
             local_only=local_only,
             litellm_parent_otel_span=litellm_parent_otel_span,

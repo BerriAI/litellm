@@ -2774,11 +2774,6 @@ def get_standard_logging_object_payload(
             metadata=metadata
         )
 
-        if litellm.cache is not None:
-            cache_key = litellm.cache.get_cache_key(**kwargs)
-        else:
-            cache_key = None
-
         saved_cache_cost: float = 0.0
         if cache_hit is True:
 
@@ -2820,7 +2815,7 @@ def get_standard_logging_object_payload(
             completionStartTime=completion_start_time_float,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
-            cache_key=cache_key,
+            cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
             total_tokens=usage.total_tokens,
             prompt_tokens=usage.prompt_tokens,

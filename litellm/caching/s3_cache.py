@@ -10,6 +10,7 @@ Has 4 methods:
 """
 
 import ast
+import asyncio
 import json
 from typing import Any, Optional
 
@@ -153,3 +154,9 @@ class S3Cache(BaseCache):
 
     async def disconnect(self):
         pass
+
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        tasks = []
+        for val in cache_list:
+            tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+        await asyncio.gather(*tasks)
