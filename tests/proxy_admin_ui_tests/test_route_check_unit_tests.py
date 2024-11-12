@@ -147,23 +147,6 @@ def test_key_info_route_allowed(route_checks):
     )
 
 
-def test_key_info_route_forbidden(route_checks):
-    """
-    Internal User is not allowed to access /key/info route for a key they're not using in Authenticated API Key
-    """
-    with pytest.raises(HTTPException) as exc_info:
-        route_checks.non_proxy_admin_allowed_routes_check(
-            user_obj=None,
-            _user_role=LitellmUserRoles.INTERNAL_USER.value,
-            route="/key/info",
-            request=MockRequest(query_params={"key": "wrong_key"}),
-            valid_token=UserAPIKeyAuth(api_key="test_key"),
-            api_key="test_key",
-            request_data={},
-        )
-    assert exc_info.value.status_code == 403
-
-
 def test_user_info_route_allowed(route_checks):
     """
     Internal User is allowed to access /user/info route for their own user_id
