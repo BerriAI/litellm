@@ -1182,7 +1182,12 @@ def test_generate_and_call_key_info(prisma_client):
             generated_key = key.key
 
             # use generated key to auth in
-            result = await info_key_fn(key=generated_key)
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
@@ -1274,7 +1279,12 @@ def test_generate_and_update_key(prisma_client):
             generated_key = key.key
 
             # use generated key to auth in
-            result = await info_key_fn(key=generated_key)
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
@@ -1306,7 +1316,12 @@ def test_generate_and_update_key(prisma_client):
             print("response2=", response2)
 
             # get info on key after update
-            result = await info_key_fn(key=generated_key)
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
@@ -1992,7 +2007,10 @@ async def test_key_name_null(prisma_client):
         key = await generate_key_fn(request)
         print("generated key=", key)
         generated_key = key.key
-        result = await info_key_fn(key=generated_key)
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
         print("result from info_key_fn", result)
         assert result["info"]["key_name"] is None
     except Exception as e:
@@ -2017,7 +2035,10 @@ async def test_key_name_set(prisma_client):
         request = GenerateKeyRequest()
         key = await generate_key_fn(request)
         generated_key = key.key
-        result = await info_key_fn(key=generated_key)
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
         print("result from info_key_fn", result)
         assert isinstance(result["info"]["key_name"], str)
     except Exception as e:
@@ -2041,7 +2062,10 @@ async def test_default_key_params(prisma_client):
         request = GenerateKeyRequest()
         key = await generate_key_fn(request)
         generated_key = key.key
-        result = await info_key_fn(key=generated_key)
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
         print("result from info_key_fn", result)
         assert result["info"]["max_budget"] == 0.000122
     except Exception as e:
@@ -2807,7 +2831,10 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     generated_key = key.key
 
     # use generated key to auth in
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -2828,7 +2855,10 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     _request._url = URL(url="/update/key")
 
     await update_key_fn(data=request, request=_request)
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -2866,7 +2896,10 @@ async def test_generate_key_with_guardrails(prisma_client):
     generated_key = key.key
 
     # use generated key to auth in
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
@@ -2885,7 +2918,10 @@ async def test_generate_key_with_guardrails(prisma_client):
     _request._url = URL(url="/update/key")
 
     await update_key_fn(data=request, request=_request)
-    result = await info_key_fn(key=generated_key)
+    result = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
     print("result from info_key_fn", result)
     assert result["key"] == generated_key
     print("\n info for key=", result["info"])
