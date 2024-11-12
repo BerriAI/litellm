@@ -15,11 +15,13 @@ spec:
           image: "ghcr.io/berriai/litellm:main-stable"
           command: ["python", "/litellm/proxy/prisma_migration.py"]
           env:
+            {{- if .Values.db.deployStandalone }}
             - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: url
+              value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
+            {{- else if .Values.db.useExisting }}
+            - name: DATABASE_URL
+              value: {{ .Values.db.url | quote }}
+            {{- end }}
             - name: DISABLE_SCHEMA_UPDATE
               value: "{{ .Values.migrationJob.disableSchemaUpdate }}"
       restartPolicy: OnFailure
