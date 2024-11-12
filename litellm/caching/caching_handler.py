@@ -595,6 +595,7 @@ class LLMCachingHandler:
                 model_response_object=EmbeddingResponse(),
                 response_type="embedding",
             )
+
         elif (
             call_type == CallTypes.arerank.value or call_type == CallTypes.rerank.value
         ) and isinstance(cached_result, dict):
@@ -618,6 +619,13 @@ class LLMCachingHandler:
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
             )
+
+        if (
+            hasattr(cached_result, "_hidden_params")
+            and cached_result._hidden_params is not None
+            and isinstance(cached_result._hidden_params, dict)
+        ):
+            cached_result._hidden_params["cache_hit"] = True
         return cached_result
 
     def _convert_cached_stream_response(
