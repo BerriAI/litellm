@@ -32,10 +32,10 @@ class DiskCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
         for cache_key, cache_value in cache_list:
-            if ttl is not None:
-                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+            if "ttl" in kwargs:
+                self.set_cache(key=cache_key, value=cache_value, ttl=kwargs["ttl"])
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 

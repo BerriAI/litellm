@@ -675,16 +675,15 @@ class Cache:
                     **kwargs,
                 )
                 cache_list.append((cache_key, cached_data))
-            async_set_cache_pipeline = getattr(
-                self.cache, "async_set_cache_pipeline", None
-            )
-            if async_set_cache_pipeline:
-                await async_set_cache_pipeline(cache_list=cache_list, **kwargs)
-            else:
-                tasks = []
-                for val in cache_list:
-                    tasks.append(self.cache.async_set_cache(val[0], val[1], **kwargs))
-                await asyncio.gather(*tasks)
+
+            await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+            # if async_set_cache_pipeline:
+            #     await async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+            # else:
+            #     tasks = []
+            #     for val in cache_list:
+            #         tasks.append(self.cache.async_set_cache(val[0], val[1], **kwargs))
+            #     await asyncio.gather(*tasks)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 

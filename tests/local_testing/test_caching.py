@@ -1211,6 +1211,85 @@ async def test_disk_cache_completion(sync_mode):
     assert response1.choices[0].message.content == response2.choices[0].message.content
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_disk_cache_embedding(sync_mode):
+    litellm._turn_on_debug()
+
+    random_number = random.randint(
+        1, 100000
+    )  # add a random number to ensure it's always adding / reading from cache
+    input = [f"hello {random_number}"]
+    litellm.cache = Cache(
+        type="disk",
+    )
+
+    if sync_mode:
+        response1 = embedding(
+            "openai/text-embedding-ada-002",
+            input=input,
+            caching=True,
+        )
+    else:
+        response1 = await litellm.aembedding(
+            "openai/text-embedding-ada-002",
+            input=input,
+            caching=True,
+        )
+    # response2 is mocked to a different response from response1,
+    # but the completion from the cache should be used instead of the mock
+    # response since the input is the same as response1
+    await asyncio.sleep(0.5)
+    if sync_mode:
+        response2 = embedding(
+            "openai/text-embedding-ada-002",
+            input=input,
+            caching=True,
+        )
+    else:
+        response2 = await litellm.aembedding(
+            "openai/text-embedding-ada-002",
+            input=input,
+            caching=True,
+        )
+
+    if response2._hidden_params["cache_hit"] is not True:
+        pytest.fail("Cache hit should be True")
+    assert response1.id == response2.id
+    # Since the parameters are not the same as response1, response3 should actually
+    # be the mock response
+    if sync_mode:
+        response3 = embedding(
+            "openai/text-embedding-ada-002",
+            input=input,
+            user="charlie",
+            caching=True,
+        )
+    else:
+        response3 = await litellm.acompletion(
+            "openai/text-embedding-ada-002",
+            input=input,
+            caching=True,
+            user="charlie",
+        )
+
+    print("\nresponse 1", response1)
+    print("\nresponse 2", response2)
+    print("\nresponse 3", response3)
+    # print("\nresponse 4", response4)
+    litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
+    # 1 & 2 should be exactly the same
+    # 1 & 3 should be different, since input params are diff
+
+    if response3._hidden_params["cache_hit"] is True:
+        pytest.fail("Cache hit should not be True")
+
+    assert response1.id != response3.id
+
+
 # @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
