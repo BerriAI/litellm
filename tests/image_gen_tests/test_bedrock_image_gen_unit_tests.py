@@ -199,7 +199,7 @@ def test_cost_calculator_stability3():
 
     cost = cost_calculator(
         model="stability.sd3-large-v1:0",
-        size="1024x1024",
+        size="1024-x-1024",
         image_response=image_response,
     )
 
@@ -217,14 +217,14 @@ def test_cost_calculator_stability1():
     # Test with different step configurations
     cost_default_steps = cost_calculator(
         model="stability.stable-diffusion-xl-v1",
-        size="1024x1024",
+        size="1024-x-1024",
         image_response=image_response,
         optional_params={"steps": 50},
     )
 
     cost_max_steps = cost_calculator(
         model="stability.stable-diffusion-xl-v1",
-        size="1024x1024",
+        size="1024-x-1024",
         image_response=image_response,
         optional_params={"steps": 51},
     )
@@ -243,7 +243,7 @@ def test_cost_calculator_with_no_optional_params():
 
     cost = cost_calculator(
         model="stability.stable-diffusion-xl-v0",
-        size="512x512",
+        size="512-x-512",
         image_response=image_response,
         optional_params=None,
     )
