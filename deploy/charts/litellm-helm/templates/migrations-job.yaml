@@ -1,6 +1,5 @@
-"""
-This job runs the prisma migrations for the LiteLLM DB.
-"""
+# This job runs the prisma migrations for the LiteLLM DB.
+
 apiVersion: batch/v1
 kind: Job
 metadata:
