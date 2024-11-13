@@ -181,6 +181,7 @@ def test_image_generation_azure_dall_e_3():
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:
+        litellm.in_memory_llm_clients_cache = {}
         response = await litellm.aimage_generation(
             prompt="A cute baby sea otter",
             model="bedrock/stability.stable-diffusion-xl-v1",
