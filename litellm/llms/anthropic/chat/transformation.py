@@ -160,15 +160,17 @@ class AnthropicConfig:
         returned_tool: Optional[AllAnthropicToolsValues] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
-            _input_function_parameters: dict = (
-                tool["function"].get("parameters", None) or {}
+            _input_schema: dict = tool["function"].get(
+                "parameters",
+                {
+                    "type": "object",
+                    "properties": {},
+                },
             )
-            _tool_input_schema: AnthropicInputSchema = AnthropicInputSchema(
-                **_input_function_parameters
-            )
+            input_schema: AnthropicInputSchema = AnthropicInputSchema(**_input_schema)
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
-                input_schema=_tool_input_schema,
+                input_schema=input_schema,
             )
 
             _description = tool["function"].get("description")
