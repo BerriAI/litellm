@@ -17,7 +17,7 @@ import secrets
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -450,6 +450,9 @@ async def delete_key_fn(
             user_custom_key_generate,
         )
 
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
         keys = data.keys
         if len(keys) == 0:
             raise ProxyException(
@@ -469,7 +472,8 @@ async def delete_key_fn(
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             user_id = None  # unless they're admin
-        number_deleted_keys = await delete_verification_token(
+
+        number_deleted_keys, _keys_being_deleted = await delete_verification_token(
             tokens=keys, user_id=user_id
         )
         if number_deleted_keys is None:
@@ -506,6 +510,7 @@ async def delete_key_fn(
         asyncio.create_task(
             KeyManagementEventHooks.async_key_deleted_hook(
                 data=data,
+                keys_being_deleted=_keys_being_deleted,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
                 response=number_deleted_keys,
@@ -950,11 +955,35 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     return key_data
 
 
-async def delete_verification_token(tokens: List, user_id: Optional[str] = None):
+async def delete_verification_token(
+    tokens: List, user_id: Optional[str] = None
+) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
+    """
+    Helper that deletes the list of tokens from the database
+
+    Args:
+        tokens: List of tokens to delete
+        user_id: Optional user_id to filter by
+
+    Returns:
+        Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
+            Optional[Dict]:
+                - Number of deleted tokens
+            List[LiteLLM_VerificationToken]:
+                - List of keys being deleted, this contains information about the key_alias, token, and user_id being deleted,
+                this is passed down to the KeyManagementEventHooks to delete the keys from the secret manager and handle audit logs
+    """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         if prisma_client:
+            tokens = [_hash_token_if_needed(token=key) for key in tokens]
+            _keys_being_deleted = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
+            )
+
             # Assuming 'db' is your Prisma Client instance
             # check if admin making request - don't filter by user-id
             if user_id == litellm_proxy_admin_name:
@@ -984,7 +1013,7 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
-    return deleted_tokens
+    return deleted_tokens, _keys_being_deleted
 
 
 @router.post(

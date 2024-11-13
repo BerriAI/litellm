@@ -3,16 +3,18 @@ import json
 import uuid
 from datetime import datetime, timezone
 from re import A
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import status
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     GenerateKeyRequest,
     KeyManagementSystem,
     KeyRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_VerificationToken,
     LitellmTableNames,
     ProxyErrorTypes,
     ProxyException,
@@ -125,6 +127,7 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_deleted_hook(
         data: KeyRequest,
+        keys_being_deleted: List[LiteLLM_VerificationToken],
         response: dict,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
@@ -177,6 +180,10 @@ class KeyManagementEventHooks:
                         )
                     )
                 )
+        # delete the keys from the secret manager
+        await KeyManagementEventHooks._delete_virtual_keys_from_secret_manager(
+            keys_being_deleted=keys_being_deleted
+        )
         pass
 
     @staticmethod
@@ -204,6 +211,33 @@ class KeyManagementEventHooks:
                         secret_name=secret_name,
                         secret_value=secret_token,
                     )
+
+    @staticmethod
+    async def _delete_virtual_keys_from_secret_manager(
+        keys_being_deleted: List[LiteLLM_VerificationToken],
+    ):
+        """
+        Deletes virtual keys from the secret manager
+
+        Args:
+            keys_being_deleted: List of keys being deleted, this is passed down from the /key/delete operation
+        """
+        if litellm._key_management_settings is not None:
+            if litellm._key_management_settings.store_virtual_keys is True:
+                from litellm.secret_managers.aws_secret_manager_v2 import (
+                    AWSSecretsManagerV2,
+                )
+
+                if isinstance(litellm.secret_manager_client, AWSSecretsManagerV2):
+                    for key in keys_being_deleted:
+                        if key.key_alias is not None:
+                            await litellm.secret_manager_client.async_delete_secret(
+                                secret_name=key.key_alias
+                            )
+                        else:
+                            verbose_proxy_logger.warning(
+                                f"KeyManagementEventHooks._delete_virtual_key_from_secret_manager: Key alias not found for key {key.token}. Skipping deletion from secret manager."
+                            )
 
     @staticmethod
     async def _send_key_created_email(response: dict):
