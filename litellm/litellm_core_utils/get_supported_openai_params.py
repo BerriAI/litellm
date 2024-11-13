@@ -161,17 +161,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "huggingface":
         return litellm.HuggingfaceConfig().get_supported_openai_params()
     elif custom_llm_provider == "together_ai":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "tools",
-            "tool_choice",
-            "response_format",
-        ]
+        return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ai21":
         return [
             "stream",
