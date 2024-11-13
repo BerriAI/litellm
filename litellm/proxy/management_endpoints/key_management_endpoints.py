@@ -374,30 +374,13 @@ async def update_key_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(data_json, default=str)
-
-            _before_value = existing_key_row.json(exclude_none=True)
-            _before_value = json.dumps(_before_value, default=str)
-
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=data.key,
-                        action="updated",
-                        updated_values=_updated_values,
-                        before_value=_before_value,
-                    )
-                )
-            )
+        await KeyManagementEventHooks.async_key_updated_hook(
+            data=data,
+            existing_key_row=existing_key_row,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
         if response is None:
             raise ValueError("Failed to update key got response = None")
@@ -482,45 +465,6 @@ async def delete_key_fn(
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             user_id = None  # unless they're admin
-
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True:
-            # make an audit log for each team deleted
-            for key in data.keys:
-                key_row = await prisma_client.get_data(  # type: ignore
-                    token=key, table_name="key", query_type="find_unique"
-                )
-
-                if key_row is None:
-                    raise ProxyException(
-                        message=f"Key {key} not found",
-                        type=ProxyErrorTypes.bad_request_error,
-                        param="key",
-                        code=status.HTTP_404_NOT_FOUND,
-                    )
-
-                key_row = key_row.json(exclude_none=True)
-                _key_row = json.dumps(key_row, default=str)
-
-                asyncio.create_task(
-                    create_audit_log_for_update(
-                        request_data=LiteLLM_AuditLogs(
-                            id=str(uuid.uuid4()),
-                            updated_at=datetime.now(timezone.utc),
-                            changed_by=litellm_changed_by
-                            or user_api_key_dict.user_id
-                            or litellm_proxy_admin_name,
-                            changed_by_api_key=user_api_key_dict.api_key,
-                            table_name=LitellmTableNames.KEY_TABLE_NAME,
-                            object_id=key,
-                            action="deleted",
-                            updated_values="{}",
-                            before_value=_key_row,
-                        )
-                    )
-                )
-
         number_deleted_keys = await delete_verification_token(
             tokens=keys, user_id=user_id
         )
@@ -553,6 +497,13 @@ async def delete_key_fn(
 
         verbose_proxy_logger.debug(
             f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
+        )
+
+        await KeyManagementEventHooks.async_key_deleted_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+            response=number_deleted_keys,
         )
 
         return {"deleted_keys": keys}
