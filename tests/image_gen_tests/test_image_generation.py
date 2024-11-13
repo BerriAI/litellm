@@ -23,6 +23,10 @@ import litellm
 import json
 import tempfile
 from base_image_generation_test import BaseImageGenTest
+import logging
+from litellm._logging import verbose_logger
+
+verbose_logger.setLevel(logging.DEBUG)
 
 
 def get_vertex_ai_creds_json() -> dict:
@@ -114,10 +118,15 @@ class TestOpenAIDalle3(BaseImageGenTest):
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
+        litellm.set_verbose = True
         return {
             "model": "azure/dall-e-3-test",
             "api_version": "2023-09-01-preview",
-            "base_model": "dall-e-3",
+            "metadata": {
+                "model_info": {
+                    "base_model": "dall-e-3",
+                }
+            },
         }
 
 
