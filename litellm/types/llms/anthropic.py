@@ -12,10 +12,16 @@ class AnthropicMessagesToolChoice(TypedDict, total=False):
     disable_parallel_tool_use: bool  # default is false
 
 
+class AnthropicInputSchema(TypedDict, total=False):
+    type: Optional[str]
+    properties: Optional[dict]
+    additionalProperties: Optional[bool]
+
+
 class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
-    input_schema: Required[dict]
+    input_schema: Optional[AnthropicInputSchema]
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
