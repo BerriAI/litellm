@@ -72,28 +72,10 @@ class KeyManagementEventHooks:
                 )
             )
         # store the generated key in the secret manager
-        _key_management_settings: Optional[dict] = general_settings.get(
-            "key_management", None
+        await KeyManagementEventHooks._store_virtual_key_in_secret_manager(
+            secret_name=data.key_alias or f"virtual-key-{uuid.uuid4()}",
+            secret_token=response.get("token", ""),
         )
-        if _key_management_settings is not None and isinstance(
-            _key_management_settings, dict
-        ):
-            if _key_management_settings.get("store_virtual_keys", None) is True:
-                from litellm.secret_managers.aws_secret_manager_v2 import (
-                    AWSSecretsManagerV2,
-                )
-
-                # store the key in the secret manager
-                if (
-                    litellm._key_management_system
-                    == KeyManagementSystem.AWS_SECRET_MANAGER
-                    and isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
-                ):
-                    _secret_name = data.key_alias or f"virtual-key-{uuid.uuid4()}"
-                    await litellm.secret_manager_client.async_write_secret(
-                        secret_name=_secret_name,
-                        secret_value=response.get("token_value", ""),
-                    )
 
     @staticmethod
     async def async_key_updated_hook(
@@ -196,6 +178,32 @@ class KeyManagementEventHooks:
                     )
                 )
         pass
+
+    @staticmethod
+    async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str):
+        """
+        Store a virtual key in the secret manager
+
+        Args:
+            secret_name: Name of the virtual key
+            secret_token: Value of the virtual key (example: sk-1234)
+        """
+        if litellm._key_management_settings is not None:
+            if litellm._key_management_settings.store_virtual_keys is True:
+                from litellm.secret_managers.aws_secret_manager_v2 import (
+                    AWSSecretsManagerV2,
+                )
+
+                # store the key in the secret manager
+                if (
+                    litellm._key_management_system
+                    == KeyManagementSystem.AWS_SECRET_MANAGER
+                    and isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
+                ):
+                    await litellm.secret_manager_client.async_write_secret(
+                        secret_name=secret_name,
+                        secret_value=secret_token,
+                    )
 
     @staticmethod
     async def _send_key_created_email(response: dict):
