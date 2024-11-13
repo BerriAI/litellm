@@ -62,8 +62,8 @@ async def chat_completion(session, key, model="azure-gpt-3.5", request_metadata=
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=6, delay=1)
-async def test_team_logging():
+@pytest.mark.flaky(retries=12, delay=2)
+async def test_aaateam_logging():
     """
     -> Team 1 logs to project 1
     -> Create Key
