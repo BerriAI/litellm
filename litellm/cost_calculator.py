@@ -459,8 +459,6 @@ def _select_model_name_for_cost_calc(
 
     elif return_model is None and hasattr(completion_response, "get"):
         return_model = completion_response.get("model", "")  # type: ignore
-    elif hasattr(completion_response, "model"):
-        return_model = completion_response.model  # type: ignore
     hidden_params = getattr(completion_response, "_hidden_params", None)
 
     if hidden_params is not None:
