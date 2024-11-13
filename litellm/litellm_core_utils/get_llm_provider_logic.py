@@ -157,6 +157,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.sambanova.ai/v1":
                         custom_llm_provider = "sambanova"
                         dynamic_api_key = get_secret_str("SAMBANOVA_API_KEY")
+                    elif endpoint == "https://api.studio.nebius.ai/v1/":
+                        custom_llm_provider = "nebius"
+                        dynamic_api_key = get_secret_str("NEBIUS_API_KEY")
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret_str("AI21_API_KEY")
@@ -397,6 +400,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.sambanova.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SAMBANOVA_API_KEY")
+    elif custom_llm_provider == "nebius":
+        api_base = (
+            api_base
+            or get_secret("NEBIUS_API_BASE")
+            or "https://api.studio.nebius.ai/v1/"
+        )
+        dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
         custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
     ):

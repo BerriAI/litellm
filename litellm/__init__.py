@@ -124,6 +124,7 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+nebius_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -415,6 +416,7 @@ groq_models: List = []
 azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+nebius_models: List = []
 
 
 def add_known_models():
@@ -471,6 +473,8 @@ def add_known_models():
                 ai21_models.append(key)
         elif value.get("litellm_provider") == "nlp_cloud":
             nlp_cloud_models.append(key)
+        elif value.get("litellm_provider") == "nebius":
+            nebius_ai_models.append(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.append(key)
         elif value.get("litellm_provider") == "bedrock":
@@ -538,6 +542,7 @@ openai_compatible_endpoints: List = [
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "api.studio.nebius.ai/v1/",
 ]
 
 # this is maintained for Exception Mapping
@@ -565,6 +570,7 @@ openai_compatible_providers: List = [
     "litellm_proxy",
     "hosted_vllm",
     "lm_studio",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -739,6 +745,30 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
+nebius_models = [
+    "nebius/Meta-Llama-3.1-70B-Instruct",
+    "nebius/Meta-Llama-3.1-8B-Instruct",
+    "nebius/Meta-Llama-3.1-405B-Instruct",
+    "nebius/Mistral-Nemo-Instruct-2407",
+    "nebius/Mixtral-8x7B-Instruct-v0.1",
+    "nebius/Mixtral-8x22B-Instruct-v0.1",
+    "nebius/Qwen2.5-Coder-7B",
+    "nebius/Qwen2.5-Coder-7B-Instruct",
+    "nebius/DeepSeek-Coder-V2-Lite-Instruct",
+    "nebius/Phi-3-mini-4k-instruct",
+    "nebius/Phi-3-medium-128k-instruct",
+    "nebius/OLMo-7B-Instruct",
+    "nebius/Gemma-2-2b-it",
+    "nebius/Gemma-2-9b-it",
+    "nebius/Meta-Llama-3.1-8B",
+    "nebius/Meta-Llama-3.1-Nemotron-70B-Instruct-HF",
+    "nebius/Gemma-27B-Instruct",
+    "nebius/Qwen2.5-32B-Instruct",
+    "nebius/Qwen2.5-72B-Instruct",
+    "nebius/Llama3-OpenBioLLM-8B",
+    "nebius/Llama3-OpenBioLLM-70B",
+]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -778,6 +808,7 @@ model_list = (
     + azure_models
     + anyscale_models
     + cerebras_models
+    + nebius_models
 )
 
 
@@ -844,6 +875,7 @@ class LlmProviders(str, Enum):
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
+    NEBIUS = "nebius"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -892,6 +924,7 @@ models_by_provider: dict = {
     "azure": azure_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "nebius": nebius_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1104,6 +1137,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
+from .llms.nebius.chat import NebiusConfig
 from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
