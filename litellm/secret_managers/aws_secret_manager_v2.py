@@ -94,6 +94,30 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             )
         return None
 
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
+        """
+        Sync function to read a secret from AWS Secrets Manager
+
+        Done for backwards compatibility with existing codebase, since get_secret is a sync function
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(
+            self.async_read_secret(
+                secret_name=secret_name,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        )
+
     async def async_write_secret(
         self,
         secret_name: str,
