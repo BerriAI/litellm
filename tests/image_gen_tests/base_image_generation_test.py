@@ -3,7 +3,7 @@ import httpx
 import json
 import pytest
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 import os
 
@@ -15,6 +15,19 @@ from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
 from openai.types.image import Image
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_payload = kwargs.get("standard_logging_object")
+        pass
+
 
 # test_example.py
 from abc import ABC, abstractmethod
@@ -34,6 +47,8 @@ class BaseImageGenTest(ABC):
     async def test_basic_image_generation(self):
         """Test basic image generation"""
         try:
+            custom_logger = TestCustomLogger()
+            litellm.callbacks = [custom_logger]
             base_image_generation_call_args = self.get_base_image_generation_call_args()
             litellm.set_verbose = True
             response = await litellm.aimage_generation(
@@ -41,8 +56,18 @@ class BaseImageGenTest(ABC):
             )
             print(response)
 
+            await asyncio.sleep(1)
+
             assert response._hidden_params["response_cost"] is not None
+            assert response._hidden_params["response_cost"] > 0
             print("response_cost", response._hidden_params["response_cost"])
+
+            logged_standard_logging_payload = custom_logger.standard_logging_payload
+            print("logged_standard_logging_payload", logged_standard_logging_payload)
+            assert logged_standard_logging_payload is not None
+            assert logged_standard_logging_payload["response_cost"] is not None
+            assert logged_standard_logging_payload["response_cost"] > 0
+
             from openai.types.images_response import ImagesResponse
 
             ImagesResponse.model_validate(response.model_dump())
