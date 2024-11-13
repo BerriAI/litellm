@@ -171,7 +171,6 @@ def cost_per_token(  # noqa: PLR0915
                 model_with_provider = model_with_provider_and_region
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:
@@ -454,7 +453,6 @@ def _select_model_name_for_cost_calc(
 
     if base_model is not None:
         return base_model
-
     return_model = model
     if isinstance(completion_response, str):
         return return_model
@@ -620,7 +618,8 @@ def completion_cost(  # noqa: PLR0915
                 f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
             )
             model = _select_model_name_for_cost_calc(
-                model=model, completion_response=completion_response
+                model=model,
+                completion_response=completion_response,
             )
             hidden_params = getattr(completion_response, "_hidden_params", None)
             if hidden_params is not None:
@@ -853,6 +852,8 @@ def response_cost_calculator(
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
             if isinstance(response_object, ImageResponse):
+                if base_model is not None:
+                    model = base_model
                 response_cost = completion_cost(
                     completion_response=response_object,
                     model=model,
