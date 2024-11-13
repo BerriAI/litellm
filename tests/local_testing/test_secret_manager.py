@@ -22,15 +22,19 @@ from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import get_secret
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_aws_secret_manager():
+    import json
+
     AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
 
     secret_val = get_secret("litellm_master_key")
 
     print(f"secret_val: {secret_val}")
 
-    assert secret_val == "sk-1234"
+    # cast json to dict
+    secret_val = json.loads(secret_val)
+
+    assert secret_val["litellm_master_key"] == "sk-1234"
 
 
 def redact_oidc_signature(secret_val):
