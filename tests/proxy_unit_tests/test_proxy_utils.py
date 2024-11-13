@@ -526,3 +526,7 @@ def test_prepare_key_update_data():
     data = UpdateKeyRequest(key="test_key", metadata={})
     updated_data = prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] == {}
+
+    data = UpdateKeyRequest(key="test_key", metadata=None)
+    updated_data = prepare_key_update_data(data, existing_key_row)
+    assert updated_data["metadata"] == None

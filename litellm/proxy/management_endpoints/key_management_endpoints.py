@@ -313,8 +313,7 @@ def prepare_key_update_data(
     for k, v in data_json.items():
         if k in _metadata_fields:
             continue
-        if v is not None:
-            non_default_values[k] = v
+        non_default_values[k] = v
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
@@ -376,7 +375,7 @@ async def update_key_fn(
     )
 
     try:
-        data_json: dict = data.json()
+        data_json: dict = data.model_dump(exclude_unset=True)
         key = data_json.pop("key")
         # get the row from db
         if prisma_client is None:
