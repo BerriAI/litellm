@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional, Union
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.custom_httpx.types import httpxSpecialProvider
@@ -59,9 +60,14 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         secret_name: str,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> str:
+    ) -> Optional[str]:
         """
         Async function to read a secret from AWS Secrets Manager
+
+        Returns:
+            str: Secret value
+        Raises:
+            ValueError: If the secret is not found or an HTTP error occurs
         """
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
@@ -80,10 +86,13 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             )
             response.raise_for_status()
             return response.json()["SecretString"]
-        except httpx.HTTPStatusError as err:
-            raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
+        except Exception as e:
+            verbose_logger.exception(
+                "Error reading secret from AWS Secrets Manager: %s", str(e)
+            )
+        return None
 
     async def async_write_secret(
         self,
