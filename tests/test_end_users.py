@@ -9,8 +9,8 @@ from openai import AsyncOpenAI
 from typing import Optional
 
 """
-- `/end_user/new` 
-- `/end_user/info` 
+- `/end_user/new`
+- `/end_user/info`
 """
 
 
