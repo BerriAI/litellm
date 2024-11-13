@@ -854,6 +854,8 @@ def response_cost_calculator(
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
             if isinstance(response_object, ImageResponse):
+                if base_model is not None:
+                    model = base_model
                 response_cost = completion_cost(
                     completion_response=response_object,
                     model=model,
