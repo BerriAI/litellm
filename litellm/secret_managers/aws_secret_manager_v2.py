@@ -4,6 +4,7 @@ This is a file for the AWS Secret Manager Integration
 Handles Async Operations for:
 - Read Secret
 - Write Secret
+- Delete Secret
 
 Relevant issue: https://github.com/BerriAI/litellm/issues/1883
 
@@ -119,6 +120,54 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             secret_value=secret_value,
             optional_params=optional_params,
             request_data=data,  # Pass the complete request data
+        )
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            response = await async_client.post(
+                url=endpoint_url, headers=headers, data=body.decode("utf-8")
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as err:
+            raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
+
+    async def async_delete_secret(
+        self,
+        secret_name: str,
+        recovery_window_in_days: Optional[int] = 7,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Async function to delete a secret from AWS Secrets Manager
+
+        Args:
+            secret_name: Name of the secret to delete
+            recovery_window_in_days: Number of days before permanent deletion (default: 7)
+            optional_params: Additional AWS parameters
+            timeout: Request timeout
+
+        Returns:
+            dict: Response from AWS Secrets Manager containing deletion details
+        """
+        # Prepare the request data
+        data = {
+            "SecretId": secret_name,
+            "RecoveryWindowInDays": recovery_window_in_days,
+        }
+
+        endpoint_url, headers, body = self._prepare_request(
+            action="DeleteSecret",
+            secret_name=secret_name,
+            optional_params=optional_params,
+            request_data=data,
         )
 
         async_client = get_async_httpx_client(
