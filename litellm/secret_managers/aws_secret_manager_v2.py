@@ -13,20 +13,13 @@ Requires:
 """
 
 import ast
+import asyncio
 import base64
+import json
 import os
 import re
 import sys
 from typing import Any, Dict, Optional, Union
-
-# Ensure project root is first in sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-
-import asyncio
-import json
 
 import httpx
 
