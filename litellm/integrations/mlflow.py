@@ -2,8 +2,9 @@ import json
 import threading
 from typing import Optional
 
-from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+
 
 class MlflowLogger(CustomLogger):
     def __init__(self):
@@ -28,7 +29,7 @@ class MlflowLogger(CustomLogger):
         from mlflow.entities import SpanStatusCode
 
         try:
-            verbose_logger.debug(f"MLflow logging start for success event")
+            verbose_logger.debug("MLflow logging start for success event")
 
             if kwargs.get("stream"):
                 self._handle_stream_event(kwargs, response_obj, start_time, end_time)
@@ -42,7 +43,7 @@ class MlflowLogger(CustomLogger):
                     end_time_ns=end_time_ns,
                 )
         except Exception:
-            verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
+            verbose_logger.debug("MLflow Logging Error", stack_info=True)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
@@ -74,7 +75,7 @@ class MlflowLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.debug(f"MLflow Logging Error", stack_info=True)
+            verbose_logger.debug(f"MLflow Logging Error - {e}", stack_info=True)
 
     def _handle_stream_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -208,7 +209,7 @@ class MlflowLogger(CustomLogger):
         inputs = self._construct_input(kwargs)
         attributes = self._extract_attributes(kwargs)
 
-        if active_span := mlflow.get_current_active_span():
+        if active_span := mlflow.get_current_active_span():  # type: ignore
             return self._client.start_span(
                 name=span_name,
                 request_id=active_span.request_id,
