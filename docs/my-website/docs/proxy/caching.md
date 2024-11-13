@@ -136,6 +136,7 @@ litellm_settings:
     type: "redis"
     service_name: "mymaster"
     sentinel_nodes: [["localhost", 26379]]
+    sentinel_password: "password" # [OPTIONAL]
 ```
 
 </TabItem>
@@ -149,6 +150,7 @@ You can configure redis sentinel in your .env by setting `REDIS_SENTINEL_NODES` 
 ```env
 REDIS_SENTINEL_NODES='[["localhost", 26379]]'
 REDIS_SERVICE_NAME = "mymaster"
+REDIS_SENTINEL_PASSWORD = "password"
 ```
 
 :::note
