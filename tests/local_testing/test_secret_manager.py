@@ -18,13 +18,13 @@ import pytest
 
 from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
 from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
-from litellm.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import get_secret
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
 def test_aws_secret_manager():
-    load_aws_secret_manager(use_aws_secret_manager=True)
+    AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
 
     secret_val = get_secret("litellm_master_key")
 
