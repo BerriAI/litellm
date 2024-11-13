@@ -112,7 +112,27 @@ general_settings:
   disable_spend_logs: True
 ```
 
-## 7. Set LiteLLM Salt Key 
+## 7. Use Helm PreSync Hook for Database Migrations
+
+To ensure only one service manages database migrations, use our [Helm PreSync hook for Database Migrations](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/templates/migrations-job.yaml). This ensures migrations are handled during `helm upgrade` or `helm install`, while LiteLLM pods explicitly disable migrations.
+
+
+1. **Helm PreSync Hook**:
+   - The Helm PreSync hook is configured in the chart to run database migrations during deployments.
+   - The hook always sets `DISABLE_SCHEMA_UPDATE=false`, ensuring migrations are executed reliably.
+
+2. **LiteLLM Pods**:
+   - Set `DISABLE_SCHEMA_UPDATE=true` in LiteLLM pod configurations to prevent them from running migrations.
+   
+   Example configuration for LiteLLM pod:
+   ```yaml
+   env:
+     - name: DISABLE_SCHEMA_UPDATE
+       value: "true"
+   ```
+
+
+## 8. Set LiteLLM Salt Key 
 
 If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
 
