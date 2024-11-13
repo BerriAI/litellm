@@ -235,11 +235,13 @@ async def generate_key_fn(  # noqa: PLR0915
             data.soft_budget
         )  # include the user-input soft budget in the response
 
-        await KeyManagementEventHooks.async_key_generated_hook(
-            data=data,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_generated_hook(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
 
         return GenerateKeyResponse(**response)
@@ -374,12 +376,14 @@ async def update_key_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        await KeyManagementEventHooks.async_key_updated_hook(
-            data=data,
-            existing_key_row=existing_key_row,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
 
         if response is None:
@@ -499,11 +503,13 @@ async def delete_key_fn(
             f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
         )
 
-        await KeyManagementEventHooks.async_key_deleted_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
-            response=number_deleted_keys,
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_deleted_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+                response=number_deleted_keys,
+            )
         )
 
         return {"deleted_keys": keys}
