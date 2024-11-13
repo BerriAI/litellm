@@ -27,7 +27,10 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_aws_llm import BaseAWSLLM
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    _get_httpx_client,
+    get_async_httpx_client,
+)
 from litellm.llms.custom_httpx.types import httpxSpecialProvider
 from litellm.proxy._types import KeyManagementSystem
 
@@ -105,18 +108,40 @@ class AWSSecretsManagerV2(BaseAWSLLM):
 
         Done for backwards compatibility with existing codebase, since get_secret is a sync function
         """
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(
-            self.async_read_secret(
-                secret_name=secret_name,
-                optional_params=optional_params,
-                timeout=timeout,
-            )
+
+        # self._prepare_request uses these env vars, we cannot read them from AWS Secrets Manager. If we do we'd get stuck in an infinite loop
+        if secret_name in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+            "AWS_REGION",
+            "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        ]:
+            return os.getenv(secret_name)
+
+        endpoint_url, headers, body = self._prepare_request(
+            action="GetSecretValue",
+            secret_name=secret_name,
+            optional_params=optional_params,
         )
+
+        sync_client = _get_httpx_client(
+            params={"timeout": timeout},
+        )
+
+        try:
+            response = sync_client.post(
+                url=endpoint_url, headers=headers, data=body.decode("utf-8")
+            )
+            response.raise_for_status()
+            return response.json()["SecretString"]
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
+        except Exception as e:
+            verbose_logger.exception(
+                "Error reading secret from AWS Secrets Manager: %s", str(e)
+            )
+        return None
 
     async def async_write_secret(
         self,

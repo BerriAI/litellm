@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import traceback
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 from dotenv import load_dotenv
@@ -269,25 +269,13 @@ def get_secret(  # noqa: PLR0915
                     if isinstance(secret, str):
                         secret = secret.strip()
                 elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
-                    try:
-                        get_secret_value_response = client.get_secret_value(
-                            SecretId=secret_name
-                        )
-                        print_verbose(
-                            f"get_secret_value_response: {get_secret_value_response}"
-                        )
-                    except Exception as e:
-                        print_verbose(f"An error occurred - {str(e)}")
-                        # For a list of exceptions thrown, see
-                        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
-                        raise e
+                    from litellm.secret_managers.aws_secret_manager_v2 import (
+                        AWSSecretsManagerV2,
+                    )
 
-                    # assume there is 1 secret per secret_name
-                    secret_dict = json.loads(get_secret_value_response["SecretString"])
-                    print_verbose(f"secret_dict: {secret_dict}")
-                    for k, v in secret_dict.items():
-                        secret = v
-                        print_verbose(f"secret: {secret}")
+                    if isinstance(client, AWSSecretsManagerV2):
+                        secret = client.sync_read_secret(secret_name=secret_name)
+                        print_verbose(f"get_secret_value_response: {secret}")
                 elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
                     try:
                         secret = client.get_secret_from_google_secret_manager(
