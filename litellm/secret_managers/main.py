@@ -207,7 +207,8 @@ def get_secret(  # noqa: PLR0915
 
                 if key_management_settings is not None:
                     if (
-                        secret_name not in key_management_settings.hosted_keys
+                        key_management_settings.hosted_keys is not None
+                        and secret_name not in key_management_settings.hosted_keys
                     ):  # allow user to specify which keys to check in hosted key manager
                         key_manager = "local"
 
