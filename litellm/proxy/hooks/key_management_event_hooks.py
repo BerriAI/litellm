@@ -10,6 +10,7 @@ from fastapi import status
 import litellm
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    KeyManagementSystem,
     KeyRequest,
     LiteLLM_AuditLogs,
     LitellmTableNames,
@@ -31,7 +32,7 @@ class KeyManagementEventHooks:
         litellm_changed_by: Optional[str] = None,
     ):
         """
-        Post /key/generate processing hook
+        Hook that runs after a successful /key/generate request
 
         Handles the following:
         - Sending Email with Key Details
@@ -70,6 +71,29 @@ class KeyManagementEventHooks:
                     )
                 )
             )
+        # store the generated key in the secret manager
+        _key_management_settings: Optional[dict] = general_settings.get(
+            "key_management", None
+        )
+        if _key_management_settings is not None and isinstance(
+            _key_management_settings, dict
+        ):
+            if _key_management_settings.get("store_virtual_keys", None) is True:
+                from litellm.secret_managers.aws_secret_manager_v2 import (
+                    AWSSecretsManagerV2,
+                )
+
+                # store the key in the secret manager
+                if (
+                    litellm._key_management_system
+                    == KeyManagementSystem.AWS_SECRET_MANAGER
+                    and isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
+                ):
+                    _secret_name = data.key_alias or f"virtual-key-{uuid.uuid4()}"
+                    await litellm.secret_manager_client.async_write_secret(
+                        secret_name=_secret_name,
+                        secret_value=response.get("token_value", ""),
+                    )
 
     @staticmethod
     async def async_key_updated_hook(
