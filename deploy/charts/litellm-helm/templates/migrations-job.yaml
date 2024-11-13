@@ -25,6 +25,6 @@ spec:
               value: {{ .Values.db.url | quote }}
             {{- end }}
             - name: DISABLE_SCHEMA_UPDATE
-              value: "{{ .Values.migrationJob.disableSchemaUpdate }}"
+              value: "false" # always run the migration from the Helm PreSync hook, override the value set
       restartPolicy: OnFailure
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
