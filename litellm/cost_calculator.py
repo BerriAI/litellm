@@ -515,6 +515,7 @@ def _infer_call_type(
 def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
+    base_model: Optional[str] = None,
     prompt="",
     messages: List = [],
     completion="",
@@ -528,6 +529,7 @@ def completion_cost(  # noqa: PLR0915
     quality=None,
     n=None,  # number of images
     ### CUSTOM PRICING ###
+    custom_pricing: Optional[bool] = None,
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
     optional_params: Optional[dict] = None,
@@ -620,7 +622,10 @@ def completion_cost(  # noqa: PLR0915
                 f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
             )
             model = _select_model_name_for_cost_calc(
-                model=model, completion_response=completion_response
+                model=model,
+                completion_response=completion_response,
+                base_model=base_model,
+                custom_pricing=custom_pricing,
             )
             hidden_params = getattr(completion_response, "_hidden_params", None)
             if hidden_params is not None:
@@ -852,24 +857,18 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
-            if isinstance(response_object, ImageResponse):
-                response_cost = completion_cost(
-                    completion_response=response_object,
-                    model=model,
-                    call_type=call_type,
-                    custom_llm_provider=custom_llm_provider,
-                    optional_params=optional_params,
-                )
-            else:
-                if custom_pricing is True:  # override defaults if custom pricing is set
-                    base_model = model
-                # base_model defaults to None if not set on model_info
-                response_cost = completion_cost(
-                    completion_response=response_object,
-                    call_type=call_type,
-                    model=base_model,
-                    custom_llm_provider=custom_llm_provider,
-                )
+
+            if custom_pricing is True:  # override defaults if custom pricing is set
+                base_model = model
+            # base_model defaults to None if not set on model_info
+            response_cost = completion_cost(
+                completion_response=response_object,
+                call_type=call_type,
+                model=model,
+                base_model=base_model,
+                custom_llm_provider=custom_llm_provider,
+                custom_pricing=custom_pricing,
+            )
         return response_cost
     except Exception as e:
         raise e
