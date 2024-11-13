@@ -627,6 +627,38 @@ def test_anthropic_tool_helper(cache_control_location):
     assert tool["cache_control"] == {"type": "ephemeral"}
 
 
+def test_create_json_tool_call_for_response_format():
+    """
+    tests using response_format=json with anthropic
+
+    A tool call to anthropic is made when response_format=json is used.
+
+    """
+    # Initialize AnthropicConfig
+    config = AnthropicConfig()
+
+    # Test case 1: No schema provided
+    # See Anthropics Example 5 on how to handle cases when no schema is provided https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+    tool = config._create_json_tool_call_for_response_format()
+    assert tool["name"] == "json_tool_call"
+    _input_schema = tool.get("input_schema")
+    assert _input_schema is not None
+    assert _input_schema.get("type") == "object"
+    assert _input_schema.get("additionalProperties") is True
+    assert _input_schema.get("properties") == {}
+
+    # Test case 2: With custom schema
+    # reference: https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+    custom_schema = {"name": {"type": "string"}, "age": {"type": "integer"}}
+    tool = config._create_json_tool_call_for_response_format(json_schema=custom_schema)
+    assert tool["name"] == "json_tool_call"
+    _input_schema = tool.get("input_schema")
+    assert _input_schema is not None
+    assert _input_schema.get("type") == "object"
+    assert _input_schema.get("properties") == custom_schema
+    assert "additionalProperties" not in _input_schema
+
+
 from litellm import completion
 
 

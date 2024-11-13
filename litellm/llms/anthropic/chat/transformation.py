@@ -7,6 +7,7 @@ from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicComputerTool,
     AnthropicHostedTools,
+    AnthropicInputSchema,
     AnthropicMessageRequestBase,
     AnthropicMessagesRequest,
     AnthropicMessagesTool,
@@ -159,15 +160,17 @@ class AnthropicConfig:
         returned_tool: Optional[AllAnthropicToolsValues] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
+            _input_schema: dict = tool["function"].get(
+                "parameters",
+                {
+                    "type": "object",
+                    "properties": {},
+                },
+            )
+            input_schema: AnthropicInputSchema = AnthropicInputSchema(**_input_schema)
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
-                input_schema=tool["function"].get(
-                    "parameters",
-                    {
-                        "type": "object",
-                        "properties": {},
-                    },
-                ),
+                input_schema=input_schema,
             )
 
             _description = tool["function"].get("description")
@@ -304,17 +307,10 @@ class AnthropicConfig:
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                _tool_choice = None
                 _tool_choice = {"name": "json_tool_call", "type": "tool"}
-
-                _tool = AnthropicMessagesTool(
-                    name="json_tool_call",
-                    input_schema={
-                        "type": "object",
-                        "properties": {"values": json_schema},  # type: ignore
-                    },
+                _tool = self._create_json_tool_call_for_response_format(
+                    json_schema=json_schema,
                 )
-
                 optional_params["tools"] = [_tool]
                 optional_params["tool_choice"] = _tool_choice
                 optional_params["json_mode"] = True
@@ -340,6 +336,34 @@ class AnthropicConfig:
                 )
 
         return optional_params
+
+    def _create_json_tool_call_for_response_format(
+        self,
+        json_schema: Optional[dict] = None,
+    ) -> AnthropicMessagesTool:
+        """
+        Handles creating a tool call for getting responses in JSON format.
+
+        Args:
+            json_schema (Optional[dict]): The JSON schema the response should be in
+
+        Returns:
+            AnthropicMessagesTool: The tool call to send to Anthropic API to get responses in JSON format
+        """
+        _input_schema: AnthropicInputSchema = AnthropicInputSchema(
+            type="object",
+        )
+
+        if json_schema is None:
+            # Anthropic raises a 400 BadRequest error if properties is passed as None
+            # see usage with additionalProperties (Example 5) https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+            _input_schema["additionalProperties"] = True
+            _input_schema["properties"] = {}
+        else:
+            _input_schema["properties"] = json_schema
+
+        _tool = AnthropicMessagesTool(name="json_tool_call", input_schema=_input_schema)
+        return _tool
 
     def is_cache_control_set(self, messages: List[AllMessageValues]) -> bool:
         """
