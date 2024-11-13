@@ -42,6 +42,7 @@ class BaseImageGenTest(ABC):
             print(response)
 
             assert response._hidden_params["response_cost"] is not None
+            print("response_cost", response._hidden_params["response_cost"])
             from openai.types.images_response import ImagesResponse
 
             ImagesResponse.model_validate(response.model_dump())
