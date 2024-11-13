@@ -66,6 +66,7 @@ async def generate_key(
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
     calling_key="sk-1234",
 ):
     url = "http://0.0.0.0:4000/key/generate"
@@ -82,6 +83,7 @@ async def generate_key(
         "max_parallel_requests": max_parallel_requests,
         "user_id": user_id,
         "team_id": team_id,
+        "metadata": metadata,
     }
 
     print(f"data: {data}")
@@ -136,16 +138,21 @@ async def test_key_gen_bad_key():
             pass
 
 
-async def update_key(session, get_key):
+async def update_key(session, get_key, metadata: Optional[dict] = None):
     """
     Make sure only models user has access to are returned
     """
     url = "http://0.0.0.0:4000/key/update"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
-    data = {"key": get_key, "models": ["gpt-4"], "duration": "120s"}
+    data = {"key": get_key}
+
+    if metadata is not None:
+        data["metadata"] = metadata
+    else:
+        data.update({"models": ["gpt-4"], "duration": "120s"})
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -276,20 +283,24 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     return prompt_tokens, completion_tokens
 
 
+@pytest.mark.parametrize("metadata", [{"test": "new"}, {}])
 @pytest.mark.asyncio
-async def test_key_update():
+async def test_key_update(metadata):
     """
     Create key
     Update key with new model
     Test key w/ model
     """
     async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, i=0)
+        key_gen = await generate_key(session=session, i=0, metadata={"test": "test"})
         key = key_gen["key"]
-        await update_key(
+        assert key_gen["metadata"]["test"] == "test"
+        updated_key = await update_key(
             session=session,
             get_key=key,
+            metadata=metadata,
         )
+        assert updated_key["metadata"] == metadata
         await update_proxy_budget(session=session)  # resets proxy spend
         await chat_completion(session=session, key=key)
 
