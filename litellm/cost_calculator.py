@@ -454,13 +454,14 @@ def _select_model_name_for_cost_calc(
 
     if base_model is not None:
         return base_model
-
     return_model = model
     if isinstance(completion_response, str):
         return return_model
 
     elif return_model is None and hasattr(completion_response, "get"):
         return_model = completion_response.get("model", "")  # type: ignore
+    elif hasattr(completion_response, "model"):
+        return_model = completion_response.model  # type: ignore
     hidden_params = getattr(completion_response, "_hidden_params", None)
 
     if hidden_params is not None:
@@ -857,9 +858,6 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
-
-            if custom_pricing is True:  # override defaults if custom pricing is set
-                base_model = model
             # base_model defaults to None if not set on model_info
             response_cost = completion_cost(
                 completion_response=response_object,
