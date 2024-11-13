@@ -104,7 +104,9 @@ def load_vertex_ai_credentials():
 
 class TestVertexImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        # load_vertex_ai_credentials()
+        # comment this when running locally
+        load_vertex_ai_credentials()
+
         litellm.in_memory_llm_clients_cache = {}
         return {
             "model": "vertex_ai/imagegeneration@006",
