@@ -50,26 +50,36 @@ async def test_write_and_read_simple_secret():
     test_secret_name = f"litellm_test_{uuid.uuid4().hex[:8]}"
     test_secret_value = "test_value_123"
 
-    # Write secret
-    write_response = await secret_manager.async_write_secret(
-        secret_name=test_secret_name,
-        secret_value=test_secret_value,
-        description="LiteLLM Test Secret",
-    )
+    try:
+        # Write secret
+        write_response = await secret_manager.async_write_secret(
+            secret_name=test_secret_name,
+            secret_value=test_secret_value,
+            description="LiteLLM Test Secret",
+        )
 
-    print("Write Response:", write_response)
+        print("Write Response:", write_response)
 
-    assert write_response is not None
-    assert "ARN" in write_response
-    assert "Name" in write_response
-    assert write_response["Name"] == test_secret_name
+        assert write_response is not None
+        assert "ARN" in write_response
+        assert "Name" in write_response
+        assert write_response["Name"] == test_secret_name
 
-    # Read secret back
-    read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
+        # Read secret back
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
 
-    print("Read Value:", read_value)
+        print("Read Value:", read_value)
 
-    assert read_value == test_secret_value
+        assert read_value == test_secret_value
+    finally:
+        # Cleanup: Delete the secret
+        delete_response = await secret_manager.async_delete_secret(
+            secret_name=test_secret_name
+        )
+        print("Delete Response:", delete_response)
+        assert delete_response is not None
 
 
 @pytest.mark.asyncio
@@ -86,24 +96,34 @@ async def test_write_and_read_json_secret():
         "metadata": {"team": "ml", "project": "litellm"},
     }
 
-    # Write JSON secret
-    write_response = await secret_manager.async_write_secret(
-        secret_name=test_secret_name,
-        secret_value=json.dumps(test_secret_value),
-        description="LiteLLM JSON Test Secret",
-    )
+    try:
+        # Write JSON secret
+        write_response = await secret_manager.async_write_secret(
+            secret_name=test_secret_name,
+            secret_value=json.dumps(test_secret_value),
+            description="LiteLLM JSON Test Secret",
+        )
 
-    print("Write Response:", write_response)
+        print("Write Response:", write_response)
 
-    # Read and parse JSON secret
-    read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
-    parsed_value = json.loads(read_value)
+        # Read and parse JSON secret
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
+        parsed_value = json.loads(read_value)
 
-    print("Read Value:", read_value)
+        print("Read Value:", read_value)
 
-    assert parsed_value == test_secret_value
-    assert parsed_value["api_key"] == "test_key"
-    assert parsed_value["metadata"]["team"] == "ml"
+        assert parsed_value == test_secret_value
+        assert parsed_value["api_key"] == "test_key"
+        assert parsed_value["metadata"]["team"] == "ml"
+    finally:
+        # Cleanup: Delete the secret
+        delete_response = await secret_manager.async_delete_secret(
+            secret_name=test_secret_name
+        )
+        print("Delete Response:", delete_response)
+        assert delete_response is not None
 
 
 @pytest.mark.asyncio
