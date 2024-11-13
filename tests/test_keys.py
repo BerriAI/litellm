@@ -283,7 +283,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     return prompt_tokens, completion_tokens
 
 
-@pytest.mark.parametrize("metadata", [{"test": "new"}, None])
+@pytest.mark.parametrize("metadata", [{"test": "new"}, {}])
 @pytest.mark.asyncio
 async def test_key_update(metadata):
     """
