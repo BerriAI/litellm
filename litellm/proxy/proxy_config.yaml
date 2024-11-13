@@ -11,3 +11,4 @@ general_settings:
   key_management_system: "aws_secret_manager" 
   key_management_settings: 
     store_virtual_keys: true
+    access_mode: "write_only"

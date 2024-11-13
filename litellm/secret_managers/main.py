@@ -335,9 +335,10 @@ def _should_read_secret_from_secret_manager() -> bool:
     - Otherwise, return False
     """
     if litellm.secret_manager_client is not None:
-        if (
-            litellm._key_management_settings.access_mode == "read_only"
-            or litellm._key_management_settings.access_mode == "read_and_write"
-        ):
-            return True
+        if litellm._key_management_settings is not None:
+            if (
+                litellm._key_management_settings.access_mode == "read_only"
+                or litellm._key_management_settings.access_mode == "read_and_write"
+            ):
+                return True
     return False
