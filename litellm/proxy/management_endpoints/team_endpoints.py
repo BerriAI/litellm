@@ -39,7 +39,10 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import get_team_object
+from litellm.proxy.auth.auth_checks import (
+    allowed_route_check_inside_route,
+    get_team_object,
+)
 from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -1227,10 +1230,8 @@ async def list_team(
         prisma_client,
     )
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-        and user_api_key_dict.user_id != user_id
+    if not allowed_route_check_inside_route(
+        user_api_key_dict=user_api_key_dict, requested_user_id=user_id
     ):
         raise HTTPException(
             status_code=401,
