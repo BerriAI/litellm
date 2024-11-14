@@ -1124,10 +1124,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             ),
                         ),
                     )
-                elif "500 Internal Server Error" in error_str:
+                elif (
+                    "500 Internal Server Error" in error_str
+                    or "The model is overloaded." in error_str
+                ):
                     exception_mapping_worked = True
-                    raise ServiceUnavailableError(
-                        message=f"litellm.ServiceUnavailableError: VertexAIException - {error_str}",
+                    raise litellm.InternalServerError(
+                        message=f"litellm.InternalServerError: VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         litellm_debug_info=extra_information,

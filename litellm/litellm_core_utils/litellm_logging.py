@@ -201,6 +201,7 @@ class Logging:
         start_time,
         litellm_call_id: str,
         function_id: str,
+        litellm_trace_id: Optional[str] = None,
         dynamic_input_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = None,
@@ -238,6 +239,7 @@ class Logging:
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
+        self.litellm_trace_id = litellm_trace_id
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[Any] = (
@@ -273,6 +275,11 @@ class Logging:
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
+
+        self.model_call_details = {
+            "litellm_trace_id": litellm_trace_id,
+            "litellm_call_id": litellm_call_id,
+        }
 
     def process_dynamic_callbacks(self):
         """
@@ -381,21 +388,23 @@ class Logging:
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
-        self.model_call_details = {
-            "model": self.model,
-            "messages": self.messages,
-            "optional_params": self.optional_params,
-            "litellm_params": self.litellm_params,
-            "start_time": self.start_time,
-            "stream": self.stream,
-            "user": user,
-            "call_type": str(self.call_type),
-            "litellm_call_id": self.litellm_call_id,
-            "completion_start_time": self.completion_start_time,
-            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
-            **self.optional_params,
-            **additional_params,
-        }
+        self.model_call_details.update(
+            {
+                "model": self.model,
+                "messages": self.messages,
+                "optional_params": self.optional_params,
+                "litellm_params": self.litellm_params,
+                "start_time": self.start_time,
+                "stream": self.stream,
+                "user": user,
+                "call_type": str(self.call_type),
+                "litellm_call_id": self.litellm_call_id,
+                "completion_start_time": self.completion_start_time,
+                "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
+                **self.optional_params,
+                **additional_params,
+            }
+        )
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -2806,6 +2815,7 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
+            trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
             call_type=call_type or "",
             cache_hit=cache_hit,
             status=status,
