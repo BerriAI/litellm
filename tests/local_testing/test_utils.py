@@ -748,7 +748,7 @@ def test_convert_model_response_object():
         ("vertex_ai/gemini-1.5-pro", True),
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
-        ("gpt-4o", False),
+        ("gpt-3.5-turbo", False),
     ],
 )
 def test_supports_response_schema(model, expected_bool):
