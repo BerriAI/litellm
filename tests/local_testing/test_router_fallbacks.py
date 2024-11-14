@@ -1455,3 +1455,46 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
     assert isinstance(
         exc_info.value, litellm.AuthenticationError
     ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
+
+
+@pytest.mark.asyncio
+async def test_router_disable_fallbacks_dynamically():
+    from litellm.router import run_async_fallback
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["good-model"]}],
+        default_fallbacks=["good-model"],
+    )
+
+    with patch.object(
+        router,
+        "log_retry",
+        new=MagicMock(return_value=None),
+    ) as mock_client:
+        try:
+            resp = await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                disable_fallbacks=True,
+            )
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_not_called()
