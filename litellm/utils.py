@@ -527,6 +527,7 @@ def function_setup(  # noqa: PLR0915
             messages=messages,
             stream=stream,
             litellm_call_id=kwargs["litellm_call_id"],
+            litellm_trace_id=kwargs.get("litellm_trace_id"),
             function_id=function_id or "",
             call_type=call_type,
             start_time=start_time,
