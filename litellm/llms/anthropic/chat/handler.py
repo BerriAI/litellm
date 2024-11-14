@@ -276,11 +276,12 @@ class AnthropicChatCompletion(BaseLLM):
                     "arguments"
                 )
                 if json_mode_content_str is not None:
-                    _message = self._convert_tool_response_to_message(
+                    _converted_message = self._convert_tool_response_to_message(
                         tool_calls=tool_calls,
                     )
-                    if _message is not None:
+                    if _converted_message is not None:
                         completion_response["stop_reason"] = "stop"
+                        _message = _converted_message
             model_response.choices[0].message = _message  # type: ignore
             model_response._hidden_params["original_response"] = completion_response[
                 "content"
