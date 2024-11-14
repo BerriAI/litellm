@@ -13,8 +13,11 @@ sys.path.insert(
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.utils import CustomStreamWrapper
-
+from litellm.utils import (
+    CustomStreamWrapper,
+    get_supported_openai_params,
+    get_optional_params,
+)
 
 # test_example.py
 from abc import ABC, abstractmethod
@@ -24,6 +27,11 @@ class BaseLLMChatTest(ABC):
     """
     Abstract base test class that enforces a common test across all test classes.
     """
+
+    @abstractmethod
+    def get_default_model_name(self) -> str:
+        """Must return the default model name"""
+        pass
 
     @abstractmethod
     def get_base_completion_call_args(self) -> dict:
