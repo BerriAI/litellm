@@ -29,11 +29,6 @@ class BaseLLMChatTest(ABC):
     """
 
     @abstractmethod
-    def get_default_model_name(self) -> str:
-        """Must return the default model name"""
-        pass
-
-    @abstractmethod
     def get_base_completion_call_args(self) -> dict:
         """Must return the base completion call args"""
         pass
