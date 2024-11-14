@@ -973,7 +973,7 @@ response = completion(
 )
 ```
 </TabItem>
-</TabItem value="proxy" label="PROXY">
+<TabItem value="proxy" label="PROXY">
 
 1. Setup config.yaml
 
