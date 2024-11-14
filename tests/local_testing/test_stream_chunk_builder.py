@@ -205,8 +205,8 @@ def test_stream_chunk_builder_litellm_usage_chunks():
             complete_response=True,
             stream_options={"include_usage": True},
         )
-    except litellm.ServiceUnavailableError as e:
-        pytest.skip(f"ServiceUnavailableError - {str(e)}")
+    except litellm.InternalServerError as e:
+        pytest.skip(f"Skipping test due to internal server error - {str(e)}")
 
     usage: litellm.Usage = response.usage
 
