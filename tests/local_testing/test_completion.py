@@ -434,6 +434,8 @@ def test_completion_claude_3():
         )
         # Add any assertions, here to check response args
         print(response)
+    except litellm.InternalServerError as e:
+        pytest.skip(f"InternalServerError - {str(e)}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
