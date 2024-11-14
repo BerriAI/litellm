@@ -3451,3 +3451,90 @@ async def test_user_api_key_auth_db_unavailable_not_allowed():
             request=request,
             api_key="Bearer sk-123456789",
         )
+
+
+## E2E Virtual Key + Secret Manager Tests #########################################
+
+
+@pytest.mark.asyncio
+async def test_key_generate_with_secret_manager_call(prisma_client):
+    """
+    Generate a key
+    assert it exists in the secret manager
+
+    delete the key
+    assert it is deleted from the secret manager
+    """
+    from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+    from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
+
+    litellm.set_verbose = True
+
+    #### Test Setup ############################################################
+    aws_secret_manager_client = AWSSecretsManagerV2()
+    litellm.secret_manager_client = aws_secret_manager_client
+    litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
+    litellm._key_management_settings = KeyManagementSettings(
+        store_virtual_keys=True,
+    )
+    general_settings = {
+        "key_management_system": "aws_secret_manager",
+        "key_management_settings": {
+            "store_virtual_keys": True,
+        },
+    }
+
+    setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    ############################################################################
+
+    # generate new key
+    key_alias = f"test_alias_secret_manager_key-{uuid.uuid4()}"
+    spend = 100
+    max_budget = 400
+    models = ["fake-openai-endpoint"]
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    print(generated_key)
+
+    await asyncio.sleep(2)
+
+    # read from the secret manager
+    result = await aws_secret_manager_client.async_read_secret(secret_name=key_alias)
+
+    # Assert the correct key is stored in the secret manager
+    print("response from AWS Secret Manager")
+    print(result)
+    assert result == generated_key
+
+    # delete the key
+    await delete_key_fn(
+        data=KeyRequest(keys=[generated_key]),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+        ),
+    )
+
+    await asyncio.sleep(2)
+
+    # Assert the key is deleted from the secret manager
+    result = await aws_secret_manager_client.async_read_secret(secret_name=key_alias)
+    assert result is None
+
+    # cleanup
+    setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+
+################################################################################

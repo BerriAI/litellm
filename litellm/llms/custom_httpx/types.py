@@ -8,3 +8,4 @@ class httpxSpecialProvider(str, Enum):
     GuardrailCallback = "guardrail_callback"
     Caching = "caching"
     Oauth2Check = "oauth2_check"
+    SecretManager = "secret_manager"
