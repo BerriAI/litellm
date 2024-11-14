@@ -89,6 +89,31 @@ def test_returned_settings():
 from litellm.types.utils import CallTypes
 
 
+def test_update_kwargs_before_fallbacks_unit_test():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ],
+    )
+
+    kwargs = {"messages": [{"role": "user", "content": "write 1 sentence poem"}]}
+
+    router._update_kwargs_before_fallbacks(
+        model="gpt-3.5-turbo",
+        kwargs=kwargs,
+    )
+
+    assert kwargs["litellm_trace_id"] is not None
+
+
 @pytest.mark.parametrize(
     "call_type",
     [
