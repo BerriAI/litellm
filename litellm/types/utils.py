@@ -1334,6 +1334,7 @@ class ResponseFormatChunk(TypedDict, total=False):
 
 all_litellm_params = [
     "metadata",
+    "litellm_trace_id",
     "tags",
     "acompletion",
     "aimg_generation",
@@ -1523,6 +1524,7 @@ StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 class StandardLoggingPayload(TypedDict):
     id: str
+    trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
     response_cost: float
     response_cost_failure_debug_info: Optional[

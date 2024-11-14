@@ -1066,6 +1066,7 @@ def completion(  # type: ignore # noqa: PLR0915
             azure_ad_token_provider=kwargs.get("azure_ad_token_provider"),
             user_continue_message=kwargs.get("user_continue_message"),
             base_model=base_model,
+            litellm_trace_id=kwargs.get("litellm_trace_id"),
         )
         logging.update_environment_variables(
             model=model,
@@ -3455,7 +3456,7 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "openai_like":
+        elif custom_llm_provider == "openai_like" or custom_llm_provider == "jina_ai":
             api_base = (
                 api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
             )

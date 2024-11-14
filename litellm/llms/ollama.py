@@ -185,6 +185,8 @@ class OllamaConfig:
           "name": "mistral"
         }'
         """
+        if model.startswith("ollama/") or model.startswith("ollama_chat/"):
+            model = model.split("/", 1)[1]
         api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
         try:

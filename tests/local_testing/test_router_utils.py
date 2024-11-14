@@ -14,6 +14,7 @@ from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
+from unittest.mock import patch, MagicMock, AsyncMock
 
 load_dotenv()
 
@@ -83,3 +84,93 @@ def test_returned_settings():
     except Exception:
         print(traceback.format_exc())
         pytest.fail("An error occurred - " + traceback.format_exc())
+
+
+from litellm.types.utils import CallTypes
+
+
+def test_update_kwargs_before_fallbacks_unit_test():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ],
+    )
+
+    kwargs = {"messages": [{"role": "user", "content": "write 1 sentence poem"}]}
+
+    router._update_kwargs_before_fallbacks(
+        model="gpt-3.5-turbo",
+        kwargs=kwargs,
+    )
+
+    assert kwargs["litellm_trace_id"] is not None
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        CallTypes.acompletion,
+        CallTypes.atext_completion,
+        CallTypes.aembedding,
+        CallTypes.arerank,
+        CallTypes.atranscription,
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_kwargs_before_fallbacks(call_type):
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ],
+    )
+
+    if call_type.value.startswith("a"):
+        with patch.object(router, "async_function_with_fallbacks") as mock_client:
+            if call_type.value == "acompletion":
+                input_kwarg = {
+                    "messages": [{"role": "user", "content": "Hello, how are you?"}],
+                }
+            elif (
+                call_type.value == "atext_completion"
+                or call_type.value == "aimage_generation"
+            ):
+                input_kwarg = {
+                    "prompt": "Hello, how are you?",
+                }
+            elif call_type.value == "aembedding" or call_type.value == "arerank":
+                input_kwarg = {
+                    "input": "Hello, how are you?",
+                }
+            elif call_type.value == "atranscription":
+                input_kwarg = {
+                    "file": "path/to/file",
+                }
+            else:
+                input_kwarg = {}
+
+            await getattr(router, call_type.value)(
+                model="gpt-3.5-turbo",
+                **input_kwarg,
+            )
+
+            mock_client.assert_called_once()
+
+            print(mock_client.call_args.kwargs)
+            assert mock_client.call_args.kwargs["litellm_trace_id"] is not None
