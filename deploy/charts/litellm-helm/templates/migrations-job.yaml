@@ -18,7 +18,10 @@ spec:
           workingDir: "/app"
           env:
             - name: DATABASE_URL
-              value: {{ .Values.db.url | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DATABASE_URL
             - name: DISABLE_SCHEMA_UPDATE
               value: "false" # always run the migration from the Helm PreSync hook, override the value set
       restartPolicy: OnFailure
