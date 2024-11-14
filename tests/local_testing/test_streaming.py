@@ -718,7 +718,7 @@ async def test_acompletion_claude_2_stream():
     try:
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "hello from litellm"}],
             stream=True,
         )
