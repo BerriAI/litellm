@@ -13,8 +13,11 @@ sys.path.insert(
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.utils import CustomStreamWrapper
-
+from litellm.utils import (
+    CustomStreamWrapper,
+    get_supported_openai_params,
+    get_optional_params,
+)
 
 # test_example.py
 from abc import ABC, abstractmethod
