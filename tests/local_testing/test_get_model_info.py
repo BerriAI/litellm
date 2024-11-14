@@ -89,11 +89,16 @@ def test_get_model_info_ollama_chat():
                 "template": "tools",
             }
         ),
-    ):
+    ) as mock_client:
         info = OllamaConfig().get_model_info("mistral")
-        print("info", info)
         assert info["supports_function_calling"] is True
 
         info = get_model_info("ollama/mistral")
-        print("info", info)
+
         assert info["supports_function_calling"] is True
+
+        mock_client.assert_called()
+
+        print(mock_client.call_args.kwargs)
+
+        assert mock_client.call_args.kwargs["json"]["name"] == "mistral"

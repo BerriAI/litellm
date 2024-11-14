@@ -527,6 +527,7 @@ def function_setup(  # noqa: PLR0915
             messages=messages,
             stream=stream,
             litellm_call_id=kwargs["litellm_call_id"],
+            litellm_trace_id=kwargs.get("litellm_trace_id"),
             function_id=function_id or "",
             call_type=call_type,
             start_time=start_time,
@@ -2056,6 +2057,7 @@ def get_litellm_params(
     azure_ad_token_provider=None,
     user_continue_message=None,
     base_model=None,
+    litellm_trace_id=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2084,6 +2086,7 @@ def get_litellm_params(
         "user_continue_message": user_continue_message,
         "base_model": base_model
         or _get_base_model_from_litellm_call_metadata(metadata=metadata),
+        "litellm_trace_id": litellm_trace_id,
     }
 
     return litellm_params

@@ -1502,6 +1502,31 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "disable_fallbacks_set",
+    [
+        True,
+        False,
+    ],
+)
+async def test_disable_fallbacks_by_key(disable_fallbacks_set):
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    key_metadata = {"disable_fallbacks": disable_fallbacks_set}
+    existing_data = {
+        "model": "azure/chatgpt-v-2",
+        "messages": [{"role": "user", "content": "write 1 sentence poem"}],
+    }
+    data = LiteLLMProxyRequestSetup.add_key_level_controls(
+        key_metadata=key_metadata,
+        data=existing_data,
+        _metadata_variable_name="metadata",
+    )
+
+    assert data["disable_fallbacks"] == disable_fallbacks_set
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "callback_type, expected_success_callbacks, expected_failure_callbacks",
     [
         ("success", ["gcs_bucket"], []),

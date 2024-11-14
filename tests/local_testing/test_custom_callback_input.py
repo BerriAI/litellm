@@ -1624,3 +1624,55 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
             print(f"standard_logging_object usage: {built_response.usage}")
     except litellm.InternalServerError:
         pass
+
+
+def test_standard_logging_retries():
+    """
+    know if a request was retried.
+    """
+    from litellm.types.utils import StandardLoggingPayload
+    from litellm.router import Router
+
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "test-api-key",
+                },
+            }
+        ]
+    )
+
+    with patch.object(
+        customHandler, "log_failure_event", new=MagicMock()
+    ) as mock_client:
+        try:
+            router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                num_retries=1,
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        assert mock_client.call_count == 2
+        assert (
+            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"][
+                "trace_id"
+            ]
+            is not None
+        )
+        assert (
+            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"][
+                "trace_id"
+            ]
+            == mock_client.call_args_list[1].kwargs["kwargs"][
+                "standard_logging_object"
+            ]["trace_id"]
+        )
