@@ -339,8 +339,10 @@ class AnthropicChatCompletion(BaseLLM):
         try:
             if json_mode_content_str is not None:
                 args = json.loads(json_mode_content_str)
-                values: Optional[dict] = args.get("values")
-                if values is not None:
+                if (
+                    isinstance(args, dict)
+                    and (values := args.get("values")) is not None
+                ):
                     _message = litellm.Message(content=json.dumps(values))
                     return _message
                 else:
