@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
         - name: prisma-migrations
-          image: "ghcr.io/berriai/litellm:main-stable"
+          image: "ghcr.io/berriai/litellm-database"
           command: ["python", "litellm/proxy/prisma_migration.py"]
           workingDir: "/app"
           env:
