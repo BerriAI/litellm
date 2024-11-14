@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Secret Manager
 LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
 
@@ -59,13 +62,34 @@ os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
 ```
 
 2. Enable AWS Secret Manager in config. 
+
+<Tabs>
+<TabItem value="read_only" label="Read Keys from AWS Secret Manager">
+
 ```yaml
 general_settings:
   master_key: os.environ/litellm_master_key 
   key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
   key_management_settings: 
     hosted_keys: ["litellm_master_key"] # 👈 Specify which env keys you stored on AWS 
+
 ```
+
+</TabItem>
+
+<TabItem value="write_only" label="Write Virtual Keys to AWS Secret Manager">
+
+This will only store virtual keys in AWS Secret Manager. No keys will be read from AWS Secret Manager.
+
+```yaml
+general_settings:
+  key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
+  key_management_settings: 
+    store_virtual_keys: true
+    access_mode: "write_only" # Literal["read_only", "write_only", "read_and_write"]
+```
+</TabItem>
+</Tabs>
 
 3. Run proxy
 
@@ -181,16 +205,14 @@ litellm --config /path/to/config.yaml
 
 Use encrypted keys from Google KMS on the proxy
 
-### Usage with LiteLLM Proxy Server
-
-## Step 1. Add keys to env 
+Step 1. Add keys to env 
 ```
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/credentials.json"
 export GOOGLE_KMS_RESOURCE_NAME="projects/*/locations/*/keyRings/*/cryptoKeys/*"
 export PROXY_DATABASE_URL_ENCRYPTED=b'\n$\x00D\xac\xb4/\x8e\xc...'
 ```
 
-## Step 2: Update Config
+Step 2: Update Config
 
 ```yaml
 general_settings:
@@ -199,7 +221,7 @@ general_settings:
   master_key: sk-1234
 ```
 
-## Step 3: Start + test proxy
+Step 3: Start + test proxy
 
 ```
 $ litellm --config /path/to/config.yaml
@@ -215,3 +237,17 @@ $ litellm --test
 <!-- 
 ## .env Files
 If no secret manager client is specified, Litellm automatically uses the `.env` file to manage sensitive data. -->
+
+
+## All Secret Manager Settings
+
+All settings related to secret management
+
+```yaml
+general_settings:
+  key_management_system: "aws_secret_manager" # REQUIRED
+  key_management_settings:  
+    store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
+    access_mode: "write_only" # OPTIONAL. Literal["read_only", "write_only", "read_and_write"]. Defaults to "read_only"
+    hosted_keys: ["litellm_master_key"] # OPTIONAL. Specify which env keys you stored on AWS
+```
