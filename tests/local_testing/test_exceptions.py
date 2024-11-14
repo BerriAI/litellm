@@ -1158,6 +1158,11 @@ async def test_exception_with_headers_httpx(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["azure/chatgpt-v-2", "openai/gpt-3.5-turbo"])
 async def test_bad_request_error_contains_httpx_response(model):
+    """
+    Test that the BadRequestError contains the httpx response
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6732
+    """
     try:
         await litellm.acompletion(
             model=model,
