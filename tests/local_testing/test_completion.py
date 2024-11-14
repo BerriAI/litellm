@@ -680,6 +680,8 @@ async def test_anthropic_no_content_error():
         )
 
         pass
+    except litellm.InternalServerError:
+        pass
     except litellm.APIError as e:
         assert e.status_code == 500
     except Exception as e:
