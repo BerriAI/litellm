@@ -134,5 +134,6 @@ async def test_read_nonexistent_secret():
     secret_manager = AWSSecretsManagerV2()
     nonexistent_secret = f"litellm_nonexistent_{uuid.uuid4().hex}"
 
-    with pytest.raises(ValueError):
-        await secret_manager.async_read_secret(secret_name=nonexistent_secret)
+    response = await secret_manager.async_read_secret(secret_name=nonexistent_secret)
+
+    assert response is None
