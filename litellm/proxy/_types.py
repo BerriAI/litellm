@@ -1128,7 +1128,16 @@ class KeyManagementSystem(enum.Enum):
 
 
 class KeyManagementSettings(LiteLLMBase):
-    hosted_keys: List
+    hosted_keys: Optional[List] = None
+    store_virtual_keys: Optional[bool] = False
+    """
+    If True, virtual keys created by litellm will be stored in the secret manager
+    """
+
+    access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
+    """
+    Access mode for the secret manager, when write_only will only use for writing secrets
+    """
 
 
 class TeamDefaultSettings(LiteLLMBase):
