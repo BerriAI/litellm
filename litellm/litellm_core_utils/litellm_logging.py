@@ -2806,6 +2806,7 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
+            trace_id=litellm_params.get("litellm_trace_id"),
             call_type=call_type or "",
             cache_hit=cache_hit,
             status=status,

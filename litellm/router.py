@@ -679,9 +679,8 @@ class Router:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
-            kwargs.get("request_timeout", self.timeout)
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+
             response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
@@ -783,8 +782,7 @@ class Router:
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             request_priority = kwargs.get("priority") or self.default_priority
 
@@ -947,6 +945,17 @@ class Router:
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
+
+    def _update_kwargs_before_fallbacks(self, model: str, kwargs: dict) -> None:
+        """
+        Adds/updates to kwargs:
+        - num_retries
+        - litellm_trace_id
+        - metadata
+        """
+        kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+        kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
+        kwargs.setdefault("metadata", {}).update({"model_group": model})
 
     def _update_kwargs_with_default_litellm_params(self, kwargs: dict) -> None:
         """
@@ -2616,6 +2625,7 @@ class Router:
         content_policy_fallbacks: Optional[List] = kwargs.get(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
+
         try:
             self._handle_mock_testing_fallbacks(
                 kwargs=kwargs,
