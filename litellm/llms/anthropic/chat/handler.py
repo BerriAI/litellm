@@ -644,7 +644,9 @@ class AnthropicChatCompletion(BaseLLM):
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool):
+    def __init__(
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+    ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List[ContentBlockDelta] = []

@@ -45,6 +45,9 @@ class BaseLLMChatTest(ABC):
         )
         assert response is not None
 
+        # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
+        assert response.choices[0].message.content is not None
+
     def test_message_with_name(self):
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
