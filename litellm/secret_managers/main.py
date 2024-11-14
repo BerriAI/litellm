@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import traceback
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 from dotenv import load_dotenv
@@ -198,7 +198,10 @@ def get_secret(  # noqa: PLR0915
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if litellm.secret_manager_client is not None:
+        if (
+            _should_read_secret_from_secret_manager()
+            and litellm.secret_manager_client is not None
+        ):
             try:
                 client = litellm.secret_manager_client
                 key_manager = "local"
@@ -207,7 +210,8 @@ def get_secret(  # noqa: PLR0915
 
                 if key_management_settings is not None:
                     if (
-                        secret_name not in key_management_settings.hosted_keys
+                        key_management_settings.hosted_keys is not None
+                        and secret_name not in key_management_settings.hosted_keys
                     ):  # allow user to specify which keys to check in hosted key manager
                         key_manager = "local"
 
@@ -268,25 +272,13 @@ def get_secret(  # noqa: PLR0915
                     if isinstance(secret, str):
                         secret = secret.strip()
                 elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
-                    try:
-                        get_secret_value_response = client.get_secret_value(
-                            SecretId=secret_name
-                        )
-                        print_verbose(
-                            f"get_secret_value_response: {get_secret_value_response}"
-                        )
-                    except Exception as e:
-                        print_verbose(f"An error occurred - {str(e)}")
-                        # For a list of exceptions thrown, see
-                        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
-                        raise e
+                    from litellm.secret_managers.aws_secret_manager_v2 import (
+                        AWSSecretsManagerV2,
+                    )
 
-                    # assume there is 1 secret per secret_name
-                    secret_dict = json.loads(get_secret_value_response["SecretString"])
-                    print_verbose(f"secret_dict: {secret_dict}")
-                    for k, v in secret_dict.items():
-                        secret = v
-                        print_verbose(f"secret: {secret}")
+                    if isinstance(client, AWSSecretsManagerV2):
+                        secret = client.sync_read_secret(secret_name=secret_name)
+                        print_verbose(f"get_secret_value_response: {secret}")
                 elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
                     try:
                         secret = client.get_secret_from_google_secret_manager(
@@ -332,3 +324,21 @@ def get_secret(  # noqa: PLR0915
             return default_value
         else:
             raise e
+
+
+def _should_read_secret_from_secret_manager() -> bool:
+    """
+    Returns True if the secret manager should be used to read the secret, False otherwise
+
+    - If the secret manager client is not set, return False
+    - If the `_key_management_settings` access mode is "read_only" or "read_and_write", return True
+    - Otherwise, return False
+    """
+    if litellm.secret_manager_client is not None:
+        if litellm._key_management_settings is not None:
+            if (
+                litellm._key_management_settings.access_mode == "read_only"
+                or litellm._key_management_settings.access_mode == "read_and_write"
+            ):
+                return True
+    return False
