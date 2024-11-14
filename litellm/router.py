@@ -3041,6 +3041,8 @@ class Router:
         ):
             raise error
 
+        if isinstance(error, litellm.BadRequestError):
+            raise error
         if isinstance(error, litellm.NotFoundError):
             raise error
         # Error we should only retry if there are other deployments
