@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure_ai.rerank import AzureAIRerank
 from litellm.llms.cohere.rerank import CohereRerank
 from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
-from litellm.llms.together_ai.rerank import TogetherAIRerank
+from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
 from litellm.types.rerank import RerankRequest, RerankResponse
 from litellm.types.router import *
