@@ -815,13 +815,7 @@ class ModelResponseIterator:
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
 
-            if self.json_mode is True and tool_use is not None:
-                message = AnthropicChatCompletion._convert_tool_response_to_message(
-                    tool_calls=[tool_use]
-                )
-                if message is not None:
-                    text = message.content or ""
-                    tool_use = None
+            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
 
             returned_chunk = GenericStreamingChunk(
                 text=text,
@@ -836,6 +830,34 @@ class ModelResponseIterator:
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    def _handle_json_mode_chunk(
+        self, text: str, tool_use: Optional[ChatCompletionToolCallChunk]
+    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
+        """
+        If JSON mode is enabled, convert the tool call to a message.
+
+        Anthropic returns the JSON schema as part of the tool call
+        OpenAI returns the JSON schema as part of the content, this handles placing it in the content
+
+        Args:
+            text: str
+            tool_use: Optional[ChatCompletionToolCallChunk]
+        Returns:
+            Tuple[str, Optional[ChatCompletionToolCallChunk]]
+
+            text: The text to use in the content
+            tool_use: The ChatCompletionToolCallChunk to use in the chunk response
+        """
+        if self.json_mode is True and tool_use is not None:
+            message = AnthropicChatCompletion._convert_tool_response_to_message(
+                tool_calls=[tool_use]
+            )
+            if message is not None:
+                text = message.content or ""
+                tool_use = None
+
+        return text, tool_use
 
     # Sync iterator
     def __iter__(self):
