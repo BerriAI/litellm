@@ -917,6 +917,9 @@ def test_completion_base64(model):
     except litellm.ServiceUnavailableError as e:
         print("got service unavailable error: ", e)
         pass
+    except litellm.InternalServerError as e:
+        print("got internal server error: ", e)
+        pass
     except Exception as e:
         if "500 Internal error encountered.'" in str(e):
             pass
