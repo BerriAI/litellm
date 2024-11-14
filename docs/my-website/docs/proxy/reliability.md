@@ -749,3 +749,18 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
     "mock_testing_fallbacks": true
 }'
 ```
+
+### Disable Fallbacks per key
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "disable_fallbacks": true
+    }
+}'
+```
