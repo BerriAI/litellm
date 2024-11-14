@@ -1834,6 +1834,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
+                        response=original_exception.response,
                     )
                 elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
@@ -1842,6 +1843,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
+                        response=original_exception.response,
                     )
                 elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
@@ -1850,6 +1852,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
+                        response=original_exception.response,
                     )
                 elif (
                     (
@@ -1870,6 +1873,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
+                        response=original_exception.response,
                     )
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
@@ -1878,6 +1882,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
+                        response=original_exception.response,
                     )
                 elif (
                     "The api_key client option must be set either by passing api_key to the client or by setting"
@@ -1889,6 +1894,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         model=model,
                         litellm_debug_info=extra_information,
+                        response=original_exception.response,
                     )
                 elif "Connection error" in error_str:
                     exception_mapping_worked = True
@@ -1907,6 +1913,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="azure",
                             model=model,
                             litellm_debug_info=extra_information,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True
@@ -1915,6 +1922,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="azure",
                             model=model,
                             litellm_debug_info=extra_information,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
@@ -1931,6 +1939,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -1939,6 +1948,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -1947,6 +1957,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
