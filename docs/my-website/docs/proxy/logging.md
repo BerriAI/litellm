@@ -66,10 +66,16 @@ Removes any field with `user_api_key_*` from metadata.
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
 ```python
+
 class StandardLoggingPayload(TypedDict):
     id: str
+    trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
     response_cost: float
+    response_cost_failure_debug_info: Optional[
+        StandardLoggingModelCostFailureDebugInformation
+    ]
+    status: StandardLoggingPayloadStatus
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -84,13 +90,13 @@ class StandardLoggingPayload(TypedDict):
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
-    saved_cache_cost: Optional[float]
-    request_tags: list                         
+    saved_cache_cost: float
+    request_tags: list
     end_user: Optional[str]
-    requester_ip_address: Optional[str]         # IP address of requester
-    requester_metadata: Optional[dict]          # metadata passed in request in the "metadata" field
+    requester_ip_address: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
+    error_str: Optional[str]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
 
@@ -99,12 +105,47 @@ class StandardLoggingHiddenParams(TypedDict):
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
-    additional_headers: Optional[dict]
+    additional_headers: Optional[StandardLoggingAdditionalHeaders]
 
+class StandardLoggingAdditionalHeaders(TypedDict, total=False):
+    x_ratelimit_limit_requests: int
+    x_ratelimit_limit_tokens: int
+    x_ratelimit_remaining_requests: int
+    x_ratelimit_remaining_tokens: int
+
+class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
+    """
+    Specific metadata k,v pairs logged to integration for easier cost tracking
+    """
+
+    spend_logs_metadata: Optional[
+        dict
+    ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
+    requester_metadata: Optional[dict]
 
 class StandardLoggingModelInformation(TypedDict):
     model_map_key: str
     model_map_value: Optional[ModelInfo]
+  
+
+StandardLoggingPayloadStatus = Literal["success", "failure"]
+
+class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
+    """
+    Debug information, if cost tracking fails.
+
+    Avoid logging sensitive information like response or optional params
+    """
+
+    error_str: Required[str]
+    traceback_str: Required[str]
+    model: str
+    cache_hit: Optional[bool]
+    custom_llm_provider: Optional[str]
+    base_model: Optional[str]
+    call_type: str
+    custom_pricing: Optional[bool]
 ```
 
 ## Langfuse
