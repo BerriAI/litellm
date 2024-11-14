@@ -113,7 +113,7 @@ general_settings:
   disable_spend_logs: True
 ```
 
-## 7. Use Helm PreSync Hook for Database Migrations
+## 7. Use Helm PreSync Hook for Database Migrations [BETA]
 
 To ensure only one service manages database migrations, use our [Helm PreSync hook for Database Migrations](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/templates/migrations-job.yaml). This ensures migrations are handled during `helm upgrade` or `helm install`, while LiteLLM pods explicitly disable migrations.
 
