@@ -1,5 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # ⚡ Best Practices for Production
 
@@ -120,6 +121,14 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
 1. **Helm PreSync Hook**:
    - The Helm PreSync hook is configured in the chart to run database migrations during deployments.
    - The hook always sets `DISABLE_SCHEMA_UPDATE=false`, ensuring migrations are executed reliably.
+  
+  Reference Settings to set on ArgoCD for `values.yaml`
+
+  ```yaml
+  db:
+    useExisting: true # use existing Postgres DB
+    url: postgresql://ishaanjaffer0324:3rnwpOBau6hT@ep-withered-mud-a5dkdpke.us-east-2.aws.neon.tech/test-argo-cd?sslmode=require # url of existing Postgres DB
+  ```
 
 2. **LiteLLM Pods**:
    - Set `DISABLE_SCHEMA_UPDATE=true` in LiteLLM pod configurations to prevent them from running migrations.
