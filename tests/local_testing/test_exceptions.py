@@ -58,6 +58,7 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
+        assert e.response is not None
         assert e.litellm_debug_info is not None
         assert isinstance(e.litellm_debug_info, str)
         assert len(e.litellm_debug_info) > 0
@@ -1152,3 +1153,24 @@ async def test_exception_with_headers_httpx(
         if exception_raised is False:
             print(resp)
         assert exception_raised
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["azure/chatgpt-v-2", "openai/gpt-3.5-turbo"])
+async def test_bad_request_error_contains_httpx_response(model):
+    """
+    Test that the BadRequestError contains the httpx response
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6732
+    """
+    try:
+        await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello world"}],
+            bad_arg="bad_arg",
+        )
+        pytest.fail("Expected to raise BadRequestError")
+    except litellm.BadRequestError as e:
+        print("e.response", e.response)
+        print("vars(e.response)", vars(e.response))
+        assert e.response is not None
