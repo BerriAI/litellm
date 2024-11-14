@@ -295,7 +295,9 @@ class AnthropicConfig:
             if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
-                optional_params["stop_sequences"] = self._map_stop_sequences(value)
+                _value = self._map_stop_sequences(value)
+                if _value is not None:
+                    optional_params["stop_sequences"] = _value
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
