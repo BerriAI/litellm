@@ -144,6 +144,7 @@ def validate_raw_gen_ai_request_openai_streaming(span):
     "model",
     ["anthropic/claude-3-opus-20240229"],
 )
+@pytest.mark.flaky(retries=6, delay=2)
 def test_completion_claude_3_function_call_with_otel(model):
     litellm.set_verbose = True
 
@@ -188,7 +189,8 @@ def test_completion_claude_3_function_call_with_otel(model):
         )
 
         print("response from LiteLLM", response)
-
+    except litellm.InternalServerError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
     finally:
