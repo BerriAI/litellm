@@ -3333,6 +3333,8 @@ async def test_acompletion_claude_3_function_call_with_streaming(model):
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
         # raise Exception("it worked! ")
+    except litellm.InternalServerError as e:
+        pytest.skip(f"InternalServerError - {str(e)}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
