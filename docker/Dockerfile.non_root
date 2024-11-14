@@ -9,13 +9,16 @@ FROM $LITELLM_BUILD_IMAGE AS builder
 # Set the working directory to /app
 WORKDIR /app
 
+# Set the shell to bash
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # Install build dependencies
 RUN apt-get clean && apt-get update && \
     apt-get install -y gcc python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip install --upgrade pip && \
-    pip install build
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir build
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -39,7 +42,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Update dependencies and clean up - handles debian security issue
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* 
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -53,42 +56,45 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
+# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0
 RUN pip install redisvl==0.0.7 --no-deps
 
 # ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.9.0 --no-cache-dir
+RUN pip uninstall jwt -y && \
+    pip uninstall PyJWT -y && \
+    pip install PyJWT==2.9.0 --no-cache-dir
 
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 ### Prisma Handling for Non-Root #################################################
-# Prisma allows you to specify the binary cache directory to use 
-ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
+# Prisma allows you to specify the binary cache directory to use
+ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
 
 # Set the TMPDIR environment variable, when this does not exist prisma raises "Error: ENOENT: no such file or directory, lstat '/var/folders'""
-ENV TMPDIR=/tmp 
+ENV TMPDIR=/tmp
 RUN mkdir -p /tmp && chmod 1777 /tmp
 
-RUN pip install nodejs-bin
-RUN pip install prisma
-
 # Make a /non-existent folder and assign chown to nobody
-RUN mkdir -p /nonexistent && chown -R nobody:nogroup /nonexistent
+RUN mkdir -p /nonexistent && \
+    chown -R nobody:nogroup /nonexistent && \
+    chown -R nobody:nogroup /usr/local/lib/python3.11/site-packages/prisma/
+
 RUN chmod +x docker/entrypoint.sh
+
 # Run Prisma generate as user = nobody
 USER nobody
+
+RUN pip install --no-cache-dir nodejs-bin prisma
 RUN prisma generate
 ### End of Prisma Handling for Non-Root #########################################
-USER root
+
 EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
 
 ENTRYPOINT ["litellm"]
 
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs
 # CMD ["--port", "4000", "--detailed_debug"]
 CMD ["--port", "4000"]
