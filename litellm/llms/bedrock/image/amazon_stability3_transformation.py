@@ -53,9 +53,15 @@ class AmazonStability3Config:
             sd3-medium
             sd3.5-large
             sd3.5-large-turbo
+
+        Stability ultra models
+            stable-image-ultra-v1
         """
-        if model and ("sd3" in model or "sd3.5" in model):
-            return True
+        if model:
+            if "sd3" in model or "sd3.5" in model:
+                return True
+            if "stable-image-ultra-v1" in model:
+                return True
         return False
 
     @classmethod
