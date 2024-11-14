@@ -406,8 +406,13 @@ def test_completion_claude_3_empty_response():
             "content": "I was hoping we could chat a bit",
         },
     ]
-    response = litellm.completion(model="claude-3-opus-20240229", messages=messages)
-    print(response)
+    try:
+        response = litellm.completion(model="claude-3-opus-20240229", messages=messages)
+        print(response)
+    except litellm.InternalServerError as e:
+        pytest.skip(f"InternalServerError - {str(e)}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_claude_3():
