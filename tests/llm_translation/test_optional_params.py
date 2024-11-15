@@ -923,6 +923,14 @@ def test_watsonx_text_top_k():
     assert optional_params["top_k"] == 10
 
 
+
+def test_together_ai_model_params():
+    optional_params = get_optional_params(
+        model="together_ai", custom_llm_provider="together_ai", logprobs=1
+    )
+    print(optional_params)
+    assert optional_params["logprobs"] == 1
+
 def test_forward_user_param():
     from litellm.utils import get_supported_openai_params, get_optional_params
 
