@@ -46,6 +46,9 @@ from litellm.llms.OpenAI.cost_calculation import (
 from litellm.llms.OpenAI.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.OpenAI.cost_calculation import cost_router as openai_cost_router
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.cost_calculator import (
+    cost_calculator as vertex_ai_image_cost_calculator,
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -667,9 +670,11 @@ def completion_cost(  # noqa: PLR0915
         ):
             ### IMAGE GENERATION COST CALCULATION ###
             if custom_llm_provider == "vertex_ai":
-                # https://cloud.google.com/vertex-ai/generative-ai/pricing
-                # Vertex Charges Flat $0.20 per image
-                return 0.020
+                if isinstance(completion_response, ImageResponse):
+                    return vertex_ai_image_cost_calculator(
+                        model=model,
+                        image_response=completion_response,
+                    )
             elif custom_llm_provider == "bedrock":
                 if isinstance(completion_response, ImageResponse):
                     return bedrock_image_cost_calculator(
