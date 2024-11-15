@@ -75,6 +75,7 @@ Works for:
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
 - Bedrock Models
+- Anthropic API Models
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
