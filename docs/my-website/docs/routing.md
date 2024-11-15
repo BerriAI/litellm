@@ -1035,7 +1035,7 @@ print(f"response: {response}")
 
 ### [Advanced]: Custom Retries, Cooldowns based on Error Type
 
-- Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+- Use `RetryPolicy` if you want to set a `num_retries` based on the Exception received
 - Use `AllowedFailsPolicy` to set a custom number of `allowed_fails`/minute before cooling down a deployment
 
 [**See All Exception Types**](https://github.com/BerriAI/litellm/blob/ccda616f2f881375d4e8586c76fe4662909a7d22/litellm/types/router.py#L436)
