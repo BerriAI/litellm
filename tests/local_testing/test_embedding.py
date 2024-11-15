@@ -1080,3 +1080,18 @@ def test_cohere_img_embeddings(input, input_type):
         assert response.usage.prompt_tokens_details.image_tokens > 0
     else:
         assert response.usage.prompt_tokens_details.text_tokens > 0
+
+
+def test_lm_studio_embedding():
+    litellm.set_verbose = True
+    os.environ["LM_STUDIO_API_BASE"] = "my-fake-endpoint"
+    try:
+        response = embedding(
+            model="lm_studio/gemma2-9b-it",
+            input=["hello world"],
+        )
+        print(response)
+    except litellm.APIConnectionError:
+        pass
+    except litellm.APIError:
+        pass

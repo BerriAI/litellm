@@ -3392,9 +3392,7 @@ def embedding(  # noqa: PLR0915
             )
         elif (
             model in litellm.open_ai_embedding_models
-            or custom_llm_provider == "openai"
-            or custom_llm_provider == "together_ai"
-            or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider in litellm.openai_compatible_providers
         ):
             api_base = (
                 api_base
