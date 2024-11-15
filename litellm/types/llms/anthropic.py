@@ -98,21 +98,28 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesToolResultContent(TypedDict):
-    type: Literal["text"]
-    text: str
+# class AnthropicMessagesToolResultContent(TypedDict):
+#     type: Literal["text"]
+#     text: str
+
+
+AnthropicMessagesToolResultContentValues = Union[
+    str,
+    Iterable[
+        Union[
+            AnthropicMessagesTextParam,
+            AnthropicMessagesImageParam,
+            AnthropicMessagesDocumentParam,
+        ]
+    ],
+]
 
 
 class AnthropicMessagesToolResultParam(TypedDict, total=False):
     type: Required[Literal["tool_result"]]
     tool_use_id: Required[str]
     is_error: bool
-    content: Union[
-        str,
-        Iterable[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
-        ],
-    ]
+    content: AnthropicMessagesToolResultContentValues
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 

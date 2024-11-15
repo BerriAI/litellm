@@ -37,6 +37,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionUserMessage,
+    OpenAIMessageContent,
 )
 from litellm.types.utils import GenericImageParsingChunk
 
@@ -1145,6 +1146,54 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
+def convert_to_anthropic_content_element(
+    content_element: OpenAIMessageContent,
+) -> AnthropicMessagesToolResultContentValues:
+    if isinstance(content_element, str):
+        return content_element
+
+    content_list: AnthropicMessagesToolResultContentValues = []
+    if isinstance(content_element, list):
+        for content in content_element:
+            if content["type"] == "image_url":
+                if isinstance(content["image_url"], str):
+                    image_chunk = convert_to_anthropic_image_obj(
+                        openai_image_url=content["image_url"]
+                    )
+                else:
+                    image_chunk = convert_to_anthropic_image_obj(
+                        openai_image_url=content["image_url"]["url"]
+                    )
+
+                _anthropic_content_element = _anthropic_content_element_factory(
+                    image_chunk
+                )
+                _content_element = add_cache_control_to_content(
+                    anthropic_content_element=_anthropic_content_element,
+                    orignal_content_element=dict(content),
+                )
+
+                if "cache_control" in _content_element:
+                    _anthropic_content_element["cache_control"] = _content_element[
+                        "cache_control"
+                    ]
+                content_list.append(_anthropic_content_element)
+            elif content["type"] == "text":
+                _anthropic_text_content_element = AnthropicMessagesTextParam(
+                    type="text",
+                    text=content["text"],
+                )
+                _content_element = add_cache_control_to_content(
+                    anthropic_content_element=_anthropic_text_content_element,
+                    orignal_content_element=dict(content),
+                )
+                _content_element = cast(AnthropicMessagesTextParam, _content_element)
+            else:
+                raise ValueError(f"Unsupported content element type: {content}")
+
+    return content_list
+
+
 def convert_to_anthropic_tool_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage]
 ) -> AnthropicMessagesToolResultParam:
@@ -1179,14 +1228,9 @@ def convert_to_anthropic_tool_result(
         ]
     }
     """
-    content_str: str = ""
-    if isinstance(message["content"], str):
-        content_str = message["content"]
-    elif isinstance(message["content"], List):
-        content_list = message["content"]
-        for content in content_list:
-            if content["type"] == "text":
-                content_str += content["text"]
+    content_str: AnthropicMessagesToolResultContentValues = ""
+    if "content" in message and message["content"] is not None:
+        content_str = convert_to_anthropic_content_element(message["content"])
 
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
     ## PROMPT CACHING CHECK ##

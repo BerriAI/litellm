@@ -661,6 +661,56 @@ def test_create_json_tool_call_for_response_format():
     assert "additionalProperties" not in _input_schema
 
 
+def test_anthropic_computer_tool_use_2():
+    litellm.set_verbose = True
+    from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+    import json
+
+    messages = [
+        {
+            "role": "user",
+            "content": "Open a new Firefox window, navigate to google.com.",
+        },
+        {
+            "content": "I'll help you open Firefox and navigate to Google. First, let me check the desktop with a screenshot to locate the Firefox icon.",
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "index": 1,
+                    "function": {
+                        "arguments": '{"action": "screenshot"}',
+                        "name": "computer",
+                    },
+                    "id": "toolu_01Tour7YxyXkwhuSP25dQEP7",
+                    "type": "function",
+                }
+            ],
+            "function_call": None,
+        },
+        {
+            "tool_call_id": "toolu_01Tour7YxyXkwhuSP25dQEP7",
+            "role": "tool",
+            "name": "computer",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64,my-fake-image",
+                    },
+                }
+            ],
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(
+        messages=messages, model="claude-3-5-sonnet-20241022", llm_provider="anthropic"
+    )
+    print(translated_messages)
+    msg_str = json.dumps(translated_messages)
+
+    assert "my-fake-image" in msg_str
+
+
 from litellm import completion
 
 
