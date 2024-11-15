@@ -1121,7 +1121,7 @@
         "mode": "chat"
     },
     "azure_ai/mistral-large-2407": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000002,
@@ -1132,7 +1132,7 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview"
     },
     "azure_ai/ministral-3b": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000004,
@@ -1143,7 +1143,7 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.ministral-3b-2410-offer?tab=Overview"
     },    
     "azure_ai/Llama-3.2-11B-Vision-Instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
         "input_cost_per_token": 0.00000037,
@@ -1155,7 +1155,7 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-11b-vision-instruct-offer?tab=Overview"
     },
     "azure_ai/Llama-3.2-90B-Vision-Instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
         "input_cost_per_token": 0.00000204,
@@ -1176,9 +1176,9 @@
         "mode": "chat"
     },
     "azure_ai/Meta-Llama-3.1-8B-Instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 2048,
         "input_cost_per_token": 0.0000003,
         "output_cost_per_token": 0.00000061,
         "litellm_provider": "azure_ai",
@@ -1186,9 +1186,9 @@
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-8b-instruct-offer?tab=PlansAndPrice"
     },
     "azure_ai/Meta-Llama-3.1-70B-Instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 2048,
         "input_cost_per_token": 0.00000268,
         "output_cost_per_token": 0.00000354,
         "litellm_provider": "azure_ai",
@@ -1196,9 +1196,9 @@
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-70b-instruct-offer?tab=PlansAndPrice"
     },
     "azure_ai/Meta-Llama-3.1-405B-Instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 2048,
         "input_cost_per_token": 0.00000533,
         "output_cost_per_token": 0.000016,
         "litellm_provider": "azure_ai",
@@ -1206,7 +1206,7 @@
         "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice"
     },
     "azure_ai/Phi-3.5-mini-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000013,
@@ -1217,7 +1217,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
     },
     "azure_ai/Phi-3.5-vision-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000013,
@@ -1228,7 +1228,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
     },
     "azure_ai/Phi-3.5-MoE-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000016,
@@ -1250,7 +1250,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
     },
     "azure_ai/Phi-3-mini-128k-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000013,
@@ -1261,7 +1261,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
     },
     "azure_ai/Phi-3-small-8k-instruct": {
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "max_input_tokens": 8192,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000015,
@@ -1272,7 +1272,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
     },
     "azure_ai/Phi-3-small-128k-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000015,
@@ -1294,7 +1294,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/phi-3/"
     },
     "azure_ai/Phi-3-medium-128k-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000017,
@@ -2885,7 +2885,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
     },
     "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
         "input_cost_per_token": 0.0,
@@ -3357,7 +3357,7 @@
     },
     "gemini/gemini-1.5-pro-002": {
         "max_tokens": 8192,
-        "max_input_tokens": 2097152,
+        "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.0000035, 
         "input_cost_per_token_above_128k_tokens": 0.000007, 
@@ -3375,7 +3375,7 @@
     },
     "gemini/gemini-1.5-pro-001": {
         "max_tokens": 8192,
-        "max_input_tokens": 2097152,
+        "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.0000035, 
         "input_cost_per_token_above_128k_tokens": 0.000007, 
@@ -3427,7 +3427,7 @@
     },
     "gemini/gemini-1.5-pro-latest": {
         "max_tokens": 8192,
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 2000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.0000035, 
         "input_cost_per_token_above_128k_tokens": 0.000007, 
