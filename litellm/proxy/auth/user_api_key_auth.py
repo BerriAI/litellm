@@ -111,12 +111,12 @@ def _get_bearer_token(
     return api_key
 
 
-def _is_ui_route_allowed(
+def _is_ui_route(
     route: str,
     user_obj: Optional[LiteLLM_UserTable] = None,
 ) -> bool:
     """
-    - Route b/w ui token check and normal token check
+    - Check if the route is a UI used route
     """
     # this token is only used for managing the ui
     allowed_routes = LiteLLMRoutes.ui_routes.value
@@ -133,15 +133,7 @@ def _is_ui_route_allowed(
         for allowed_route in allowed_routes
     ):
         return True
-    else:
-        if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
-            return True
-        elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-            return True
-        else:
-            raise Exception(
-                f"This key is made for LiteLLM UI, Tried to access route: {route}. Not allowed"
-            )
+    return False
 
 
 def _is_api_route_allowed(
@@ -185,8 +177,8 @@ def _is_allowed_route(
     """
     - Route b/w ui token check and normal token check
     """
-    if token_type == "ui":
-        return _is_ui_route_allowed(route=route, user_obj=user_obj)
+    if token_type == "ui" and _is_ui_route(route=route, user_obj=user_obj):
+        return True
     else:
         return _is_api_route_allowed(
             route=route,
