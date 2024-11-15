@@ -6119,10 +6119,22 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioObject,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
+    ChatCompletionToolMessage,
     ChatCompletionUserMessage,
     OpenAIMessageContent,
     ValidUserMessageContentTypes,
 )
+
+
+def _validate_message_content(message_content: Optional[Any]) -> bool:
+    if message_content is None:
+        return True
+    if isinstance(message_content, list):
+        for item in message_content:
+            if isinstance(item, dict):
+                if item.get("type") not in ValidUserMessageContentTypes:
+                    return False
+    return True
 
 
 def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
@@ -6141,16 +6153,11 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     """
     for idx, m in enumerate(messages):
         try:
-            if m["role"] == "user":
-                user_content = m.get("content")
-                if user_content is not None:
-                    if isinstance(user_content, str):
-                        continue
-                    elif isinstance(user_content, list):
-                        for item in user_content:
-                            if isinstance(item, dict):
-                                if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception("invalid content type")
+            if m["role"] != "assistant":
+                _valid_msg = _validate_message_content(message_content=m.get("content"))
+                if _valid_msg is False:
+                    raise Exception("invalid content type - {}".format(m))
+
         except Exception as e:
             if "invalid content type" in str(e):
                 raise Exception(

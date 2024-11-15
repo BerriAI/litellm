@@ -931,6 +931,26 @@ def test_is_base64_encoded_2():
             ],
             False,
         ),
+        (
+            [
+                {
+                    "tool_call_id": "toolu_01Tour7YxyXkwhuSP25dQEP7",
+                    "role": "tool",
+                    "name": "computer",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "",
+                            },
+                        }
+                    ],
+                }
+            ],
+            False,
+        ),
     ],
 )
 def test_validate_chat_completion_user_messages(messages, expected_bool):
