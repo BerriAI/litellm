@@ -961,6 +961,8 @@ from .utils import (
     supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
+    supports_audio_input,
+    supports_audio_output,
     supports_system_messages,
     get_litellm_params,
     acreate,
