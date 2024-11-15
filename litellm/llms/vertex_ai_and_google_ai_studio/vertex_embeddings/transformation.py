@@ -203,6 +203,11 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         Transforms a vertex embedding response to an openai response.
         """
+        if model.isdigit():
+            return self._transform_vertex_response_to_openai_for_fine_tuned_models(
+                response, model, model_response
+            )
+
         _predictions = response["predictions"]
 
         embedding_response = []
@@ -218,6 +223,38 @@ class VertexAITextEmbeddingConfig(BaseModel):
                 }
             )
             input_tokens += embedding["statistics"]["token_count"]
+
+        model_response.object = "list"
+        model_response.data = embedding_response
+        model_response.model = model
+        usage = Usage(
+            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+        )
+        setattr(model_response, "usage", usage)
+        return model_response
+
+    def _transform_vertex_response_to_openai_for_fine_tuned_models(
+        self, response: dict, model: str, model_response: litellm.EmbeddingResponse
+    ) -> litellm.EmbeddingResponse:
+        """
+        Transforms a vertex fine-tuned model embedding response to an openai response format.
+        """
+        _predictions = response["predictions"]
+
+        embedding_response = []
+        # For fine-tuned models, we don't get token counts in the response
+        input_tokens = 0
+
+        for idx, embedding_values in enumerate(_predictions):
+            embedding_response.append(
+                {
+                    "object": "embedding",
+                    "index": idx,
+                    "embedding": embedding_values[
+                        0
+                    ],  # The embedding values are nested one level deeper
+                }
+            )
 
         model_response.object = "list"
         model_response.data = embedding_response
