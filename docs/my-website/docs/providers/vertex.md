@@ -1562,6 +1562,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ## **Embedding Models**
 
 #### Usage - Embedding
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 import litellm
 from litellm import embedding
@@ -1574,6 +1578,49 @@ response = embedding(
 )
 print(response)
 ```
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: snowflake-arctic-embed-m-long-1731622468876
+    litellm_params:
+      model: vertex_ai/<your-model-id>
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request using OpenAI Python SDK, Langchain Python SDK
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="snowflake-arctic-embed-m-long-1731622468876", 
+    input = ["good morning from litellm", "this is another item"],
+)
+
+print(response)
+```
+
+
+</TabItem>
+</Tabs>
 
 #### Supported Embedding Models
 All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
@@ -1589,6 +1636,7 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+| Fine-tuned OR Custom Embedding models | `embedding(model="vertex_ai/<your-model-id>", input)` | 
 
 ### Supported OpenAI (Unified) Params
 
