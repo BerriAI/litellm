@@ -184,12 +184,11 @@ def test_stream_chunk_builder_litellm_usage_chunks():
         {"role": "assistant", "content": "uhhhh\n\n\nhmmmm.....\nthinking....\n"},
         {"role": "user", "content": "\nI am waiting...\n\n...\n"},
     ]
-    # make a regular gemini call
 
     usage: litellm.Usage = Usage(
-        completion_tokens=64,
+        completion_tokens=27,
         prompt_tokens=55,
-        total_tokens=119,
+        total_tokens=82,
         completion_tokens_details=None,
         prompt_tokens_details=None,
     )

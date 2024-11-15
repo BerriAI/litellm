@@ -33,8 +33,10 @@ from litellm import (
 )
 from litellm.adapters.anthropic_adapter import anthropic_adapter
 from litellm.types.llms.anthropic import AnthropicResponse
-
+from litellm.types.utils import GenericStreamingChunk, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
+from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest
 
@@ -694,3 +696,91 @@ class TestAnthropicCompletion(BaseLLMChatTest):
             assert _document_validation["type"] == "document"
             assert _document_validation["source"]["media_type"] == "application/pdf"
             assert _document_validation["source"]["type"] == "base64"
+
+
+def test_convert_tool_response_to_message_with_values():
+    """Test converting a tool response with 'values' key to a message"""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call",
+                arguments='{"values": {"name": "John", "age": 30}}',
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicChatCompletion._convert_tool_response_to_message(
+        tool_calls=tool_calls
+    )
+
+    assert message is not None
+    assert message.content == '{"name": "John", "age": 30}'
+
+
+def test_convert_tool_response_to_message_without_values():
+    """
+    Test converting a tool response without 'values' key to a message
+
+    Anthropic API returns the JSON schema in the tool call, OpenAI Spec expects it in the message. This test ensures that the tool call is converted to a message correctly.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6741
+    """
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call", arguments='{"name": "John", "age": 30}'
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicChatCompletion._convert_tool_response_to_message(
+        tool_calls=tool_calls
+    )
+
+    assert message is not None
+    assert message.content == '{"name": "John", "age": 30}'
+
+
+def test_convert_tool_response_to_message_invalid_json():
+    """Test converting a tool response with invalid JSON"""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call", arguments="invalid json"
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicChatCompletion._convert_tool_response_to_message(
+        tool_calls=tool_calls
+    )
+
+    assert message is not None
+    assert message.content == "invalid json"
+
+
+def test_convert_tool_response_to_message_no_arguments():
+    """Test converting a tool response with no arguments"""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(name="json_tool_call"),
+            index=0,
+        )
+    ]
+
+    message = AnthropicChatCompletion._convert_tool_response_to_message(
+        tool_calls=tool_calls
+    )
+
+    assert message is None

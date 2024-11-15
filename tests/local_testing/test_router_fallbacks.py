@@ -1138,9 +1138,9 @@ async def test_router_content_policy_fallbacks(
     router = Router(
         model_list=[
             {
-                "model_name": "claude-2",
+                "model_name": "claude-2.1",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": mock_response,
                 },
@@ -1164,7 +1164,7 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
@@ -1172,14 +1172,14 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-context-window-model",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
             },
         ],
         content_policy_fallbacks=(
-            [{"claude-2": ["my-fallback-model"]}]
+            [{"claude-2.1": ["my-fallback-model"]}]
             if fallback_type == "model-specific"
             else None
         ),
@@ -1190,12 +1190,12 @@ async def test_router_content_policy_fallbacks(
 
     if sync_mode is True:
         response = router.completion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
         response = await router.acompletion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
@@ -1455,3 +1455,46 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
     assert isinstance(
         exc_info.value, litellm.AuthenticationError
     ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
+
+
+@pytest.mark.asyncio
+async def test_router_disable_fallbacks_dynamically():
+    from litellm.router import run_async_fallback
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["good-model"]}],
+        default_fallbacks=["good-model"],
+    )
+
+    with patch.object(
+        router,
+        "log_retry",
+        new=MagicMock(return_value=None),
+    ) as mock_client:
+        try:
+            resp = await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                disable_fallbacks=True,
+            )
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_not_called()

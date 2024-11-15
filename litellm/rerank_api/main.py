@@ -8,7 +8,8 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure_ai.rerank import AzureAIRerank
 from litellm.llms.cohere.rerank import CohereRerank
-from litellm.llms.together_ai.rerank import TogetherAIRerank
+from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
+from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
 from litellm.types.rerank import RerankRequest, RerankResponse
 from litellm.types.router import *
@@ -19,6 +20,7 @@ from litellm.utils import client, exception_type, supports_httpx_timeout
 cohere_rerank = CohereRerank()
 together_rerank = TogetherAIRerank()
 azure_ai_rerank = AzureAIRerank()
+jina_ai_rerank = JinaAIRerank()
 #################################################
 
 
@@ -247,7 +249,23 @@ def rerank(
                 api_key=api_key,
                 _is_async=_is_async,
             )
+        elif _custom_llm_provider == "jina_ai":
 
+            if dynamic_api_key is None:
+                raise ValueError(
+                    "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"
+                )
+            response = jina_ai_rerank.rerank(
+                model=model,
+                api_key=dynamic_api_key,
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
+                _is_async=_is_async,
+            )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
 

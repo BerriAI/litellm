@@ -265,7 +265,6 @@ def run_server(  # noqa: PLR0915
             ProxyConfig,
             app,
             load_aws_kms,
-            load_aws_secret_manager,
             load_from_azure_key_vault,
             load_google_kms,
             save_worker_config,
@@ -278,7 +277,6 @@ def run_server(  # noqa: PLR0915
                 ProxyConfig,
                 app,
                 load_aws_kms,
-                load_aws_secret_manager,
                 load_from_azure_key_vault,
                 load_google_kms,
                 save_worker_config,
@@ -295,7 +293,6 @@ def run_server(  # noqa: PLR0915
                     ProxyConfig,
                     app,
                     load_aws_kms,
-                    load_aws_secret_manager,
                     load_from_azure_key_vault,
                     load_google_kms,
                     save_worker_config,
@@ -559,8 +556,14 @@ def run_server(  # noqa: PLR0915
                         key_management_system
                         == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
                     ):
+                        from litellm.secret_managers.aws_secret_manager_v2 import (
+                            AWSSecretsManagerV2,
+                        )
+
                         ### LOAD FROM AWS SECRET MANAGER ###
-                        load_aws_secret_manager(use_aws_secret_manager=True)
+                        AWSSecretsManagerV2.load_aws_secret_manager(
+                            use_aws_secret_manager=True
+                        )
                     elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                         load_aws_kms(use_aws_kms=True)
                     elif (

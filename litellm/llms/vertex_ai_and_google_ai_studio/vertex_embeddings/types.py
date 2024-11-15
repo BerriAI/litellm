@@ -23,14 +23,27 @@ class TextEmbeddingInput(TypedDict, total=False):
     title: Optional[str]
 
 
+# Fine-tuned models require a different input format
+# Ref: https://console.cloud.google.com/vertex-ai/model-garden?hl=en&project=adroit-crow-413218&pageState=(%22galleryStateKey%22:(%22f%22:(%22g%22:%5B%5D,%22o%22:%5B%5D),%22s%22:%22%22))
+class TextEmbeddingFineTunedInput(TypedDict, total=False):
+    inputs: str
+
+
+class TextEmbeddingFineTunedParameters(TypedDict, total=False):
+    max_new_tokens: Optional[int]
+    temperature: Optional[float]
+    top_p: Optional[float]
+    top_k: Optional[int]
+
+
 class EmbeddingParameters(TypedDict, total=False):
     auto_truncate: Optional[bool]
     output_dimensionality: Optional[int]
 
 
 class VertexEmbeddingRequest(TypedDict, total=False):
-    instances: List[TextEmbeddingInput]
-    parameters: Optional[EmbeddingParameters]
+    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingFineTunedInput]]
+    parameters: Optional[Union[EmbeddingParameters, TextEmbeddingFineTunedParameters]]
 
 
 # Example usage:

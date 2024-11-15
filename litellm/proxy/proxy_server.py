@@ -245,10 +245,7 @@ from litellm.router import (
 from litellm.router import ModelInfo as RouterModelInfo
 from litellm.router import updateDeployment
 from litellm.scheduler import DefaultPriorities, FlowItem, Scheduler
-from litellm.secret_managers.aws_secret_manager import (
-    load_aws_kms,
-    load_aws_secret_manager,
-)
+from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
 from litellm.secret_managers.main import (
     get_secret,
@@ -1825,8 +1822,13 @@ class ProxyConfig:
                     key_management_system
                     == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
                 ):
-                    ### LOAD FROM AWS SECRET MANAGER ###
-                    load_aws_secret_manager(use_aws_secret_manager=True)
+                    from litellm.secret_managers.aws_secret_manager_v2 import (
+                        AWSSecretsManagerV2,
+                    )
+
+                    AWSSecretsManagerV2.load_aws_secret_manager(
+                        use_aws_secret_manager=True
+                    )
                 elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                     load_aws_kms(use_aws_kms=True)
                 elif (

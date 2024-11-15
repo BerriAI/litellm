@@ -274,6 +274,51 @@ class LiteLLMProxyRequestSetup:
         )
         return user_api_key_logged_metadata
 
+    @staticmethod
+    def add_key_level_controls(
+        key_metadata: dict, data: dict, _metadata_variable_name: str
+    ):
+        data = data.copy()
+        if "cache" in key_metadata:
+            data["cache"] = {}
+            if isinstance(key_metadata["cache"], dict):
+                for k, v in key_metadata["cache"].items():
+                    if k in SupportedCacheControls:
+                        data["cache"][k] = v
+
+        ## KEY-LEVEL SPEND LOGS / TAGS
+        if "tags" in key_metadata and key_metadata["tags"] is not None:
+            if "tags" in data[_metadata_variable_name] and isinstance(
+                data[_metadata_variable_name]["tags"], list
+            ):
+                data[_metadata_variable_name]["tags"].extend(key_metadata["tags"])
+            else:
+                data[_metadata_variable_name]["tags"] = key_metadata["tags"]
+        if "spend_logs_metadata" in key_metadata and isinstance(
+            key_metadata["spend_logs_metadata"], dict
+        ):
+            if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
+                data[_metadata_variable_name]["spend_logs_metadata"], dict
+            ):
+                for key, value in key_metadata["spend_logs_metadata"].items():
+                    if (
+                        key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                    ):  # don't override k-v pair sent by request (user request)
+                        data[_metadata_variable_name]["spend_logs_metadata"][
+                            key
+                        ] = value
+            else:
+                data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
+                    "spend_logs_metadata"
+                ]
+
+        ## KEY-LEVEL DISABLE FALLBACKS
+        if "disable_fallbacks" in key_metadata and isinstance(
+            key_metadata["disable_fallbacks"], bool
+        ):
+            data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
+        return data
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -389,37 +434,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
-    if "cache" in key_metadata:
-        data["cache"] = {}
-        if isinstance(key_metadata["cache"], dict):
-            for k, v in key_metadata["cache"].items():
-                if k in SupportedCacheControls:
-                    data["cache"][k] = v
-
-    ## KEY-LEVEL SPEND LOGS / TAGS
-    if "tags" in key_metadata and key_metadata["tags"] is not None:
-        if "tags" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["tags"], list
-        ):
-            data[_metadata_variable_name]["tags"].extend(key_metadata["tags"])
-        else:
-            data[_metadata_variable_name]["tags"] = key_metadata["tags"]
-    if "spend_logs_metadata" in key_metadata and isinstance(
-        key_metadata["spend_logs_metadata"], dict
-    ):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in key_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
-                "spend_logs_metadata"
-            ]
-
+    data = LiteLLMProxyRequestSetup.add_key_level_controls(
+        key_metadata=key_metadata,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
     ## TEAM-LEVEL SPEND LOGS/TAGS
     team_metadata = user_api_key_dict.team_metadata or {}
     if "tags" in team_metadata and team_metadata["tags"] is not None:

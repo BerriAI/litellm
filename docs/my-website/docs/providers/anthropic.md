@@ -957,3 +957,69 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ```
 </TabItem>
 </Tabs>
+
+## Usage - passing 'user_id' to Anthropic
+
+LiteLLM translates the OpenAI `user` param to Anthropic's `metadata[user_id]` param.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+    user="user_123",
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-3-5-sonnet-20240620
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20240620
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-5-sonnet-20240620",
+    "messages": [{"role": "user", "content": "What is Anthropic?"}],
+    "user": "user_123"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+## All Supported OpenAI Params
+
+```
+"stream",
+"stop",
+"temperature",
+"top_p",
+"max_tokens",
+"max_completion_tokens",
+"tools",
+"tool_choice",
+"extra_headers",
+"parallel_tool_calls",
+"response_format",
+"user"
+```

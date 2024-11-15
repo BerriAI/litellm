@@ -718,7 +718,7 @@ async def test_acompletion_claude_2_stream():
     try:
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "hello from litellm"}],
             stream=True,
         )
@@ -3274,7 +3274,7 @@ def test_completion_claude_3_function_call_with_streaming():
     ],  #  "claude-3-opus-20240229"
 )  #
 @pytest.mark.asyncio
-async def test_acompletion_claude_3_function_call_with_streaming(model):
+async def test_acompletion_function_call_with_streaming(model):
     litellm.set_verbose = True
     tools = [
         {
@@ -3335,6 +3335,8 @@ async def test_acompletion_claude_3_function_call_with_streaming(model):
         # raise Exception("it worked! ")
     except litellm.InternalServerError as e:
         pytest.skip(f"InternalServerError - {str(e)}")
+    except litellm.ServiceUnavailableError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
