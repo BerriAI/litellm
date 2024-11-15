@@ -1069,7 +1069,7 @@ async def update_cache(  # noqa: PLR0915
     end_user_id: Optional[str],
     team_id: Optional[str],
     response_cost: Optional[float],
-    parent_otel_span: Optional[Span],
+    parent_otel_span: Optional[Span],  # type: ignore
 ):
     """
     Use this to update the cache with new user spend.
@@ -5657,6 +5657,13 @@ async def anthropic_response(  # noqa: PLR0915
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    This is a BETA endpoint that calls 100+ LLMs in the anthropic format.
+
+    To do a simple pass-through for anthropic, do `{PROXY_BASE_URL}/anthropic/v1/messages`
+
+    Docs - https://docs.litellm.ai/docs/anthropic_completion
+    """
     from litellm import adapter_completion
     from litellm.adapters.anthropic_adapter import anthropic_adapter
 

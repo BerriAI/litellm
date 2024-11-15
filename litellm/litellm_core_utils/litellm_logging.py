@@ -28,6 +28,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.mlflow import MlflowLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -563,6 +564,7 @@ class Logging:
                             message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
+
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
                             model=self.model,
@@ -1258,6 +1260,7 @@ class Logging:
                                 end_time=end_time,
                                 print_verbose=print_verbose,
                             )
+
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2347,6 +2350,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
 
+    elif logging_integration == "mlflow":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, MlflowLogger):
+                return callback  # type: ignore
+
+        _mlflow_logger = MlflowLogger()
+        _in_memory_loggers.append(_mlflow_logger)
+        return _mlflow_logger  # type: ignore
 
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
@@ -2448,6 +2459,12 @@ def get_custom_logger_compatible_class(
                 and callback.callback_name == "langtrace"
             ):
                 return callback
+
+    elif logging_integration == "mlflow":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, MlflowLogger):
+                return callback
+
     return None
 
 

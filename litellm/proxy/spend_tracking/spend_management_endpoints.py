@@ -9,6 +9,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    get_spend_by_team_and_customer,
+)
 
 router = APIRouter()
 
@@ -932,6 +935,14 @@ async def get_global_spend_report(
         default=None,
         description="View spend for a specific internal_user_id. Example internal_user_id='1234",
     ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="View spend for a specific team_id. Example team_id='1234",
+    ),
+    customer_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="View spend for a specific customer_id. Example customer_id='1234. Can be used in conjunction with team_id as well.",
+    ),
 ):
     """
     Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
@@ -1074,8 +1085,12 @@ async def get_global_spend_report(
                 return []
 
             return db_response
-
+        elif team_id is not None and customer_id is not None:
+            return await get_spend_by_team_and_customer(
+                start_date_obj, end_date_obj, team_id, customer_id, prisma_client
+            )
         if group_by == "team":
+
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
             sql_query = """
@@ -1305,7 +1320,6 @@ async def global_get_all_tag_names():
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
