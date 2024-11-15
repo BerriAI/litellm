@@ -281,7 +281,7 @@ Picks the deployment with the lowest response time.
 
 It caches, and updates the response times for deployments based on when a request was sent and received from a deployment.
 
-[**How to test**](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_lowest_latency_routing.py)
+[**How to test**](https://github.com/BerriAI/litellm/blob/main/tests/local_testing/test_lowest_latency_routing.py)
 
 ```python
 from litellm import Router 
@@ -567,7 +567,7 @@ print(response)
 
 Picks a deployment with the least number of ongoing calls, it's handling.
 
-[**How to test**](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_least_busy_routing.py)
+[**How to test**](https://github.com/BerriAI/litellm/blob/main/tests/local_testing/test_least_busy_routing.py)
 
 ```python
 from litellm import Router 
