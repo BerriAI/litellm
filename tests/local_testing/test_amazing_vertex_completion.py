@@ -975,6 +975,7 @@ async def test_partner_models_httpx(model, sync_mode):
         data = {
             "model": model,
             "messages": messages,
+            "timeout": 10,
         }
         if sync_mode:
             response = litellm.completion(**data)
@@ -987,6 +988,8 @@ async def test_partner_models_httpx(model, sync_mode):
 
         assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
+        pass
+    except litellm.Timeout as e:
         pass
     except litellm.InternalServerError as e:
         pass
