@@ -2903,24 +2903,16 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if stop is not None:
-            optional_params["stop"] = stop
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if response_format is not None:
-            optional_params["response_format"] = response_format
+        optional_params = litellm.TogetherAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
