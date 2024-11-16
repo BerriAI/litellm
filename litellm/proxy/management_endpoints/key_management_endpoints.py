@@ -363,9 +363,11 @@ async def update_key_fn(
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-1234",
+        "key_alias": "my-key",
+        "user_id": "user-1234",
+        "team_id": "team-1234",
         "max_budget": 100,
         "metadata": {"any_key": "any-val"},
-        "permissions": {"allow_pii_controls": true}
     }'
     ```
     """
