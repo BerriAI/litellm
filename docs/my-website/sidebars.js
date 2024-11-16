@@ -36,7 +36,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture"],
+          items: ["proxy/architecture", "proxy/db_info"],
         }, 
         {
           type: "link",
