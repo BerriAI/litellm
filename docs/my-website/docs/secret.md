@@ -85,7 +85,8 @@ This will only store virtual keys in AWS Secret Manager. No keys will be read fr
 general_settings:
   key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
   key_management_settings: 
-    store_virtual_keys: true
+    store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
+    prefix_for_stored_virtual_keys: "litellm/" # OPTIONAL. If set, this prefix will be used for stored virtual keys in the secret manager
     access_mode: "write_only" # Literal["read_only", "write_only", "read_and_write"]
 ```
 </TabItem>
@@ -247,7 +248,14 @@ All settings related to secret management
 general_settings:
   key_management_system: "aws_secret_manager" # REQUIRED
   key_management_settings:  
+
+    # Storing Virtual Keys Settings
     store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
+    prefix_for_stored_virtual_keys: "litellm/" # OPTIONAL.I f set, this prefix will be used for stored virtual keys in the secret manager
+    
+    # Access Mode Settings
     access_mode: "write_only" # OPTIONAL. Literal["read_only", "write_only", "read_and_write"]. Defaults to "read_only"
+    
+    # Hosted Keys Settings
     hosted_keys: ["litellm_master_key"] # OPTIONAL. Specify which env keys you stored on AWS
 ```
