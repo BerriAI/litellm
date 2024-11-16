@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import HTTPException, Request, status
 
@@ -80,7 +80,9 @@ class RouteChecks:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
                 )
-            if route in LiteLLMRoutes.management_routes.value:
+            if RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.management_routes.value
+            ):
                 # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
                 if route == "/user/update":
 
@@ -101,21 +103,27 @@ class RouteChecks:
 
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and route in LiteLLMRoutes.internal_user_routes.value
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
+            )
         ):
             pass
-        elif (
-            _user_is_org_admin(request_data=request_data, user_object=user_obj)
-            and route in LiteLLMRoutes.org_admin_allowed_routes.value
+        elif _user_is_org_admin(
+            request_data=request_data, user_object=user_obj
+        ) and RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value
         ):
             pass
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            and route in LiteLLMRoutes.internal_user_view_only_routes.value
+            and RouteChecks.check_route_access(
+                route=route,
+                allowed_routes=LiteLLMRoutes.internal_user_view_only_routes.value,
+            )
         ):
             pass
-        elif (
-            route in LiteLLMRoutes.self_managed_routes.value
+        elif RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
         else:
@@ -207,3 +215,20 @@ class RouteChecks:
         if re.match(pattern, route):
             return True
         return False
+
+    @staticmethod
+    def check_route_access(route: str, allowed_routes: List[str]) -> bool:
+        """
+        Check if a route has access by checking both exact matches and patterns
+
+        Args:
+            route (str): The route to check
+            allowed_routes (list): List of allowed routes/patterns
+
+        Returns:
+            bool: True if route is allowed, False otherwise
+        """
+        return route in allowed_routes or any(  # Check exact match
+            RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
+            for allowed_route in allowed_routes
+        )  # Check pattern match
