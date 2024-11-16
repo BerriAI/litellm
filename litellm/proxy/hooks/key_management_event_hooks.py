@@ -211,7 +211,7 @@ class KeyManagementEventHooks:
                     and isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
                 ):
                     await litellm.secret_manager_client.async_write_secret(
-                        secret_name=f"{LITELLM_PREFIX_STORED_VIRTUAL_KEYS}/{secret_name}",
+                        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{secret_name}",
                         secret_value=secret_token,
                     )
 
@@ -235,7 +235,7 @@ class KeyManagementEventHooks:
                     for key in keys_being_deleted:
                         if key.key_alias is not None:
                             await litellm.secret_manager_client.async_delete_secret(
-                                secret_name=f"{LITELLM_PREFIX_STORED_VIRTUAL_KEYS}/{key.key_alias}"
+                                secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key.key_alias}"
                             )
                         else:
                             verbose_proxy_logger.warning(
