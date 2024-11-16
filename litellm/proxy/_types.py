@@ -278,6 +278,7 @@ class LiteLLMRoutes(enum.Enum):
 
     management_routes = [  # key
         "/key/generate",
+        "/key/{token_id}/regenerate",
         "/key/update",
         "/key/delete",
         "/key/info",
@@ -360,6 +361,7 @@ class LiteLLMRoutes(enum.Enum):
     internal_user_routes = (
         [
             "/key/generate",
+            "/key/{token_id}/regenerate",
             "/key/update",
             "/key/delete",
             "/key/health",
