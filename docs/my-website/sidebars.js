@@ -54,7 +54,6 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/reliability",
         {
           type: "category",
           label: "Usage",
@@ -90,7 +89,7 @@ const sidebars = {
         {
           type: "category",
           label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
+          items: ["proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
         },
         {
           type: "category",
@@ -211,8 +210,15 @@ const sidebars = {
         "fine_tuning",
       ],
     },
-    "routing",
-    "scheduler",
+    {
+      type: "category",
+      label: "Load Balancing",
+      items: [
+        "routing",
+        "scheduler",
+        "proxy/reliability",
+      ],
+    },
     {
       type: "category",
       label: "LiteLLM Python SDK",
