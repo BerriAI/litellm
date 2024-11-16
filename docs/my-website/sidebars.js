@@ -20,19 +20,29 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
-      label: "💥 LiteLLM Proxy Server",
+      label: "LiteLLM Proxy Server",
       link: {
         type: "generated-index",
-        title: "💥 LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM Proxy Server (LLM Gateway)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
       items: [
-        "proxy/quick_start",
-        "proxy/docker_quick_start",
-        "proxy/deploy", 
         "proxy/demo",
-        "proxy/prod",
+        {
+          type: "category",
+          label: "Setup & Deployment",
+          items: [
+            "proxy/docker_quick_start", 
+            "proxy/deploy", 
+            "proxy/prod", 
+            "proxy/configs", 
+            "proxy/cli",
+            "proxy/model_management",
+            "proxy/health",
+            "proxy/debugging",
+        ],
+        },
         {
           type: "category",
           label: "Architecture",
@@ -44,29 +54,13 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/user_keys",
-        "proxy/configs",
-        "proxy/response_headers", 
         "proxy/reliability",
         {
           type: "category",
-          label: "🔑 Authentication",
-          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/service_accounts", "proxy/access_control","proxy/ip_address"],
-        },
-        {
-          type: "category",
-          label: "💸 Spend Tracking + Budgets",
-          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
-        },
-        {
-          type: "category",
-          label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
-        },
-        {
-          type: "category",
-          label: "Pass-through Endpoints (Provider-specific)",
+          label: "Usage",
           items: [
+            "proxy/user_keys", 
+            "proxy/response_headers",
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
             "pass_through/cohere",
@@ -74,6 +68,29 @@ const sidebars = {
             "pass_through/bedrock",
             "pass_through/langfuse"
           ],
+        },
+        {
+          type: "category",
+          label: "Authentication",
+          items: [
+            "proxy/virtual_keys", 
+            "proxy/token_auth", 
+            "proxy/service_accounts", 
+            "proxy/access_control",
+            "proxy/ip_address",
+            "proxy/email",
+            "proxy/multiple_admins",
+        ],
+        },
+        {
+          type: "category",
+          label: "Spend Tracking + Budgets",
+          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+        },
+        {
+          type: "category",
+          label: "Routing",
+          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
         },
         {
           type: "category",
@@ -114,14 +131,6 @@ const sidebars = {
         },
         "proxy/caching",
         "proxy/pass_through",
-        "proxy/email",
-        "proxy/multiple_admins",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
-        "proxy/call_hooks",
-        "proxy/rules",
-        "proxy/cli", 
       ]
     },
     {
@@ -189,7 +198,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
+      label: "Supported Endpoints",
       items: [
         "embedding/supported_embedding",
         "image_generation",
@@ -200,18 +209,13 @@ const sidebars = {
         "batches",
         "realtime",
         "fine_tuning",
-        {
-          type: "link",
-          label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
-          href: "/docs/pass_through/vertex_ai",
-        },
       ],
     },
     "routing",
     "scheduler",
     {
       type: "category",
-      label: "🚅 LiteLLM Python SDK",
+      label: "LiteLLM Python SDK",
       items: [
         "set_keys",
         "completion/token_usage",

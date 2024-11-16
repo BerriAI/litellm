@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# ⚡ Best Practices for Production
+# Best Practices for Production
 
 ## 1. Use this config.yaml
 Use this config.yaml in production (with your own LLMs)
