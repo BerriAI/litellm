@@ -471,6 +471,15 @@ async def delete_key_fn(
     Returns:
     - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
 
+    Example:
+    ```bash
+    curl --location 'http://0.0.0.0:8000/key/delete' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
+    }'
+    ```
 
     Raises:
         HTTPException: If an error occurs during key deletion.
@@ -573,7 +582,10 @@ async def delete_key_fn(
 
 
 @router.post(
-    "/v2/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+    "/v2/key/info",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def info_key_fn_v2(
     data: Optional[KeyRequest] = None,
