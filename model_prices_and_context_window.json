@@ -1701,7 +1701,12 @@
         "output_cost_per_token": 0.00000008,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/llama3-70b-8192": {
         "max_tokens": 8192,
@@ -1711,7 +1716,12 @@
         "output_cost_per_token": 0.00000079,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/llama-3.1-8b-instant": {
         "max_tokens": 8192,
@@ -1721,7 +1731,12 @@
         "output_cost_per_token": 0.00000008,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/llama-3.1-70b-versatile": {
         "max_tokens": 8192,
@@ -1731,7 +1746,12 @@
         "output_cost_per_token": 0.00000079,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/llama-3.1-405b-reasoning": {
         "max_tokens": 8192,
@@ -1751,7 +1771,12 @@
         "output_cost_per_token": 0.00000024,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/gemma-7b-it": {
         "max_tokens": 8192,
@@ -1761,17 +1786,27 @@
         "output_cost_per_token": 0.00000007,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/gemma2-9b-it": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000020,
-        "output_cost_per_token": 0.00000020,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000002,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/llama3-groq-70b-8192-tool-use-preview": {
         "max_tokens": 8192,
@@ -1781,7 +1816,12 @@
         "output_cost_per_token": 0.00000089,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "groq/llama3-groq-8b-8192-tool-use-preview": {
         "max_tokens": 8192,
@@ -1791,7 +1831,72 @@
         "output_cost_per_token": 0.00000019,
         "litellm_provider": "groq",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
+    },
+    "groq/llama-3.2-1b-preview": {
+        "max_tokens": 8000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.00000004,
+        "output_cost_per_token": 0.00000004,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
+    },
+    "groq/llama-3.2-3b-preview": {
+        "max_tokens": 8000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.00000006,
+        "output_cost_per_token": 0.00000006,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
+    },
+    "groq/llama-3.2-11b-vision-preview": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000018,
+        "output_cost_per_token": 0.00000018,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
+    },
+    "groq/llama-3.2-90b-vision-preview": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_audio_output": false,
+        "supports_prompt_caching": false
     },
     "cerebras/llama3.1-8b": {
         "max_tokens": 128000,
