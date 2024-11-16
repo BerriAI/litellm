@@ -102,11 +102,6 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "🪢 Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging", "proxy/alerting", "proxy/prometheus",],
-        },
-        {
-          type: "category",
           label: "🛡️ [Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start", 
@@ -221,6 +216,18 @@ const sidebars = {
     },
     {
       type: "category",
+      label: "Logging & Observability",
+      items: [
+        "proxy/logging", 
+        "proxy/team_logging",
+        "proxy/streaming_logging", 
+        "proxy/alerting", 
+        "proxy/prometheus",
+        `observability/telemetry`,
+      ],
+    },
+    {
+      type: "category",
       label: "LiteLLM Python SDK",
       items: [
         "set_keys",
@@ -248,38 +255,6 @@ const sidebars = {
         "load_test_sdk",
         "load_test_rpm",
       ]
-    },
-    {
-      type: "category",
-      label: "Logging & Observability",
-      items: [
-        "observability/langfuse_integration",
-        "observability/gcs_bucket_integration",
-        "observability/langsmith_integration",
-        "observability/literalai_integration",
-        "observability/opentelemetry_integration",
-        "observability/logfire_integration",
-        "observability/argilla",
-        "observability/arize_integration",
-        "debugging/local_debugging",
-        "observability/raw_request_response",
-        "observability/custom_callback",
-        "observability/scrub_data",
-        "observability/braintrust",
-        "observability/sentry",
-        "observability/lago",
-        "observability/helicone_integration",
-        "observability/openmeter",
-        "observability/promptlayer_integration",
-        "observability/wandb_integration",
-        "observability/slack_integration",
-        "observability/athina_integration",
-        "observability/lunary_integration",
-        "observability/greenscale_integration",
-        "observability/supabase_integration",
-        `observability/telemetry`,
-        "observability/opik_integration",
-      ],
     },
     {
       type: "category",
