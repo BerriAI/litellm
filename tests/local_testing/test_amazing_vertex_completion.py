@@ -3123,3 +3123,85 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
         assert isinstance(embedding["embedding"], list)
         assert len(embedding["embedding"]) > 0
         assert all(isinstance(x, float) for x in embedding["embedding"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_vertexai_model_garden_model_completion(respx_mock: MockRouter):
+    """
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6480
+
+    Using OpenAI compatible models from Vertex Model Garden
+    """
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+
+    # Test input
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+    ]
+
+    # Expected request/response
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/633608382793/locations/us-central1/endpoints/5464397967697903616/chat/completions"
+    expected_request = {"model": "", "messages": messages, "stream": False}
+
+    mock_response = {
+        "id": "chat-09940d4e99e3488aa52a6f5e2ecf35b1",
+        "object": "chat.completion",
+        "created": 1731702782,
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello, my name is Litellm Bot. I'm a helpful assistant here to provide information and answer your questions.\n\nTo check the weather for you, I'll need to know your location. Could you please provide me with your city or zip code? That way, I can give you the most accurate and up-to-date weather information.\n\nIf you don't have your location handy, I can also suggest some popular weather websites or apps that you can use to check the weather for your area.\n\nLet me know how I can assist you!",
+                    "tool_calls": [],
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+                "stop_reason": None,
+            }
+        ],
+        "usage": {"prompt_tokens": 63, "total_tokens": 172, "completion_tokens": 109},
+        "prompt_logprobs": None,
+    }
+
+    # Setup mock request
+    mock_request = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
+
+    # Make request
+    response = await litellm.acompletion(
+        model="vertex_ai/openai/5464397967697903616",
+        messages=messages,
+        vertex_project="633608382793",
+        vertex_location="us-central1",
+    )
+
+    # Assert request was made correctly
+    assert mock_request.called
+    request_body = json.loads(mock_request.calls[0].request.content)
+    assert request_body == expected_request
+
+    # Assert response structure
+    assert response.id == "chat-09940d4e99e3488aa52a6f5e2ecf35b1"
+    assert response.created == 1731702782
+    assert response.model == "vertex_ai/meta-llama/Llama-3.1-8B-Instruct"
+    assert len(response.choices) == 1
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content.startswith(
+        "Hello, my name is Litellm Bot"
+    )
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.completion_tokens == 109
+    assert response.usage.prompt_tokens == 63
+    assert response.usage.total_tokens == 172
