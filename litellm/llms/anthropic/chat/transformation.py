@@ -106,6 +106,7 @@ class AnthropicConfig:
         computer_tool_used: bool = False,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
+        is_vertex_request: bool = False,
     ) -> dict:
         import json
 
@@ -122,8 +123,12 @@ class AnthropicConfig:
             "accept": "application/json",
             "content-type": "application/json",
         }
-        if len(betas) > 0:
+
+        if is_vertex_request is True:
+            pass
+        elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
+
         return headers
 
     def _map_tool_choice(
