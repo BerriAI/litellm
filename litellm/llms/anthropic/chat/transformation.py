@@ -125,6 +125,7 @@ class AnthropicConfig:
             "content-type": "application/json",
         }
 
+        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
         if is_vertex_request is True:
             pass
         elif len(betas) > 0:
