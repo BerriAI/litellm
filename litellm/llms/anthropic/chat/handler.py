@@ -60,6 +60,7 @@ def validate_environment(
     user_headers,
     model,
     messages: List[AllMessageValues],
+    is_vertex_request: bool,
     tools: Optional[List[AllAnthropicToolsValues]],
     anthropic_version: Optional[str] = None,
 ):
@@ -80,6 +81,7 @@ def validate_environment(
         prompt_caching_set=prompt_caching_set,
         pdf_used=pdf_used,
         api_key=api_key,
+        is_vertex_request=is_vertex_request,
     )
 
     if user_headers is not None and isinstance(user_headers, dict):
@@ -486,19 +488,20 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
+        optional_params = copy.deepcopy(optional_params)
+        stream = optional_params.pop("stream", None)
+        json_mode: bool = optional_params.pop("json_mode", False)
+        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
+        _is_function_call = False
+        messages = copy.deepcopy(messages)
         headers = validate_environment(
             api_key,
             headers,
             model,
             messages=messages,
             tools=optional_params.get("tools"),
+            is_vertex_request=is_vertex_request,
         )
-        _is_function_call = False
-        messages = copy.deepcopy(messages)
-        optional_params = copy.deepcopy(optional_params)
-        stream = optional_params.pop("stream", None)
-        json_mode: bool = optional_params.pop("json_mode", False)
-        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
 
         data = AnthropicConfig()._transform_request(
             model=model,
