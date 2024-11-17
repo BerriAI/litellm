@@ -291,6 +291,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         >
                 <>
 
+                <Form.Item name="key_alias" label="Key Alias">
+                  <TextInput />
+                </Form.Item>
+
               <Form.Item label="Models" name="models" rules={[
                 {
                   validator: (rule, value) => {
