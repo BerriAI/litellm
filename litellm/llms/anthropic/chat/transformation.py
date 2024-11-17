@@ -402,7 +402,8 @@ class AnthropicConfig:
 
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
-        Set to true if media passed into messages.
+        Set to true if any message content has type="document"
+
         """
         for message in messages:
             if (
@@ -411,7 +412,7 @@ class AnthropicConfig:
                 and isinstance(message["content"], list)
             ):
                 for content in message["content"]:
-                    if "type" in content:
+                    if "type" in content and content["type"] == "document":
                         return True
         return False
 
