@@ -288,11 +288,15 @@ def prepare_key_update_data(
             non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
-        duration_s = _duration_in_seconds(
-            duration=non_default_values["budget_duration"]
-        )
-        key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["budget_reset_at"] = key_reset_at
+        budget_duration = non_default_values.pop("budget_duration")
+        if (
+            budget_duration
+            and (isinstance(budget_duration, str))
+            and len(budget_duration) > 0
+        ):
+            duration_s = _duration_in_seconds(duration=budget_duration)
+            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = key_reset_at
 
     _metadata = existing_key_row.metadata or {}
 
