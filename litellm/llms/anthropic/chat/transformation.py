@@ -107,6 +107,7 @@ class AnthropicConfig:
         computer_tool_used: bool = False,
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
+        is_vertex_request: bool = False,
     ) -> dict:
         import json
 
@@ -123,8 +124,13 @@ class AnthropicConfig:
             "accept": "application/json",
             "content-type": "application/json",
         }
-        if len(betas) > 0:
+
+        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
+        if is_vertex_request is True:
+            pass
+        elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
+
         return headers
 
     def _map_tool_choice(
@@ -403,6 +409,7 @@ class AnthropicConfig:
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
         Set to true if media passed into messages.
+
         """
         for message in messages:
             if (
