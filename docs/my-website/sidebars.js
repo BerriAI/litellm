@@ -132,7 +132,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "💯 Supported Models & Providers",
+      label: "Supported Models & Providers",
       link: {
         type: "generated-index",
         title: "Providers",
@@ -197,7 +197,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Chat Completions (litellm.completion + PROXY)",
+      label: "Guides",
       link: {
         type: "generated-index",
         title: "Chat Completions",
@@ -251,7 +251,7 @@ const sidebars = {
     "scheduler",
     {
       type: "category",
-      label: "🚅 LiteLLM Python SDK",
+      label: "LiteLLM Python SDK",
       items: [
         "set_keys",
         "completion/token_usage",
