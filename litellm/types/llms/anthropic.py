@@ -98,7 +98,7 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-AnthropicMessageToolResultList = Iterable[
+AnthropicMessageToolResultList = List[
     Union[
         AnthropicMessagesTextParam,
         AnthropicMessagesImageParam,
