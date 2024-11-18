@@ -4,7 +4,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
-from httpx import USE_CLIENT_DEFAULT
+from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
 
@@ -60,8 +60,11 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
+        # Create transport with IPv4 only
+        transport = AsyncHTTPTransport(local_address="0.0.0.0")
 
         return httpx.AsyncClient(
+            transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
@@ -316,8 +319,12 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
+            # Create transport with IPv4 only
+            transport = HTTPTransport(local_address="0.0.0.0")
+
             # Create a client with a connection pool
             self.client = httpx.Client(
+                transport=transport,
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_connections=concurrent_limit,
