@@ -4193,6 +4193,9 @@ async def test_completion_codestral_fim_api_stream(model):
     except litellm.APIConnectionError as e:
         print(e)
         pass
+    except litellm.ServiceUnavailableError as e:
+        print(e)
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
