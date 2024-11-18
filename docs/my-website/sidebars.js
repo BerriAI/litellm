@@ -54,8 +54,20 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/user_keys",
-        "proxy/response_headers", 
+        {
+          type: "category",
+          label: "Making LLM Requests",
+          items: [
+            "proxy/user_keys",
+            "proxy/response_headers", 
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse"
+          ],
+        },
         "proxy/reliability",
         {
           type: "category",
@@ -79,18 +91,6 @@ const sidebars = {
           type: "category",
           label: "Routing",
           items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
-        },
-        {
-          type: "category",
-          label: "Pass-through Endpoints (Provider-specific)",
-          items: [
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/langfuse"
-          ],
         },
         {
           type: "category",
