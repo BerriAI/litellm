@@ -31,69 +31,6 @@ spec:
       serviceAccountName: {{ include "litellm.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      initContainers:
-        - name: db-ready
-          securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "docker.io/bitnami/postgresql:16.1.0-debian-11-r20"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          env:
-            {{- if .Values.db.deployStandalone }}
-            - name: DATABASE_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
-                  key: username
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "litellm.fullname" . }}-dbcredentials
-                  key: password
-            - name: DATABASE_HOST
-              value: {{ .Release.Name }}-postgresql
-            - name: DATABASE_NAME
-              value: litellm
-            {{- else if .Values.db.useExisting }}
-            - name: DATABASE_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: {{ .Values.db.secret.usernameKey }}
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.db.secret.name }}
-                  key: {{ .Values.db.secret.passwordKey }}
-            - name: DATABASE_HOST
-              value: {{ .Values.db.endpoint }}
-            - name: DATABASE_NAME
-              value: litellm
-            {{- end }}
-          command:
-            - sh
-            - -c
-            - |
-              # Maximum wait time will be (limit * 2) seconds.
-              limit=60
-              current=0
-              ret=1
-              while [ $current -lt $limit ] && [ $ret -ne 0 ]; do
-                echo "Waiting for database to be ready $current"
-                psql -U $(DATABASE_USERNAME) -h $(DATABASE_HOST) -l
-                ret=$?
-                current=$(( $current + 1 ))
-                sleep 2
-              done
-              if [ $ret -eq 0 ]; then
-                echo "Database is ready"
-              else
-                echo "Database failed to become ready before we gave up waiting."
-              fi
-          {{ if .Values.securityContext.readOnlyRootFilesystem }}
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-          {{ end }}
       containers:
         - name: {{ include "litellm.name" . }}
           securityContext:
@@ -102,7 +39,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: HOST
-              value: "::"
+              value: "{{ .Values.listen | default "0.0.0.0" }}"
             - name: PORT
               value: {{ .Values.service.port | quote}}
             {{- if .Values.db.deployStandalone }}
@@ -135,9 +72,9 @@ spec:
               value: {{ .Values.db.endpoint }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
-            {{- end }}
             - name: DATABASE_URL
-              value: "postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)"
+              value: {{ .Values.db.url | quote }}
+            {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:
@@ -157,6 +94,10 @@ spec:
           envFrom:
           {{- range .Values.environmentSecrets }}
             - secretRef:
+                name: {{ . }}
+          {{- end }}
+          {{- range .Values.environmentConfigMaps }}
+            - configMapRef:
                 name: {{ . }}
           {{- end }}
           args:
@@ -197,6 +138,9 @@ spec:
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         {{ if .Values.securityContext.readOnlyRootFilesystem }}
         - name: tmp

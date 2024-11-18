@@ -4,6 +4,17 @@ import TabItem from '@theme/TabItem';
 
 # VertexAI [Anthropic, Gemini, Model Garden]
 
+
+| Property | Details |
+|-------|-------|
+| Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
+| Provider Route on LiteLLM | `vertex_ai/` |
+| Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
+| Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+
+<br />
+<br />
+
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
@@ -983,86 +994,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
-## AI21 Models
- 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| jamba-1.5-mini@001   | `completion(model='vertex_ai/jamba-1.5-mini@001', messages)` |
-| jamba-1.5-large@001   | `completion(model='vertex_ai/jamba-1.5-large@001', messages)` |
-
-### Usage
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
-
-model = "meta/jamba-1.5-mini@001"
-
-vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
-vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
-
-response = completion(
-    model="vertex_ai/" + model,
-    messages=[{"role": "user", "content": "hi"}],
-    vertex_ai_project=vertex_ai_project,
-    vertex_ai_location=vertex_ai_location,
-)
-print("\nModel Response", response)
-```
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: jamba-1.5-mini
-      litellm_params:
-        model: vertex_ai/jamba-1.5-mini@001
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-    - model_name: jamba-1.5-large
-      litellm_params:
-        model: vertex_ai/jamba-1.5-large@001
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-west-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "jamba-1.5-large",
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-</TabItem>
-</Tabs>
-
-
-
 ### Usage - Codestral FIM
 
 Call Codestral on VertexAI via the OpenAI [`/v1/completion`](https://platform.openai.com/docs/api-reference/completions/create) endpoint for FIM tasks. 
@@ -1150,12 +1081,175 @@ curl -X POST 'http://0.0.0.0:4000/completions' \
 </Tabs>
 
 
-## Model Garden
+## AI21 Models
+ 
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| llama2   | `completion('vertex_ai/<endpoint_id>', messages)` |
+| jamba-1.5-mini@001   | `completion(model='vertex_ai/jamba-1.5-mini@001', messages)` |
+| jamba-1.5-large@001   | `completion(model='vertex_ai/jamba-1.5-large@001', messages)` |
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+model = "meta/jamba-1.5-mini@001"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
+
+response = completion(
+    model="vertex_ai/" + model,
+    messages=[{"role": "user", "content": "hi"}],
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: jamba-1.5-mini
+      litellm_params:
+        model: vertex_ai/jamba-1.5-mini@001
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+    - model_name: jamba-1.5-large
+      litellm_params:
+        model: vertex_ai/jamba-1.5-large@001
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-west-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "jamba-1.5-large",
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
+## Model Garden
+
+:::tip
+
+All OpenAI compatible models from Vertex Model Garden are supported. 
+
+:::
 
 #### Using Model Garden
+
+**Almost all Vertex Model Garden models are OpenAI compatible.**
+
+<Tabs>
+
+<TabItem value="openai" label="OpenAI Compatible Models">
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/openai/{MODEL_ID}` |
+| Vertex Documentation | [Vertex Model Garden - OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_gradio_streaming_chat_completions.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Supported Operations | `/chat/completions`, `/embeddings` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = completion(
+  model="vertex_ai/openai/<your-endpoint-id>", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: llama3-1-8b-instruct
+      litellm_params:
+        model: vertex_ai/openai/5464397967697903616
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "llama3-1-8b-instruct", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+
+
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+
+<TabItem value="non-openai" label="Non-OpenAI Compatible Models">
 
 ```python
 from litellm import completion
@@ -1171,6 +1265,11 @@ response = completion(
 )
 ```
 
+</TabItem>
+
+</Tabs>
+
+
 ## Gemini Pro
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
@@ -1180,9 +1279,58 @@ response = completion(
 
 Fine tuned models on vertex have a numerical model/endpoint id. 
 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| your fine tuned model   | `completion(model='vertex_ai/4965075652664360960', messages)`|
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = completion(
+  model="vertex_ai/<your-finetuned-model>",  # e.g. vertex_ai/4965075652664360960
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  base_model="vertex_ai/gemini-1.5-pro" # the base model - used for routing
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add Vertex Credentials to your env 
+
+```bash
+!gcloud auth application-default login
+```
+
+2. Setup config.yaml 
+
+```yaml
+- model_name: finetuned-gemini
+  litellm_params:
+    model: vertex_ai/<ENDPOINT_ID>
+    vertex_project: <PROJECT_ID>
+    vertex_location: <LOCATION>
+  model_info:
+    base_model: vertex_ai/gemini-1.5-pro # IMPORTANT
+```
+
+3. Test it! 
+
+```bash
+curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: <LITELLM_KEY>' \
+--data '{"model": "finetuned-gemini" ,"messages":[{"role": "user", "content":[{"type": "text", "text": "hi"}]}]}'
+```
+
+</TabItem>
+</Tabs>
+
+
 
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
@@ -1503,6 +1651,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ## **Embedding Models**
 
 #### Usage - Embedding
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 import litellm
 from litellm import embedding
@@ -1515,6 +1667,49 @@ response = embedding(
 )
 print(response)
 ```
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: snowflake-arctic-embed-m-long-1731622468876
+    litellm_params:
+      model: vertex_ai/<your-model-id>
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request using OpenAI Python SDK, Langchain Python SDK
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="snowflake-arctic-embed-m-long-1731622468876", 
+    input = ["good morning from litellm", "this is another item"],
+)
+
+print(response)
+```
+
+
+</TabItem>
+</Tabs>
 
 #### Supported Embedding Models
 All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
@@ -1530,6 +1725,7 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+| Fine-tuned OR Custom Embedding models | `embedding(model="vertex_ai/<your-model-id>", input)` | 
 
 ### Supported OpenAI (Unified) Params
 
@@ -1636,17 +1832,21 @@ Usage
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+Using GCS Images
+
 ```python
 response = await litellm.aembedding(
     model="vertex_ai/multimodalembedding@001",
-    input=[
-        {
-            "image": {
-                "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-            },
-            "text": "this is a unicorn",
-        },
-    ],
+    input="gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png" # will be sent as a gcs image
+)
+```
+
+Using base 64 encoded images
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input="data:image/jpeg;base64,..." # will be sent as a base64 encoded image
 )
 ```
 
@@ -1673,8 +1873,14 @@ litellm_settings:
 $ litellm --config /path/to/config.yaml
 ```
 
-3. Make Request use OpenAI Python SDK
+3. Make Request use OpenAI Python SDK, Langchain Python SDK
 
+
+<Tabs>
+
+<TabItem value="OpenAI SDK" label="OpenAI SDK">
+
+Requests with GCS Image / Video URI
 
 ```python
 import openai
@@ -1684,23 +1890,13 @@ client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 # # request sent to model set on litellm proxy, `litellm --model`
 response = client.embeddings.create(
     model="multimodalembedding@001", 
-    input = None,
-    extra_body = {
-        "instances": [
-        {
-            "image": {
-                "bytesBase64Encoded": "base64"
-            },
-            "text": "this is a unicorn",
-        },
-    ],
-    }
+    input = "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png",
 )
 
 print(response)
 ```
 
-
+Requests with base64 encoded images
 
 ```python
 import openai
@@ -1710,23 +1906,63 @@ client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 # # request sent to model set on litellm proxy, `litellm --model`
 response = client.embeddings.create(
     model="multimodalembedding@001", 
-    input = None,
-    extra_body = {
-        "instances": [
-        {
-            "image": {
-                "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-            },
-            "text": "this is a unicorn",
-        },
-    ],
-    }
+    input = "data:image/jpeg;base64,...",
 )
 
 print(response)
 ```
 
 </TabItem>
+
+<TabItem value="langchain" label="Langchain">
+
+Requests with GCS Image / Video URI
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings_models = "multimodalembedding@001"
+
+embeddings = OpenAIEmbeddings(
+    model="multimodalembedding@001",
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-1234",  # type: ignore
+)
+
+
+query_result = embeddings.embed_query(
+    "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+)
+print(query_result)
+
+```
+
+Requests with base64 encoded images
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings_models = "multimodalembedding@001"
+
+embeddings = OpenAIEmbeddings(
+    model="multimodalembedding@001",
+    base_url="http://0.0.0.0:4000",
+    api_key="sk-1234",  # type: ignore
+)
+
+
+query_result = embeddings.embed_query(
+    "data:image/jpeg;base64,..."
+)
+print(query_result)
+
+```
+
+</TabItem>
+
+</Tabs>
+</TabItem>
+
+
 <TabItem value="proxy-vtx" label="LiteLLM PROXY (Vertex SDK)">
 
 1. Add model to config.yaml
@@ -2069,8 +2305,93 @@ print("response from proxy", response)
 
 
 
+## Authentication - vertex_project, vertex_location, etc. 
+
+Set your vertex credentials via:
+- dynamic params
+OR
+- env vars 
 
 
+### **Dynamic Params**
+
+You can set:
+- `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
+- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
+
+as dynamic params for a `litellm.completion` call. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+
+response = completion(
+  model="vertex_ai/gemini-pro",
+  messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
+  vertex_credentials=vertex_credentials_json,
+  vertex_project="my-special-project", 
+  vertex_location="my-special-location"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+    - model_name: gemini-1.5-pro
+      litellm_params:
+        model: gemini-1.5-pro
+        vertex_credentials: os.environ/VERTEX_FILE_PATH_ENV_VAR # os.environ["VERTEX_FILE_PATH_ENV_VAR"] = "/path/to/service_account.json" 
+        vertex_project: "my-special-project"
+        vertex_location: "my-special-location:
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+### **Environment Variables**
+
+You can set:
+- `GOOGLE_APPLICATION_CREDENTIALS` - store the filepath for your service_account.json in here (used by vertex sdk directly).
+- VERTEXAI_LOCATION - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- VERTEXAI_PROJECT - Optional[str] - use if vertex project different from the one in vertex_credentials
+
+1. GOOGLE_APPLICATION_CREDENTIALS
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json"
+```
+
+2. VERTEXAI_LOCATION
+
+```bash
+export VERTEXAI_LOCATION="us-central1" # can be any vertex location
+```
+
+3. VERTEXAI_PROJECT
+
+```bash
+export VERTEXAI_PROJECT="my-test-project" # ONLY use if model project is different from service account project
+```
 
 
 ## Extra
@@ -2080,6 +2401,9 @@ Here's the code for storing your service account credentials as `GOOGLE_APPLICAT
 
 
 ```python
+import os 
+import tempfile
+
 def load_vertex_ai_credentials():
   # Define the path to the vertex_key.json file
   print("loading vertex ai credentials")

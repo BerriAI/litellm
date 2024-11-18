@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
@@ -34,7 +34,7 @@ def init_rds_client(
     # Iterate over parameters and update if needed
     for i, param in enumerate(params_to_check):
         if param and param.startswith("os.environ/"):
-            params_to_check[i] = get_secret(param)
+            params_to_check[i] = get_secret(param)  # type: ignore
     # Assign updated values back to parameters
     (
         aws_access_key_id,
@@ -62,13 +62,13 @@ def init_rds_client(
     import boto3
 
     if isinstance(timeout, float):
-        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
     elif isinstance(timeout, httpx.Timeout):
-        config = boto3.session.Config(
+        config = boto3.session.Config(  # type: ignore
             connect_timeout=timeout.connect, read_timeout=timeout.read
         )
     else:
-        config = boto3.session.Config()
+        config = boto3.session.Config()  # type: ignore
 
     ### CHECK STS ###
     if (
@@ -105,6 +105,7 @@ def init_rds_client(
             region_name=region_name,
             config=config,
         )
+
     elif aws_role_name is not None and aws_session_name is not None:
         # use sts if role name passed in
         sts_client = boto3.client(
@@ -144,6 +145,7 @@ def init_rds_client(
             region_name=region_name,
             config=config,
         )
+
     else:
         # aws_access_key_id is None, assume user is trying to auth using env variables
         # boto3 automatically reads env variables
@@ -157,25 +159,31 @@ def init_rds_client(
     return client
 
 
-def generate_iam_auth_token(db_host, db_port, db_user) -> str:
+def generate_iam_auth_token(
+    db_host, db_port, db_user, client: Optional[Any] = None
+) -> str:
     from urllib.parse import quote
 
     import boto3
 
-    boto_client = init_rds_client(
-        aws_region_name=os.getenv("AWS_REGION_NAME"),
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        aws_session_name=os.getenv("AWS_SESSION_NAME"),
-        aws_profile_name=os.getenv("AWS_PROFILE_NAME"),
-        aws_role_name=os.getenv("AWS_ROLE_NAME", os.getenv("AWS_ROLE_ARN")),
-        aws_web_identity_token=os.getenv(
-            "AWS_WEB_IDENTITY_TOKEN", os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
-        ),
-    )
+    if client is None:
+        boto_client = init_rds_client(
+            aws_region_name=os.getenv("AWS_REGION_NAME"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_name=os.getenv("AWS_SESSION_NAME"),
+            aws_profile_name=os.getenv("AWS_PROFILE_NAME"),
+            aws_role_name=os.getenv("AWS_ROLE_NAME", os.getenv("AWS_ROLE_ARN")),
+            aws_web_identity_token=os.getenv(
+                "AWS_WEB_IDENTITY_TOKEN", os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+            ),
+        )
+    else:
+        boto_client = client
 
     token = boto_client.generate_db_auth_token(
         DBHostname=db_host, Port=db_port, DBUsername=db_user
     )
     cleaned_token = quote(token, safe="")
+
     return cleaned_token

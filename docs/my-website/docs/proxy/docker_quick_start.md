@@ -314,12 +314,18 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 If you need to run the docker image as a non-root user, use [this](https://github.com/BerriAI/litellm/pkgs/container/litellm-non_root).
 
-### SSL Verification Issue
+### SSL Verification Issue / Connection Error.
 
 If you see 
 
 ```bash
 ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain (_ssl.c:1006)
+```
+
+OR
+
+```bash
+Connection Error.
 ```
 
 You can disable ssl verification with: 

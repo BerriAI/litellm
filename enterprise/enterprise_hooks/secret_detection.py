@@ -5,39 +5,24 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys, os
+import sys
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
-from litellm.caching import DualCache
+from typing import Optional
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
-import aiohttp, asyncio
 from litellm._logging import verbose_proxy_logger
 import tempfile
-from litellm._logging import verbose_proxy_logger
-
-
-litellm.set_verbose = True
+from litellm.integrations.custom_guardrail import CustomGuardrail
 
 GUARDRAIL_NAME = "hide_secrets"
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
 )
-print("custom plugins path", _custom_plugins_path)
 _default_detect_secrets_config = {
     "plugins_used": [
         {"name": "SoftlayerDetector"},
@@ -434,9 +419,10 @@ _default_detect_secrets_config = {
 }
 
 
-class _ENTERPRISE_SecretDetection(CustomLogger):
-    def __init__(self):
-        pass
+class _ENTERPRISE_SecretDetection(CustomGuardrail):
+    def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
+        self.user_defined_detect_secrets_config = detect_secrets_config
+        super().__init__(**kwargs)
 
     def scan_message_for_secrets(self, message_content: str):
         from detect_secrets import SecretsCollection
@@ -447,7 +433,11 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
         temp_file.close()
 
         secrets = SecretsCollection()
-        with transient_settings(_default_detect_secrets_config):
+
+        detect_secrets_config = (
+            self.user_defined_detect_secrets_config or _default_detect_secrets_config
+        )
+        with transient_settings(detect_secrets_config):
             secrets.scan_file(temp_file.name)
 
         os.remove(temp_file.name)
@@ -484,9 +474,12 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
         from detect_secrets import SecretsCollection
         from detect_secrets.settings import default_settings
 
+        print("INSIDE SECRET DETECTION PRE-CALL HOOK!")
+
         if await self.should_run_check(user_api_key_dict) is False:
             return
 
+        print("RUNNING CHECK!")
         if "messages" in data and isinstance(data["messages"], list):
             for message in data["messages"]:
                 if "content" in message and isinstance(message["content"], str):
@@ -503,6 +496,8 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
                         verbose_proxy_logger.warning(
                             f"Detected and redacted secrets in message: {secret_types}"
                         )
+                    else:
+                        verbose_proxy_logger.debug("No secrets detected on input.")
 
         if "prompt" in data:
             if isinstance(data["prompt"], str):

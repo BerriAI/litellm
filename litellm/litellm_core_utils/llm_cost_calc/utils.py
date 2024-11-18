@@ -17,9 +17,8 @@ def _generic_cost_per_character(
     custom_completion_cost: Optional[float],
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Generic function to help calculate cost per character.
-    """
-    """
+    Calculates cost per character for aspeech/speech calls.
+
     Calculates the cost per character for a given model, input messages, and response object.
 
     Input:
@@ -29,7 +28,7 @@ def _generic_cost_per_character(
         - completion_characters: float, the number of output characters
 
     Returns:
-        Tuple[Optional[float], Optional[float]] - prompt_cost_in_usd, completion_cost_in_usd. 
+        Tuple[Optional[float], Optional[float]] - prompt_cost_in_usd, completion_cost_in_usd.
         - returns None if not able to calculate cost.
 
     Raises:

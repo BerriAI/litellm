@@ -140,6 +140,7 @@ async def langfuse_proxy_route(
         request,
         fastapi_response,
         user_api_key_dict,
+        query_params=dict(request.query_params),  # type: ignore
     )
 
     return received_value

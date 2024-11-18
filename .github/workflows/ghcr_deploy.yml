@@ -63,7 +63,7 @@ jobs:
         with:
           context: .
           push: true
-          file: Dockerfile.database
+          file: ./docker/Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
       -
         name: Build and push litellm-spend-logs image
@@ -149,7 +149,7 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          file: Dockerfile.database
+          file: ./docker/Dockerfile.database
           push: true
           tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
           labels: ${{ steps.meta-database.outputs.labels }} 
@@ -188,7 +188,7 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          file: Dockerfile.non_root
+          file: ./docker/Dockerfile.non_root
           push: true
           tags: ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }} 
           labels: ${{ steps.meta-non_root.outputs.labels }} 

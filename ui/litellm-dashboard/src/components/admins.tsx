@@ -215,10 +215,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     const fetchProxyAdminInfo = async () => {
       if (accessToken != null) {
         const combinedList: any[] = [];
-        const proxyViewers = await userGetAllUsersCall(
+        const response = await userGetAllUsersCall(
           accessToken,
           "proxy_admin_viewer"
         );
+        console.log("proxy admin viewer response: ", response);
+        const proxyViewers: User[] = response["users"];
+        console.log(`proxy viewers response: ${proxyViewers}`);
         proxyViewers.forEach((viewer: User) => {
           combinedList.push({
             user_role: viewer.user_role,
@@ -229,10 +232,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
         console.log(`proxy viewers: ${proxyViewers}`);
 
-        const proxyAdmins = await userGetAllUsersCall(
+        const response2 = await userGetAllUsersCall(
           accessToken,
           "proxy_admin"
         );
+
+        const proxyAdmins: User[] = response2["users"];
 
         proxyAdmins.forEach((admins: User) => {
           combinedList.push({

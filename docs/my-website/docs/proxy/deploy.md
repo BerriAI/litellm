@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 🐳 Docker, Deploying LiteLLM Proxy
+# 🐳 Docker, Deployment
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
@@ -24,7 +24,7 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 # It is used to encrypt / decrypt your LLM API Key credentials
 # We recommned - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
-echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
 source .env
 
@@ -124,8 +124,8 @@ WORKDIR /app
 # Copy the configuration file into the container at /app
 COPY config.yaml .
 
-# Make sure your entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x ./docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
@@ -265,12 +265,12 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 
 ## Options to deploy LiteLLM 
 
-| Docs | When to Use |
-| --- | --- |
-| [Quick Start](#quick-start) | call 100+ LLMs + Load Balancing |
-| [Deploy with Database](#deploy-with-database) | + use Virtual Keys + Track Spend (Note: When deploying with a database providing a `DATABASE_URL` and `LITELLM_MASTER_KEY` are required in your env ) |
-| [LiteLLM container + Redis](#litellm-container--redis) | + load balance across multiple litellm containers |
-| [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers |
+| Docs                                                                                              | When to Use                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Quick Start](#quick-start)                                                                       | call 100+ LLMs + Load Balancing                                                                                                                       |
+| [Deploy with Database](#deploy-with-database)                                                     | + use Virtual Keys + Track Spend (Note: When deploying with a database providing a `DATABASE_URL` and `LITELLM_MASTER_KEY` are required in your env ) |
+| [LiteLLM container + Redis](#litellm-container--redis)                                            | + load balance across multiple litellm containers                                                                                                     |
+| [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers                                                                    |
 
 ## Deploy with Database
 ### Docker, Kubernetes, Helm Chart
@@ -562,34 +562,13 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 
 By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
 
-Use this dockerfile to build an image which pre-generates the prisma binaries.
+Use this docker image to deploy litellm with pre-generated prisma binaries.
 
-```Dockerfile
-# Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
-
-# Set the working directory to /app
-WORKDIR /app
-
-### [👇 KEY STEP] ###
-# Install Prisma CLI and generate Prisma client
-RUN pip install prisma 
-RUN prisma generate
-### FIN #### 
-
-
-# Expose the necessary port
-EXPOSE 4000
-
-# Override the CMD instruction with your desired command and arguments
-# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
-# CMD ["--port", "4000", "--config", "config.yaml"]
-
-# Define the command to run your app
-ENTRYPOINT ["litellm"]
-
-CMD ["--port", "4000"]
+```bash
+docker pull ghcr.io/berriai/litellm-non_root:main-stable
 ```
+
+[Published Docker Image link](https://github.com/BerriAI/litellm/pkgs/container/litellm-non_root)
 
 ## Advanced Deployment Settings
 
@@ -653,7 +632,7 @@ RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
 WORKDIR /app
 
 # Make sure your entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+RUN chmod +x ./docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
@@ -705,7 +684,54 @@ docker run ghcr.io/berriai/litellm:main-latest \
 
 Provide an ssl certificate when starting litellm proxy server 
 
-### 3. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
+### 3. Using Http/2 with Hypercorn
+
+Use this if you want to run the proxy with hypercorn to support http/2
+
+Step 1. Build your custom docker image with hypercorn
+
+```shell
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Copy the configuration file into the container at /app
+COPY config.yaml .
+
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x ./docker/entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# 👉 Key Change: Install hypercorn
+RUN pip install hypercorn
+
+# Override the CMD instruction with your desired command and arguments
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
+```
+
+Step 2. Pass the `--run_hypercorn` flag when starting the proxy
+
+```shell
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -p 4000:4000 \
+    -e LITELLM_LOG="DEBUG"\
+    -e SERVER_ROOT_PATH="/api/v1"\
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+    -e LITELLM_MASTER_KEY="sk-1234"\
+    your_custom_docker_image \
+    --config /app/config.yaml
+    --run_hypercorn
+```
+
+### 4. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
@@ -964,6 +990,7 @@ export DATABASE_USER="db-user"
 export DATABASE_PORT="5432"
 export DATABASE_HOST="database-1-instance-1.cs1ksmwz2xt3.us-west-2.rds.amazonaws.com"
 export DATABASE_NAME="database-1-instance-1"
+export DATABASE_SCHEMA="schema-name" # skip to use the default "public" schema
 ```
 
 3. Run proxy with iam+rds

@@ -21,6 +21,7 @@ import {
   InputNumber,
   Select,
   message,
+  Radio,
 } from "antd";
 import {
   keyCreateCall,
@@ -53,6 +54,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [softBudget, setSoftBudget] = useState(null);
   const [userModels, setUserModels] = useState([]);
   const [modelsToPick, setModelsToPick] = useState([]);
+  const [keyOwner, setKeyOwner] = useState("you");
+
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -108,6 +111,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       message.info("Making API Call");
       setIsModalVisible(true);
+
+      // If it's a service account, add the service_account_id to the metadata
+      if (keyOwner === "service_account") {
+        // Parse existing metadata or create an empty object
+        let metadata: Record<string, any> = {};
+        try {
+          metadata = JSON.parse(formValues.metadata || "{}");
+        } catch (error) {
+          console.error("Error parsing metadata:", error);
+        }
+        metadata["service_account_id"] = formValues.key_alias;
+        // Update the formValues with the new metadata
+        formValues.metadata = JSON.stringify(metadata);
+      }
+
       const response = await keyCreateCall(accessToken, userID, formValues);
 
       console.log("key create Response:", response);
@@ -172,11 +190,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           labelAlign="left"
         >
           <>
+            <Form.Item label="Owned By" className="mb-4">
+              <Radio.Group
+                onChange={(e) => setKeyOwner(e.target.value)}
+                value={keyOwner}
+              >
+                <Radio value="you">You</Radio>
+                <Radio value="service_account">Service Account</Radio>
+              </Radio.Group>
+            </Form.Item>
+
             <Form.Item
-              label="Key Name"
+              label={keyOwner === "you" ? "Key Name" : "Service Account ID"}
               name="key_alias"
-              rules={[{ required: true, message: "Please input a key name" }]}
-              help="required"
+              rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
+              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
             >
               <TextInput placeholder="" />
             </Form.Item>

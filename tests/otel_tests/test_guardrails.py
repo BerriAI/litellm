@@ -70,6 +70,7 @@ async def generate_key(session, guardrails):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Aporia account disabled")
 async def test_llm_guard_triggered_safe_request():
     """
     - Tests a request where no content mod is triggered
@@ -99,6 +100,7 @@ async def test_llm_guard_triggered_safe_request():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Aporia account disabled")
 async def test_llm_guard_triggered():
     """
     - Tests a request where no content mod is triggered
@@ -146,6 +148,7 @@ async def test_no_llm_guard_triggered():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Aporia account disabled")
 async def test_guardrails_with_api_key_controls():
     """
     - Make two API Keys

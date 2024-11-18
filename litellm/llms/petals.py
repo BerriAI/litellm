@@ -98,7 +98,7 @@ def completion(
     print_verbose: Callable,
     encoding,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     stream=False,
     litellm_params=None,
     logger_fn=None,
@@ -123,6 +123,7 @@ def completion(
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
+    output_text: Optional[str] = None
     if api_base:
         ## LOGGING
         logging_obj.pre_call(
@@ -157,7 +158,7 @@ def completion(
             import torch
             from petals import AutoDistributedModelForCausalLM  # type: ignore
             from transformers import AutoTokenizer
-        except:
+        except Exception:
             raise Exception(
                 "Importing torch, transformers, petals failed\nTry pip installing petals \npip install git+https://github.com/bigscience-workshop/petals"
             )
@@ -192,7 +193,7 @@ def completion(
         ## RESPONSE OBJECT
         output_text = tokenizer.decode(outputs[0])
 
-    if len(output_text) > 0:
+    if output_text is not None and len(output_text) > 0:
         model_response.choices[0].message.content = output_text  # type: ignore
 
     prompt_tokens = len(encoding.encode(prompt))

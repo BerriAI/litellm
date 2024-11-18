@@ -49,12 +49,11 @@ for chunk in response:
 ## Supported Models
 | Model Name | Function Call |
 |------------|----------------|
+| command-r-plus-08-2024 | `completion('command-r-plus-08-2024', messages)` |  
+| command-r-08-2024 | `completion('command-r-08-2024', messages)` |
+| command-r-plus | `completion('command-r-plus', messages)` |  
 | command-r | `completion('command-r', messages)` |
 | command-light | `completion('command-light', messages)` |  
-| command-r-plus | `completion('command-r-plus', messages)` |  
-| command-medium | `completion('command-medium', messages)` |
-| command-medium-beta | `completion('command-medium-beta', messages)` |
-| command-xlarge-nightly | `completion('command-xlarge-nightly', messages)` |
 | command-nightly | `completion('command-nightly', messages)` |
 
 

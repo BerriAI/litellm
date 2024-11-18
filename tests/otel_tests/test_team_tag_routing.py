@@ -18,6 +18,7 @@ async def chat_completion(
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    print("headers=", headers)
     data = {
         "model": model,
         "messages": [
@@ -96,16 +97,21 @@ async def test_team_tag_routing():
     async with aiohttp.ClientSession() as session:
         key = LITELLM_MASTER_KEY
         team_a_data = await create_team_with_tags(session, key, ["teamA"])
+        print("team_a_data=", team_a_data)
         team_a_id = team_a_data["team_id"]
 
         team_b_data = await create_team_with_tags(session, key, ["teamB"])
+        print("team_b_data=", team_b_data)
         team_b_id = team_b_data["team_id"]
 
         key_with_team_a = await create_key_with_team(session, key, team_a_id)
-        print(key_with_team_a)
+        print("key_with_team_a=", key_with_team_a)
         _key_with_team_a = key_with_team_a["key"]
         for _ in range(5):
-            response_a, headers = await chat_completion(session, _key_with_team_a)
+            response_a, headers = await chat_completion(
+                session=session, key=_key_with_team_a
+            )
+
             headers = dict(headers)
             print(response_a)
             print(headers)

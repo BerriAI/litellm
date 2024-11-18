@@ -34,7 +34,7 @@ class AnthropicAdapter(CustomLogger):
         """
         request_body = AnthropicMessagesRequest(**kwargs)  # type: ignore
 
-        translated_body = litellm.AnthropicConfig().translate_anthropic_to_openai(
+        translated_body = litellm.AnthropicExperimentalPassThroughConfig().translate_anthropic_to_openai(
             anthropic_message_request=request_body
         )
 
@@ -44,7 +44,7 @@ class AnthropicAdapter(CustomLogger):
         self, response: litellm.ModelResponse
     ) -> Optional[AnthropicResponse]:
 
-        return litellm.AnthropicConfig().translate_openai_response_to_anthropic(
+        return litellm.AnthropicExperimentalPassThroughConfig().translate_openai_response_to_anthropic(
             response=response
         )
 
@@ -99,7 +99,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                processed_chunk = litellm.AnthropicConfig().translate_streaming_openai_response_to_anthropic(
+                processed_chunk = litellm.AnthropicExperimentalPassThroughConfig().translate_streaming_openai_response_to_anthropic(
                     response=chunk
                 )
                 if (
@@ -163,7 +163,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                processed_chunk = litellm.AnthropicConfig().translate_streaming_openai_response_to_anthropic(
+                processed_chunk = litellm.AnthropicExperimentalPassThroughConfig().translate_streaming_openai_response_to_anthropic(
                     response=chunk
                 )
                 if (

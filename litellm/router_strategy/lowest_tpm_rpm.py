@@ -1,14 +1,19 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-from pydantic import BaseModel
-import dotenv, os, requests, random
-from typing import Optional, Union, List, Dict
-from datetime import datetime
+import os
+import random
 import traceback
+from datetime import datetime
+from typing import Dict, List, Optional, Union
+
+import dotenv
+import requests
+from pydantic import BaseModel
+
 from litellm import token_counter
-from litellm.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_router_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.utils import print_verbose
 
 
@@ -17,10 +22,10 @@ class LiteLLMBase(BaseModel):
     Implements default functions, all pydantic objects should have.
     """
 
-    def json(self, **kwargs):
+    def json(self, **kwargs):  # type: ignore
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception:
             # if using pydantic v1
             return self.dict()
 
@@ -134,18 +139,22 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # update cache
 
                 ## TPM
-                request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=tpm_key) or {}
+                )
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )
 
                 ## RPM
-                request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
+                request_count_dict = (
+                    await self.router_cache.async_get_cache(key=rpm_key) or {}
+                )
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(
+                await self.router_cache.async_set_cache(
                     key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )
 
@@ -161,7 +170,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             verbose_router_logger.debug(traceback.format_exc())
             pass
 
-    def get_available_deployments(
+    def get_available_deployments(  # noqa: PLR0915
         self,
         model_group: str,
         healthy_deployments: list,
@@ -187,7 +196,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         )
         try:
             input_tokens = token_counter(messages=messages, text=input)
-        except:
+        except Exception:
             input_tokens = 0
         verbose_router_logger.debug(f"input_tokens={input_tokens}")
         # -----------------------

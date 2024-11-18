@@ -113,3 +113,5 @@ curl http://0.0.0.0:4000/rerank \
 |-------------|--------------------|
 | Cohere      |   [Usage](#quick-start)                 |
 | Together AI|   [Usage](../docs/providers/togetherai)                 |  
+| Azure AI|   [Usage](../docs/providers/azure_ai)                 |  
+| Jina AI|   [Usage](../docs/providers/jina_ai)                 |  

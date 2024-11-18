@@ -25,6 +25,13 @@ model_list:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
       tags: ["paid"] # 👈 Key Change
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["default"] # OPTIONAL - All untagged requests will get routed to this
+  
 
 router_settings:
   enable_tag_filtering: True # 👈 Key Change
@@ -136,6 +143,46 @@ Response
 }
 ```
 
+## Setting Default Tags 
+
+Use this if you want all untagged requests to be routed to specific deployments
+
+1. Set default tag on your yaml
+```yaml
+  model_list:
+    - model_name: fake-openai-endpoint
+      litellm_params:
+        model: openai/fake
+        api_key: fake-key
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+        tags: ["default"] # 👈 Key Change - All untagged requests will get routed to this
+      model_info:
+        id: "default-model" # used for identifying model in response headers
+```
+
+2. Start proxy
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make request with no tags
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ]
+  }'
+```
+
+Expect to see the following response header when this works
+```shell
+x-litellm-model-id: default-model
+```
+
 ## ✨ Team based tag routing (Enterprise)
 
 LiteLLM Proxy supports team-based tag routing, allowing you to associate specific tags with teams and route requests accordingly. Example **Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B** (LLM Access Control For Teams)
@@ -170,6 +217,12 @@ Here's how to set up and use team-based tag routing using curl commands:
         tags: ["teamB"] # 👈 Key Change
       model_info:
         id: "team-b-model" # used for identifying model in response headers
+    - model_name: fake-openai-endpoint
+      litellm_params:
+        model: openai/fake
+        api_key: fake-key
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+        tags: ["default"] # OPTIONAL - All untagged requests will get routed to this
 
   router_settings:
     enable_tag_filtering: True # 👈 Key Change

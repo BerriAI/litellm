@@ -34,7 +34,7 @@ from litellm.proxy.utils import PrismaClient
 def get_new_internal_user_defaults(
     user_id: str, user_email: Optional[str] = None
 ) -> dict:
-    user_info = litellm.default_user_params or {}
+    user_info = litellm.default_internal_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
         "models": user_info.get("models", None),
@@ -109,8 +109,8 @@ async def add_new_member(
                 where={"user_id": user_info.user_id},  # type: ignore
                 data={"teams": {"push": [team_id]}},
             )
-
-            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+            if _returned_user is not None:
+                returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
                 status_code=400,
@@ -228,24 +228,26 @@ async def send_management_endpoint_alert(
     - A team is created, updated, or deleted
     """
     from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
+    from litellm.types.integrations.slack_alerting import AlertType
 
     if premium_user is not True:
         return
 
     management_function_to_event_name = {
-        "generate_key_fn": "New Virtual Key Created",
-        "update_key_fn": "Virtual Key Updated",
-        "delete_key_fn": "Virtual Key Deleted",
+        "generate_key_fn": AlertType.new_virtual_key_created,
+        "update_key_fn": AlertType.virtual_key_updated,
+        "delete_key_fn": AlertType.virtual_key_deleted,
         # Team events
-        "new_team": "New Team Created",
-        "update_team": "Team Updated",
-        "delete_team": "Team Deleted",
+        "new_team": AlertType.new_team_created,
+        "update_team": AlertType.team_updated,
+        "delete_team": AlertType.team_deleted,
         # Internal User events
-        "new_user": "New Internal User Created",
-        "user_update": "Internal User Updated",
-        "delete_user": "Internal User Deleted",
+        "new_user": AlertType.new_internal_user_created,
+        "user_update": AlertType.internal_user_updated,
+        "delete_user": AlertType.internal_user_deleted,
     }
 
+    # Check if alerting is enabled
     if (
         proxy_logging_obj is not None
         and proxy_logging_obj.slack_alerting_instance is not None
@@ -253,6 +255,8 @@ async def send_management_endpoint_alert(
 
         # Virtual Key Events
         if function_name in management_function_to_event_name:
+            _event_name: AlertType = management_function_to_event_name[function_name]
+
             key_event = VirtualKeyEvent(
                 created_by_user_id=user_api_key_dict.user_id or "Unknown",
                 created_by_user_role=user_api_key_dict.user_role or "Unknown",
@@ -260,9 +264,12 @@ async def send_management_endpoint_alert(
                 request_kwargs=request_kwargs,
             )
 
-            event_name = management_function_to_event_name[function_name]
+            # replace all "_" with " " and capitalize
+            event_name = _event_name.replace("_", " ").title()
             await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
-                key_event=key_event, event_name=event_name
+                key_event=key_event,
+                event_name=event_name,
+                alert_type=_event_name,
             )
 
 
@@ -277,7 +284,7 @@ def management_endpoint_wrapper(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = datetime.now()
-
+        _http_request: Optional[Request] = None
         try:
             result = await func(*args, **kwargs)
             end_time = datetime.now()
@@ -293,8 +300,7 @@ def management_endpoint_wrapper(func):
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
                 )
-
-                _http_request: Request = kwargs.get("http_request")
+                _http_request = kwargs.get("http_request", None)
                 parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     from litellm.proxy.proxy_server import open_telemetry_logger
@@ -315,7 +321,7 @@ def management_endpoint_wrapper(func):
                                 end_time=end_time,
                             )
 
-                            await open_telemetry_logger.async_management_endpoint_success_hook(
+                            await open_telemetry_logger.async_management_endpoint_success_hook(  # type: ignore
                                 logging_payload=logging_payload,
                                 parent_otel_span=parent_otel_span,
                             )
@@ -344,7 +350,7 @@ def management_endpoint_wrapper(func):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 if open_telemetry_logger is not None:
-                    _http_request: Request = kwargs.get("http_request")
+                    _http_request = kwargs.get("http_request")
                     if _http_request:
                         _route = _http_request.url.path
                         _request_body: dict = await _read_request_body(
@@ -359,7 +365,7 @@ def management_endpoint_wrapper(func):
                             exception=e,
                         )
 
-                        await open_telemetry_logger.async_management_endpoint_failure_hook(
+                        await open_telemetry_logger.async_management_endpoint_failure_hook(  # type: ignore
                             logging_payload=logging_payload,
                             parent_otel_span=parent_otel_span,
                         )

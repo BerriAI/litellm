@@ -82,7 +82,17 @@ const CreateKeyPage = () => {
   const invitation_id = searchParams.get("invitation_id");
   const token = getCookie('token');
 
-  const [page, setPage] = useState("api-keys");
+  const [page, setPage] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('selectedPage') || "api-keys";
+    }
+    return "api-keys";
+  });
+
+  useEffect(() => {
+    localStorage.setItem('selectedPage', page);
+  }, [page]);
+
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
@@ -149,16 +159,13 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
-              setProxySettings={setProxySettings}
-              proxySettings={proxySettings}
             />
         ) : (
         <div className="flex flex-col min-h-screen">
         <Navbar
           userID={userID}
           userRole={userRole}
-          userEmail={userEmail}
-          showSSOBanner={showSSOBanner}
+          userEmail={userEmail} 
           premiumUser={premiumUser}
           setProxySettings={setProxySettings}
           proxySettings={proxySettings}
@@ -168,7 +175,7 @@ const CreateKeyPage = () => {
                 <Sidebar
                 setPage={setPage}
                 userRole={userRole}
-                defaultSelectedKey={null}
+                defaultSelectedKey={page}
               />            
           </div>
 
@@ -184,8 +191,6 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
-              setProxySettings={setProxySettings}
-              proxySettings={proxySettings}
             />
           ) : page == "models" ? (
             <ModelDashboard

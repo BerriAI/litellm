@@ -26,32 +26,6 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
-  themes: [
-    [
-      require.resolve("@getcanary/docusaurus-theme-search-pagefind"),
-      {
-        styles: {
-          "--canary-color-primary-c": 0.1,
-          "--canary-color-primary-h": 270,
-        },
-        pagefind: {
-          ranking: {
-            // https://pagefind.app/docs/ranking
-            pageLength: 0.0,
-            termFrequency: 1.0,
-            termSimilarity: 1.0,
-            termSaturation: 2.0,
-          }
-        },
-        tabs: [
-          { name: "All", pattern: "**/*" },
-          { name: "Providers", pattern: "/docs/providers/**" },
-          { name: "Proxy", pattern: "/docs/proxy/**" }
-        ],
-        indexOnly: true,
-      },
-    ],
-  ],
   plugins: [
     [
       '@docusaurus/plugin-ideal-image',

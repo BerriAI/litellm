@@ -5,14 +5,14 @@ import json
 import os
 import sys
 import traceback
-from typing import Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 from dotenv import load_dotenv
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import KeyManagementSystem
 
@@ -29,12 +29,74 @@ def _is_base64(s):
         return False
 
 
-def get_secret(
+def str_to_bool(value: Optional[str]) -> Optional[bool]:
+    """
+    Converts a string to a boolean if it's a recognized boolean string.
+    Returns None if the string is not a recognized boolean value.
+
+    :param value: The string to be checked.
+    :return: True or False if the string is a recognized boolean, otherwise None.
+    """
+    if value is None:
+        return None
+
+    true_values = {"true"}
+    false_values = {"false"}
+
+    value_lower = value.strip().lower()
+
+    if value_lower in true_values:
+        return True
+    elif value_lower in false_values:
+        return False
+    else:
+        return None
+
+
+def get_secret_str(
+    secret_name: str,
+    default_value: Optional[Union[str, bool]] = None,
+) -> Optional[str]:
+    """
+    Guarantees response from 'get_secret' is either string or none. Used for fixing linting errors.
+    """
+    value = get_secret(secret_name=secret_name, default_value=default_value)
+    if value is not None and not isinstance(value, str):
+        return None
+
+    return value
+
+
+def get_secret_bool(
+    secret_name: str,
+    default_value: Optional[bool] = None,
+) -> Optional[bool]:
+    """
+    Guarantees response from 'get_secret' is either boolean or none. Used for fixing linting errors.
+
+    Args:
+        secret_name: The name of the secret to get.
+        default_value: The default value to return if the secret is not found.
+
+    Returns:
+        The secret value as a boolean or None if the secret is not found.
+    """
+    _secret_value = get_secret(secret_name, default_value)
+    if _secret_value is None:
+        return None
+    elif isinstance(_secret_value, bool):
+        return _secret_value
+    else:
+        return str_to_bool(_secret_value)
+
+
+def get_secret(  # noqa: PLR0915
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):
     key_management_system = litellm._key_management_system
     key_management_settings = litellm._key_management_settings
+    secret = None
 
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
@@ -100,7 +162,7 @@ def get_secret(
                 },
             )
             if response.status_code == 200:
-                oidc_token = response.text["value"]
+                oidc_token = response.json().get("value", None)
                 oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
                 return oidc_token
             else:
@@ -136,7 +198,10 @@ def get_secret(
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if litellm.secret_manager_client is not None:
+        if (
+            _should_read_secret_from_secret_manager()
+            and litellm.secret_manager_client is not None
+        ):
             try:
                 client = litellm.secret_manager_client
                 key_manager = "local"
@@ -145,7 +210,8 @@ def get_secret(
 
                 if key_management_settings is not None:
                     if (
-                        secret_name not in key_management_settings.hosted_keys
+                        key_management_settings.hosted_keys is not None
+                        and secret_name not in key_management_settings.hosted_keys
                     ):  # allow user to specify which keys to check in hosted key manager
                         key_manager = "local"
 
@@ -162,15 +228,15 @@ def get_secret(
                     encrypted_secret: Any = os.getenv(secret_name)
                     if encrypted_secret is None:
                         raise ValueError(
-                            f"Google KMS requires the encrypted secret to be in the environment!"
+                            "Google KMS requires the encrypted secret to be in the environment!"
                         )
                     b64_flag = _is_base64(encrypted_secret)
-                    if b64_flag == True:  # if passed in as encoded b64 string
+                    if b64_flag is True:  # if passed in as encoded b64 string
                         encrypted_secret = base64.b64decode(encrypted_secret)
                         ciphertext = encrypted_secret
                     else:
                         raise ValueError(
-                            f"Google KMS requires the encrypted secret to be encoded in base64"
+                            "Google KMS requires the encrypted secret to be encoded in base64"
                         )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
                     response = client.decrypt(
                         request={
@@ -206,26 +272,14 @@ def get_secret(
                     if isinstance(secret, str):
                         secret = secret.strip()
                 elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
-                    try:
-                        get_secret_value_response = client.get_secret_value(
-                            SecretId=secret_name
-                        )
-                        print_verbose(
-                            f"get_secret_value_response: {get_secret_value_response}"
-                        )
-                    except Exception as e:
-                        print_verbose(f"An error occurred - {str(e)}")
-                        # For a list of exceptions thrown, see
-                        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
-                        raise e
+                    from litellm.secret_managers.aws_secret_manager_v2 import (
+                        AWSSecretsManagerV2,
+                    )
 
-                    # assume there is 1 secret per secret_name
-                    secret_dict = json.loads(get_secret_value_response["SecretString"])
-                    print_verbose(f"secret_dict: {secret_dict}")
-                    for k, v in secret_dict.items():
-                        secret = v
-                    print_verbose(f"secret: {secret}")
-                if key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
+                    if isinstance(client, AWSSecretsManagerV2):
+                        secret = client.sync_read_secret(secret_name=secret_name)
+                        print_verbose(f"get_secret_value_response: {secret}")
+                elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
                     try:
                         secret = client.get_secret_from_google_secret_manager(
                             secret_name
@@ -248,29 +302,43 @@ def get_secret(
                 )
                 secret = os.getenv(secret_name)
             try:
-                secret_value_as_bool = ast.literal_eval(secret)
-                if isinstance(secret_value_as_bool, bool):
-                    return secret_value_as_bool
-                else:
-                    return secret
-            except:
+                if isinstance(secret, str):
+                    secret_value_as_bool = ast.literal_eval(secret)
+                    if isinstance(secret_value_as_bool, bool):
+                        return secret_value_as_bool
+                    else:
+                        return secret
+            except Exception:
                 return secret
         else:
             secret = os.environ.get(secret_name)
-            try:
-                secret_value_as_bool = (
-                    ast.literal_eval(secret) if secret is not None else None
-                )
-                if isinstance(secret_value_as_bool, bool):
-                    return secret_value_as_bool
-                else:
-                    return secret
-            except Exception:
-                if default_value is not None:
-                    return default_value
+            secret_value_as_bool = str_to_bool(secret) if secret is not None else None
+            if secret_value_as_bool is not None and isinstance(
+                secret_value_as_bool, bool
+            ):
+                return secret_value_as_bool
+            else:
                 return secret
     except Exception as e:
         if default_value is not None:
             return default_value
         else:
             raise e
+
+
+def _should_read_secret_from_secret_manager() -> bool:
+    """
+    Returns True if the secret manager should be used to read the secret, False otherwise
+
+    - If the secret manager client is not set, return False
+    - If the `_key_management_settings` access mode is "read_only" or "read_and_write", return True
+    - Otherwise, return False
+    """
+    if litellm.secret_manager_client is not None:
+        if litellm._key_management_settings is not None:
+            if (
+                litellm._key_management_settings.access_mode == "read_only"
+                or litellm._key_management_settings.access_mode == "read_and_write"
+            ):
+                return True
+    return False

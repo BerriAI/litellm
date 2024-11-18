@@ -40,7 +40,7 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
         organization: Optional[str] = None,
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
         api_version: Optional[str] = None,
-    ) -> Union[FineTuningJob, Union[Coroutine[Any, Any, FineTuningJob]]]:
+    ) -> Union[FineTuningJob, Coroutine[Any, Any, FineTuningJob]]:
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             get_azure_openai_client(
                 api_key=api_key,

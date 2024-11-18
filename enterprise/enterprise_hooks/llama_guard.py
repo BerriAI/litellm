@@ -8,22 +8,24 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import sys, os
+from collections.abc import Iterable
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from typing import Optional, Literal, Union
 import litellm, traceback, sys, uuid
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
+from litellm.types.utils import (
     ModelResponse,
     EmbeddingResponse,
     ImageResponse,
     StreamingChoices,
+    Choices,
 )
 from datetime import datetime
 import aiohttp, asyncio
@@ -34,7 +36,10 @@ litellm.set_verbose = True
 class _ENTERPRISE_LlamaGuard(CustomLogger):
     # Class variables or attributes
     def __init__(self, model_name: Optional[str] = None):
-        self.model = model_name or litellm.llamaguard_model_name
+        _model = model_name or litellm.llamaguard_model_name
+        if _model is None:
+            raise ValueError("model_name not set for LlamaGuard")
+        self.model = _model
         file_path = litellm.llamaguard_unsafe_content_categories
         data = None
 
@@ -58,7 +63,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
                 print(print_statement)  # noqa
-        except:
+        except Exception:
             pass
 
     def set_custom_prompt_template(self, messages: list):
@@ -100,7 +105,13 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
     ):
         """
         - Calls the Llama Guard Endpoint
@@ -118,7 +129,13 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
                 hf_model_name="meta-llama/LlamaGuard-7b",
             )
 
-            if "unsafe" in response.choices[0].message.content:
+            if (
+                isinstance(response, ModelResponse)
+                and isinstance(response.choices[0], Choices)
+                and response.choices[0].message.content is not None
+                and isinstance(response.choices[0].message.content, Iterable)
+                and "unsafe" in response.choices[0].message.content
+            ):
                 raise HTTPException(
                     status_code=400, detail={"error": "Violated content safety policy"}
                 )

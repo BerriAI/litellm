@@ -14,7 +14,8 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.types.utils import ProviderField
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
 
 from .prompt_templates.factory import custom_prompt, prompt_factory
 
@@ -163,6 +164,58 @@ class OllamaConfig:
             "response_format",
         ]
 
+    def _supports_function_calling(self, ollama_model_info: dict) -> bool:
+        """
+        Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
+        """
+        _template: str = str(ollama_model_info.get("template", "") or "")
+        return "tools" in _template.lower()
+
+    def _get_max_tokens(self, ollama_model_info: dict) -> Optional[int]:
+        _model_info: dict = ollama_model_info.get("model_info", {})
+
+        for k, v in _model_info.items():
+            if "context_length" in k:
+                return v
+        return None
+
+    def get_model_info(self, model: str) -> ModelInfo:
+        """
+        curl http://localhost:11434/api/show -d '{
+          "name": "mistral"
+        }'
+        """
+        if model.startswith("ollama/") or model.startswith("ollama_chat/"):
+            model = model.split("/", 1)[1]
+        api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+
+        try:
+            response = litellm.module_level_client.post(
+                url=f"{api_base}/api/show",
+                json={"name": model},
+            )
+        except Exception as e:
+            raise Exception(
+                f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
+            )
+
+        model_info = response.json()
+
+        _max_tokens: Optional[int] = self._get_max_tokens(model_info)
+
+        return ModelInfo(
+            key=model,
+            litellm_provider="ollama",
+            mode="chat",
+            supported_openai_params=self.get_supported_openai_params(),
+            supports_function_calling=self._supports_function_calling(model_info),
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=_max_tokens,
+            max_input_tokens=_max_tokens,
+            max_output_tokens=_max_tokens,
+        )
+
 
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
@@ -172,7 +225,7 @@ def _convert_image(image):
 
     try:
         from PIL import Image
-    except:
+    except Exception:
         raise Exception(
             "ollama image conversion failed please run `pip install Pillow`"
         )
@@ -184,7 +237,7 @@ def _convert_image(image):
         image_data = Image.open(io.BytesIO(base64.b64decode(image)))
         if image_data.format in ["JPEG", "PNG"]:
             return image
-    except:
+    except Exception:
         return orig
     jpeg_image = io.BytesIO()
     image_data.convert("RGB").save(jpeg_image, "JPEG")
@@ -195,13 +248,13 @@ def _convert_image(image):
 # ollama implementation
 def get_ollama_response(
     model_response: litellm.ModelResponse,
-    api_base="http://localhost:11434",
-    model="llama2",
-    prompt="Why is the sky blue?",
-    optional_params=None,
-    logging_obj=None,
+    model: str,
+    prompt: str,
+    optional_params: dict,
+    logging_obj: Any,
+    encoding: Any,
     acompletion: bool = False,
-    encoding=None,
+    api_base="http://localhost:11434",
 ):
     if api_base.endswith("/api/generate"):
         url = api_base
@@ -242,7 +295,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if stream == True:
+        if stream is True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -340,11 +393,17 @@ def ollama_completion_stream(url, data, logging_obj):
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
                 first_chunk = next(streamwrapper)
-                response_content = "".join(
-                    chunk.choices[0].delta.content
-                    for chunk in chain([first_chunk], streamwrapper)
-                    if chunk.choices[0].delta.content
-                )
+                content_chunks = []
+                for chunk in chain([first_chunk], streamwrapper):
+                    content_chunk = chunk.choices[0]
+                    if (
+                        isinstance(content_chunk, StreamingChoices)
+                        and hasattr(content_chunk, "delta")
+                        and hasattr(content_chunk.delta, "content")
+                        and content_chunk.delta.content is not None
+                    ):
+                        content_chunks.append(content_chunk.delta.content)
+                response_content = "".join(content_chunks)
 
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
@@ -392,15 +451,27 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
             # If format is JSON, this was a function call
             # Gather all chunks and return the function call as one delta to simplify parsing
             if data.get("format", "") == "json":
-                first_chunk = await anext(streamwrapper)
-                first_chunk_content = first_chunk.choices[0].delta.content or ""
-                response_content = first_chunk_content + "".join(
-                    [
-                        chunk.choices[0].delta.content
-                        async for chunk in streamwrapper
-                        if chunk.choices[0].delta.content
-                    ]
-                )
+                first_chunk = await anext(streamwrapper)  # noqa F821
+                chunk_choice = first_chunk.choices[0]
+                if (
+                    isinstance(chunk_choice, StreamingChoices)
+                    and hasattr(chunk_choice, "delta")
+                    and hasattr(chunk_choice.delta, "content")
+                ):
+                    first_chunk_content = chunk_choice.delta.content or ""
+                else:
+                    first_chunk_content = ""
+
+                content_chunks = []
+                async for chunk in streamwrapper:
+                    chunk_choice = chunk.choices[0]
+                    if (
+                        isinstance(chunk_choice, StreamingChoices)
+                        and hasattr(chunk_choice, "delta")
+                        and hasattr(chunk_choice.delta, "content")
+                    ):
+                        content_chunks.append(chunk_choice.delta.content)
+                response_content = first_chunk_content + "".join(content_chunks)
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
                     content=None,
@@ -501,8 +572,8 @@ async def ollama_aembeddings(
     prompts: List[str],
     model_response: litellm.EmbeddingResponse,
     optional_params: dict,
-    logging_obj=None,
-    encoding=None,
+    logging_obj: Any,
+    encoding: Any,
 ):
     if api_base.endswith("/api/embed"):
         url = api_base
@@ -568,10 +639,11 @@ async def ollama_aembeddings(
         model_response,
         "usage",
         litellm.Usage(
-            **{
-                "prompt_tokens": total_input_tokens,
-                "total_tokens": total_input_tokens,
-            }
+            prompt_tokens=total_input_tokens,
+            completion_tokens=total_input_tokens,
+            total_tokens=total_input_tokens,
+            prompt_tokens_details=None,
+            completion_tokens_details=None,
         ),
     )
     return model_response
@@ -581,9 +653,9 @@ def ollama_embeddings(
     api_base: str,
     model: str,
     prompts: list,
-    optional_params=None,
-    logging_obj=None,
-    model_response=None,
+    optional_params: dict,
+    model_response: litellm.EmbeddingResponse,
+    logging_obj: Any,
     encoding=None,
 ):
     return asyncio.run(

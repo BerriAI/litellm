@@ -22,7 +22,8 @@
 				"ms-python.python",
 				"ms-python.vscode-pylance",
 				"GitHub.copilot",
-				"GitHub.copilot-chat"
+				"GitHub.copilot-chat",
+				"ms-python.autopep8"
 			]
 		}
 	},

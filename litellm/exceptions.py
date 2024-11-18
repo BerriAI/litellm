@@ -292,8 +292,12 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        _response_headers = (
+            getattr(response, "headers", None) if response is not None else None
+        )
         self.response = httpx.Response(
             status_code=429,
+            headers=_response_headers,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",
@@ -657,13 +661,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         return _message
 
 
-class OpenAIError(openai.OpenAIError):  # type: ignore
-    def __init__(self, original_exception=None):
-        super().__init__()
-        self.llm_provider = "openai"
-
-
-class JSONSchemaValidationError(APIError):
+class JSONSchemaValidationError(APIResponseValidationError):
     def __init__(
         self, model: str, llm_provider: str, raw_response: str, schema: str
     ) -> None:
@@ -674,9 +672,13 @@ class JSONSchemaValidationError(APIError):
             model, raw_response, schema
         )
         self.message = message
-        super().__init__(
-            model=model, message=message, llm_provider=llm_provider, status_code=500
-        )
+        super().__init__(model=model, message=message, llm_provider=llm_provider)
+
+
+class OpenAIError(openai.OpenAIError):  # type: ignore
+    def __init__(self, original_exception=None):
+        super().__init__()
+        self.llm_provider = "openai"
 
 
 class UnsupportedParamsError(BadRequestError):
@@ -750,8 +752,14 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        self.response = httpx.Response(
+            status_code=400,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),  # mock request object
+        )
         super().__init__(
-            self.message, f"{self.model}"
+            message=self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
 
 

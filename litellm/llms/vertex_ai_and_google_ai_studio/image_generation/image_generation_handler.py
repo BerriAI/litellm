@@ -43,17 +43,17 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         model_response: litellm.ImageResponse,
+        logging_obj: Any,
         model: Optional[
             str
         ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[Any] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
-        logging_obj=None,
         aimg_generation=False,
-    ):
+    ) -> litellm.ImageResponse:
         if aimg_generation is True:
-            return self.aimage_generation(
+            return self.aimage_generation(  # type: ignore
                 prompt=prompt,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
@@ -82,7 +82,9 @@ class VertexImageGeneration(VertexLLM):
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
 
         auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
         )
         optional_params = optional_params or {
             "sampleCount": 1
@@ -136,13 +138,13 @@ class VertexImageGeneration(VertexLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         model_response: litellm.ImageResponse,
+        logging_obj: Any,
         model: Optional[
             str
         ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[AsyncHTTPHandler] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
-        logging_obj=None,
     ):
         response = None
         if client is None:
@@ -180,7 +182,9 @@ class VertexImageGeneration(VertexLLM):
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
         auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
         )
         optional_params = optional_params or {
             "sampleCount": 1

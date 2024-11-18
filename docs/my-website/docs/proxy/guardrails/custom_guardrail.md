@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
@@ -84,7 +84,7 @@ class myCustomGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal["completion", "embeddings", "image_generation", "moderation", "audio_transcription"],
     ):
         """
         Runs in parallel to LLM API call

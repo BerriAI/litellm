@@ -7,15 +7,10 @@ replicaCount: 1
 image:
   # Use "ghcr.io/berriai/litellm-database" for optimized image with database
   repository: ghcr.io/berriai/litellm-database
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "main-latest"
   tag: ""
-
-  # Image and tag used for the init container to check and wait for the
-  #  readiness of the postgres database.
-  dbReadyImage: docker.io/bitnami/postgresql
-  dbReadyTag: ""
 
 imagePullSecrets: []
 nameOverride: "litellm"
@@ -50,7 +45,13 @@ securityContext: {}
 #  pod as environment variables.  These secrets can then be referenced in the
 #  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
 environmentSecrets: []
-  # - litellm-envsecrets
+  # - litellm-env-secret
+
+# A list of Kubernetes ConfigMap objects that will be exported to the LiteLLM proxy
+#  pod as environment variables.  The ConfigMap kv-pairs can then be referenced in the
+#  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
+environmentConfigMaps: []
+  # - litellm-env-configmap
 
 service:
   type: ClusterIP
@@ -137,6 +138,7 @@ db:
   # How to connect to the existing postgres server/cluster
   endpoint: localhost
   database: litellm
+  url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
   secret:
     name: postgres
     usernameKey: username
@@ -177,3 +179,12 @@ postgresql:
 redis:
   enabled: false
   architecture: standalone
+
+# Prisma migration job settings
+migrationJob:
+  enabled: true # Enable or disable the schema migration Job
+  retries: 3 # Number of retries for the Job in case of failure
+  backoffLimit: 4 # Backoff limit for Job restarts
+  disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
+
+

@@ -1,14 +1,16 @@
 from typing import Optional
+
 import httpx
 
 try:
     from litellm._version import version
-except:
+except Exception:
     version = "0.0.0"
 
 headers = {
     "User-Agent": f"litellm/{version}",
 }
+
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):

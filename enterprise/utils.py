@@ -6,7 +6,9 @@ import collections
 from datetime import datetime
 
 
-async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
+async def get_spend_by_tags(
+    prisma_client: PrismaClient, start_date=None, end_date=None
+):
     response = await prisma_client.db.query_raw(
         """
         SELECT
@@ -47,17 +49,14 @@ async def ui_get_spend_by_tags(
     if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
         # Get spend for all tags
         sql_query = """
-            SELECT
-            jsonb_array_elements_text(request_tags) AS individual_request_tag,
-            DATE(s."startTime") AS spend_date,
-            COUNT(*) AS log_count,
-            SUM(spend) AS total_spend
-            FROM "LiteLLM_SpendLogs" s
-            WHERE
-                DATE(s."startTime") >= $1::date
-                AND DATE(s."startTime") <= $2::date
-            GROUP BY individual_request_tag, spend_date
-            ORDER BY total_spend DESC;
+        SELECT
+            individual_request_tag,
+            spend_date,
+            log_count,
+            total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+        ORDER BY total_spend DESC;
         """
         response = await prisma_client.db.query_raw(
             sql_query,
@@ -67,23 +66,15 @@ async def ui_get_spend_by_tags(
     else:
         # filter by tags list
         sql_query = """
-            SELECT
-                individual_request_tag,
-                COUNT(*) AS log_count,
-                SUM(spend) AS total_spend
-            FROM (
-                SELECT
-                    jsonb_array_elements_text(request_tags) AS individual_request_tag,
-                    DATE(s."startTime") AS spend_date,
-                    spend
-                FROM "LiteLLM_SpendLogs" s
-                WHERE
-                    DATE(s."startTime") >= $1::date
-                    AND DATE(s."startTime") <= $2::date
-            ) AS subquery
-            WHERE individual_request_tag = ANY($3::text[])
-            GROUP BY individual_request_tag
-            ORDER BY total_spend DESC;
+        SELECT
+            individual_request_tag,
+            SUM(log_count) AS log_count,
+            SUM(total_spend) AS total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+          AND individual_request_tag = ANY($3::text[])
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
         """
         response = await prisma_client.db.query_raw(
             sql_query,

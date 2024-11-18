@@ -4,10 +4,10 @@ from typing import Callable, List, Literal, Optional, Tuple, Union
 import httpx
 
 import litellm
-from litellm.caching import Cache
+from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.openai import AllMessageValues
+from litellm.llms.OpenAI.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     RequestBody,
@@ -16,15 +16,18 @@ from litellm.types.llms.vertex_ai import (
 from litellm.utils import ModelResponse
 
 from ..common_utils import VertexAIError
+from ..vertex_llm_base import VertexBase
 from .transformation import (
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
 
-local_cache_obj = Cache(type="local")  # only used for calling 'get_cache_key' function
+local_cache_obj = Cache(
+    type=LiteLLMCacheType.LOCAL
+)  # only used for calling 'get_cache_key' function
 
 
-class ContextCachingEndpoints:
+class ContextCachingEndpoints(VertexBase):
     """
     Covers context caching endpoints for Vertex AI + Google AI Studio
 
@@ -34,7 +37,7 @@ class ContextCachingEndpoints:
     def __init__(self) -> None:
         pass
 
-    def _get_token_and_url(
+    def _get_token_and_url_context_caching(
         self,
         gemini_api_key: Optional[str],
         custom_llm_provider: Literal["gemini"],
@@ -57,18 +60,16 @@ class ContextCachingEndpoints:
 
         else:
             raise NotImplementedError
-        if (
-            api_base is not None
-        ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
-            if custom_llm_provider == "gemini":
-                url = "{}/{}".format(api_base, endpoint)
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
-            else:
-                url = "{}:{}".format(api_base, endpoint)
 
-        return auth_header, url
+        return self._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            gemini_api_key=gemini_api_key,
+            endpoint=endpoint,
+            stream=None,
+            auth_header=auth_header,
+            url=url,
+        )
 
     def check_cache(
         self,
@@ -90,7 +91,7 @@ class ContextCachingEndpoints:
         - None
         """
 
-        _, url = self._get_token_and_url(
+        _, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,
@@ -125,11 +126,12 @@ class ContextCachingEndpoints:
 
         all_cached_items = CachedContentListAllResponseBody(**raw_response)
 
+        if "cachedContents" not in all_cached_items:
+            return None
+
         for cached_item in all_cached_items["cachedContents"]:
-            if (
-                cached_item.get("displayName") is not None
-                and cached_item["displayName"] == cache_key
-            ):
+            display_name = cached_item.get("displayName")
+            if display_name is not None and display_name == cache_key:
                 return cached_item.get("name")
 
         return None
@@ -154,7 +156,7 @@ class ContextCachingEndpoints:
         - None
         """
 
-        _, url = self._get_token_and_url(
+        _, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,
@@ -189,11 +191,12 @@ class ContextCachingEndpoints:
 
         all_cached_items = CachedContentListAllResponseBody(**raw_response)
 
+        if "cachedContents" not in all_cached_items:
+            return None
+
         for cached_item in all_cached_items["cachedContents"]:
-            if (
-                cached_item.get("displayName") is not None
-                and cached_item["displayName"] == cache_key
-            ):
+            display_name = cached_item.get("displayName")
+            if display_name is not None and display_name == cache_key:
                 return cached_item.get("name")
 
         return None
@@ -224,7 +227,7 @@ class ContextCachingEndpoints:
             return messages, cached_content
 
         ## AUTHORIZATION ##
-        token, url = self._get_token_and_url(
+        token, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,
@@ -329,7 +332,7 @@ class ContextCachingEndpoints:
             return messages, cached_content
 
         ## AUTHORIZATION ##
-        token, url = self._get_token_and_url(
+        token, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,

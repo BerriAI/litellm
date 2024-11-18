@@ -43,7 +43,7 @@
 #     ### REDIS
 #     # if len(os.getenv("REDIS_HOST", "")) >  0 and len(os.getenv("REDIS_PORT", "")) > 0 and len(os.getenv("REDIS_PASSWORD", "")) > 0:
 #     #     print(f"redis host: {os.getenv('REDIS_HOST')}; redis port: {os.getenv('REDIS_PORT')}; password: {os.getenv('REDIS_PASSWORD')}")
-#     #     from litellm.caching import Cache
+#     #     from litellm.caching.caching import Cache
 #     #     litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
 #     #     print("\033[92mLiteLLM: Switched on Redis caching\033[0m")
 
@@ -57,7 +57,7 @@
 #                 config = yaml.safe_load(file)
 #         else:
 #             pass
-#     except:
+#     except Exception:
 #         pass
 
 #     ## SERVER SETTINGS (e.g. default completion model = 'ollama/mistral')

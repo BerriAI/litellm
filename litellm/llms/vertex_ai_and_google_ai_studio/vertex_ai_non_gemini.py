@@ -5,7 +5,7 @@ import time
 import types
 import uuid
 from enum import Enum
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union, cast
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -25,9 +25,16 @@ from litellm.types.files import (
     is_gemini_1_5_accepted_file_type,
     is_video_file_type,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+
+from .common_utils import _check_text_in_content
 
 
 class VertexAIError(Exception):
@@ -78,166 +85,9 @@ class TextStreamer:
             raise StopAsyncIteration  # once we run out of data to stream, we raise this error
 
 
-def _get_image_bytes_from_url(image_url: str) -> bytes:
-    try:
-        response = requests.get(image_url)
-        response.raise_for_status()  # Raise an error for bad responses (4xx and 5xx)
-        image_bytes = response.content
-        return image_bytes
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"An exception occurs with this image - {str(e)}")
-
-
-def _convert_gemini_role(role: str) -> Literal["user", "model"]:
-    if role == "user":
-        return "user"
-    else:
-        return "model"
-
-
-def _process_gemini_image(image_url: str) -> PartType:
-    try:
-        # GCS URIs
-        if "gs://" in image_url:
-            # Figure out file type
-            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
-            extension = extension_with_dot[1:]  # Ex: "png"
-
-            file_type = get_file_type_from_extension(extension)
-
-            # Validate the file type is supported by Gemini
-            if not is_gemini_1_5_accepted_file_type(file_type):
-                raise Exception(f"File type not supported by gemini - {file_type}")
-
-            mime_type = get_file_mime_type_for_file_type(file_type)
-            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
-
-            return PartType(file_data=file_data)
-
-        # Direct links
-        elif "https:/" in image_url or "base64" in image_url:
-            image = convert_to_anthropic_image_obj(image_url)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
-            return PartType(inline_data=_blob)
-        raise Exception("Invalid image received - {}".format(image_url))
-    except Exception as e:
-        raise e
-
-
-def _gemini_convert_messages_with_history(
-    messages: List[AllMessageValues],
-) -> List[ContentType]:
-    """
-    Converts given messages from OpenAI format to Gemini format
-
-    - Parts must be iterable
-    - Roles must alternate b/w 'user' and 'model' (same as anthropic -> merge consecutive roles)
-    - Please ensure that function response turn comes immediately after a function call turn
-    """
-    user_message_types = {"user", "system"}
-    contents: List[ContentType] = []
-
-    last_message_with_tool_calls = None
-
-    msg_i = 0
-    try:
-        while msg_i < len(messages):
-            user_content: List[PartType] = []
-            init_msg_i = msg_i
-            ## MERGE CONSECUTIVE USER CONTENT ##
-            while (
-                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
-            ):
-                if messages[msg_i]["content"] is not None and isinstance(
-                    messages[msg_i]["content"], list
-                ):
-                    _parts: List[PartType] = []
-                    for element in messages[msg_i]["content"]:  # type: ignore
-                        if isinstance(element, dict):
-                            if element["type"] == "text" and len(element["text"]) > 0:  # type: ignore
-                                _part = PartType(text=element["text"])  # type: ignore
-                                _parts.append(_part)
-                            elif element["type"] == "image_url":
-                                image_url = element["image_url"]["url"]  # type: ignore
-                                _part = _process_gemini_image(image_url=image_url)
-                                _parts.append(_part)  # type: ignore
-                    user_content.extend(_parts)
-                elif (
-                    messages[msg_i]["content"] is not None
-                    and isinstance(messages[msg_i]["content"], str)
-                    and len(messages[msg_i]["content"]) > 0  # type: ignore
-                ):
-                    _part = PartType(text=messages[msg_i]["content"])  # type: ignore
-                    user_content.append(_part)
-
-                msg_i += 1
-
-            if user_content:
-                contents.append(ContentType(role="user", parts=user_content))
-            assistant_content = []
-            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-                if isinstance(messages[msg_i], BaseModel):
-                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[msg_i].model_dump()  # type: ignore
-                else:
-                    msg_dict = messages[msg_i]  # type: ignore
-                assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
-                if assistant_msg.get("content", None) is not None and isinstance(
-                    assistant_msg["content"], list
-                ):
-                    _parts = []
-                    for element in assistant_msg["content"]:
-                        if isinstance(element, dict):
-                            if element["type"] == "text":
-                                _part = PartType(text=element["text"])  # type: ignore
-                                _parts.append(_part)
-                    assistant_content.extend(_parts)
-                elif (
-                    assistant_msg.get("content", None) is not None
-                    and isinstance(assistant_msg["content"], str)
-                    and assistant_msg["content"]
-                ):
-                    assistant_text = assistant_msg["content"]  # either string or none
-                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
-
-                ## HANDLE ASSISTANT FUNCTION CALL
-                if (
-                    assistant_msg.get("tool_calls", []) is not None
-                    or assistant_msg.get("function_call") is not None
-                ):  # support assistant tool invoke conversion
-                    assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(assistant_msg)
-                    )
-                    last_message_with_tool_calls = assistant_msg
-
-                msg_i += 1
-
-            if assistant_content:
-                contents.append(ContentType(role="model", parts=assistant_content))
-
-            ## APPEND TOOL CALL MESSAGES ##
-            if msg_i < len(messages) and (
-                messages[msg_i]["role"] == "tool"
-                or messages[msg_i]["role"] == "function"
-            ):
-                _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
-                )
-                contents.append(ContentType(parts=[_part]))  # type: ignore
-                msg_i += 1
-
-            if msg_i == init_msg_i:  # prevent infinite loops
-                raise Exception(
-                    "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
-                        messages[msg_i]
-                    )
-                )
-        return contents
-    except Exception as e:
-        raise e
-
-
-def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
+def _get_client_cache_key(
+    model: str, vertex_project: Optional[str], vertex_location: Optional[str]
+):
     _cache_key = f"{model}-{vertex_project}-{vertex_location}"
     return _cache_key
 
@@ -250,7 +100,7 @@ def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
     litellm.in_memory_llm_clients_cache[client_cache_key] = vertex_llm_model
 
 
-def completion(
+def completion(  # noqa: PLR0915
     model: str,
     messages: list,
     model_response: ModelResponse,
@@ -275,7 +125,7 @@ def completion(
     """
     try:
         import vertexai
-    except:
+    except Exception:
         raise VertexAIError(
             status_code=400,
             message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
@@ -320,6 +170,8 @@ def completion(
         _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
 
         if _vertex_llm_model_object is None:
+            from google.auth.credentials import Credentials
+
             if vertex_credentials is not None and isinstance(vertex_credentials, str):
                 import google.oauth2.service_account
 
@@ -337,7 +189,9 @@ def completion(
                 f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
             )
             vertexai.init(
-                project=vertex_project, location=vertex_location, credentials=creds
+                project=vertex_project,
+                location=vertex_location,
+                credentials=cast(Credentials, creds),
             )
 
         ## Load Config
@@ -372,7 +226,6 @@ def completion(
 
         request_str = ""
         response_obj = None
-        async_client = None
         instances = None
         client_options = {
             "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
@@ -381,7 +234,7 @@ def completion(
             model in litellm.vertex_language_models
             or model in litellm.vertex_vision_models
         ):
-            llm_model = _vertex_llm_model_object or GenerativeModel(model)
+            llm_model: Any = _vertex_llm_model_object or GenerativeModel(model)
             mode = "vision"
             request_str += f"llm_model = GenerativeModel({model})\n"
         elif model in litellm.vertex_chat_models:
@@ -440,7 +293,6 @@ def completion(
                 "model_response": model_response,
                 "encoding": encoding,
                 "messages": messages,
-                "request_str": request_str,
                 "print_verbose": print_verbose,
                 "client_options": client_options,
                 "instances": instances,
@@ -455,95 +307,12 @@ def completion(
 
             return async_completion(**data)
 
-        if mode == "vision":
-            print_verbose("\nMaking VertexAI Gemini Pro / Pro Vision Call")
-            print_verbose(f"\nProcessing input messages = {messages}")
-            tools = optional_params.pop("tools", None)
-            content = _gemini_convert_messages_with_history(messages=messages)
-            stream = optional_params.pop("stream", False)
-            if stream is True:
-                request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
-                logging_obj.pre_call(
-                    input=prompt,
-                    api_key=None,
-                    additional_args={
-                        "complete_input_dict": optional_params,
-                        "request_str": request_str,
-                    },
-                )
-
-                _model_response = llm_model.generate_content(
-                    contents=content,
-                    generation_config=optional_params,
-                    safety_settings=safety_settings,
-                    stream=True,
-                    tools=tools,
-                )
-
-                return _model_response
-
-            request_str += f"response = llm_model.generate_content({content})\n"
-            ## LOGGING
-            logging_obj.pre_call(
-                input=prompt,
-                api_key=None,
-                additional_args={
-                    "complete_input_dict": optional_params,
-                    "request_str": request_str,
-                },
-            )
-
-            ## LLM Call
-            response = llm_model.generate_content(
-                contents=content,
-                generation_config=optional_params,
-                safety_settings=safety_settings,
-                tools=tools,
-            )
-
-            if tools is not None and bool(
-                getattr(response.candidates[0].content.parts[0], "function_call", None)
-            ):
-                function_call = response.candidates[0].content.parts[0].function_call
-                args_dict = {}
-
-                # Check if it's a RepeatedComposite instance
-                for key, val in function_call.args.items():
-                    if isinstance(
-                        val, proto.marshal.collections.repeated.RepeatedComposite
-                    ):
-                        # If so, convert to list
-                        args_dict[key] = [v for v in val]
-                    else:
-                        args_dict[key] = val
-
-                try:
-                    args_str = json.dumps(args_dict)
-                except Exception as e:
-                    raise VertexAIError(status_code=422, message=str(e))
-                message = litellm.Message(
-                    content=None,
-                    tool_calls=[
-                        {
-                            "id": f"call_{str(uuid.uuid4())}",
-                            "function": {
-                                "arguments": args_str,
-                                "name": function_call.name,
-                            },
-                            "type": "function",
-                        }
-                    ],
-                )
-                completion_response = message
-            else:
-                completion_response = response.text
-            response_obj = response._raw_response
-            optional_params["tools"] = tools
-        elif mode == "chat":
+        completion_response = None
+        if mode == "chat":
             chat = llm_model.start_chat()
-            request_str += f"chat = llm_model.start_chat()\n"
+            request_str += "chat = llm_model.start_chat()\n"
 
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 # NOTE: VertexAI does not accept stream=True as a param and raises an error,
                 # we handle this by removing 'stream' from optional params and sending the request
                 # after we get the response we add optional_params["stream"] = True, since main.py needs to know it's a streaming response to then transform it for the OpenAI format
@@ -578,7 +347,7 @@ def completion(
             )
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 optional_params.pop(
                     "stream", None
                 )  # See note above on handling streaming for vertex ai
@@ -613,6 +382,12 @@ def completion(
             """
             Vertex AI Model Garden
             """
+
+            if vertex_project is None or vertex_location is None:
+                raise ValueError(
+                    "Vertex project and location are required for custom endpoint"
+                )
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -642,13 +417,17 @@ def completion(
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 response = TextStreamer(completion_response)
                 return response
         elif mode == "private":
             """
             Vertex AI Model Garden deployed on private endpoint
             """
+            if instances is None:
+                raise ValueError("instances are required for private endpoint")
+            if llm_model is None:
+                raise ValueError("Unable to pick client for private endpoint")
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -667,7 +446,7 @@ def completion(
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] is True:
                 response = TextStreamer(completion_response)
                 return response
 
@@ -696,7 +475,7 @@ def completion(
         else:
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None:
                 if hasattr(response_obj, "usage_metadata") and hasattr(
                     response_obj.usage_metadata, "prompt_token_count"
@@ -728,7 +507,7 @@ def completion(
         )
 
 
-async def async_completion(
+async def async_completion(  # noqa: PLR0915
     llm_model,
     mode: str,
     prompt: str,
@@ -752,82 +531,9 @@ async def async_completion(
     try:
         import proto  # type: ignore
 
-        if mode == "vision":
-            print_verbose("\nMaking VertexAI Gemini Pro/Vision Call")
-            print_verbose(f"\nProcessing input messages = {messages}")
-            tools = optional_params.pop("tools", None)
-            stream = optional_params.pop("stream", False)
-
-            content = _gemini_convert_messages_with_history(messages=messages)
-
-            request_str += f"response = llm_model.generate_content({content})\n"
-            ## LOGGING
-            logging_obj.pre_call(
-                input=prompt,
-                api_key=None,
-                additional_args={
-                    "complete_input_dict": optional_params,
-                    "request_str": request_str,
-                },
-            )
-
-            ## LLM Call
-            # print(f"final content: {content}")
-            response = await llm_model._generate_content_async(
-                contents=content,
-                generation_config=optional_params,
-                safety_settings=safety_settings,
-                tools=tools,
-            )
-
-            _cache_key = _get_client_cache_key(
-                model=model,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-            )
-            _set_client_in_cache(
-                client_cache_key=_cache_key, vertex_llm_model=llm_model
-            )
-
-            if tools is not None and bool(
-                getattr(response.candidates[0].content.parts[0], "function_call", None)
-            ):
-                function_call = response.candidates[0].content.parts[0].function_call
-                args_dict = {}
-
-                # Check if it's a RepeatedComposite instance
-                for key, val in function_call.args.items():
-                    if isinstance(
-                        val, proto.marshal.collections.repeated.RepeatedComposite
-                    ):
-                        # If so, convert to list
-                        args_dict[key] = [v for v in val]
-                    else:
-                        args_dict[key] = val
-
-                try:
-                    args_str = json.dumps(args_dict)
-                except Exception as e:
-                    raise VertexAIError(status_code=422, message=str(e))
-                message = litellm.Message(
-                    content=None,
-                    tool_calls=[
-                        {
-                            "id": f"call_{str(uuid.uuid4())}",
-                            "function": {
-                                "arguments": args_str,
-                                "name": function_call.name,
-                            },
-                            "type": "function",
-                        }
-                    ],
-                )
-                completion_response = message
-            else:
-                completion_response = response.text
-            response_obj = response._raw_response
-            optional_params["tools"] = tools
-        elif mode == "chat":
+        response_obj = None
+        completion_response = None
+        if mode == "chat":
             # chat-bison etc.
             chat = llm_model.start_chat()
             ## LOGGING
@@ -860,6 +566,11 @@ async def async_completion(
             Vertex AI Model Garden
             """
             from google.cloud import aiplatform  # type: ignore
+
+            if vertex_project is None or vertex_location is None:
+                raise ValueError(
+                    "Vertex project and location are required for custom endpoint"
+                )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -934,7 +645,7 @@ async def async_completion(
         else:
             # init prompt tokens
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
-            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None and (
                 hasattr(response_obj, "usage_metadata")
                 and hasattr(response_obj.usage_metadata, "prompt_token_count")
@@ -961,7 +672,7 @@ async def async_completion(
         raise VertexAIError(status_code=500, message=str(e))
 
 
-async def async_streaming(
+async def async_streaming(  # noqa: PLR0915
     llm_model,
     mode: str,
     prompt: str,
@@ -982,32 +693,8 @@ async def async_streaming(
     """
     Add support for async streaming calls for gemini-pro
     """
-    if mode == "vision":
-        stream = optional_params.pop("stream")
-        tools = optional_params.pop("tools", None)
-        print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
-        print_verbose(f"\nProcessing input messages = {messages}")
-
-        content = _gemini_convert_messages_with_history(messages=messages)
-
-        request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), stream={stream})\n"
-        logging_obj.pre_call(
-            input=prompt,
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        response = await llm_model._generate_content_streaming_async(
-            contents=content,
-            generation_config=optional_params,
-            safety_settings=safety_settings,
-            tools=tools,
-        )
-
-    elif mode == "chat":
+    response: Any = None
+    if mode == "chat":
         chat = llm_model.start_chat()
         optional_params.pop(
             "stream", None
@@ -1046,6 +733,11 @@ async def async_streaming(
     elif mode == "custom":
         from google.cloud import aiplatform  # type: ignore
 
+        if vertex_project is None or vertex_location is None:
+            raise ValueError(
+                "Vertex project and location are required for custom endpoint"
+            )
+
         stream = optional_params.pop("stream", None)
 
         ## LOGGING
@@ -1083,6 +775,8 @@ async def async_streaming(
             response = TextStreamer(completion_response)
 
     elif mode == "private":
+        if instances is None:
+            raise ValueError("Instances are required for private endpoint")
         stream = optional_params.pop("stream", None)
         _ = instances[0].pop("stream", None)
         request_str += f"llm_model.predict_async(instances={instances})\n"
@@ -1098,6 +792,9 @@ async def async_streaming(
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
         if stream:
             response = TextStreamer(completion_response)
+
+    if response is None:
+        raise ValueError("Unable to generate response")
 
     logging_obj.post_call(input=prompt, api_key=None, original_response=response)
 

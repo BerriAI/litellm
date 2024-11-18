@@ -60,6 +60,7 @@ class VolcEngineConfig:
             "logit_bias",
             "logprobs",
             "top_logprobs",
+            "max_completion_tokens",
             "max_tokens",
             "n",
             "presence_penalty",
@@ -82,6 +83,8 @@ class VolcEngineConfig:
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
-            if param in supported_openai_params:
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params

@@ -4,6 +4,12 @@ import TabItem from '@theme/TabItem';
 # Caching 
 Cache LLM Responses
 
+:::note 
+
+For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
+:::
+
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
@@ -43,16 +49,20 @@ litellm_settings:
   cache: true 
   cache_params:        # set cache params for redis
     type: redis
-    namespace: "litellm_caching"
+    namespace: "litellm.caching.caching"
 ```
 
 and keys will be stored like:
 
 ```
-litellm_caching:<hash>
+litellm.caching.caching:<hash>
 ```
 
 #### Redis Cluster 
+
+<Tabs>
+
+<TabItem value="redis-cluster-config" label="Set on config.yaml">
 
 ```yaml
 model_list:
@@ -67,6 +77,100 @@ litellm_settings:
     type: redis
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
 ```
+
+</TabItem>
+
+<TabItem value="redis-env" label="Set on .env">
+
+You can configure redis cluster in your .env by setting `REDIS_CLUSTER_NODES` in your .env
+
+**Example `REDIS_CLUSTER_NODES`** value
+
+```
+REDIS_CLUSTER_NODES = "[{"host": "127.0.0.1", "port": "7001"}, {"host": "127.0.0.1", "port": "7003"}, {"host": "127.0.0.1", "port": "7004"}, {"host": "127.0.0.1", "port": "7005"}, {"host": "127.0.0.1", "port": "7006"}, {"host": "127.0.0.1", "port": "7007"}]"
+```
+
+:::note
+
+Example python script for setting redis cluster nodes in .env:
+
+```python
+# List of startup nodes
+startup_nodes = [
+    {"host": "127.0.0.1", "port": "7001"},
+    {"host": "127.0.0.1", "port": "7003"},
+    {"host": "127.0.0.1", "port": "7004"},
+    {"host": "127.0.0.1", "port": "7005"},
+    {"host": "127.0.0.1", "port": "7006"},
+    {"host": "127.0.0.1", "port": "7007"},
+]
+
+# set startup nodes in environment variables
+os.environ["REDIS_CLUSTER_NODES"] = json.dumps(startup_nodes)
+print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
+```
+
+:::
+
+</TabItem>
+
+</Tabs>
+
+#### Redis Sentinel 
+
+
+<Tabs>
+
+<TabItem value="redis-sentinel-config" label="Set on config.yaml">
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: "redis"
+    service_name: "mymaster"
+    sentinel_nodes: [["localhost", 26379]]
+    sentinel_password: "password" # [OPTIONAL]
+```
+
+</TabItem>
+
+<TabItem value="redis-env" label="Set on .env">
+
+You can configure redis sentinel in your .env by setting `REDIS_SENTINEL_NODES` in your .env
+
+**Example `REDIS_SENTINEL_NODES`** value
+
+```env
+REDIS_SENTINEL_NODES='[["localhost", 26379]]'
+REDIS_SERVICE_NAME = "mymaster"
+REDIS_SENTINEL_PASSWORD = "password"
+```
+
+:::note
+
+Example python script for setting redis cluster nodes in .env:
+
+```python
+# List of startup nodes
+sentinel_nodes = [["localhost", 26379]]
+
+# set startup nodes in environment variables
+os.environ["REDIS_SENTINEL_NODES"] = json.dumps(sentinel_nodes)
+print("REDIS_SENTINEL_NODES", os.environ["REDIS_SENTINEL_NODES"])
+```
+
+:::
+
+</TabItem>
+
+</Tabs>
 
 #### TTL
 
@@ -625,7 +729,7 @@ curl http://localhost:4000/v1/chat/completions \
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
     "user_id": "222",
     "metadata": {
         "cache": {
@@ -641,7 +745,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer <YOUR_NEW_KEY>' \
--D '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
 ```
 
 ### Deleting Cache Keys - `/cache/delete` 

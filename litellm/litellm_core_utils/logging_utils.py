@@ -1,4 +1,8 @@
-from typing import TYPE_CHECKING, Any, Optional, Union
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, List, Optional, Union
+
+from litellm._logging import verbose_logger
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
     from litellm import ModelResponse as _ModelResponse
@@ -13,21 +17,6 @@ import litellm
 """
 Helper utils used for logging callbacks
 """
-
-
-def convert_litellm_response_object_to_dict(response_obj: Any) -> dict:
-    """
-    Convert a LiteLLM response object to a dictionary
-
-    """
-    if isinstance(response_obj, dict):
-        return response_obj
-    for _type in litellm.ALL_LITELLM_RESPONSE_TYPES:
-        if isinstance(response_obj, _type):
-            return response_obj.model_dump()
-
-    # If it's not a LiteLLM type, return the object as is
-    return dict(response_obj)
 
 
 def convert_litellm_response_object_to_str(
@@ -46,3 +35,55 @@ def convert_litellm_response_object_to_str(
         return response_str
 
     return None
+
+
+def _assemble_complete_response_from_streaming_chunks(
+    result: Union[ModelResponse, TextCompletionResponse],
+    start_time: datetime,
+    end_time: datetime,
+    request_kwargs: dict,
+    streaming_chunks: List[Any],
+    is_async: bool,
+):
+    """
+    Assemble a complete response from a streaming chunks
+
+    - assemble a complete streaming response if result.choices[0].finish_reason is not None
+    - else append the chunk to the streaming_chunks
+
+
+    Args:
+        result: ModelResponse
+        start_time: datetime
+        end_time: datetime
+        request_kwargs: dict
+        streaming_chunks: List[Any]
+        is_async: bool
+
+    Returns:
+        Optional[Union[ModelResponse, TextCompletionResponse]]: Complete streaming response
+
+    """
+    complete_streaming_response: Optional[
+        Union[ModelResponse, TextCompletionResponse]
+    ] = None
+    if result.choices[0].finish_reason is not None:  # if it's the last chunk
+        streaming_chunks.append(result)
+        try:
+            complete_streaming_response = litellm.stream_chunk_builder(
+                chunks=streaming_chunks,
+                messages=request_kwargs.get("messages", None),
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except Exception as e:
+            log_message = (
+                "Error occurred building stream chunk in {} success logging: {}".format(
+                    "async" if is_async else "sync", str(e)
+                )
+            )
+            verbose_logger.exception(log_message)
+            complete_streaming_response = None
+    else:
+        streaming_chunks.append(result)
+    return complete_streaming_response

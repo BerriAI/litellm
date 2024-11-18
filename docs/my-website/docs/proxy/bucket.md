@@ -9,7 +9,7 @@ LiteLLM Supports Logging to the following Cloud Buckets
 - (Enterprise) ✨ [Google Cloud Storage Buckets](#logging-proxy-inputoutput-to-google-cloud-storage-buckets)
 - (Free OSS) [Amazon s3 Buckets](#logging-proxy-inputoutput---s3-buckets) 
 
-## Logging Proxy Input/Output to Google Cloud Storage Buckets
+## Google Cloud Storage Buckets
 
 Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?hl=en)
 
@@ -18,6 +18,14 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 ✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LLM Input/Output to cloud storage buckets |
+| Load Test Benchmarks | [Benchmarks](https://docs.litellm.ai/docs/benchmarks) |
+| Google Docs on Cloud Storage | [Google Cloud Storage](https://cloud.google.com/storage?hl=en) |
+
 
 
 ### Usage
@@ -70,55 +78,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 <Image img={require('../../img/gcs_bucket.png')} />
 
-
 ### Fields Logged on GCS Buckets
 
-Example payload of a `/chat/completion` request logged on GCS
-```json
-{
-  "request_kwargs": {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-      {
-        "role": "user",
-        "content": "This is a test"
-      }
-    ],
-    "optional_params": {
-      "temperature": 0.7,
-      "max_tokens": 10,
-      "user": "ishaan-2",
-      "extra_body": {}
-    }
-  },
-  "response_obj": {
-    "id": "chatcmpl-bd836a8c-89bc-4abd-bee5-e3f1ebfdb541",
-    "choices": [
-      {
-        "finish_reason": "stop",
-        "index": 0,
-        "message": {
-          "content": "Hi!",
-          "role": "assistant",
-          "tool_calls": null,
-          "function_call": null
-        }
-      }
-    ],
-    "created": 1722868456,
-    "model": "gpt-3.5-turbo",
-    "object": "chat.completion",
-    "system_fingerprint": null,
-    "usage": {
-      "prompt_tokens": 10,
-      "completion_tokens": 20,
-      "total_tokens": 30
-    }
-  },
-  "start_time": "2024-08-05 07:34:16",
-  "end_time": "2024-08-05 07:34:16"
-}
-```
+[**The standard logging object is logged on GCS Bucket**](../proxy/logging)
+
 
 ### Getting `service_account.json` from Google Cloud Console
 
@@ -130,7 +93,7 @@ Example payload of a `/chat/completion` request logged on GCS
 6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
 
 
-## Logging Proxy Input/Output - s3 Buckets
+## s3 Buckets
 
 We will use the `--config` to set 
 

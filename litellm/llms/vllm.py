@@ -45,8 +45,8 @@ def completion(
     print_verbose: Callable,
     encoding,
     logging_obj,
+    optional_params: dict,
     custom_prompt_dict={},
-    optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -83,7 +83,7 @@ def completion(
         )
 
     ## COMPLETION CALL
-    if "stream" in optional_params and optional_params["stream"] == True:
+    if "stream" in optional_params and optional_params["stream"] is True:
         return iter(outputs)
     else:
         ## LOGGING
@@ -144,10 +144,7 @@ def batch_completions(
         llm, SamplingParams = validate_environment(model=model)
     except Exception as e:
         error_str = str(e)
-        if "data parallel group is already initialized" in error_str:
-            pass
-        else:
-            raise VLLMError(status_code=0, message=error_str)
+        raise VLLMError(status_code=0, message=error_str)
     sampling_params = SamplingParams(**optional_params)
     prompts = []
     if model in custom_prompt_dict:
