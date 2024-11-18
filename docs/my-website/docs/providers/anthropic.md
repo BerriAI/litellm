@@ -631,7 +631,7 @@ response = completion(
     model="anthropic/claude-3-opus-20240229",
     messages=messages,
     tools=tools,
-    tool_choice={"type": "tool", "name": "get_weather"},
+    tool_choice={"type": "function", "function": {"name": "get_weather"}},
 )
 ```
 
