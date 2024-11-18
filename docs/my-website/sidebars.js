@@ -50,7 +50,7 @@ const sidebars = {
         }, 
         {
           type: "link",
-          label: "📖 All Endpoints (Swagger)",
+          label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
@@ -103,7 +103,7 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "🪢 Logging, Alerting, Metrics",
+          label: "Logging, Alerting, Metrics",
           items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging", "proxy/alerting", "proxy/prometheus",],
         },
         {
@@ -123,7 +123,7 @@ const sidebars = {
         },
         {
           type: "category", 
-          label: "Secret Manager - storing LLM API Keys", 
+          label: "Secret Managers", 
           items: [
             "secret", 
             "oidc"
@@ -233,7 +233,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
+      label: "Supported Endpoints",
       items: [
         "embedding/supported_embedding",
         "image_generation",
@@ -251,8 +251,11 @@ const sidebars = {
         },
       ],
     },
-    "routing",
-    "scheduler",
+    {
+      type: "category",
+      label: "Load Balancing",
+      items: ["routing", "scheduler"],
+    },
     {
       type: "category",
       label: "LiteLLM Python SDK",
