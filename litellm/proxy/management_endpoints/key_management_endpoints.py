@@ -288,11 +288,15 @@ def prepare_key_update_data(
             non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
-        duration_s = _duration_in_seconds(
-            duration=non_default_values["budget_duration"]
-        )
-        key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        non_default_values["budget_reset_at"] = key_reset_at
+        budget_duration = non_default_values.pop("budget_duration")
+        if (
+            budget_duration
+            and (isinstance(budget_duration, str))
+            and len(budget_duration) > 0
+        ):
+            duration_s = _duration_in_seconds(duration=budget_duration)
+            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = key_reset_at
 
     _metadata = existing_key_row.metadata or {}
 
@@ -329,7 +333,47 @@ async def update_key_fn(
     ),
 ):
     """
-    Update an existing key
+    Update an existing API key's parameters.
+
+    Parameters:
+    - key: str - The key to update
+    - key_alias: Optional[str] - User-friendly key alias
+    - user_id: Optional[str] - User ID associated with key
+    - team_id: Optional[str] - Team ID associated with key
+    - models: Optional[list] - Model_name's a user is allowed to call
+    - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
+    - spend: Optional[float] - Amount spent by key
+    - max_budget: Optional[float] - Max budget for key
+    - model_max_budget: Optional[dict] - Model-specific budgets {"gpt-4": 0.5, "claude-v1": 1.0}
+    - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - max_parallel_requests: Optional[int] - Rate limit for parallel requests
+    - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
+    - tpm_limit: Optional[int] - Tokens per minute limit
+    - rpm_limit: Optional[int] - Requests per minute limit
+    - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
+    - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+    - allowed_cache_controls: Optional[list] - List of allowed cache control values
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+    - permissions: Optional[dict] - Key-specific permissions
+    - send_invite_email: Optional[bool] - Send invite email to user_id
+    - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - blocked: Optional[bool] - Whether the key is blocked
+
+    Example:
+    ```bash
+    curl --location 'http://0.0.0.0:8000/key/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-1234",
+        "key_alias": "my-key",
+        "user_id": "user-1234",
+        "team_id": "team-1234",
+        "max_budget": 100,
+        "metadata": {"any_key": "any-val"},
+    }'
+    ```
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -431,6 +475,15 @@ async def delete_key_fn(
     Returns:
     - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
 
+    Example:
+    ```bash
+    curl --location 'http://0.0.0.0:8000/key/delete' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
+    }'
+    ```
 
     Raises:
         HTTPException: If an error occurs during key deletion.
@@ -533,7 +586,10 @@ async def delete_key_fn(
 
 
 @router.post(
-    "/v2/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+    "/v2/key/info",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def info_key_fn_v2(
     data: Optional[KeyRequest] = None,

@@ -1161,11 +1161,95 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 
 ## Model Garden
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| llama2   | `completion('vertex_ai/<endpoint_id>', messages)` |
+
+:::tip
+
+All OpenAI compatible models from Vertex Model Garden are supported. 
+
+:::
 
 #### Using Model Garden
+
+**Almost all Vertex Model Garden models are OpenAI compatible.**
+
+<Tabs>
+
+<TabItem value="openai" label="OpenAI Compatible Models">
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/openai/{MODEL_ID}` |
+| Vertex Documentation | [Vertex Model Garden - OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_gradio_streaming_chat_completions.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Supported Operations | `/chat/completions`, `/embeddings` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = completion(
+  model="vertex_ai/openai/<your-endpoint-id>", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: llama3-1-8b-instruct
+      litellm_params:
+        model: vertex_ai/openai/5464397967697903616
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "llama3-1-8b-instruct", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+
+
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+
+<TabItem value="non-openai" label="Non-OpenAI Compatible Models">
 
 ```python
 from litellm import completion
@@ -1180,6 +1264,11 @@ response = completion(
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+
+</TabItem>
+
+</Tabs>
+
 
 ## Gemini Pro
 | Model Name       | Function Call                        |

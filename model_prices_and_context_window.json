@@ -4162,6 +4162,15 @@
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
+    "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
+        "max_tokens": 33792,
+        "max_input_tokens": 33792,
+        "max_output_tokens": 33792,
+        "input_cost_per_token": 0.00000018,
+        "output_cost_per_token": 0.00000018,
+        "litellm_provider": "openrouter",
+        "mode": "chat"
+    },
     "j2-ultra": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -5439,6 +5448,17 @@
         "supports_function_calling": true, 
         "supports_tool_choice": false
     },
+    "us.meta.llama3-1-8b-instruct-v1:0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.00000022,
+        "output_cost_per_token": 0.00000022,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
+    },
     "meta.llama3-1-70b-instruct-v1:0": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
@@ -5450,7 +5470,29 @@
         "supports_function_calling": true, 
         "supports_tool_choice": false
     },
+    "us.meta.llama3-1-70b-instruct-v1:0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.00000099,
+        "output_cost_per_token": 0.00000099,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
+    },
     "meta.llama3-1-405b-instruct-v1:0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000532,
+        "output_cost_per_token": 0.000016,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
+    },
+    "us.meta.llama3-1-405b-instruct-v1:0": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,

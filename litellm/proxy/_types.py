@@ -278,6 +278,7 @@ class LiteLLMRoutes(enum.Enum):
 
     management_routes = [  # key
         "/key/generate",
+        "/key/{token_id}/regenerate",
         "/key/update",
         "/key/delete",
         "/key/info",
@@ -339,11 +340,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso",
         "/sso/get/ui_settings",
         "/login",
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
         "/key/info",
-        "/key/delete",
         "/config",
         "/spend",
         "/user",
@@ -364,6 +361,7 @@ class LiteLLMRoutes(enum.Enum):
     internal_user_routes = (
         [
             "/key/generate",
+            "/key/{token_id}/regenerate",
             "/key/update",
             "/key/delete",
             "/key/health",
@@ -1132,6 +1130,11 @@ class KeyManagementSettings(LiteLLMBase):
     store_virtual_keys: Optional[bool] = False
     """
     If True, virtual keys created by litellm will be stored in the secret manager
+    """
+
+    prefix_for_stored_virtual_keys: str = "litellm/"
+    """
+    If set, this prefix will be used for stored virtual keys in the secret manager
     """
 
     access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
