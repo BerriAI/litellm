@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] Vertex AI Endpoints
+# Vertex AI SDK
 
 Use VertexAI SDK to call endpoints on LiteLLM Gateway (native provider format)
 
