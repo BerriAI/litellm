@@ -20,19 +20,30 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
-      label: "💥 LiteLLM Proxy Server",
+      label: "LiteLLM Proxy Server",
       link: {
         type: "generated-index",
-        title: "💥 LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM Proxy Server (LLM Gateway)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
       items: [
         "proxy/quick_start",
-        "proxy/docker_quick_start",
-        "proxy/deploy", 
+        "proxy/docker_quick_start", 
+        {
+          type: "category",
+          label: "Setup & Deployment",
+          items: [
+            "proxy/deploy", 
+            "proxy/prod", 
+            "proxy/configs", 
+            "proxy/cli",
+            "proxy/model_management",
+            "proxy/health",
+            "proxy/debugging",
+        ],
+        },
         "proxy/demo",
-        "proxy/prod",
         {
           type: "category",
           label: "Architecture",
@@ -45,7 +56,6 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/user_keys",
-        "proxy/configs",
         "proxy/response_headers", 
         "proxy/reliability",
         {
@@ -116,12 +126,8 @@ const sidebars = {
         "proxy/pass_through",
         "proxy/email",
         "proxy/multiple_admins",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
         "proxy/call_hooks",
-        "proxy/rules",
-        "proxy/cli", 
+        "proxy/rules", 
       ]
     },
     {
