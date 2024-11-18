@@ -33,7 +33,11 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import _duration_in_seconds, _hash_token_if_needed
+from litellm.proxy.utils import (
+    _duration_in_seconds,
+    _hash_token_if_needed,
+    handle_exception_on_proxy,
+)
 from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
@@ -1082,105 +1086,153 @@ async def regenerate_key_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> GenerateKeyResponse:
-    from litellm.proxy.proxy_server import (
-        hash_token,
-        premium_user,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
+) -> Optional[GenerateKeyResponse]:
     """
-    Endpoint for regenerating a key
+    Regenerate an existing API key while optionally updating its parameters.
+
+    Parameters:
+    - key: str (path parameter) - The key to regenerate
+    - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
+        - key_alias: Optional[str] - User-friendly key alias
+        - user_id: Optional[str] - User ID associated with key
+        - team_id: Optional[str] - Team ID associated with key
+        - models: Optional[list] - Model_name's a user is allowed to call
+        - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
+        - spend: Optional[float] - Amount spent by key
+        - max_budget: Optional[float] - Max budget for key
+        - model_max_budget: Optional[dict] - Model-specific budgets {"gpt-4": 0.5, "claude-v1": 1.0}
+        - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+        - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+        - max_parallel_requests: Optional[int] - Rate limit for parallel requests
+        - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
+        - tpm_limit: Optional[int] - Tokens per minute limit
+        - rpm_limit: Optional[int] - Requests per minute limit
+        - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
+        - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+        - allowed_cache_controls: Optional[list] - List of allowed cache control values
+        - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+        - permissions: Optional[dict] - Key-specific permissions
+        - guardrails: Optional[List[str]] - List of active guardrails for the key
+        - blocked: Optional[bool] - Whether the key is blocked
+
+
+    Returns:
+    - GenerateKeyResponse containing the new key and its updated parameters
+
+    Example:
+    ```bash
+    curl --location --request POST 'http://localhost:8000/key/sk-1234/regenerate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data-raw '{
+        "max_budget": 100,
+        "metadata": {"team": "core-infra"},
+        "models": ["gpt-4", "gpt-3.5-turbo"],
+        "model_max_budget": {"gpt-4": 50, "gpt-3.5-turbo": 50}
+    }'
+    ```
+
+    Note: This is an Enterprise feature. It requires a premium license to use.
     """
+    try:
 
-    if premium_user is not True:
-        raise ValueError(
-            f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
+        from litellm.proxy.proxy_server import (
+            hash_token,
+            premium_user,
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
         )
 
-    # Check if key exists, raise exception if key is not in the DB
+        if premium_user is not True:
+            raise ValueError(
+                f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
+            )
 
-    ### 1. Create New copy that is duplicate of existing key
-    ######################################################################
+        # Check if key exists, raise exception if key is not in the DB
 
-    # create duplicate of existing key
-    # set token = new token generated
-    # insert new token in DB
+        ### 1. Create New copy that is duplicate of existing key
+        ######################################################################
 
-    # create hash of token
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "DB not connected. prisma_client is None"},
+        # create duplicate of existing key
+        # set token = new token generated
+        # insert new token in DB
+
+        # create hash of token
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "DB not connected. prisma_client is None"},
+            )
+
+        if "sk" not in key:
+            hashed_api_key = key
+        else:
+            hashed_api_key = hash_token(key)
+
+        _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_api_key},
+        )
+        if _key_in_db is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Key {key} not found."},
+            )
+
+        verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
+
+        new_token = f"sk-{secrets.token_urlsafe(16)}"
+        new_token_hash = hash_token(new_token)
+        new_token_key_name = f"sk-...{new_token[-4:]}"
+
+        # Prepare the update data
+        update_data = {
+            "token": new_token_hash,
+            "key_name": new_token_key_name,
+        }
+
+        non_default_values = {}
+        if data is not None:
+            # Update with any provided parameters from GenerateKeyRequest
+            non_default_values = prepare_key_update_data(
+                data=data, existing_key_row=_key_in_db
+            )
+            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+
+        update_data.update(non_default_values)
+        # Update the token in the database
+        updated_token = await prisma_client.update_data(
+            token=key, data={**non_default_values, "token": hashed_api_key}
         )
 
-    if "sk" not in key:
-        hashed_api_key = key
-    else:
-        hashed_api_key = hash_token(key)
+        updated_token_dict = {}
+        if updated_token is not None:
+            _updated_token = dict(updated_token)
+            updated_token_dict = _updated_token["data"]
 
-    _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
-        where={"token": hashed_api_key},
-    )
-    if _key_in_db is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": f"Key {key} not found."},
+        updated_token_dict["key"] = new_token
+
+        ### 3. remove existing key entry from cache
+        ######################################################################
+        if key:
+            await _delete_cache_key_object(
+                hashed_token=hash_token(key),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        if hashed_api_key:
+            await _delete_cache_key_object(
+                hashed_token=hash_token(key),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        return GenerateKeyResponse(
+            **updated_token_dict,
         )
-
-    verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
-
-    new_token = f"sk-{secrets.token_urlsafe(16)}"
-    new_token_hash = hash_token(new_token)
-    new_token_key_name = f"sk-...{new_token[-4:]}"
-
-    # Prepare the update data
-    update_data = {
-        "token": new_token_hash,
-        "key_name": new_token_key_name,
-    }
-
-    non_default_values = {}
-    if data is not None:
-        # Update with any provided parameters from GenerateKeyRequest
-        non_default_values = prepare_key_update_data(
-            data=data, existing_key_row=_key_in_db
-        )
-
-    update_data.update(non_default_values)
-    # Update the token in the database
-    updated_token = await prisma_client.db.litellm_verificationtoken.update(
-        where={"token": hashed_api_key},
-        data=update_data,  # type: ignore
-    )
-
-    updated_token_dict = {}
-    if updated_token is not None:
-        updated_token_dict = dict(updated_token)
-
-    updated_token_dict["token"] = new_token
-
-    ### 3. remove existing key entry from cache
-    ######################################################################
-    if key:
-        await _delete_cache_key_object(
-            hashed_token=hash_token(key),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    if hashed_api_key:
-        await _delete_cache_key_object(
-            hashed_token=hash_token(key),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    return GenerateKeyResponse(
-        **updated_token_dict,
-    )
+    except Exception as e:
+        handle_exception_on_proxy(e)
 
 
 @router.get(
