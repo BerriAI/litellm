@@ -20,19 +20,29 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
-      label: "💥 LiteLLM Proxy Server",
+      label: "LiteLLM Proxy Server",
       link: {
         type: "generated-index",
-        title: "💥 LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM Proxy Server (LLM Gateway)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
       items: [
-        "proxy/quick_start",
-        "proxy/docker_quick_start",
-        "proxy/deploy", 
+        "proxy/docker_quick_start", 
+        {
+          type: "category",
+          label: "Setup & Deployment",
+          items: [
+            "proxy/deploy", 
+            "proxy/prod", 
+            "proxy/configs", 
+            "proxy/cli",
+            "proxy/model_management",
+            "proxy/health",
+            "proxy/debugging",
+        ],
+        },
         "proxy/demo",
-        "proxy/prod",
         {
           type: "category",
           label: "Architecture",
@@ -45,17 +55,24 @@ const sidebars = {
         },
         "proxy/enterprise",
         "proxy/user_keys",
-        "proxy/configs",
         "proxy/response_headers", 
         "proxy/reliability",
         {
           type: "category",
-          label: "🔑 Authentication",
-          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/service_accounts", "proxy/access_control","proxy/ip_address"],
+          label: "Authentication",
+          items: [
+            "proxy/virtual_keys", 
+            "proxy/token_auth", 
+            "proxy/service_accounts", 
+            "proxy/access_control",
+            "proxy/ip_address",
+            "proxy/email",
+            "proxy/multiple_admins",
+          ],
         },
         {
           type: "category",
-          label: "💸 Spend Tracking + Budgets",
+          label: "Spend Tracking + Budgets",
           items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
         },
         {
@@ -91,7 +108,7 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "🛡️ [Beta] Guardrails",
+          label: "[Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start", 
             "proxy/guardrails/aporia_api", 
@@ -114,19 +131,13 @@ const sidebars = {
         },
         "proxy/caching",
         "proxy/pass_through",
-        "proxy/email",
-        "proxy/multiple_admins",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
         "proxy/call_hooks",
-        "proxy/rules",
-        "proxy/cli", 
+        "proxy/rules", 
       ]
     },
     {
       type: "category",
-      label: "💯 Supported Models & Providers",
+      label: "Supported Models & Providers",
       link: {
         type: "generated-index",
         title: "Providers",
@@ -183,7 +194,6 @@ const sidebars = {
         "providers/openrouter", 
         "providers/palm", 
         "providers/sambanova", 
-        // "providers/custom_openai_proxy",
         "providers/custom_llm_server",
         "providers/petals",
         
@@ -191,7 +201,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Chat Completions (litellm.completion + PROXY)",
+      label: "Guides",
       link: {
         type: "generated-index",
         title: "Chat Completions",
@@ -245,7 +255,7 @@ const sidebars = {
     "scheduler",
     {
       type: "category",
-      label: "🚅 LiteLLM Python SDK",
+      label: "LiteLLM Python SDK",
       items: [
         "set_keys",
         "completion/token_usage",
