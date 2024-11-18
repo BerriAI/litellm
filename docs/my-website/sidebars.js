@@ -28,7 +28,6 @@ const sidebars = {
         slug: "/simple_proxy",
       },
       items: [
-        "proxy/quick_start",
         "proxy/docker_quick_start", 
         {
           type: "category",
