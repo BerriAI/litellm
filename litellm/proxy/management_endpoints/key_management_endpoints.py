@@ -88,7 +88,7 @@ async def generate_key_fn(  # noqa: PLR0915
     1. Allow users to turn on/off pii masking
 
     ```bash
-    curl --location 'http://0.0.0.0:8000/key/generate' \
+    curl --location 'http://0.0.0.0:4000/key/generate' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
         --data '{
@@ -352,7 +352,7 @@ async def update_key_fn(
 
     Example:
     ```bash
-    curl --location 'http://0.0.0.0:8000/key/update' \
+    curl --location 'http://0.0.0.0:4000/key/update' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -467,7 +467,7 @@ async def delete_key_fn(
 
     Example:
     ```bash
-    curl --location 'http://0.0.0.0:8000/key/delete' \
+    curl --location 'http://0.0.0.0:4000/key/delete' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -583,7 +583,7 @@ async def info_key_fn_v2(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:8000/key/info" \
+    curl -X GET "http://0.0.0.0:4000/key/info" \
     -H "Authorization: Bearer sk-1234" \
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
@@ -649,13 +649,13 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
-    curl -X GET "http://0.0.0.0:8000/key/info" \
+    curl -X GET "http://0.0.0.0:4000/key/info" \
 -H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
     ```
     """
@@ -1065,7 +1065,7 @@ async def regenerate_key_fn(
 
     Example:
     ```bash
-    curl --location --request POST 'http://localhost:8000/key/sk-1234/regenerate' \
+    curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data-raw '{
@@ -1299,9 +1299,24 @@ async def block_key(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-):
+) -> Optional[LiteLLM_VerificationToken]:
     """
-    Blocks all calls from keys with this team id.
+    Block an API key from making any requests.
+
+    Parameters:
+    - key: str - The key to block. Can be either the unhashed key (sk-...) or the hashed key value
+
+     Example:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+    }'
+    ```
+
+    Note: This is an admin-only endpoint. Only proxy admins can block keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
