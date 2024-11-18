@@ -1179,14 +1179,14 @@ def convert_to_anthropic_tool_result(
         ]
     }
     """
-    content_str: str = ""
+
+    # Anthropic returns a string or a list of dicts
     if isinstance(message["content"], str):
-        content_str = message["content"]
+        constent_result = message["content"]
     elif isinstance(message["content"], List):
-        content_list = message["content"]
-        for content in content_list:
-            if content["type"] == "text":
-                content_str += content["text"]
+        constent_result = message["content"]
+    else:
+        raise Exception(f"Unable to parse anthropic tool result for message: {message}")
 
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
     ## PROMPT CACHING CHECK ##
@@ -1198,14 +1198,14 @@ def convert_to_anthropic_tool_result(
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content_str
+            type="tool_result", tool_use_id=tool_call_id, content=constent_result
         )
 
     if message["role"] == "function":
         function_message: ChatCompletionFunctionMessage = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content_str
+            type="tool_result", tool_use_id=tool_call_id, content=constent_result
         )
 
     if anthropic_tool_result is None:
