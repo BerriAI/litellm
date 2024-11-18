@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔑 Virtual Keys
+# Virtual Keys
 Track Spend, and control model access via virtual keys for the proxy
 
 :::info
