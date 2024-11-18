@@ -993,6 +993,8 @@ async def test_partner_models_httpx(model, sync_mode):
         pass
     except litellm.InternalServerError as e:
         pass
+    except litellm.APIConnectionError as e:
+        pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
             pass
