@@ -98,15 +98,17 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+AnthropicMessageToolResultList = Iterable[
+    Union[
+        AnthropicMessagesTextParam,
+        AnthropicMessagesImageParam,
+        AnthropicMessagesDocumentParam,
+    ]
+]
+
 AnthropicMessagesToolResultContentValues = Union[
     str,
-    Iterable[
-        Union[
-            AnthropicMessagesTextParam,
-            AnthropicMessagesImageParam,
-            AnthropicMessagesDocumentParam,
-        ]
-    ],
+    AnthropicMessageToolResultList,
 ]
 
 

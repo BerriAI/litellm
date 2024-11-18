@@ -1152,7 +1152,7 @@ def convert_to_anthropic_content_element(
     if isinstance(content_element, str):
         return content_element
 
-    content_list: AnthropicMessagesToolResultContentValues = []
+    content_list: AnthropicMessageToolResultList = []
     if isinstance(content_element, list):
         for content in content_element:
             if content["type"] == "image_url":
