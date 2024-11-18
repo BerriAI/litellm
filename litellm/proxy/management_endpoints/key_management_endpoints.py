@@ -1301,7 +1301,7 @@ async def block_key(
     ),
 ) -> Optional[LiteLLM_VerificationToken]:
     """
-    Block an API key from making any requests.
+    Block a Virtual key from making any requests.
 
     Parameters:
     - key: str - The key to block. Can be either the unhashed key (sk-...) or the hashed key value
@@ -1408,7 +1408,22 @@ async def unblock_key(
     ),
 ):
     """
-    Unblocks all calls from this key.
+    Unblock a Virtual key to allow it to make requests again.
+
+    Parameters:
+    - key: str - The key to unblock. Can be either the unhashed key (sk-...) or the hashed key value
+
+    Example:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/unblock' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+    }'
+    ```
+
+    Note: This is an admin-only endpoint. Only proxy admins can unblock keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
