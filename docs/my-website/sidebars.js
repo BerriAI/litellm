@@ -40,6 +40,7 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
+            "proxy/pass_through",
         ],
         },
         "proxy/demo",
@@ -50,13 +51,24 @@ const sidebars = {
         }, 
         {
           type: "link",
-          label: "📖 All Endpoints (Swagger)",
+          label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/user_keys",
-        "proxy/response_headers", 
-        "proxy/reliability",
+        {
+          type: "category",
+          label: "Making LLM Requests",
+          items: [
+            "proxy/user_keys",
+            "proxy/response_headers", 
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse"
+          ],
+        },
         {
           type: "category",
           label: "Authentication",
@@ -72,28 +84,6 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Spend Tracking + Budgets",
-          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
-        },
-        {
-          type: "category",
-          label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
-        },
-        {
-          type: "category",
-          label: "Pass-through Endpoints (Provider-specific)",
-          items: [
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/langfuse"
-          ],
-        },
-        {
-          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui", 
@@ -103,7 +93,18 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "🪢 Logging, Alerting, Metrics",
+          label: "Spend Tracking + Budgets",
+          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+        },
+        "proxy/reliability",
+        {
+          type: "category",
+          label: "Routing",
+          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
+        },
+        {
+          type: "category",
+          label: "Logging, Alerting, Metrics",
           items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging", "proxy/alerting", "proxy/prometheus",],
         },
         {
@@ -123,14 +124,13 @@ const sidebars = {
         },
         {
           type: "category", 
-          label: "Secret Manager - storing LLM API Keys", 
+          label: "Secret Managers", 
           items: [
             "secret", 
             "oidc"
           ]
         },
         "proxy/caching",
-        "proxy/pass_through",
         "proxy/call_hooks",
         "proxy/rules", 
       ]
@@ -233,7 +233,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
+      label: "Supported Endpoints",
       items: [
         "embedding/supported_embedding",
         "image_generation",
@@ -251,8 +251,11 @@ const sidebars = {
         },
       ],
     },
-    "routing",
-    "scheduler",
+    {
+      type: "category",
+      label: "Load Balancing",
+      items: ["routing", "scheduler"],
+    },
     {
       type: "category",
       label: "LiteLLM Python SDK",
