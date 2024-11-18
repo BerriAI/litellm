@@ -40,6 +40,7 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
+            "proxy/pass_through",
         ],
         },
         "proxy/demo",
@@ -68,7 +69,6 @@ const sidebars = {
             "pass_through/langfuse"
           ],
         },
-        "proxy/reliability",
         {
           type: "category",
           label: "Authentication",
@@ -84,22 +84,23 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Spend Tracking + Budgets",
-          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
-        },
-        {
-          type: "category",
-          label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
-        },
-        {
-          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui", 
             "proxy/self_serve", 
             "proxy/custom_sso"
           ],
+        },
+        {
+          type: "category",
+          label: "Spend Tracking + Budgets",
+          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+        },
+        "proxy/reliability",
+        {
+          type: "category",
+          label: "Routing",
+          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
         },
         {
           type: "category",
@@ -130,7 +131,6 @@ const sidebars = {
           ]
         },
         "proxy/caching",
-        "proxy/pass_through",
         "proxy/call_hooks",
         "proxy/rules", 
       ]
