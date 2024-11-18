@@ -284,11 +284,18 @@ max_end_user_budget: Optional[float] = None
 priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
 REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
+
+#### Networking settings ####
 request_timeout: float = 6000  # time in seconds
+force_ipv4: bool = (
+    False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
+)
 module_level_aclient = AsyncHTTPHandler(
     timeout=request_timeout, client_alias="module level aclient"
 )
 module_level_client = HTTPHandler(timeout=request_timeout)
+
+#### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
 max_fallbacks: Optional[int] = None
 default_fallbacks: Optional[List] = None
