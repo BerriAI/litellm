@@ -255,21 +255,7 @@ async def generate_key_fn(  # noqa: PLR0915
                 str(e)
             )
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        handle_exception_on_proxy(e)
 
 
 def prepare_key_update_data(
@@ -572,21 +558,7 @@ async def delete_key_fn(
 
         return {"deleted_keys": keys}
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -655,21 +627,7 @@ async def info_key_fn_v2(
         return {"key": data.keys, "info": filtered_key_info}
 
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -756,21 +714,7 @@ async def info_key_fn(
         key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        handle_exception_on_proxy(e)
 
 
 async def generate_key_helper_fn(  # noqa: PLR0915
