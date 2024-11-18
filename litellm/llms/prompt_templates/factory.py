@@ -1466,6 +1466,27 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             user_content.append(_content_element)
+                        elif m.get("type", "") == "tool_result":
+                            try:
+                                m["content"] = json.loads(m["content"])
+                            except json.JSONDecodeError:
+                                continue
+
+                            if m["content"]["type"] == "image_url":
+                                m = cast(ChatCompletionImageObject, m)
+                                if isinstance(m["image_url"], str):
+                                    m["content"] = [
+                                        convert_to_anthropic_image_obj(
+                                            openai_image_url=m["image_url"]
+                                        )
+                                    ]
+                                else:
+                                    m["content"] = [
+                                        convert_to_anthropic_image_obj(
+                                            openai_image_url=m["image_url"]["url"]
+                                        )
+                                    ]
+
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
