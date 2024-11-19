@@ -562,6 +562,15 @@ async def user_api_key_auth(  # noqa: PLR0915
                 f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
             )
 
+        if route == "/user/auth":
+            if general_settings.get("allow_user_auth", False) is True:
+                return UserAPIKeyAuth()
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="'allow_user_auth' not set or set to False",
+                )
+
         ## Check END-USER OBJECT
         _end_user_object = None
         end_user_params = {}
