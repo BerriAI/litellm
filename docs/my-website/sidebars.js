@@ -105,7 +105,7 @@ const sidebars = {
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging", "proxy/alerting", "proxy/prometheus",],
+          items: ["proxy/logging", "proxy/team_logging","proxy/alerting", "proxy/prometheus",],
         },
         {
           type: "category",
