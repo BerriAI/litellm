@@ -37,6 +37,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -197,76 +198,6 @@ async def new_user(
     )
 
 
-@router.post(
-    "/user/auth",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def user_auth(request: Request):
-    """
-    Allows UI ("https://dashboard.litellm.ai/", or self-hosted - os.getenv("LITELLM_HOSTED_UI")) to request a magic link to be sent to user email, for auth to proxy.
-
-    Only allows emails from accepted email subdomains.
-
-    Rate limit: 1 request every 60s.
-
-    Only works, if you enable 'allow_user_auth' in general settings:
-    e.g.:
-    ```yaml
-    general_settings:
-        allow_user_auth: true
-    ```
-
-    Requirements:
-    SMTP server details saved in .env:
-    - os.environ["SMTP_HOST"]
-    - os.environ["SMTP_PORT"]
-    - os.environ["SMTP_USERNAME"]
-    - os.environ["SMTP_PASSWORD"]
-    - os.environ["SMTP_SENDER_EMAIL"]
-    """
-    from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy.utils import send_email
-
-    data = await request.json()  # type: ignore
-    user_email = data["user_email"]
-    page_params = data["page"]
-    if user_email is None:
-        raise HTTPException(status_code=400, detail="User email is none")
-
-    if prisma_client is None:  # if no db connected, raise an error
-        raise Exception("No connected db.")
-
-    ### Check if user email in user table
-    response = await prisma_client.get_generic_data(
-        key="user_email", value=user_email, table_name="users"
-    )
-    ### if so - generate a 24 hr key with that user id
-    if response is not None:
-        user_id = response.user_id  # type: ignore
-        response = await generate_key_helper_fn(
-            request_type="key",
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id},  # type: ignore
-        )
-    else:  ### else - create new user
-        response = await generate_key_helper_fn(
-            request_type="key",
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_email": user_email},  # type: ignore
-        )
-
-    base_url = os.getenv("LITELLM_HOSTED_UI", "https://dashboard.litellm.ai/")
-
-    params = {
-        "sender_name": "LiteLLM Proxy",
-        "receiver_email": user_email,
-        "subject": "Your Magic Link",
-        "html": f"<strong> Follow this  link, to login:\n\n{base_url}user/?token={response['token']}&user_id={response['user_id']}&page={page_params}</strong>",
-    }
-
-    await send_email(**params)
-    return "Email sent!"
-
-
 @router.get(
     "/user/available_roles",
     tags=["Internal User management"],
@@ -338,7 +269,7 @@ async def user_info(  # noqa: PLR0915
 
     Example request
     ```
-    curl -X GET 'http://localhost:8000/user/info?user_id=krrish7%40berri.ai' \
+    curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
     --header 'Authorization: Bearer sk-1234'
     ```
     """
@@ -488,21 +419,7 @@ async def user_info(  # noqa: PLR0915
                 str(e)
             )
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -527,7 +444,55 @@ async def user_update(
         "user_role": "proxy_admin_viewer"
     }'
 
-    See below for all params 
+    Parameters:
+        user_id: Optional[str]
+            Unique identifier for the user to update
+        
+        user_email: Optional[str]
+            Email address for the user
+        
+        password: Optional[str]
+            Password for the user
+        
+        user_role: Optional[Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]]
+            Role assigned to the user. Can be one of:
+            - proxy_admin: Full admin access
+            - proxy_admin_viewer: Read-only admin access
+            - internal_user: Standard internal user
+            - internal_user_viewer: Read-only internal user
+        
+        models: Optional[list]
+            List of model names the user is allowed to access
+        
+        spend: Optional[float]
+            Current spend amount for the user
+        
+        max_budget: Optional[float]
+            Maximum budget allowed for the user
+        
+        team_id: Optional[str]
+            ID of the team the user belongs to
+        
+        max_parallel_requests: Optional[int]
+            Maximum number of concurrent requests allowed
+        
+        metadata: Optional[dict]
+            Additional metadata associated with the user
+        
+        tpm_limit: Optional[int]
+            Maximum tokens per minute allowed
+        
+        rpm_limit: Optional[int]
+            Maximum requests per minute allowed
+        
+        budget_duration: Optional[str]
+            Duration for budget renewal (e.g., "30d" for 30 days)
+        
+        allowed_cache_controls: Optional[list]
+            List of allowed cache control options
+        
+        soft_budget: Optional[float]
+            Soft budget limit for alerting purposes
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -643,113 +608,6 @@ async def user_update(
         )
 
 
-@router.post(
-    "/user/request_model",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def user_request_model(request: Request):
-    """
-    Allow a user to create a request to access a model
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    try:
-        data_json = await request.json()
-
-        # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        non_default_values = {k: v for k, v in data_json.items() if v is not None}
-        new_models = non_default_values.get("models", None)
-        user_id = non_default_values.get("user_id", None)
-        justification = non_default_values.get("justification", None)
-
-        await prisma_client.insert_data(
-            data={
-                "models": new_models,
-                "justification": justification,
-                "user_id": user_id,
-                "status": "pending",
-                "request_id": str(uuid.uuid4()),
-            },
-            table_name="user_notification",
-        )
-        return {"status": "success"}
-        # update based on remaining passed in values
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_request_model(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
-
-@router.get(
-    "/user/get_requests",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def user_get_requests():
-    """
-    Get all "Access" requests made by proxy users, access requests are requests for accessing models
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    try:
-
-        # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        # TODO: Optimize this so we don't read all the data here, eventually move to pagination
-        response = await prisma_client.get_data(
-            query_type="find_all",
-            table_name="user_notification",
-        )
-        return {"requests": response}
-        # update based on remaining passed in values
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_get_requests(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
-
 @router.get(
     "/user/get_users",
     tags=["Internal User management"],
@@ -773,6 +631,18 @@ async def get_users(
     Get a paginated list of users, optionally filtered by role.
 
     Used by the UI to populate the user lists.
+
+    Parameters:
+        role: Optional[str]
+            Filter users by role. Can be one of:
+            - proxy_admin
+            - proxy_admin_viewer
+            - internal_user
+            - internal_user_viewer
+        page: int
+            The page number to return
+        page_size: int
+            The number of items per page
 
     Currently - admin-only endpoint.
     """
@@ -842,7 +712,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/user/delete' \
+    curl --location 'http://0.0.0.0:4000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 
