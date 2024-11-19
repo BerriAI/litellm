@@ -1144,15 +1144,17 @@ async def regenerate_key_fn(
             verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
 
         update_data.update(non_default_values)
+        update_data = prisma_client.jsonify_object(data=update_data)
         # Update the token in the database
-        updated_token = await prisma_client.update_data(
-            token=key, data={**non_default_values, "token": hashed_api_key}
+        updated_token = await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data=update_data,  # type: ignore
         )
 
         updated_token_dict = {}
         if updated_token is not None:
-            _updated_token = dict(updated_token)
-            updated_token_dict.update(_updated_token["data"])
+            updated_token_dict = dict(updated_token)
+
         updated_token_dict["key"] = new_token
         updated_token_dict.pop("token")
 
