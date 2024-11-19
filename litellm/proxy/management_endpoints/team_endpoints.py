@@ -1159,6 +1159,25 @@ async def block_team(
 ):
     """
     Blocks all calls from keys with this team id.
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to block.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated team record with blocked=True
+
+
+
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
@@ -1173,6 +1192,12 @@ async def block_team(
     record = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
     )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     return record
 
