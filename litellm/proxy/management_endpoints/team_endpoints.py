@@ -1266,6 +1266,9 @@ async def list_team(
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
         --header 'Authorization: Bearer sk-1234'
     ```
+
+    Parameters:
+    - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
