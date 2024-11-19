@@ -10,8 +10,10 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadAccessors
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.types.utils import StandardLoggingPayload
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -49,6 +51,10 @@ def get_logging_payload(
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
+    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+        "standard_logging_object", None
+    )
+
     metadata = (
         litellm_params.get("metadata", {}) or {}
     )  # if litellm_params['metadata'] == None
@@ -150,7 +156,9 @@ def get_logging_payload(
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=litellm_params.get("api_base", ""),
-            custom_llm_provider=litellm_params.get("custom_llm_provider", None),
+            custom_llm_provider=StandardLoggingPayloadAccessors.get_custom_llm_provider_from_standard_logging_payload(
+                standard_logging_payload
+            ),
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),

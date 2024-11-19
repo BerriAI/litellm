@@ -2359,6 +2359,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _in_memory_loggers.append(_mlflow_logger)
         return _mlflow_logger  # type: ignore
 
+
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
@@ -2717,6 +2718,31 @@ class StandardLoggingPayloadSetup:
                     else:
                         clean_hidden_params[key] = hidden_params[key]  # type: ignore
         return clean_hidden_params
+
+
+class StandardLoggingPayloadAccessors:
+    """
+    Accessor methods for StandardLoggingPayload
+
+    Class that allows easily reading fields from StandardLoggingPayload
+
+    """
+
+    @staticmethod
+    def get_custom_llm_provider_from_standard_logging_payload(
+        standard_logging_payload: Optional[StandardLoggingPayload],
+    ) -> Optional[str]:
+        """
+        Accessor method to safely get custom_llm_provider from standard_logging_payload
+        """
+        if standard_logging_payload is None:
+            return None
+        model_map_information = (
+            standard_logging_payload.get("model_map_information") or {}
+        )
+        model_map_value = model_map_information.get("model_map_value") or {}
+        custom_llm_provider = model_map_value.get("litellm_provider")
+        return custom_llm_provider
 
 
 def get_standard_logging_object_payload(
