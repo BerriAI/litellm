@@ -37,7 +37,6 @@ from litellm.proxy.proxy_server import (
     image_generation,
     model_list,
     moderations,
-    new_end_user,
     user_api_key_auth,
 )
 
