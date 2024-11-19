@@ -1131,7 +1131,6 @@ class KeyManagementSettings(LiteLLMBase):
     """
     If True, virtual keys created by litellm will be stored in the secret manager
     """
-
     prefix_for_stored_virtual_keys: str = "litellm/"
     """
     If set, this prefix will be used for stored virtual keys in the secret manager

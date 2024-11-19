@@ -26,7 +26,6 @@ from litellm.proxy._types import (
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
 
-
 class KeyManagementEventHooks:
 
     @staticmethod
