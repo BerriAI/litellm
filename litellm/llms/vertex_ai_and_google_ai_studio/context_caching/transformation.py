@@ -11,9 +11,9 @@ from litellm.types.llms.vertex_ai import CachedContentRequestBody, SystemInstruc
 from litellm.utils import is_cached_message
 
 from ..common_utils import VertexAIError, get_supports_system_message
-from ..gemini.transformation import _transform_system_message
-from ..gemini.vertex_and_google_ai_studio_gemini import (
+from ..gemini.transformation import (
     _gemini_convert_messages_with_history,
+    _transform_system_message,
 )
 
 

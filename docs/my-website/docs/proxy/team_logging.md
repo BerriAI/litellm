@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team/Key Based Logging
+# Team/Key Based Logging
 
 Allow each key/team to use their own Langfuse Project / custom callbacks
 
@@ -11,15 +11,13 @@ Allow each key/team to use their own Langfuse Project / custom callbacks
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
 Team 3 -> Disabled Logging (for GDPR compliance)
-
 ```
 
 ## Team Based Logging
 
-[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging.md)
 
 
-## Logging / Caching
+### Setting Team Logging via `config.yaml`
 
 Turn on/off logging and caching for a specific team id. 
 
@@ -30,11 +28,11 @@ This config would send langfuse logs to 2 different langfuse projects, based on 
 ```yaml
 litellm_settings:
   default_team_settings: 
-    - team_id: my-secret-project
+    - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
       langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
-    - team_id: ishaans-secret-project
+    - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
       langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
@@ -46,7 +44,7 @@ Now, when you [generate keys](./virtual_keys.md) for this team-id
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--d '{"team_id": "ishaans-secret-project"}'
+-d '{"team_id": "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"}'
 ```
 
 All requests made with these keys will log data to their team-specific logging. -->
@@ -267,6 +265,51 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
   Use the virtual key from step 3 to make a `/chat/completions` request
 
   You should see your logs on GCS Bucket on a successful request
+
+  ```shell
+  curl -i http://localhost:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-Fxq5XSyWKeXDKfPdqXZhPg" \
+    -d '{
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {"role": "user", "content": "Hello, Claude"}
+      ],
+      "user": "hello",
+    }'
+  ```
+
+</TabItem>
+
+<TabItem label="Langsmith" value="langsmith">
+
+1. Create Virtual Key to log to a specific Langsmith Project
+
+  ```bash
+  curl -X POST 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+      "metadata": {
+          "logging": [{
+              "callback_name": "langsmith", # "otel", "gcs_bucket"
+              "callback_type": "success", # "success", "failure", "success_and_failure"
+              "callback_vars": {
+                  "langsmith_api_key": "os.environ/LANGSMITH_API_KEY", # API Key for Langsmith logging
+                  "langsmith_project": "pr-brief-resemblance-72", # project name on langsmith
+                  "langsmith_base_url": "https://api.smith.langchain.com"
+              }
+          }]
+      }
+  }'
+
+  ```
+
+2. Test it - `/chat/completions` request
+
+  Use the virtual key from step 3 to make a `/chat/completions` request
+
+  You should see your logs on your Langsmith project on a successful request
 
   ```shell
   curl -i http://localhost:4000/v1/chat/completions \

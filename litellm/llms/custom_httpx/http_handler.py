@@ -4,7 +4,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
-from httpx import USE_CLIENT_DEFAULT
+from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
 
@@ -34,12 +34,14 @@ class AsyncHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
+        client_alias: Optional[str] = None,  # name for client in logs
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.client = self.create_client(
             timeout=timeout, concurrent_limit=concurrent_limit, event_hooks=event_hooks
         )
+        self.client_alias = client_alias
 
     def create_client(
         self,
@@ -58,8 +60,10 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
+        transport = self._create_async_transport()
 
         return httpx.AsyncClient(
+            transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
@@ -112,6 +116,7 @@ class AsyncHTTPHandler:
         try:
             if timeout is None:
                 timeout = self.timeout
+
             req = self.client.build_request(
                 "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
             )
@@ -294,6 +299,18 @@ class AsyncHTTPHandler:
         except Exception:
             pass
 
+    def _create_async_transport(self) -> Optional[AsyncHTTPTransport]:
+        """
+        Create an async transport with IPv4 only if litellm.force_ipv4 is True.
+        Otherwise, return None.
+
+        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+        """
+        if litellm.force_ipv4:
+            return AsyncHTTPTransport(local_address="0.0.0.0")
+        else:
+            return None
+
 
 class HTTPHandler:
     def __init__(
@@ -313,8 +330,11 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
+            transport = self._create_sync_transport()
+
             # Create a client with a connection pool
             self.client = httpx.Client(
+                transport=transport,
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_connections=concurrent_limit,
@@ -423,6 +443,18 @@ class HTTPHandler:
             self.close()
         except Exception:
             pass
+
+    def _create_sync_transport(self) -> Optional[HTTPTransport]:
+        """
+        Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
+        Otherwise, return None.
+
+        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+        """
+        if litellm.force_ipv4:
+            return HTTPTransport(local_address="0.0.0.0")
+        else:
+            return None
 
 
 def get_async_httpx_client(

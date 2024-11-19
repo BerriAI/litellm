@@ -135,7 +135,7 @@ def test_get_cache_key_text_completion():
 def test_get_hashed_cache_key():
     cache = Cache()
     cache_key = "model:gpt-3.5-turbo,messages:Hello world"
-    hashed_key = cache._get_hashed_cache_key(cache_key)
+    hashed_key = Cache._get_hashed_cache_key(cache_key)
     assert len(hashed_key) == 64  # SHA-256 produces a 64-character hex string
 
 

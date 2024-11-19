@@ -661,13 +661,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         return _message
 
 
-class OpenAIError(openai.OpenAIError):  # type: ignore
-    def __init__(self, original_exception=None):
-        super().__init__()
-        self.llm_provider = "openai"
-
-
-class JSONSchemaValidationError(APIError):
+class JSONSchemaValidationError(APIResponseValidationError):
     def __init__(
         self, model: str, llm_provider: str, raw_response: str, schema: str
     ) -> None:
@@ -678,9 +672,13 @@ class JSONSchemaValidationError(APIError):
             model, raw_response, schema
         )
         self.message = message
-        super().__init__(
-            model=model, message=message, llm_provider=llm_provider, status_code=500
-        )
+        super().__init__(model=model, message=message, llm_provider=llm_provider)
+
+
+class OpenAIError(openai.OpenAIError):  # type: ignore
+    def __init__(self, original_exception=None):
+        super().__init__()
+        self.llm_provider = "openai"
 
 
 class UnsupportedParamsError(BadRequestError):

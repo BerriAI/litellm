@@ -551,11 +551,8 @@ const Team: React.FC<TeamProps> = ({
                             {perTeamInfo &&
                               team.team_id &&
                               perTeamInfo[team.team_id] &&
-                              perTeamInfo[team.team_id].team_info &&
-                              perTeamInfo[team.team_id].team_info
-                                .members_with_roles &&
-                              perTeamInfo[team.team_id].team_info
-                                .members_with_roles.length}{" "}
+                              perTeamInfo[team.team_id].members_with_roles &&
+                              perTeamInfo[team.team_id].members_with_roles.length}{" "}
                             Members
                           </Text>
                         </TableCell>

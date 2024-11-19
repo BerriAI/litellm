@@ -440,23 +440,29 @@ def test_update_usage(model_list):
     )
     deployment_id = deployment["model_info"]["id"]
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
     assert request_count == 1
 
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
 
     assert request_count == 2
 
 
 @pytest.mark.parametrize(
-    "finish_reason, expected_error", [("content_filter", True), ("stop", False)]
+    "finish_reason, expected_fallback", [("content_filter", True), ("stop", False)]
 )
-def test_should_raise_content_policy_error(model_list, finish_reason, expected_error):
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
+def test_should_raise_content_policy_error(
+    model_list, finish_reason, expected_fallback, fallback_type
+):
     """Test if the '_should_raise_content_policy_error' function is working correctly"""
-    router = Router(model_list=model_list)
+    router = Router(
+        model_list=model_list,
+        default_fallbacks=["gpt-4o"] if fallback_type == "default" else None,
+    )
 
     assert (
         router._should_raise_content_policy_error(
@@ -472,17 +478,23 @@ def test_should_raise_content_policy_error(model_list, finish_reason, expected_e
                 usage={"total_tokens": 100},
             ),
             kwargs={
-                "content_policy_fallbacks": [{"gpt-3.5-turbo": "gpt-4o"}],
+                "content_policy_fallbacks": (
+                    [{"gpt-3.5-turbo": "gpt-4o"}]
+                    if fallback_type == "model-specific"
+                    else None
+                )
             },
         )
-        is expected_error
+        is expected_fallback
     )
 
 
 def test_get_healthy_deployments(model_list):
     """Test if the '_get_healthy_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_healthy_deployments(model="gpt-3.5-turbo")
+    deployments = router._get_healthy_deployments(
+        model="gpt-3.5-turbo", parent_otel_span=None
+    )
     assert len(deployments) > 0
 
 
@@ -756,6 +768,7 @@ def test_track_deployment_metrics(model_list):
             model="gpt-3.5-turbo",
             usage={"total_tokens": 100},
         ),
+        parent_otel_span=None,
     )
 
 
@@ -957,6 +970,18 @@ def test_replace_model_in_jsonl(model_list):
             "openai/gpt-3.5-turbo",
             "openai/gpt-3.5-turbo",
         ),
+        (
+            "bedrock/meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "bedrock/meta.llama3-70b",
+        ),
+        (
+            "meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "meta.llama3-70b",
+        ),
     ],
 )
 def test_pattern_match_deployment_set_model_name(
@@ -983,3 +1008,38 @@ def test_pattern_match_deployment_set_model_name(
 
     print(updated_model)  # Expected output: "openai/fo::hi:static::hello"
     assert updated_model == expected_model
+
+    updated_models = pattern_router._return_pattern_matched_deployments(
+        match,
+        deployments=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": litellm_model},
+            }
+        ],
+    )
+
+    for model in updated_models:
+        assert model["litellm_params"]["model"] == expected_model
+
+
+@pytest.mark.asyncio
+async def test_pass_through_moderation_endpoint_factory(model_list):
+    router = Router(model_list=model_list)
+    response = await router._pass_through_moderation_endpoint_factory(
+        original_function=litellm.amoderation, input="this is valid good text"
+    )
+
+
+@pytest.mark.parametrize(
+    "has_default_fallbacks, expected_result",
+    [(True, True), (False, False)],
+)
+def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_result):
+    router = Router(
+        model_list=model_list,
+        default_fallbacks=(
+            ["my-default-fallback-model"] if has_default_fallbacks else None
+        ),
+    )
+    assert router._has_default_fallbacks() is expected_result

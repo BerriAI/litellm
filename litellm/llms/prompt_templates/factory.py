@@ -259,43 +259,6 @@ def mistral_instruct_pt(messages):
     return prompt
 
 
-def mistral_api_pt(messages):
-    """
-    - handles scenario where content is list and not string
-    - content list is just text, and no images
-    - if image passed in, then just return as is (user-intended)
-
-    Motivation: mistral api doesn't support content as a list
-    """
-    new_messages = []
-    for m in messages:
-        special_keys = ["role", "content", "tool_calls", "function_call"]
-        extra_args = {}
-        if isinstance(m, dict):
-            for k, v in m.items():
-                if k not in special_keys:
-                    extra_args[k] = v
-        texts = ""
-        if m.get("content", None) is not None and isinstance(m["content"], list):
-            for c in m["content"]:
-                if c["type"] == "image_url":
-                    return messages
-                elif c["type"] == "text" and isinstance(c["text"], str):
-                    texts += c["text"]
-        elif m.get("content", None) is not None and isinstance(m["content"], str):
-            texts = m["content"]
-
-        new_m = {"role": m["role"], "content": texts, **extra_args}
-
-        if new_m["role"] == "tool" and m.get("name"):
-            new_m["name"] = m["name"]
-        if m.get("tool_calls"):
-            new_m["tool_calls"] = m["tool_calls"]
-
-        new_messages.append(new_m)
-    return new_messages
-
-
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def falcon_instruct_pt(messages):
     prompt = ""
@@ -1224,6 +1187,10 @@ def convert_to_anthropic_tool_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
+
+    anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
+    ## PROMPT CACHING CHECK ##
+    cache_control = message.get("cache_control", None)
     if message["role"] == "tool":
         tool_message: ChatCompletionToolMessage = message
         tool_call_id: str = tool_message["tool_call_id"]
@@ -1233,7 +1200,7 @@ def convert_to_anthropic_tool_result(
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
-        return anthropic_tool_result
+
     if message["role"] == "function":
         function_message: ChatCompletionFunctionMessage = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
@@ -1241,13 +1208,11 @@ def convert_to_anthropic_tool_result(
             type="tool_result", tool_use_id=tool_call_id, content=content_str
         )
 
-        return anthropic_tool_result
-    else:
-        raise Exception(
-            "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
-                message.get("content")
-            )
-        )
+    if anthropic_tool_result is None:
+        raise Exception(f"Unable to parse anthropic tool result for message: {message}")
+    if cache_control is not None:
+        anthropic_tool_result["cache_control"] = cache_control  # type: ignore
+    return anthropic_tool_result
 
 
 def convert_function_to_anthropic_tool_invoke(
@@ -1328,7 +1293,10 @@ def convert_to_anthropic_tool_invoke(
 
 def add_cache_control_to_content(
     anthropic_content_element: Union[
-        dict, AnthropicMessagesImageParam, AnthropicMessagesTextParam
+        dict,
+        AnthropicMessagesImageParam,
+        AnthropicMessagesTextParam,
+        AnthropicMessagesDocumentParam,
     ],
     orignal_content_element: Union[dict, AllMessageValues],
 ):
@@ -1339,6 +1307,32 @@ def add_cache_control_to_content(
         anthropic_content_element["cache_control"] = transformed_param
 
     return anthropic_content_element
+
+
+def _anthropic_content_element_factory(
+    image_chunk: GenericImageParsingChunk,
+) -> Union[AnthropicMessagesImageParam, AnthropicMessagesDocumentParam]:
+    if image_chunk["media_type"] == "application/pdf":
+        _anthropic_content_element: Union[
+            AnthropicMessagesDocumentParam, AnthropicMessagesImageParam
+        ] = AnthropicMessagesDocumentParam(
+            type="document",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+    else:
+        _anthropic_content_element = AnthropicMessagesImageParam(
+            type="image",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+    return _anthropic_content_element
 
 
 def anthropic_messages_pt(  # noqa: PLR0915
@@ -1384,55 +1378,67 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ] = messages[
                 msg_i
             ]  # type: ignore
-            if user_message_types_block["content"] and isinstance(
-                user_message_types_block["content"], list
-            ):
-                for m in user_message_types_block["content"]:
-                    if m.get("type", "") == "image_url":
-                        m = cast(ChatCompletionImageObject, m)
-                        if isinstance(m["image_url"], str):
-                            image_chunk = convert_to_anthropic_image_obj(
-                                openai_image_url=m["image_url"]
+            if user_message_types_block["role"] == "user":
+                if isinstance(user_message_types_block["content"], list):
+                    for m in user_message_types_block["content"]:
+                        if m.get("type", "") == "image_url":
+                            m = cast(ChatCompletionImageObject, m)
+                            if isinstance(m["image_url"], str):
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=m["image_url"]
+                                )
+                            else:
+                                image_chunk = convert_to_anthropic_image_obj(
+                                    openai_image_url=m["image_url"]["url"]
+                                )
+
+                            _anthropic_content_element = (
+                                _anthropic_content_element_factory(image_chunk)
                             )
-                        else:
-                            image_chunk = convert_to_anthropic_image_obj(
-                                openai_image_url=m["image_url"]["url"]
+                            _content_element = add_cache_control_to_content(
+                                anthropic_content_element=_anthropic_content_element,
+                                orignal_content_element=dict(m),
                             )
 
-                        _anthropic_content_element = AnthropicMessagesImageParam(
-                            type="image",
-                            source=AnthropicImageParamSource(
-                                type="base64",
-                                media_type=image_chunk["media_type"],
-                                data=image_chunk["data"],
-                            ),
-                        )
-
-                        _content_element = add_cache_control_to_content(
-                            anthropic_content_element=_anthropic_content_element,
-                            orignal_content_element=dict(m),
-                        )
-
-                        if "cache_control" in _content_element:
-                            _anthropic_content_element["cache_control"] = (
-                                _content_element["cache_control"]
+                            if "cache_control" in _content_element:
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
+                            user_content.append(_anthropic_content_element)
+                        elif m.get("type", "") == "text":
+                            m = cast(ChatCompletionTextObject, m)
+                            _anthropic_text_content_element = (
+                                AnthropicMessagesTextParam(
+                                    type="text",
+                                    text=m["text"],
+                                )
                             )
-                        user_content.append(_anthropic_content_element)
-                    elif m.get("type", "") == "text":
-                        m = cast(ChatCompletionTextObject, m)
-                        _anthropic_text_content_element = AnthropicMessagesTextParam(
-                            type="text",
-                            text=m["text"],
-                        )
-                        _content_element = add_cache_control_to_content(
-                            anthropic_content_element=_anthropic_text_content_element,
-                            orignal_content_element=dict(m),
-                        )
-                        _content_element = cast(
-                            AnthropicMessagesTextParam, _content_element
+                            _content_element = add_cache_control_to_content(
+                                anthropic_content_element=_anthropic_text_content_element,
+                                orignal_content_element=dict(m),
+                            )
+                            _content_element = cast(
+                                AnthropicMessagesTextParam, _content_element
+                            )
+
+                            user_content.append(_content_element)
+                elif isinstance(user_message_types_block["content"], str):
+                    _anthropic_content_text_element: AnthropicMessagesTextParam = {
+                        "type": "text",
+                        "text": user_message_types_block["content"],
+                    }
+                    _content_element = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_content_text_element,
+                        orignal_content_element=dict(user_message_types_block),
+                    )
+
+                    if "cache_control" in _content_element:
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
                         )
 
-                        user_content.append(_content_element)
+                    user_content.append(_anthropic_content_text_element)
+
             elif (
                 user_message_types_block["role"] == "tool"
                 or user_message_types_block["role"] == "function"
@@ -1441,22 +1447,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block)
                 )
-            elif isinstance(user_message_types_block["content"], str):
-                _anthropic_content_text_element: AnthropicMessagesTextParam = {
-                    "type": "text",
-                    "text": user_message_types_block["content"],
-                }
-                _content_element = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_content_text_element,
-                    orignal_content_element=dict(user_message_types_block),
-                )
-
-                if "cache_control" in _content_element:
-                    _anthropic_content_text_element["cache_control"] = _content_element[
-                        "cache_control"
-                    ]
-
-                user_content.append(_anthropic_content_text_element)
 
             msg_i += 1
 
@@ -2548,18 +2538,20 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 BedrockContentBlock(image=assistants_part)  # type: ignore
                             )
                 assistant_content.extend(assistants_parts)
-            elif messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke convertion
-                assistant_content.extend(
-                    _convert_to_bedrock_tool_call_invoke(messages[msg_i]["tool_calls"])
-                )
-            else:
+            elif messages[msg_i].get("content", None) is not None and isinstance(
+                messages[msg_i]["content"], str
+            ):
                 assistant_text = (
                     messages[msg_i].get("content") or ""
                 )  # either string or none
                 if assistant_text:
                     assistant_content.append(BedrockContentBlock(text=assistant_text))
+            if messages[msg_i].get(
+                "tool_calls", []
+            ):  # support assistant tool invoke convertion [TODO]:
+                assistant_content.extend(
+                    _convert_to_bedrock_tool_call_invoke(messages[msg_i]["tool_calls"])
+                )
 
             msg_i += 1
 
@@ -2824,7 +2816,7 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     elif custom_llm_provider == "mistral":
-        return mistral_api_pt(messages=messages)
+        return litellm.MistralConfig._transform_messages(messages=messages)
     elif custom_llm_provider == "bedrock":
         if "amazon.titan-text" in model:
             return amazon_titan_pt(messages=messages)

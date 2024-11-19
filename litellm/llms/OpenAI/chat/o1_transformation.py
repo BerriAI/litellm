@@ -108,7 +108,9 @@ class OpenAIO1Config(OpenAIGPTConfig):
             return True
         return False
 
-    def o1_prompt_factory(self, messages: List[AllMessageValues]):
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)

@@ -28,6 +28,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.mlflow import MlflowLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -42,6 +43,7 @@ from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
     StandardCallbackDynamicParams,
+    StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
@@ -64,6 +66,7 @@ from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.datadog.datadog import DataDogLogger
+from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
@@ -199,6 +202,7 @@ class Logging:
         start_time,
         litellm_call_id: str,
         function_id: str,
+        litellm_trace_id: Optional[str] = None,
         dynamic_input_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = None,
@@ -236,6 +240,7 @@ class Logging:
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
+        self.litellm_trace_id = litellm_trace_id
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[Any] = (
@@ -271,6 +276,11 @@ class Logging:
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
+
+        self.model_call_details = {
+            "litellm_trace_id": litellm_trace_id,
+            "litellm_call_id": litellm_call_id,
+        }
 
     def process_dynamic_callbacks(self):
         """
@@ -379,21 +389,23 @@ class Logging:
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
-        self.model_call_details = {
-            "model": self.model,
-            "messages": self.messages,
-            "optional_params": self.optional_params,
-            "litellm_params": self.litellm_params,
-            "start_time": self.start_time,
-            "stream": self.stream,
-            "user": user,
-            "call_type": str(self.call_type),
-            "litellm_call_id": self.litellm_call_id,
-            "completion_start_time": self.completion_start_time,
-            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
-            **self.optional_params,
-            **additional_params,
-        }
+        self.model_call_details.update(
+            {
+                "model": self.model,
+                "messages": self.messages,
+                "optional_params": self.optional_params,
+                "litellm_params": self.litellm_params,
+                "start_time": self.start_time,
+                "stream": self.stream,
+                "user": user,
+                "call_type": str(self.call_type),
+                "litellm_call_id": self.litellm_call_id,
+                "completion_start_time": self.completion_start_time,
+                "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
+                **self.optional_params,
+                **additional_params,
+            }
+        )
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -552,6 +564,7 @@ class Logging:
                             message=f"Model Call Details pre-call: {details_to_log}",
                             level="info",
                         )
+
                     elif isinstance(callback, CustomLogger):  # custom logger class
                         callback.log_pre_api_call(
                             model=self.model,
@@ -1247,6 +1260,7 @@ class Logging:
                                 end_time=end_time,
                                 print_verbose=print_verbose,
                             )
+
                     if (
                         callback == "openmeter"
                         and self.model_call_details.get("litellm_params", {}).get(
@@ -2205,6 +2219,10 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _datadog_logger = DataDogLogger()
         _in_memory_loggers.append(_datadog_logger)
         return _datadog_logger  # type: ignore
+    elif logging_integration == "datadog_llm_observability":
+        _datadog_llm_obs_logger = DataDogLLMObsLogger()
+        _in_memory_loggers.append(_datadog_llm_obs_logger)
+        return _datadog_llm_obs_logger  # type: ignore
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
@@ -2332,6 +2350,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
 
+    elif logging_integration == "mlflow":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, MlflowLogger):
+                return callback  # type: ignore
+
+        _mlflow_logger = MlflowLogger()
+        _in_memory_loggers.append(_mlflow_logger)
+        return _mlflow_logger  # type: ignore
 
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
@@ -2371,6 +2397,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "datadog":
         for callback in _in_memory_loggers:
             if isinstance(callback, DataDogLogger):
+                return callback
+    elif logging_integration == "datadog_llm_observability":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, DataDogLLMObsLogger):
                 return callback
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
@@ -2429,6 +2459,12 @@ def get_custom_logger_compatible_class(
                 and callback.callback_name == "langtrace"
             ):
                 return callback
+
+    elif logging_integration == "mlflow":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, MlflowLogger):
+                return callback
+
     return None
 
 
@@ -2464,6 +2500,14 @@ class StandardLoggingPayloadSetup:
     ) -> Tuple[float, float, float]:
         """
         Convert datetime objects to floats
+
+        Args:
+            start_time: Union[dt_object, float]
+            end_time: Union[dt_object, float]
+            completion_start_time: Union[dt_object, float]
+
+        Returns:
+            Tuple[float, float, float]: A tuple containing the start time, end time, and completion start time as floats.
         """
 
         if isinstance(start_time, datetime.datetime):
@@ -2524,13 +2568,10 @@ class StandardLoggingPayloadSetup:
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
-            clean_metadata = StandardLoggingMetadata(
-                **{  # type: ignore
-                    key: metadata[key]
-                    for key in StandardLoggingMetadata.__annotations__.keys()
-                    if key in metadata
-                }
-            )
+            supported_keys = StandardLoggingMetadata.__annotations__.keys()
+            for key in supported_keys:
+                if key in metadata:
+                    clean_metadata[key] = metadata[key]  # type: ignore
 
             if metadata.get("user_api_key") is not None:
                 if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
@@ -2631,6 +2672,52 @@ class StandardLoggingPayloadSetup:
 
         return final_response_obj
 
+    @staticmethod
+    def get_additional_headers(
+        additiona_headers: Optional[dict],
+    ) -> Optional[StandardLoggingAdditionalHeaders]:
+
+        if additiona_headers is None:
+            return None
+
+        additional_logging_headers: StandardLoggingAdditionalHeaders = {}
+
+        for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
+            _key = key.lower()
+            _key = _key.replace("_", "-")
+            if _key in additiona_headers:
+                try:
+                    additional_logging_headers[key] = int(additiona_headers[_key])  # type: ignore
+                except (ValueError, TypeError):
+                    verbose_logger.debug(
+                        f"Could not convert {additiona_headers[_key]} to int for key {key}."
+                    )
+        return additional_logging_headers
+
+    @staticmethod
+    def get_hidden_params(
+        hidden_params: Optional[dict],
+    ) -> StandardLoggingHiddenParams:
+        clean_hidden_params = StandardLoggingHiddenParams(
+            model_id=None,
+            cache_key=None,
+            api_base=None,
+            response_cost=None,
+            additional_headers=None,
+        )
+        if hidden_params is not None:
+            for key in StandardLoggingHiddenParams.__annotations__.keys():
+                if key in hidden_params:
+                    if key == "additional_headers":
+                        clean_hidden_params["additional_headers"] = (
+                            StandardLoggingPayloadSetup.get_additional_headers(
+                                hidden_params[key]
+                            )
+                        )
+                    else:
+                        clean_hidden_params[key] = hidden_params[key]  # type: ignore
+        return clean_hidden_params
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2662,7 +2749,9 @@ def get_standard_logging_object_payload(
             if response_headers is not None:
                 hidden_params = dict(
                     StandardLoggingHiddenParams(
-                        additional_headers=dict(response_headers),
+                        additional_headers=StandardLoggingPayloadSetup.get_additional_headers(
+                            dict(response_headers)
+                        ),
                         model_id=None,
                         cache_key=None,
                         api_base=None,
@@ -2703,30 +2792,13 @@ def get_standard_logging_object_payload(
             )
         )
         # clean up litellm hidden params
-        clean_hidden_params = StandardLoggingHiddenParams(
-            model_id=None,
-            cache_key=None,
-            api_base=None,
-            response_cost=None,
-            additional_headers=None,
+        clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
+            hidden_params
         )
-        if hidden_params is not None:
-            clean_hidden_params = StandardLoggingHiddenParams(
-                **{  # type: ignore
-                    key: hidden_params[key]
-                    for key in StandardLoggingHiddenParams.__annotations__.keys()
-                    if key in hidden_params
-                }
-            )
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata
         )
-
-        if litellm.cache is not None:
-            cache_key = litellm.cache.get_cache_key(**kwargs)
-        else:
-            cache_key = None
 
         saved_cache_cost: float = 0.0
         if cache_hit is True:
@@ -2760,6 +2832,7 @@ def get_standard_logging_object_payload(
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
+            trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
             call_type=call_type or "",
             cache_hit=cache_hit,
             status=status,
@@ -2769,7 +2842,7 @@ def get_standard_logging_object_payload(
             completionStartTime=completion_start_time_float,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
-            cache_key=cache_key,
+            cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
             total_tokens=usage.total_tokens,
             prompt_tokens=usage.prompt_tokens,

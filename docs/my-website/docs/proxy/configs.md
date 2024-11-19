@@ -625,7 +625,9 @@ litellm_settings:
   redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
   langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"] # default tags for Langfuse Logging
   
+  # Networking settings
   request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
+  force_ipv4: boolean # If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API
   
   set_verbose: boolean # sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION
   json_logs: boolean # if true, logs will be in json format
@@ -692,9 +694,13 @@ general_settings:
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
   key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
+
+  # Database Settings
   database_url: string
   database_connection_pool_limit: 0  # default 100
   database_connection_timeout: 0  # default 60s
+  allow_requests_on_db_unavailable: boolean  # if true, will allow requests that can not connect to the DB to verify Virtual Key to still work 
+
   custom_auth: string
   max_parallel_requests: 0  # the max parallel requests allowed per deployment 
   global_max_parallel_requests: 0  # the max parallel requests allowed on the proxy all up 
@@ -723,6 +729,7 @@ general_settings:
 | json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
 | default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
 | request_timeout | integer | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py) |
+| force_ipv4 | boolean | If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API |
 | content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
 | context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
 | cache | boolean | If true, enables caching. [Further docs](./caching) |
@@ -766,6 +773,7 @@ general_settings:
 | database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
 | database_connection_pool_limit | integer | The limit for database connection pool [Setting DB Connection Pool limit](#configure-db-pool-limits--connection-timeouts) |
 | database_connection_timeout | integer | The timeout for database connections in seconds [Setting DB Connection Pool limit, timeout](#configure-db-pool-limits--connection-timeouts) |
+| allow_requests_on_db_unavailable | boolean | If true, allows requests to succeed even if DB is unreachable. **Only use this if running LiteLLM in your VPC** This will allow requests to work even when LiteLLM cannot connect to the DB to verify a Virtual Key |
 | custom_auth | string | Write your own custom authentication logic [Doc Custom Auth](virtual_keys#custom-auth) |
 | max_parallel_requests | integer | The max parallel requests allowed per deployment |
 | global_max_parallel_requests | integer | The max parallel requests allowed on the proxy overall |
@@ -786,9 +794,9 @@ general_settings:
 | store_model_in_db | boolean | If true, allows `/model/new` endpoint to store model information in db. Endpoint disabled by default. [Doc on `/model/new` endpoint](./model_management.md#create-a-new-model) |
 | max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
-| proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. |
-| proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. |
-| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. |
+| proxy_budget_rescheduler_min_time | int | The minimum time (in seconds) to wait before checking db for budget resets. **Default is 597 seconds** |
+| proxy_budget_rescheduler_max_time | int | The maximum time (in seconds) to wait before checking db for budget resets. **Default is 605 seconds** |
+| proxy_batch_write_at | int | Time (in seconds) to wait before batch writing spend logs to the db. **Default is 10 seconds** |
 | alerting_args | dict | Args for Slack Alerting [Doc on Slack Alerting](./alerting.md) |
 | custom_key_generate | str | Custom function for key generation [Doc on custom key generation](./virtual_keys.md#custom--key-generate) |
 | allowed_ips | List[str] | List of IPs allowed to access the proxy. If not set, all IPs are allowed. |
@@ -918,6 +926,7 @@ router_settings:
 | DD_API_KEY | API key for Datadog integration
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
+| DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
@@ -928,6 +937,8 @@ router_settings:
 | EMAIL_SUPPORT_CONTACT | Support contact email address
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
+| GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
+| GCS_BATCH_SIZE | Batch size for GCS logging. Specify after how many logs you want to flush to GCS. If `BATCH_SIZE` is set to 10, logs are flushed every 10 logs. **Default is 2048**
 | GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers

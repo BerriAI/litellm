@@ -15,22 +15,29 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-
+import litellm
 from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
 from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
-from litellm.secret_managers.aws_secret_manager import load_aws_secret_manager
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+from litellm.secret_managers.main import (
+    get_secret,
+    _should_read_secret_from_secret_manager,
+)
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
 def test_aws_secret_manager():
-    load_aws_secret_manager(use_aws_secret_manager=True)
+    import json
+
+    AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
 
     secret_val = get_secret("litellm_master_key")
 
     print(f"secret_val: {secret_val}")
 
-    assert secret_val == "sk-1234"
+    # cast json to dict
+    secret_val = json.loads(secret_val)
+
+    assert secret_val["litellm_master_key"] == "sk-1234"
 
 
 def redact_oidc_signature(secret_val):
@@ -240,3 +247,71 @@ def test_google_secret_manager_read_in_memory():
     )
     print("secret_val: {}".format(secret_val))
     assert secret_val == "lite-llm"
+
+
+def test_should_read_secret_from_secret_manager():
+    """
+    Test that _should_read_secret_from_secret_manager returns correct values based on access mode
+    """
+    from litellm.proxy._types import KeyManagementSettings
+
+    # Test when secret manager client is None
+    litellm.secret_manager_client = None
+    litellm._key_management_settings = KeyManagementSettings()
+    assert _should_read_secret_from_secret_manager() is False
+
+    # Test with secret manager client and read_only access
+    litellm.secret_manager_client = "dummy_client"
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
+    assert _should_read_secret_from_secret_manager() is True
+
+    # Test with secret manager client and read_and_write access
+    litellm._key_management_settings = KeyManagementSettings(
+        access_mode="read_and_write"
+    )
+    assert _should_read_secret_from_secret_manager() is True
+
+    # Test with secret manager client and write_only access
+    litellm._key_management_settings = KeyManagementSettings(access_mode="write_only")
+    assert _should_read_secret_from_secret_manager() is False
+
+    # Reset global variables
+    litellm.secret_manager_client = None
+    litellm._key_management_settings = KeyManagementSettings()
+
+
+def test_get_secret_with_access_mode():
+    """
+    Test that get_secret respects access mode settings
+    """
+    from litellm.proxy._types import KeyManagementSettings
+
+    # Set up test environment
+    test_secret_name = "TEST_SECRET_KEY"
+    test_secret_value = "test_secret_value"
+    os.environ[test_secret_name] = test_secret_value
+
+    # Test with write_only access (should read from os.environ)
+    litellm.secret_manager_client = "dummy_client"
+    litellm._key_management_settings = KeyManagementSettings(access_mode="write_only")
+    assert get_secret(test_secret_name) == test_secret_value
+
+    # Test with no KeyManagementSettings but secret_manager_client set
+    litellm.secret_manager_client = "dummy_client"
+    litellm._key_management_settings = KeyManagementSettings()
+    assert _should_read_secret_from_secret_manager() is True
+
+    # Test with read_only access
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
+    assert _should_read_secret_from_secret_manager() is True
+
+    # Test with read_and_write access
+    litellm._key_management_settings = KeyManagementSettings(
+        access_mode="read_and_write"
+    )
+    assert _should_read_secret_from_secret_manager() is True
+
+    # Reset global variables
+    litellm.secret_manager_client = None
+    litellm._key_management_settings = KeyManagementSettings()
+    del os.environ[test_secret_name]

@@ -113,7 +113,7 @@ for part in response:
 
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 
-LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, DynamoDB, s3 Buckets, Helicone, Promptlayer, Traceloop, Athina, Slack
+LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, DynamoDB, s3 Buckets, Helicone, Promptlayer, Traceloop, Athina, Slack, MLflow
 
 ```python
 from litellm import completion
@@ -304,6 +304,36 @@ Step 4: Submit a PR with your changes! 🚀
 
 - push your fork to your GitHub repo
 - submit a PR from there
+
+### Building LiteLLM Docker Image 
+
+Follow these instructions if you want to build / run the LiteLLM Docker Image yourself.
+
+Step 1: Clone the repo
+
+```
+git clone https://github.com/BerriAI/litellm.git
+```
+
+Step 2: Build the Docker Image
+
+Build using Dockerfile.non_root
+```
+docker build -f docker/Dockerfile.non_root -t litellm_test_image .
+```
+
+Step 3: Run the Docker Image
+
+Make sure config.yaml is present in the root directory. This is your litellm proxy config file.
+```
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -e DATABASE_URL="postgresql://xxxxxxxx" \
+    -e LITELLM_MASTER_KEY="sk-1234" \
+    -p 4000:4000 \
+    litellm_test_image \
+    --config /app/config.yaml --detailed_debug
+```
 
 # Enterprise
 For companies that need better security, user management and professional support

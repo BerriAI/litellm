@@ -13,7 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-
+from unittest.mock import patch, MagicMock, AsyncMock
 import os
 
 from dotenv import load_dotenv
@@ -38,9 +38,9 @@ def test_router_timeouts():
             "tpm": 80000,
         },
         {
-            "model_name": "anthropic-claude-instant-1.2",
+            "model_name": "anthropic-claude-3-5-haiku-20241022",
             "litellm_params": {
-                "model": "claude-instant-1.2",
+                "model": "claude-3-5-haiku-20241022",
                 "api_key": "os.environ/ANTHROPIC_API_KEY",
                 "mock_response": "hello world",
             },
@@ -49,7 +49,7 @@ def test_router_timeouts():
     ]
 
     fallbacks_list = [
-        {"openai-gpt-4": ["anthropic-claude-instant-1.2"]},
+        {"openai-gpt-4": ["anthropic-claude-3-5-haiku-20241022"]},
     ]
 
     # Configure router
@@ -139,3 +139,50 @@ async def test_router_timeouts_bedrock():
         pytest.fail(
             f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
         )
+
+
+@pytest.mark.parametrize(
+    "num_retries, expected_call_count",
+    [(0, 1), (1, 2), (2, 3), (3, 4)],
+)
+def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_count):
+    """
+    If request hits custom timeout, ensure it's retried.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import time
+
+    litellm.num_retries = num_retries
+    litellm.request_timeout = 0.000001
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-haiku-20240307",
+                },
+            }
+        ],
+    )
+
+    custom_client = HTTPHandler()
+
+    with patch.object(custom_client, "post", new=MagicMock()) as mock_client:
+        try:
+
+            def delayed_response(*args, **kwargs):
+                time.sleep(0.01)  # Exceeds the 0.000001 timeout
+                raise TimeoutError("Request timed out.")
+
+            mock_client.side_effect = delayed_response
+
+            router.completion(
+                model="claude-3-haiku",
+                messages=[{"role": "user", "content": "hello, who are u"}],
+                client=custom_client,
+            )
+        except litellm.Timeout:
+            pass
+
+        assert mock_client.call_count == expected_call_count

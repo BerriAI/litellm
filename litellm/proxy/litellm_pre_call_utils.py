@@ -1,4 +1,5 @@
 import copy
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import Request
@@ -6,6 +7,7 @@ from starlette.datastructures import Headers
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._service_logger import ServiceLogging
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -16,10 +18,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
+
+service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -268,6 +274,51 @@ class LiteLLMProxyRequestSetup:
         )
         return user_api_key_logged_metadata
 
+    @staticmethod
+    def add_key_level_controls(
+        key_metadata: dict, data: dict, _metadata_variable_name: str
+    ):
+        data = data.copy()
+        if "cache" in key_metadata:
+            data["cache"] = {}
+            if isinstance(key_metadata["cache"], dict):
+                for k, v in key_metadata["cache"].items():
+                    if k in SupportedCacheControls:
+                        data["cache"][k] = v
+
+        ## KEY-LEVEL SPEND LOGS / TAGS
+        if "tags" in key_metadata and key_metadata["tags"] is not None:
+            if "tags" in data[_metadata_variable_name] and isinstance(
+                data[_metadata_variable_name]["tags"], list
+            ):
+                data[_metadata_variable_name]["tags"].extend(key_metadata["tags"])
+            else:
+                data[_metadata_variable_name]["tags"] = key_metadata["tags"]
+        if "spend_logs_metadata" in key_metadata and isinstance(
+            key_metadata["spend_logs_metadata"], dict
+        ):
+            if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
+                data[_metadata_variable_name]["spend_logs_metadata"], dict
+            ):
+                for key, value in key_metadata["spend_logs_metadata"].items():
+                    if (
+                        key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                    ):  # don't override k-v pair sent by request (user request)
+                        data[_metadata_variable_name]["spend_logs_metadata"][
+                            key
+                        ] = value
+            else:
+                data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
+                    "spend_logs_metadata"
+                ]
+
+        ## KEY-LEVEL DISABLE FALLBACKS
+        if "disable_fallbacks" in key_metadata and isinstance(
+            key_metadata["disable_fallbacks"], bool
+        ):
+            data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
+        return data
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -383,37 +434,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
-    if "cache" in key_metadata:
-        data["cache"] = {}
-        if isinstance(key_metadata["cache"], dict):
-            for k, v in key_metadata["cache"].items():
-                if k in SupportedCacheControls:
-                    data["cache"][k] = v
-
-    ## KEY-LEVEL SPEND LOGS / TAGS
-    if "tags" in key_metadata and key_metadata["tags"] is not None:
-        if "tags" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["tags"], list
-        ):
-            data[_metadata_variable_name]["tags"].extend(key_metadata["tags"])
-        else:
-            data[_metadata_variable_name]["tags"] = key_metadata["tags"]
-    if "spend_logs_metadata" in key_metadata and isinstance(
-        key_metadata["spend_logs_metadata"], dict
-    ):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in key_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
-                "spend_logs_metadata"
-            ]
-
+    data = LiteLLMProxyRequestSetup.add_key_level_controls(
+        key_metadata=key_metadata,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
     ## TEAM-LEVEL SPEND LOGS/TAGS
     team_metadata = user_api_key_dict.team_metadata or {}
     if "tags" in team_metadata and team_metadata["tags"] is not None:
@@ -471,7 +496,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
-
+    start_time = time.time()
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
@@ -538,6 +563,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     verbose_proxy_logger.debug(
         f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+    )
+
+    end_time = time.time()
+    await service_logger_obj.async_service_success_hook(
+        service=ServiceTypes.PROXY_PRE_CALL,
+        duration=end_time - start_time,
+        call_type="add_litellm_data_to_request",
+        start_time=start_time,
+        end_time=end_time,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
     )
     return data
 

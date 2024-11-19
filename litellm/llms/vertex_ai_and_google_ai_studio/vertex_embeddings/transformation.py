@@ -101,11 +101,16 @@ class VertexAITextEmbeddingConfig(BaseModel):
         return optional_params
 
     def transform_openai_request_to_vertex_embedding_request(
-        self, input: Union[list, str], optional_params: dict
+        self, input: Union[list, str], optional_params: dict, model: str
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex embedding request.
         """
+        if model.isdigit():
+            return self._transform_openai_request_to_fine_tuned_embedding_request(
+                input, optional_params, model
+            )
+
         vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
         vertex_text_embedding_input_list: List[TextEmbeddingInput] = []
         task_type: Optional[TaskType] = optional_params.get("task_type")
@@ -122,6 +127,47 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
         vertex_request["instances"] = vertex_text_embedding_input_list
         vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+
+        return vertex_request
+
+    def _transform_openai_request_to_fine_tuned_embedding_request(
+        self, input: Union[list, str], optional_params: dict, model: str
+    ) -> VertexEmbeddingRequest:
+        """
+        Transforms an openai request to a vertex fine-tuned embedding request.
+
+        Vertex Doc: https://console.cloud.google.com/vertex-ai/model-garden?hl=en&project=adroit-crow-413218&pageState=(%22galleryStateKey%22:(%22f%22:(%22g%22:%5B%5D,%22o%22:%5B%5D),%22s%22:%22%22))
+        Sample Request:
+
+        ```json
+        {
+            "instances" : [
+                {
+                "inputs": "How would the Future of AI in 10 Years look?",
+                "parameters": {
+                    "max_new_tokens": 128,
+                    "temperature": 1.0,
+                    "top_p": 0.9,
+                    "top_k": 10
+                }
+                }
+            ]
+        }
+        ```
+        """
+        vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
+        vertex_text_embedding_input_list: List[TextEmbeddingFineTunedInput] = []
+        if isinstance(input, str):
+            input = [input]  # Convert single string to list for uniform processing
+
+        for text in input:
+            embedding_input = TextEmbeddingFineTunedInput(inputs=text)
+            vertex_text_embedding_input_list.append(embedding_input)
+
+        vertex_request["instances"] = vertex_text_embedding_input_list
+        vertex_request["parameters"] = TextEmbeddingFineTunedParameters(
+            **optional_params
+        )
 
         return vertex_request
 
@@ -157,6 +203,11 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         Transforms a vertex embedding response to an openai response.
         """
+        if model.isdigit():
+            return self._transform_vertex_response_to_openai_for_fine_tuned_models(
+                response, model, model_response
+            )
+
         _predictions = response["predictions"]
 
         embedding_response = []
@@ -172,6 +223,38 @@ class VertexAITextEmbeddingConfig(BaseModel):
                 }
             )
             input_tokens += embedding["statistics"]["token_count"]
+
+        model_response.object = "list"
+        model_response.data = embedding_response
+        model_response.model = model
+        usage = Usage(
+            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+        )
+        setattr(model_response, "usage", usage)
+        return model_response
+
+    def _transform_vertex_response_to_openai_for_fine_tuned_models(
+        self, response: dict, model: str, model_response: litellm.EmbeddingResponse
+    ) -> litellm.EmbeddingResponse:
+        """
+        Transforms a vertex fine-tuned model embedding response to an openai response format.
+        """
+        _predictions = response["predictions"]
+
+        embedding_response = []
+        # For fine-tuned models, we don't get token counts in the response
+        input_tokens = 0
+
+        for idx, embedding_values in enumerate(_predictions):
+            embedding_response.append(
+                {
+                    "object": "embedding",
+                    "index": idx,
+                    "embedding": embedding_values[
+                        0
+                    ],  # The embedding values are nested one level deeper
+                }
+            )
 
         model_response.object = "list"
         model_response.data = embedding_response

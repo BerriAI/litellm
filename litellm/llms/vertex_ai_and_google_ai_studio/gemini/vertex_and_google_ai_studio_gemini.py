@@ -35,13 +35,6 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.prompt_templates.factory import (
-    convert_url_to_base64,
-    response_schema_prompt,
-)
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
-    _gemini_convert_messages_with_history,
-)
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
@@ -56,6 +49,8 @@ from litellm.types.llms.vertex_ai import (
     FunctionDeclaration,
     GenerateContentResponseBody,
     GenerationConfig,
+    HttpxPartType,
+    LogprobsResult,
     PartType,
     RequestBody,
     SafetSettingsConfig,
@@ -63,7 +58,12 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
+    ChoiceLogprobs,
+    GenericStreamingChunk,
+    TopLogprob,
+)
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
@@ -364,6 +364,7 @@ class VertexGeminiConfig:
             "presence_penalty",
             "extra_headers",
             "seed",
+            "logprobs",
         ]
 
     def map_tool_choice_values(
@@ -394,30 +395,49 @@ class VertexGeminiConfig:
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
+        code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
+
         for tool in value:
             openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
                 None
             )
             if "function" in tool:  # tools list
-                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
                 )
+
+                if (
+                    "parameters" in _openai_function_object
+                    and _openai_function_object["parameters"] is not None
+                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
+                    _openai_function_object["parameters"] = _build_vertex_schema(
+                        _openai_function_object["parameters"]
+                    )
+
+                openai_function_object = _openai_function_object
+
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
             # check if grounding
             if tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif tool.get("code_execution", None) is not None:
+                code_execution = tool["code_execution"]
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
-                    description=openai_function_object.get("description", ""),
-                    parameters=openai_function_object.get("parameters", {}),
                 )
+                _description = openai_function_object.get("description", None)
+                _parameters = openai_function_object.get("parameters", None)
+                if _description is not None:
+                    gtool_func_declaration["description"] = _description
+                if _parameters is not None:
+                    gtool_func_declaration["parameters"] = _parameters
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
                 # assume it's a provider-specific param
@@ -430,7 +450,19 @@ class VertexGeminiConfig:
         )
         if googleSearchRetrieval is not None:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        if code_execution is not None:
+            _tools["code_execution"] = code_execution
         return [_tools]
+
+    def _map_response_schema(self, value: dict) -> dict:
+        old_schema = deepcopy(value)
+        if isinstance(old_schema, list):
+            for item in old_schema:
+                if isinstance(item, dict):
+                    item = _build_vertex_schema(parameters=item)
+        elif isinstance(old_schema, dict):
+            old_schema = _build_vertex_schema(parameters=old_schema)
+        return old_schema
 
     def map_openai_params(
         self,
@@ -439,6 +471,7 @@ class VertexGeminiConfig:
         optional_params: dict,
         drop_params: bool,
     ):
+
         for param, value in non_default_params.items():
             if param == "temperature":
                 optional_params["temperature"] = value
@@ -477,19 +510,15 @@ class VertexGeminiConfig:
                 if "response_schema" in optional_params and isinstance(
                     optional_params["response_schema"], dict
                 ):
-                    old_schema = deepcopy(optional_params["response_schema"])
-
-                    if isinstance(old_schema, list):
-                        for item in old_schema:
-                            if isinstance(item, dict):
-                                item = _build_vertex_schema(parameters=item)
-                    elif isinstance(old_schema, dict):
-                        old_schema = _build_vertex_schema(parameters=old_schema)
-                    optional_params["response_schema"] = old_schema
+                    optional_params["response_schema"] = self._map_response_schema(
+                        value=optional_params["response_schema"]
+                    )
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
+            if param == "logprobs":
+                optional_params["responseLogprobs"] = value
             if (param == "tools" or param == "functions") and isinstance(value, list):
                 optional_params["tools"] = self._map_function(value=value)
                 optional_params["litellm_param_is_function_call"] = (
@@ -505,6 +534,7 @@ class VertexGeminiConfig:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "seed":
                 optional_params["seed"] = value
+
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
@@ -561,6 +591,326 @@ class VertexGeminiConfig:
                 exception_string
             )
         return exception_string
+
+    def get_assistant_content_message(
+        self, parts: List[HttpxPartType]
+    ) -> Optional[str]:
+        _content_str = ""
+        for part in parts:
+            if "text" in part:
+                _content_str += part["text"]
+        if _content_str:
+            return _content_str
+        return None
+
+    def _transform_parts(
+        self,
+        parts: List[HttpxPartType],
+        index: int,
+        is_function_call: Optional[bool],
+    ) -> Tuple[
+        Optional[ChatCompletionToolCallFunctionChunk],
+        Optional[List[ChatCompletionToolCallChunk]],
+    ]:
+        function: Optional[ChatCompletionToolCallFunctionChunk] = None
+        _tools: List[ChatCompletionToolCallChunk] = []
+        for part in parts:
+            if "functionCall" in part:
+                _function_chunk = ChatCompletionToolCallFunctionChunk(
+                    name=part["functionCall"]["name"],
+                    arguments=json.dumps(part["functionCall"]["args"]),
+                )
+                if is_function_call is True:
+                    function = _function_chunk
+                else:
+                    _tool_response_chunk = ChatCompletionToolCallChunk(
+                        id=f"call_{str(uuid.uuid4())}",
+                        type="function",
+                        function=_function_chunk,
+                        index=index,
+                    )
+                    _tools.append(_tool_response_chunk)
+        if len(_tools) == 0:
+            tools: Optional[List[ChatCompletionToolCallChunk]] = None
+        else:
+            tools = _tools
+        return function, tools
+
+    def _transform_logprobs(
+        self, logprobs_result: Optional[LogprobsResult]
+    ) -> Optional[ChoiceLogprobs]:
+        if logprobs_result is None:
+            return None
+        if "chosenCandidates" not in logprobs_result:
+            return None
+        logprobs_list: List[ChatCompletionTokenLogprob] = []
+        for index, candidate in enumerate(logprobs_result["chosenCandidates"]):
+            top_logprobs: List[TopLogprob] = []
+            if "topCandidates" in logprobs_result and index < len(
+                logprobs_result["topCandidates"]
+            ):
+                top_candidates_for_index = logprobs_result["topCandidates"][index][
+                    "candidates"
+                ]
+
+                for options in top_candidates_for_index:
+                    top_logprobs.append(
+                        TopLogprob(
+                            token=options["token"], logprob=options["logProbability"]
+                        )
+                    )
+            logprobs_list.append(
+                ChatCompletionTokenLogprob(
+                    token=candidate["token"],
+                    logprob=candidate["logProbability"],
+                    top_logprobs=top_logprobs,
+                )
+            )
+        return ChoiceLogprobs(content=logprobs_list)
+
+    def _handle_blocked_response(
+        self,
+        model_response: ModelResponse,
+        completion_response: GenerateContentResponseBody,
+    ) -> ModelResponse:
+        # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
+        model_response.choices[0].finish_reason = "content_filter"
+
+        chat_completion_message: ChatCompletionResponseMessage = {
+            "role": "assistant",
+            "content": None,
+        }
+
+        choice = litellm.Choices(
+            finish_reason="content_filter",
+            index=0,
+            message=chat_completion_message,  # type: ignore
+            logprobs=None,
+            enhancements=None,
+        )
+
+        model_response.choices = [choice]
+
+        ## GET USAGE ##
+        usage = litellm.Usage(
+            prompt_tokens=completion_response["usageMetadata"].get(
+                "promptTokenCount", 0
+            ),
+            completion_tokens=completion_response["usageMetadata"].get(
+                "candidatesTokenCount", 0
+            ),
+            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+        )
+
+        setattr(model_response, "usage", usage)
+
+        return model_response
+
+    def _handle_content_policy_violation(
+        self,
+        model_response: ModelResponse,
+        completion_response: GenerateContentResponseBody,
+    ) -> ModelResponse:
+        ## CONTENT POLICY VIOLATION ERROR
+        model_response.choices[0].finish_reason = "content_filter"
+
+        _chat_completion_message = {
+            "role": "assistant",
+            "content": None,
+        }
+
+        choice = litellm.Choices(
+            finish_reason="content_filter",
+            index=0,
+            message=_chat_completion_message,
+            logprobs=None,
+            enhancements=None,
+        )
+
+        model_response.choices = [choice]
+
+        ## GET USAGE ##
+        usage = litellm.Usage(
+            prompt_tokens=completion_response["usageMetadata"].get(
+                "promptTokenCount", 0
+            ),
+            completion_tokens=completion_response["usageMetadata"].get(
+                "candidatesTokenCount", 0
+            ),
+            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+        )
+
+        setattr(model_response, "usage", usage)
+
+        return model_response
+
+    def _transform_response(
+        self,
+        model: str,
+        response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str,
+        data: Union[dict, str, RequestBody],
+        messages: List,
+        print_verbose,
+        encoding,
+    ) -> ModelResponse:
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
+        except Exception as e:
+            raise VertexAIError(
+                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    response.text, str(e)
+                ),
+                status_code=422,
+            )
+
+        ## GET MODEL ##
+        model_response.model = model
+
+        ## CHECK IF RESPONSE FLAGGED
+        if (
+            "promptFeedback" in completion_response
+            and "blockReason" in completion_response["promptFeedback"]
+        ):
+            return self._handle_blocked_response(
+                model_response=model_response,
+                completion_response=completion_response,
+            )
+
+        _candidates = completion_response.get("candidates")
+        if _candidates and len(_candidates) > 0:
+            content_policy_violations = (
+                VertexGeminiConfig().get_flagged_finish_reasons()
+            )
+            if (
+                "finishReason" in _candidates[0]
+                and _candidates[0]["finishReason"] in content_policy_violations.keys()
+            ):
+                return self._handle_content_policy_violation(
+                    model_response=model_response,
+                    completion_response=completion_response,
+                )
+
+        model_response.choices = []  # type: ignore
+
+        try:
+            ## CHECK IF GROUNDING METADATA IN REQUEST
+            grounding_metadata: List[dict] = []
+            safety_ratings: List = []
+            citation_metadata: List = []
+            ## GET TEXT ##
+            chat_completion_message: ChatCompletionResponseMessage = {
+                "role": "assistant"
+            }
+            chat_completion_logprobs: Optional[ChoiceLogprobs] = None
+            tools: Optional[List[ChatCompletionToolCallChunk]] = []
+            functions: Optional[ChatCompletionToolCallFunctionChunk] = None
+            if _candidates:
+                for idx, candidate in enumerate(_candidates):
+                    if "content" not in candidate:
+                        continue
+
+                    if "groundingMetadata" in candidate:
+                        grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
+
+                    if "safetyRatings" in candidate:
+                        safety_ratings.append(candidate["safetyRatings"])
+
+                    if "citationMetadata" in candidate:
+                        citation_metadata.append(candidate["citationMetadata"])
+                    if "parts" in candidate["content"]:
+                        chat_completion_message[
+                            "content"
+                        ] = VertexGeminiConfig().get_assistant_content_message(
+                            parts=candidate["content"]["parts"]
+                        )
+
+                        functions, tools = self._transform_parts(
+                            parts=candidate["content"]["parts"],
+                            index=candidate.get("index", idx),
+                            is_function_call=litellm_params.get(
+                                "litellm_param_is_function_call"
+                            ),
+                        )
+
+                    if "logprobsResult" in candidate:
+                        chat_completion_logprobs = self._transform_logprobs(
+                            logprobs_result=candidate["logprobsResult"]
+                        )
+
+                    if tools:
+                        chat_completion_message["tool_calls"] = tools
+
+                    if functions is not None:
+                        chat_completion_message["function_call"] = functions
+                    choice = litellm.Choices(
+                        finish_reason=candidate.get("finishReason", "stop"),
+                        index=candidate.get("index", idx),
+                        message=chat_completion_message,  # type: ignore
+                        logprobs=chat_completion_logprobs,
+                        enhancements=None,
+                    )
+
+                    model_response.choices.append(choice)
+
+            ## GET USAGE ##
+            usage = litellm.Usage(
+                prompt_tokens=completion_response["usageMetadata"].get(
+                    "promptTokenCount", 0
+                ),
+                completion_tokens=completion_response["usageMetadata"].get(
+                    "candidatesTokenCount", 0
+                ),
+                total_tokens=completion_response["usageMetadata"].get(
+                    "totalTokenCount", 0
+                ),
+            )
+
+            setattr(model_response, "usage", usage)
+
+            ## ADD GROUNDING METADATA ##
+            setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = (  # older approach - maintaining to prevent regressions
+                grounding_metadata
+            )
+
+            ## ADD SAFETY RATINGS ##
+            setattr(model_response, "vertex_ai_safety_results", safety_ratings)
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
+
+            ## ADD CITATION METADATA ##
+            setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata  # older approach - maintaining to prevent regressions
+            )
+
+        except Exception as e:
+            raise VertexAIError(
+                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    completion_response, str(e)
+                ),
+                status_code=422,
+            )
+
+        return model_response
 
 
 class GoogleAIStudioGeminiConfig(
@@ -646,6 +996,7 @@ class GoogleAIStudioGeminiConfig(
             "response_format",
             "n",
             "stop",
+            "logprobs",
         ]
 
     def map_openai_params(
@@ -741,242 +1092,6 @@ def make_sync_call(
 class VertexLLM(VertexBase):
     def __init__(self) -> None:
         super().__init__()
-
-    def _process_response(  # noqa: PLR0915
-        self,
-        model: str,
-        response: httpx.Response,
-        model_response: ModelResponse,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str,
-        data: Union[dict, str, RequestBody],
-        messages: List,
-        print_verbose,
-        encoding,
-    ) -> ModelResponse:
-
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-
-        print_verbose(f"raw model_response: {response.text}")
-        ## RESPONSE OBJECT
-        try:
-            completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
-        except Exception as e:
-            raise VertexAIError(
-                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    response.text, str(e)
-                ),
-                status_code=422,
-            )
-
-        ## GET MODEL ##
-        model_response.model = model
-
-        ## CHECK IF RESPONSE FLAGGED
-        if "promptFeedback" in completion_response:
-            if "blockReason" in completion_response["promptFeedback"]:
-                # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
-                model_response.choices[0].finish_reason = "content_filter"
-
-                chat_completion_message: ChatCompletionResponseMessage = {
-                    "role": "assistant",
-                    "content": None,
-                }
-
-                choice = litellm.Choices(
-                    finish_reason="content_filter",
-                    index=0,
-                    message=chat_completion_message,  # type: ignore
-                    logprobs=None,
-                    enhancements=None,
-                )
-
-                model_response.choices = [choice]
-
-                ## GET USAGE ##
-                usage = litellm.Usage(
-                    prompt_tokens=completion_response["usageMetadata"].get(
-                        "promptTokenCount", 0
-                    ),
-                    completion_tokens=completion_response["usageMetadata"].get(
-                        "candidatesTokenCount", 0
-                    ),
-                    total_tokens=completion_response["usageMetadata"].get(
-                        "totalTokenCount", 0
-                    ),
-                )
-
-                setattr(model_response, "usage", usage)
-
-                return model_response
-
-        _candidates = completion_response.get("candidates")
-        if _candidates and len(_candidates) > 0:
-            content_policy_violations = (
-                VertexGeminiConfig().get_flagged_finish_reasons()
-            )
-            if (
-                "finishReason" in _candidates[0]
-                and _candidates[0]["finishReason"] in content_policy_violations.keys()
-            ):
-                ## CONTENT POLICY VIOLATION ERROR
-                model_response.choices[0].finish_reason = "content_filter"
-
-                chat_completion_message = {
-                    "role": "assistant",
-                    "content": None,
-                }
-
-                choice = litellm.Choices(
-                    finish_reason="content_filter",
-                    index=0,
-                    message=chat_completion_message,  # type: ignore
-                    logprobs=None,
-                    enhancements=None,
-                )
-
-                model_response.choices = [choice]
-
-                ## GET USAGE ##
-                usage = litellm.Usage(
-                    prompt_tokens=completion_response["usageMetadata"].get(
-                        "promptTokenCount", 0
-                    ),
-                    completion_tokens=completion_response["usageMetadata"].get(
-                        "candidatesTokenCount", 0
-                    ),
-                    total_tokens=completion_response["usageMetadata"].get(
-                        "totalTokenCount", 0
-                    ),
-                )
-
-                setattr(model_response, "usage", usage)
-
-                return model_response
-
-        model_response.choices = []  # type: ignore
-
-        try:
-            ## CHECK IF GROUNDING METADATA IN REQUEST
-            grounding_metadata: List[dict] = []
-            safety_ratings: List = []
-            citation_metadata: List = []
-            ## GET TEXT ##
-            chat_completion_message = {"role": "assistant"}
-            content_str = ""
-            tools: List[ChatCompletionToolCallChunk] = []
-            functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-            if _candidates:
-                for idx, candidate in enumerate(_candidates):
-                    if "content" not in candidate:
-                        continue
-
-                    if "groundingMetadata" in candidate:
-                        grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
-
-                    if "safetyRatings" in candidate:
-                        safety_ratings.append(candidate["safetyRatings"])
-
-                    if "citationMetadata" in candidate:
-                        citation_metadata.append(candidate["citationMetadata"])
-                    if (
-                        "parts" in candidate["content"]
-                        and "text" in candidate["content"]["parts"][0]
-                    ):
-                        content_str = candidate["content"]["parts"][0]["text"]
-
-                    if (
-                        "parts" in candidate["content"]
-                        and "functionCall" in candidate["content"]["parts"][0]
-                    ):
-                        _function_chunk = ChatCompletionToolCallFunctionChunk(
-                            name=candidate["content"]["parts"][0]["functionCall"][
-                                "name"
-                            ],
-                            arguments=json.dumps(
-                                candidate["content"]["parts"][0]["functionCall"]["args"]
-                            ),
-                        )
-                        if litellm_params.get("litellm_param_is_function_call") is True:
-                            functions = _function_chunk
-                        else:
-                            _tool_response_chunk = ChatCompletionToolCallChunk(
-                                id=f"call_{str(uuid.uuid4())}",
-                                type="function",
-                                function=_function_chunk,
-                                index=candidate.get("index", idx),
-                            )
-                            tools.append(_tool_response_chunk)
-                    chat_completion_message["content"] = (
-                        content_str if len(content_str) > 0 else None
-                    )
-                    if len(tools) > 0:
-                        chat_completion_message["tool_calls"] = tools
-
-                    if functions is not None:
-                        chat_completion_message["function_call"] = functions
-                    choice = litellm.Choices(
-                        finish_reason=candidate.get("finishReason", "stop"),
-                        index=candidate.get("index", idx),
-                        message=chat_completion_message,  # type: ignore
-                        logprobs=None,
-                        enhancements=None,
-                    )
-
-                    model_response.choices.append(choice)
-
-            ## GET USAGE ##
-            usage = litellm.Usage(
-                prompt_tokens=completion_response["usageMetadata"].get(
-                    "promptTokenCount", 0
-                ),
-                completion_tokens=completion_response["usageMetadata"].get(
-                    "candidatesTokenCount", 0
-                ),
-                total_tokens=completion_response["usageMetadata"].get(
-                    "totalTokenCount", 0
-                ),
-            )
-
-            setattr(model_response, "usage", usage)
-
-            ## ADD GROUNDING METADATA ##
-            setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params[
-                "vertex_ai_grounding_metadata"
-            ] = (  # older approach - maintaining to prevent regressions
-                grounding_metadata
-            )
-
-            ## ADD SAFETY RATINGS ##
-            setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
-                safety_ratings  # older approach - maintaining to prevent regressions
-            )
-
-            ## ADD CITATION METADATA ##
-            setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata  # older approach - maintaining to prevent regressions
-            )
-
-        except Exception as e:
-            raise VertexAIError(
-                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    completion_response, str(e)
-                ),
-                status_code=422,
-            )
-
-        return model_response
 
     async def async_streaming(
         self,
@@ -1141,7 +1256,7 @@ class VertexLLM(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        return self._process_response(
+        return VertexGeminiConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -1329,7 +1444,7 @@ class VertexLLM(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        return self._process_response(
+        return VertexGeminiConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,

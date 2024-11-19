@@ -155,6 +155,51 @@ async def cohere_proxy_route(
     return received_value
 
 
+@router.api_route(
+    "/anthropic/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
+)
+async def anthropic_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    base_target_url = "https://api.anthropic.com"
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    # Add or update query parameters
+    anthropic_api_key = litellm.utils.get_secret(secret_name="ANTHROPIC_API_KEY")
+
+    ## check for streaming
+    is_streaming_request = False
+    if "stream" in str(updated_url):
+        is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"x-api-key": "{}".format(anthropic_api_key)},
+        _forward_headers=True,
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+        stream=is_streaming_request,  # type: ignore
+    )
+
+    return received_value
+
+
 @router.api_route("/bedrock/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def bedrock_proxy_route(
     endpoint: str,

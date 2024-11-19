@@ -1,7 +1,9 @@
+import datetime
 import json
 import os
 import secrets
 import traceback
+from datetime import datetime as dt
 from typing import Optional
 
 from pydantic import BaseModel
@@ -9,7 +11,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
-from litellm.proxy.utils import hash_token
+from litellm.proxy.utils import PrismaClient, hash_token
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -163,3 +165,79 @@ def get_logging_payload(
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+async def get_spend_by_team_and_customer(
+    start_date: dt,
+    end_date: dt,
+    team_id: str,
+    customer_id: str,
+    prisma_client: PrismaClient,
+):
+    sql_query = """
+    WITH SpendByModelApiKey AS (
+        SELECT
+            date_trunc('day', sl."startTime") AS group_by_day,
+            COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+            sl.end_user AS customer,
+            sl.model,
+            sl.api_key,
+            SUM(sl.spend) AS model_api_spend,
+            SUM(sl.total_tokens) AS model_api_tokens
+        FROM 
+            "LiteLLM_SpendLogs" sl
+        LEFT JOIN 
+            "LiteLLM_TeamTable" tt 
+        ON 
+            sl.team_id = tt.team_id
+        WHERE
+            sl."startTime" BETWEEN $1::date AND $2::date
+            AND sl.team_id = $3
+            AND sl.end_user = $4
+        GROUP BY
+            date_trunc('day', sl."startTime"),
+            tt.team_alias,
+            sl.end_user,
+            sl.model,
+            sl.api_key
+    )
+        SELECT
+            group_by_day,
+            jsonb_agg(jsonb_build_object(
+                'team_name', team_name,
+                'customer', customer,
+                'total_spend', total_spend,
+                'metadata', metadata
+            )) AS teams_customers
+        FROM (
+            SELECT
+                group_by_day,
+                team_name,
+                customer,
+                SUM(model_api_spend) AS total_spend,
+                jsonb_agg(jsonb_build_object(
+                    'model', model,
+                    'api_key', api_key,
+                    'spend', model_api_spend,
+                    'total_tokens', model_api_tokens
+                )) AS metadata
+            FROM 
+                SpendByModelApiKey
+            GROUP BY
+                group_by_day,
+                team_name,
+                customer
+        ) AS aggregated
+        GROUP BY
+            group_by_day
+        ORDER BY
+            group_by_day;
+    """
+
+    db_response = await prisma_client.db.query_raw(
+        sql_query, start_date, end_date, team_id, customer_id
+    )
+    if db_response is None:
+        return []
+
+    return db_response

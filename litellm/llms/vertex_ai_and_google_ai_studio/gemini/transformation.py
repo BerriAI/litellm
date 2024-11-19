@@ -4,14 +4,34 @@ Transformation logic from OpenAI format to Gemini format.
 Why separate file? Make it easy to see how transformation works
 """
 
-from typing import List, Literal, Optional, Tuple, Union
+import os
+from typing import List, Literal, Optional, Tuple, Union, cast
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import response_schema_prompt
-from litellm.types.llms.openai import AllMessageValues
+from litellm.llms.prompt_templates.factory import (
+    convert_to_anthropic_image_obj,
+    convert_to_gemini_tool_call_invoke,
+    convert_to_gemini_tool_call_result,
+    response_schema_prompt,
+)
+from litellm.types.files import (
+    get_file_mime_type_for_file_type,
+    get_file_type_from_extension,
+    is_gemini_1_5_accepted_file_type,
+    is_video_file_type,
+)
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+)
+from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
     GenerationConfig,
     PartType,
@@ -21,9 +41,216 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from ..common_utils import get_supports_response_schema, get_supports_system_message
-from ..vertex_ai_non_gemini import _gemini_convert_messages_with_history
+from ..common_utils import (
+    _check_text_in_content,
+    get_supports_response_schema,
+    get_supports_system_message,
+)
+
+
+def _process_gemini_image(image_url: str) -> PartType:
+    """
+    Given an image URL, return the appropriate PartType for Gemini
+    """
+    try:
+        # GCS URIs
+        if "gs://" in image_url:
+            # Figure out file type
+            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
+            extension = extension_with_dot[1:]  # Ex: "png"
+
+            file_type = get_file_type_from_extension(extension)
+
+            # Validate the file type is supported by Gemini
+            if not is_gemini_1_5_accepted_file_type(file_type):
+                raise Exception(f"File type not supported by gemini - {file_type}")
+
+            mime_type = get_file_mime_type_for_file_type(file_type)
+            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
+
+            return PartType(file_data=file_data)
+        elif (
+            "https://" in image_url
+            and (image_type := _get_image_mime_type_from_url(image_url)) is not None
+        ):
+            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            return PartType(file_data=file_data)
+        elif "https://" in image_url or "base64" in image_url:
+            # https links for unsupported mime types and base64 images
+            image = convert_to_anthropic_image_obj(image_url)
+            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
+            return PartType(inline_data=_blob)
+        raise Exception("Invalid image received - {}".format(image_url))
+    except Exception as e:
+        raise e
+
+
+def _get_image_mime_type_from_url(url: str) -> Optional[str]:
+    """
+    Get mime type for common image URLs
+    See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
+
+    Supported by Gemini:
+     - PNG (`image/png`)
+     - JPEG (`image/jpeg`)
+     - WebP (`image/webp`)
+    Example:
+        url = https://example.com/image.jpg
+        Returns: image/jpeg
+    """
+    url = url.lower()
+    if url.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    elif url.endswith(".png"):
+        return "image/png"
+    elif url.endswith(".webp"):
+        return "image/webp"
+    return None
+
+
+def _gemini_convert_messages_with_history(  # noqa: PLR0915
+    messages: List[AllMessageValues],
+) -> List[ContentType]:
+    """
+    Converts given messages from OpenAI format to Gemini format
+
+    - Parts must be iterable
+    - Roles must alternate b/w 'user' and 'model' (same as anthropic -> merge consecutive roles)
+    - Please ensure that function response turn comes immediately after a function call turn
+    """
+    user_message_types = {"user", "system"}
+    contents: List[ContentType] = []
+
+    last_message_with_tool_calls = None
+
+    msg_i = 0
+    tool_call_responses = []
+    try:
+        while msg_i < len(messages):
+            user_content: List[PartType] = []
+            init_msg_i = msg_i
+            ## MERGE CONSECUTIVE USER CONTENT ##
+            while (
+                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
+            ):
+                _message_content = messages[msg_i].get("content")
+                if _message_content is not None and isinstance(_message_content, list):
+                    _parts: List[PartType] = []
+                    for element in _message_content:
+                        if (
+                            element["type"] == "text"
+                            and "text" in element
+                            and len(element["text"]) > 0
+                        ):
+                            element = cast(ChatCompletionTextObject, element)
+                            _part = PartType(text=element["text"])
+                            _parts.append(_part)
+                        elif element["type"] == "image_url":
+                            element = cast(ChatCompletionImageObject, element)
+                            img_element = element
+                            if isinstance(img_element["image_url"], dict):
+                                image_url = img_element["image_url"]["url"]
+                            else:
+                                image_url = img_element["image_url"]
+                            _part = _process_gemini_image(image_url=image_url)
+                            _parts.append(_part)
+                    user_content.extend(_parts)
+                elif (
+                    _message_content is not None
+                    and isinstance(_message_content, str)
+                    and len(_message_content) > 0
+                ):
+                    _part = PartType(text=_message_content)
+                    user_content.append(_part)
+
+                msg_i += 1
+
+            if user_content:
+                """
+                check that user_content has 'text' parameter.
+                    - Known Vertex Error: Unable to submit request because it must have a text parameter.
+                    - Relevant Issue: https://github.com/BerriAI/litellm/issues/5515
+                """
+                has_text_in_content = _check_text_in_content(user_content)
+                if has_text_in_content is False:
+                    verbose_logger.warning(
+                        "No text in user content. Adding a blank text to user content, to ensure Gemini doesn't fail the request. Relevant Issue - https://github.com/BerriAI/litellm/issues/5515"
+                    )
+                    user_content.append(
+                        PartType(text=" ")
+                    )  # add a blank text, to ensure Gemini doesn't fail the request.
+                contents.append(ContentType(role="user", parts=user_content))
+            assistant_content = []
+            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+                if isinstance(messages[msg_i], BaseModel):
+                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[msg_i].model_dump()  # type: ignore
+                else:
+                    msg_dict = messages[msg_i]  # type: ignore
+                assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
+                _message_content = assistant_msg.get("content", None)
+                if _message_content is not None and isinstance(_message_content, list):
+                    _parts = []
+                    for element in _message_content:
+                        if isinstance(element, dict):
+                            if element["type"] == "text":
+                                _part = PartType(text=element["text"])
+                                _parts.append(_part)
+                    assistant_content.extend(_parts)
+                elif (
+                    _message_content is not None
+                    and isinstance(_message_content, str)
+                    and _message_content
+                ):
+                    assistant_text = _message_content  # either string or none
+                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
+
+                ## HANDLE ASSISTANT FUNCTION CALL
+                if (
+                    assistant_msg.get("tool_calls", []) is not None
+                    or assistant_msg.get("function_call") is not None
+                ):  # support assistant tool invoke conversion
+                    assistant_content.extend(
+                        convert_to_gemini_tool_call_invoke(assistant_msg)
+                    )
+                    last_message_with_tool_calls = assistant_msg
+
+                msg_i += 1
+
+            if assistant_content:
+                contents.append(ContentType(role="model", parts=assistant_content))
+
+            ## APPEND TOOL CALL MESSAGES ##
+            tool_call_message_roles = ["tool", "function"]
+            if (
+                msg_i < len(messages)
+                and messages[msg_i]["role"] in tool_call_message_roles
+            ):
+                _part = convert_to_gemini_tool_call_result(
+                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                )
+                msg_i += 1
+                tool_call_responses.append(_part)
+            if msg_i < len(messages) and (
+                messages[msg_i]["role"] not in tool_call_message_roles
+            ):
+                if len(tool_call_responses) > 0:
+                    contents.append(ContentType(parts=tool_call_responses))
+                    tool_call_responses = []
+
+            if msg_i == init_msg_i:  # prevent infinite loops
+                raise Exception(
+                    "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                        messages[msg_i]
+                    )
+                )
+        if len(tool_call_responses) > 0:
+            contents.append(ContentType(parts=tool_call_responses))
+        return contents
+    except Exception as e:
+        raise e
 
 
 def _transform_request_body(

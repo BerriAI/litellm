@@ -18,7 +18,7 @@ class AzureOpenAIConfig:
     """
     Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions
 
-    The class `AzureOpenAIConfig` provides configuration for the OpenAI's Chat API interface, for use with Azure. It inherits from `OpenAIConfig`. Below are the parameters::
+    The class `AzureOpenAIConfig` provides configuration for the OpenAI's Chat API interface, for use with Azure. Below are the parameters::
 
     - `frequency_penalty` (number or null): Defaults to 0. Allows a value between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, thereby minimizing repetition.
 
@@ -102,6 +102,7 @@ class AzureOpenAIConfig:
             "response_format",
             "seed",
             "extra_headers",
+            "parallel_tool_calls",
         ]
 
     def map_openai_params(

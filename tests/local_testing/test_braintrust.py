@@ -31,16 +31,15 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 def test_braintrust_logging():
     import litellm
 
+    litellm.set_verbose = True
+
     http_client = HTTPHandler()
 
-    setattr(
-        litellm.integrations.braintrust_logging,
-        "global_braintrust_sync_http_handler",
-        http_client,
-    )
-
-    with patch.object(http_client, "post", new=MagicMock()) as mock_client:
-
+    with patch.object(
+        litellm.integrations.braintrust_logging.global_braintrust_sync_http_handler,
+        "post",
+        new=MagicMock(),
+    ) as mock_client:
         # set braintrust as a callback, litellm will send the data to braintrust
         litellm.callbacks = ["braintrust"]
 
@@ -50,4 +49,5 @@ def test_braintrust_logging():
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
         )
 
+        time.sleep(2)
         mock_client.assert_called()
