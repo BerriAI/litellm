@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 from unittest.mock import Mock
+from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 
 import pytest
 from fastapi import Request
@@ -530,3 +531,46 @@ def test_prepare_key_update_data():
     data = UpdateKeyRequest(key="test_key", metadata=None)
     updated_data = prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] == None
+
+
+@pytest.mark.parametrize(
+    "env_value, expected_url",
+    [
+        (None, "/redoc"),  # default case
+        ("/custom-redoc", "/custom-redoc"),  # custom URL
+        ("https://example.com/redoc", "https://example.com/redoc"),  # full URL
+    ],
+)
+def test_get_redoc_url(env_value, expected_url):
+    if env_value is not None:
+        os.environ["REDOC_URL"] = env_value
+    else:
+        os.environ.pop("REDOC_URL", None)  # ensure env var is not set
+
+    result = _get_redoc_url()
+    assert result == expected_url
+
+
+@pytest.mark.parametrize(
+    "env_vars, expected_url",
+    [
+        ({}, "/"),  # default case
+        ({"DOCS_URL": "/custom-docs"}, "/custom-docs"),  # custom URL
+        (
+            {"DOCS_URL": "https://example.com/docs"},
+            "https://example.com/docs",
+        ),  # full URL
+        ({"NO_DOCS": "True"}, None),  # docs disabled
+    ],
+)
+def test_get_docs_url(env_vars, expected_url):
+    # Clear relevant environment variables
+    for key in ["DOCS_URL", "NO_DOCS"]:
+        os.environ.pop(key, None)
+
+    # Set test environment variables
+    for key, value in env_vars.items():
+        os.environ[key] = value
+
+    result = _get_docs_url()
+    assert result == expected_url

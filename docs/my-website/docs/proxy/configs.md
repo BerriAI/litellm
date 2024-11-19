@@ -934,6 +934,7 @@ router_settings:
 | DOCS_DESCRIPTION | Description text for documentation pages
 | DOCS_FILTERED | Flag indicating filtered documentation
 | DOCS_TITLE | Title of the documentation pages
+| DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_SUPPORT_CONTACT | Support contact email address
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
@@ -1041,6 +1042,7 @@ router_settings:
 | REDIS_HOST | Hostname for Redis server
 | REDIS_PASSWORD | Password for Redis service
 | REDIS_PORT | Port number for Redis server
+| REDOC_URL | The path to the Redoc Fast API documentation. **By default this is "/redoc"**
 | SERVER_ROOT_PATH | Root path for the server application
 | SET_VERBOSE | Flag to enable verbose logging
 | SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
