@@ -1025,6 +1025,9 @@ async def team_info(
     """
     get info on team + related keys
 
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to get info on.
+
     ```
     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
     --header 'Authorization: Bearer your_api_key_here'
