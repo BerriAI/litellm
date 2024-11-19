@@ -33,7 +33,11 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import _duration_in_seconds, _hash_token_if_needed
+from litellm.proxy.utils import (
+    _duration_in_seconds,
+    _hash_token_if_needed,
+    handle_exception_on_proxy,
+)
 from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
@@ -84,7 +88,7 @@ async def generate_key_fn(  # noqa: PLR0915
     1. Allow users to turn on/off pii masking
 
     ```bash
-    curl --location 'http://0.0.0.0:8000/key/generate' \
+    curl --location 'http://0.0.0.0:4000/key/generate' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
         --data '{
@@ -251,21 +255,7 @@ async def generate_key_fn(  # noqa: PLR0915
                 str(e)
             )
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 def prepare_key_update_data(
@@ -362,7 +352,7 @@ async def update_key_fn(
 
     Example:
     ```bash
-    curl --location 'http://0.0.0.0:8000/key/update' \
+    curl --location 'http://0.0.0.0:4000/key/update' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -477,7 +467,7 @@ async def delete_key_fn(
 
     Example:
     ```bash
-    curl --location 'http://0.0.0.0:8000/key/delete' \
+    curl --location 'http://0.0.0.0:4000/key/delete' \
     --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -568,21 +558,7 @@ async def delete_key_fn(
 
         return {"deleted_keys": keys}
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -607,7 +583,7 @@ async def info_key_fn_v2(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:8000/key/info" \
+    curl -X GET "http://0.0.0.0:4000/key/info" \
     -H "Authorization: Bearer sk-1234" \
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
@@ -651,21 +627,7 @@ async def info_key_fn_v2(
         return {"key": data.keys, "info": filtered_key_info}
 
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -687,13 +649,13 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
-    curl -X GET "http://0.0.0.0:8000/key/info" \
+    curl -X GET "http://0.0.0.0:4000/key/info" \
 -H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
     ```
     """
@@ -752,21 +714,7 @@ async def info_key_fn(
         key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 async def generate_key_helper_fn(  # noqa: PLR0915
@@ -1082,105 +1030,155 @@ async def regenerate_key_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> GenerateKeyResponse:
-    from litellm.proxy.proxy_server import (
-        hash_token,
-        premium_user,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
+) -> Optional[GenerateKeyResponse]:
     """
-    Endpoint for regenerating a key
+    Regenerate an existing API key while optionally updating its parameters.
+
+    Parameters:
+    - key: str (path parameter) - The key to regenerate
+    - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
+        - key_alias: Optional[str] - User-friendly key alias
+        - user_id: Optional[str] - User ID associated with key
+        - team_id: Optional[str] - Team ID associated with key
+        - models: Optional[list] - Model_name's a user is allowed to call
+        - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
+        - spend: Optional[float] - Amount spent by key
+        - max_budget: Optional[float] - Max budget for key
+        - model_max_budget: Optional[dict] - Model-specific budgets {"gpt-4": 0.5, "claude-v1": 1.0}
+        - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+        - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+        - max_parallel_requests: Optional[int] - Rate limit for parallel requests
+        - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
+        - tpm_limit: Optional[int] - Tokens per minute limit
+        - rpm_limit: Optional[int] - Requests per minute limit
+        - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
+        - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+        - allowed_cache_controls: Optional[list] - List of allowed cache control values
+        - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+        - permissions: Optional[dict] - Key-specific permissions
+        - guardrails: Optional[List[str]] - List of active guardrails for the key
+        - blocked: Optional[bool] - Whether the key is blocked
+
+
+    Returns:
+    - GenerateKeyResponse containing the new key and its updated parameters
+
+    Example:
+    ```bash
+    curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data-raw '{
+        "max_budget": 100,
+        "metadata": {"team": "core-infra"},
+        "models": ["gpt-4", "gpt-3.5-turbo"],
+        "model_max_budget": {"gpt-4": 50, "gpt-3.5-turbo": 50}
+    }'
+    ```
+
+    Note: This is an Enterprise feature. It requires a premium license to use.
     """
+    try:
 
-    if premium_user is not True:
-        raise ValueError(
-            f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
+        from litellm.proxy.proxy_server import (
+            hash_token,
+            premium_user,
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
         )
 
-    # Check if key exists, raise exception if key is not in the DB
+        if premium_user is not True:
+            raise ValueError(
+                f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
+            )
 
-    ### 1. Create New copy that is duplicate of existing key
-    ######################################################################
+        # Check if key exists, raise exception if key is not in the DB
 
-    # create duplicate of existing key
-    # set token = new token generated
-    # insert new token in DB
+        ### 1. Create New copy that is duplicate of existing key
+        ######################################################################
 
-    # create hash of token
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "DB not connected. prisma_client is None"},
+        # create duplicate of existing key
+        # set token = new token generated
+        # insert new token in DB
+
+        # create hash of token
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "DB not connected. prisma_client is None"},
+            )
+
+        if "sk" not in key:
+            hashed_api_key = key
+        else:
+            hashed_api_key = hash_token(key)
+
+        _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_api_key},
+        )
+        if _key_in_db is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Key {key} not found."},
+            )
+
+        verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
+
+        new_token = f"sk-{secrets.token_urlsafe(16)}"
+        new_token_hash = hash_token(new_token)
+        new_token_key_name = f"sk-...{new_token[-4:]}"
+
+        # Prepare the update data
+        update_data = {
+            "token": new_token_hash,
+            "key_name": new_token_key_name,
+        }
+
+        non_default_values = {}
+        if data is not None:
+            # Update with any provided parameters from GenerateKeyRequest
+            non_default_values = prepare_key_update_data(
+                data=data, existing_key_row=_key_in_db
+            )
+            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+
+        update_data.update(non_default_values)
+        update_data = prisma_client.jsonify_object(data=update_data)
+        # Update the token in the database
+        updated_token = await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data=update_data,  # type: ignore
         )
 
-    if "sk" not in key:
-        hashed_api_key = key
-    else:
-        hashed_api_key = hash_token(key)
+        updated_token_dict = {}
+        if updated_token is not None:
+            updated_token_dict = dict(updated_token)
 
-    _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
-        where={"token": hashed_api_key},
-    )
-    if _key_in_db is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": f"Key {key} not found."},
+        updated_token_dict["key"] = new_token
+        updated_token_dict.pop("token")
+
+        ### 3. remove existing key entry from cache
+        ######################################################################
+        if key:
+            await _delete_cache_key_object(
+                hashed_token=hash_token(key),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        if hashed_api_key:
+            await _delete_cache_key_object(
+                hashed_token=hash_token(key),
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        return GenerateKeyResponse(
+            **updated_token_dict,
         )
-
-    verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
-
-    new_token = f"sk-{secrets.token_urlsafe(16)}"
-    new_token_hash = hash_token(new_token)
-    new_token_key_name = f"sk-...{new_token[-4:]}"
-
-    # Prepare the update data
-    update_data = {
-        "token": new_token_hash,
-        "key_name": new_token_key_name,
-    }
-
-    non_default_values = {}
-    if data is not None:
-        # Update with any provided parameters from GenerateKeyRequest
-        non_default_values = prepare_key_update_data(
-            data=data, existing_key_row=_key_in_db
-        )
-
-    update_data.update(non_default_values)
-    # Update the token in the database
-    updated_token = await prisma_client.db.litellm_verificationtoken.update(
-        where={"token": hashed_api_key},
-        data=update_data,  # type: ignore
-    )
-
-    updated_token_dict = {}
-    if updated_token is not None:
-        updated_token_dict = dict(updated_token)
-
-    updated_token_dict["token"] = new_token
-
-    ### 3. remove existing key entry from cache
-    ######################################################################
-    if key:
-        await _delete_cache_key_object(
-            hashed_token=hash_token(key),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    if hashed_api_key:
-        await _delete_cache_key_object(
-            hashed_token=hash_token(key),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    return GenerateKeyResponse(
-        **updated_token_dict,
-    )
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -1303,9 +1301,24 @@ async def block_key(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-):
+) -> Optional[LiteLLM_VerificationToken]:
     """
-    Blocks all calls from keys with this team id.
+    Block an Virtual key from making any requests.
+
+    Parameters:
+    - key: str - The key to block. Can be either the unhashed key (sk-...) or the hashed key value
+
+     Example:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+    }'
+    ```
+
+    Note: This is an admin-only endpoint. Only proxy admins can block keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -1397,7 +1410,22 @@ async def unblock_key(
     ),
 ):
     """
-    Unblocks all calls from this key.
+    Unblock a Virtual key to allow it to make requests again.
+
+    Parameters:
+    - key: str - The key to unblock. Can be either the unhashed key (sk-...) or the hashed key value
+
+    Example:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/unblock' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+    }'
+    ```
+
+    Note: This is an admin-only endpoint. Only proxy admins can unblock keys.
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
