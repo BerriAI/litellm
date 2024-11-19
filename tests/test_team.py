@@ -362,7 +362,7 @@ async def test_team_info():
 
         try:
             await get_team_info(session=session, get_team=team_id, call_key=key)
-            pytest.fail(f"Expected call to fail")
+            pytest.fail("Expected call to fail")
         except Exception as e:
             pass
 

@@ -1161,11 +1161,95 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 
 ## Model Garden
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| llama2   | `completion('vertex_ai/<endpoint_id>', messages)` |
+
+:::tip
+
+All OpenAI compatible models from Vertex Model Garden are supported. 
+
+:::
 
 #### Using Model Garden
+
+**Almost all Vertex Model Garden models are OpenAI compatible.**
+
+<Tabs>
+
+<TabItem value="openai" label="OpenAI Compatible Models">
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/openai/{MODEL_ID}` |
+| Vertex Documentation | [Vertex Model Garden - OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_gradio_streaming_chat_completions.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Supported Operations | `/chat/completions`, `/embeddings` |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+response = completion(
+  model="vertex_ai/openai/<your-endpoint-id>", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: llama3-1-8b-instruct
+      litellm_params:
+        model: vertex_ai/openai/5464397967697903616
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "llama3-1-8b-instruct", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+
+
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+
+<TabItem value="non-openai" label="Non-OpenAI Compatible Models">
 
 ```python
 from litellm import completion
@@ -1180,6 +1264,11 @@ response = completion(
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+
+</TabItem>
+
+</Tabs>
+
 
 ## Gemini Pro
 | Model Name       | Function Call                        |
@@ -1562,6 +1651,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ## **Embedding Models**
 
 #### Usage - Embedding
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 import litellm
 from litellm import embedding
@@ -1574,6 +1667,49 @@ response = embedding(
 )
 print(response)
 ```
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: snowflake-arctic-embed-m-long-1731622468876
+    litellm_params:
+      model: vertex_ai/<your-model-id>
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request using OpenAI Python SDK, Langchain Python SDK
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="snowflake-arctic-embed-m-long-1731622468876", 
+    input = ["good morning from litellm", "this is another item"],
+)
+
+print(response)
+```
+
+
+</TabItem>
+</Tabs>
 
 #### Supported Embedding Models
 All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
@@ -1589,6 +1725,7 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+| Fine-tuned OR Custom Embedding models | `embedding(model="vertex_ai/<your-model-id>", input)` | 
 
 ### Supported OpenAI (Unified) Params
 

@@ -38,9 +38,9 @@ def test_router_timeouts():
             "tpm": 80000,
         },
         {
-            "model_name": "anthropic-claude-instant-1.2",
+            "model_name": "anthropic-claude-3-5-haiku-20241022",
             "litellm_params": {
-                "model": "claude-instant-1.2",
+                "model": "claude-3-5-haiku-20241022",
                 "api_key": "os.environ/ANTHROPIC_API_KEY",
                 "mock_response": "hello world",
             },
@@ -49,7 +49,7 @@ def test_router_timeouts():
     ]
 
     fallbacks_list = [
-        {"openai-gpt-4": ["anthropic-claude-instant-1.2"]},
+        {"openai-gpt-4": ["anthropic-claude-3-5-haiku-20241022"]},
     ]
 
     # Configure router
@@ -149,7 +149,6 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
     """
     If request hits custom timeout, ensure it's retried.
     """
-    litellm._turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import time
 

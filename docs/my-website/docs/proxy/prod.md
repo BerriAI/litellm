@@ -1,5 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # ⚡ Best Practices for Production
 
@@ -19,6 +20,10 @@ general_settings:
   alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
   database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
+
+  # OPTIONAL Best Practices
+  disable_spend_logs: True # turn off writing each transaction to the db. We recommend doing this is you don't need to see Usage on the LiteLLM UI and are tracking metrics via Prometheus
+  allow_requests_on_db_unavailable: True # Only USE when running LiteLLM on your VPC. Allow requests to still be processed even if the DB is unavailable. We recommend doing this if you're running LiteLLM on VPC that cannot be accessed from the public internet.
 
 litellm_settings:
   request_timeout: 600    # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
@@ -86,7 +91,57 @@ Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 5. Set LiteLLM Salt Key 
+## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
+
+This will allow LiteLLM to continue to process requests even if the DB is unavailable. This is better handling for DB unavailability.
+
+**WARNING: Only do this if you're running LiteLLM on VPC, that cannot be accessed from the public internet.**
+
+```yaml
+general_settings:
+  allow_requests_on_db_unavailable: True
+```
+
+## 6. Disable spend_logs if you're not using the LiteLLM UI
+
+By default LiteLLM will write every request to the `LiteLLM_SpendLogs` table. This is used for viewing Usage on the LiteLLM UI. 
+
+If you're not viewing Usage on the LiteLLM UI (most users use Prometheus when this is disabled), you can disable spend_logs by setting `disable_spend_logs` to `True`.
+
+```yaml
+general_settings:
+  disable_spend_logs: True
+```
+
+## 7. Use Helm PreSync Hook for Database Migrations [BETA]
+
+To ensure only one service manages database migrations, use our [Helm PreSync hook for Database Migrations](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/templates/migrations-job.yaml). This ensures migrations are handled during `helm upgrade` or `helm install`, while LiteLLM pods explicitly disable migrations.
+
+
+1. **Helm PreSync Hook**:
+   - The Helm PreSync hook is configured in the chart to run database migrations during deployments.
+   - The hook always sets `DISABLE_SCHEMA_UPDATE=false`, ensuring migrations are executed reliably.
+  
+  Reference Settings to set on ArgoCD for `values.yaml`
+
+  ```yaml
+  db:
+    useExisting: true # use existing Postgres DB
+    url: postgresql://ishaanjaffer0324:3rnwpOBau6hT@ep-withered-mud-a5dkdpke.us-east-2.aws.neon.tech/test-argo-cd?sslmode=require # url of existing Postgres DB
+  ```
+
+2. **LiteLLM Pods**:
+   - Set `DISABLE_SCHEMA_UPDATE=true` in LiteLLM pod configurations to prevent them from running migrations.
+   
+   Example configuration for LiteLLM pod:
+   ```yaml
+   env:
+     - name: DISABLE_SCHEMA_UPDATE
+       value: "true"
+   ```
+
+
+## 8. Set LiteLLM Salt Key 
 
 If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
 

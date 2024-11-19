@@ -1,4 +1,4 @@
-# Langfuse Endpoints 
+# Langfuse SDK
 
 Pass-through endpoints for Langfuse - call langfuse endpoints with LiteLLM Virtual Key.
 

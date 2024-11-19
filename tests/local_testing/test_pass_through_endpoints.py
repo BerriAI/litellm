@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 import httpx
 
-from litellm.proxy.proxy_server import app, initialize_pass_through_endpoints
+from litellm.proxy.proxy_server import initialize_pass_through_endpoints
 
 
 # Mock the async_client used in the pass_through_request function
@@ -25,7 +25,8 @@ async def mock_request(*args, **kwargs):
     return mock_response
 
 
-def remove_rerank_route():
+def remove_rerank_route(app):
+
     for route in app.routes:
         if route.path == "/v1/rerank" and "POST" in route.methods:
             app.routes.remove(route)
@@ -35,7 +36,11 @@ def remove_rerank_route():
 
 @pytest.fixture
 def client():
-    remove_rerank_route()  # remove the native rerank route on the litellm proxy - since we're testing the pass through endpoints
+    from litellm.proxy.proxy_server import app
+
+    remove_rerank_route(
+        app=app
+    )  # remove the native rerank route on the litellm proxy - since we're testing the pass through endpoints
     return TestClient(app)
 
 
@@ -145,8 +150,9 @@ async def test_pass_through_endpoint_rerank(client):
     [(True, 0, 429), (True, 1, 200), (False, 0, 200)],
 )
 @pytest.mark.asyncio
-async def test_pass_through_endpoint_rpm_limit(auth, expected_error_code, rpm_limit):
-    client = TestClient(app)
+async def test_pass_through_endpoint_rpm_limit(
+    client, auth, expected_error_code, rpm_limit
+):
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -214,9 +220,11 @@ async def test_pass_through_endpoint_rpm_limit(auth, expected_error_code, rpm_li
 async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     auth, expected_error_code, rpm_limit
 ):
+    from litellm.proxy.proxy_server import app
 
     client = TestClient(app)
     import litellm
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
 

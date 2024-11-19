@@ -13,9 +13,13 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
     Span = _Span
+    OTELClass = OpenTelemetry
 else:
     Span = Any
+    OTELClass = Any
 
 
 class ServiceLogging(CustomLogger):
@@ -111,6 +115,7 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is successful
         """
+        from litellm.integrations.opentelemetry import OpenTelemetry
 
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
@@ -122,6 +127,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
         )
+
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -139,8 +145,7 @@ class ServiceLogging(CustomLogger):
                     end_time=end_time,
                     event_metadata=event_metadata,
                 )
-            elif callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
+            elif callback == "otel" or isinstance(callback, OpenTelemetry):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()
@@ -214,6 +219,8 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is unsuccessful
         """
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
 
@@ -234,7 +241,8 @@ class ServiceLogging(CustomLogger):
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
                 await self.prometheusServicesLogger.async_service_failure_hook(
-                    payload=payload
+                    payload=payload,
+                    error=error,
                 )
             elif callback == "datadog":
                 await self.init_datadog_logger_if_none()
@@ -246,8 +254,7 @@ class ServiceLogging(CustomLogger):
                     end_time=end_time,
                     event_metadata=event_metadata,
                 )
-            elif callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
+            elif callback == "otel" or isinstance(callback, OpenTelemetry):
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 await self.init_otel_logger_if_none()

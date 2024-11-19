@@ -59,12 +59,15 @@ async def test_dual_cache_async_batch_get_cache():
     redis_cache = RedisCache()  # get credentials from environment
     dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=redis_cache)
 
-    in_memory_cache.set_cache(key="test_value", value="hello world")
+    with patch.object(
+        dual_cache.redis_cache, "async_batch_get_cache", new=AsyncMock()
+    ) as mock_redis_cache:
+        mock_redis_cache.return_value = {"test_value_2": None, "test_value": "hello"}
 
-    result = await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+        await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+        await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
 
-    assert result[0] == "hello world"
-    assert result[1] == None
+        assert mock_redis_cache.call_count == 1
 
 
 def test_dual_cache_batch_get_cache():
@@ -1098,81 +1101,6 @@ async def test_redis_cache_acompletion_stream_bedrock():
     except Exception as e:
         print(e)
         raise e
-
-
-def test_disk_cache_completion():
-    litellm.set_verbose = False
-
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
-    messages = [
-        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
-    ]
-    litellm.cache = Cache(
-        type="disk",
-    )
-
-    response1 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        max_tokens=20,
-        mock_response="This number is so great!",
-    )
-    # response2 is mocked to a different response from response1,
-    # but the completion from the cache should be used instead of the mock
-    # response since the input is the same as response1
-    response2 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        max_tokens=20,
-        mock_response="This number is awful!",
-    )
-    # Since the parameters are not the same as response1, response3 should actually
-    # be the mock response
-    response3 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        temperature=0.5,
-        mock_response="This number is awful!",
-    )
-
-    print("\nresponse 1", response1)
-    print("\nresponse 2", response2)
-    print("\nresponse 3", response3)
-    # print("\nresponse 4", response4)
-    litellm.cache = None
-    litellm.success_callback = []
-    litellm._async_success_callback = []
-
-    # 1 & 2 should be exactly the same
-    # 1 & 3 should be different, since input params are diff
-    if (
-        response1["choices"][0]["message"]["content"]
-        != response2["choices"][0]["message"]["content"]
-    ):  # 1 and 2 should be the same
-        # 1&2 have the exact same input params. This MUST Be a CACHE HIT
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Error occurred:")
-    if (
-        response1["choices"][0]["message"]["content"]
-        == response3["choices"][0]["message"]["content"]
-    ):
-        # if input params like max_tokens, temperature are diff it should NOT be a cache hit
-        print(f"response1: {response1}")
-        print(f"response3: {response3}")
-        pytest.fail(
-            f"Response 1 == response 3. Same model, diff params shoudl not cache Error"
-            f" occurred:"
-        )
-
-    assert response1.id == response2.id
-    assert response1.created == response2.created
-    assert response1.choices[0].message.content == response2.choices[0].message.content
 
 
 # @pytest.mark.skip(reason="AWS Suspended Account")

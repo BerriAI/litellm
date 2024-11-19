@@ -1,0 +1,30 @@
+# This job runs the prisma migrations for the LiteLLM DB.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "litellm.fullname" . }}-migrations
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: Never # keep this resource so we can debug status on ArgoCD
+    checksum/config: {{ toYaml .Values | sha256sum }}
+spec:
+  template:
+    spec:
+      containers:
+        - name: prisma-migrations
+          image: ghcr.io/berriai/litellm-database:main-latest
+          command: ["python", "litellm/proxy/prisma_migration.py"]
+          workingDir: "/app"
+          env:
+            {{- if .Values.db.useExisting }}
+            - name: DATABASE_URL
+              value: {{ .Values.db.url | quote }}
+            {{- else }}
+            - name: DATABASE_URL
+              value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
+            {{- end }}
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "false" # always run the migration from the Helm PreSync hook, override the value set
+      restartPolicy: OnFailure
+  backoffLimit: {{ .Values.migrationJob.backoffLimit }}

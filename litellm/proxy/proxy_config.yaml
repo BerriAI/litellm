@@ -1,11 +1,14 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: gpt-4o
+      model: openai/fake
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-litellm_settings:
-  callbacks: ["prometheus"]
-  service_callback: ["prometheus_system"]
-  cache: true
+
+
+general_settings:
+  key_management_system: "aws_secret_manager" 
+  key_management_settings: 
+    store_virtual_keys: true
+    access_mode: "write_only"

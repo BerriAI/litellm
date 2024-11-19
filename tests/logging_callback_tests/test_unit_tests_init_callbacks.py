@@ -31,6 +31,7 @@ from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
@@ -59,6 +60,7 @@ callback_class_str_to_classType = {
     "logfire": OpenTelemetry,
     "arize": OpenTelemetry,
     "langtrace": OpenTelemetry,
+    "mlflow": MlflowLogger,
 }
 
 expected_env_vars = {

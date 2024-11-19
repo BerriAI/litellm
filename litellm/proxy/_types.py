@@ -278,6 +278,7 @@ class LiteLLMRoutes(enum.Enum):
 
     management_routes = [  # key
         "/key/generate",
+        "/key/{token_id}/regenerate",
         "/key/update",
         "/key/delete",
         "/key/info",
@@ -339,11 +340,7 @@ class LiteLLMRoutes(enum.Enum):
         "/sso",
         "/sso/get/ui_settings",
         "/login",
-        "/key/generate",
-        "/key/{token_id}/regenerate",
-        "/key/update",
         "/key/info",
-        "/key/delete",
         "/config",
         "/spend",
         "/user",
@@ -364,6 +361,7 @@ class LiteLLMRoutes(enum.Enum):
     internal_user_routes = (
         [
             "/key/generate",
+            "/key/{token_id}/regenerate",
             "/key/update",
             "/key/delete",
             "/key/health",
@@ -436,15 +434,7 @@ class LiteLLM_JWTAuth(LiteLLMBase):
     """
 
     admin_jwt_scope: str = "litellm_proxy_admin"
-    admin_allowed_routes: List[
-        Literal[
-            "openai_routes",
-            "info_routes",
-            "management_routes",
-            "spend_tracking_routes",
-            "global_spend_tracking_routes",
-        ]
-    ] = [
+    admin_allowed_routes: List[str] = [
         "management_routes",
         "spend_tracking_routes",
         "global_spend_tracking_routes",
@@ -1136,7 +1126,20 @@ class KeyManagementSystem(enum.Enum):
 
 
 class KeyManagementSettings(LiteLLMBase):
-    hosted_keys: List
+    hosted_keys: Optional[List] = None
+    store_virtual_keys: Optional[bool] = False
+    """
+    If True, virtual keys created by litellm will be stored in the secret manager
+    """
+    prefix_for_stored_virtual_keys: str = "litellm/"
+    """
+    If set, this prefix will be used for stored virtual keys in the secret manager
+    """
+
+    access_mode: Literal["read_only", "write_only", "read_and_write"] = "read_only"
+    """
+    Access mode for the secret manager, when write_only will only use for writing secrets
+    """
 
 
 class TeamDefaultSettings(LiteLLMBase):
@@ -1419,6 +1422,8 @@ class UserAPIKeyAuth(
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
     tpm_limit_per_model: Optional[Dict[str, int]] = None
+    user_tpm_limit: Optional[int] = None
+    user_rpm_limit: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1900,6 +1905,7 @@ class ProxyErrorTypes(str, enum.Enum):
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
+    not_found_error = "not_found_error"
 
 
 class SSOUserDefinedValues(TypedDict):
@@ -2033,6 +2039,7 @@ class TeamInfoResponseObject(TypedDict):
 
 class TeamListResponseObject(LiteLLM_TeamTable):
     team_memberships: List[LiteLLM_TeamMembership]
+    keys: List  # list of keys that belong to the team
 
 
 class CurrentItemRateLimit(TypedDict):

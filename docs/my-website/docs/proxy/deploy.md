@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 🐳 Docker, Deployment
+# Docker, Deployment
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
@@ -688,8 +688,35 @@ Provide an ssl certificate when starting litellm proxy server
 
 Use this if you want to run the proxy with hypercorn to support http/2
 
-**Usage**
-Pass the `--run_hypercorn` flag when starting the proxy
+Step 1. Build your custom docker image with hypercorn
+
+```shell
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Copy the configuration file into the container at /app
+COPY config.yaml .
+
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x ./docker/entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# 👉 Key Change: Install hypercorn
+RUN pip install hypercorn
+
+# Override the CMD instruction with your desired command and arguments
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
+```
+
+Step 2. Pass the `--run_hypercorn` flag when starting the proxy
 
 ```shell
 docker run \
@@ -699,7 +726,7 @@ docker run \
     -e SERVER_ROOT_PATH="/api/v1"\
     -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
     -e LITELLM_MASTER_KEY="sk-1234"\
-    ghcr.io/berriai/litellm:main-latest \
+    your_custom_docker_image \
     --config /app/config.yaml
     --run_hypercorn
 ```

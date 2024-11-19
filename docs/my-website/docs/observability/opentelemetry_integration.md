@@ -35,7 +35,7 @@ OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
 
 ```shell
 OTEL_EXPORTER="otlp_http"
-OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_ENDPOINT="http://0.0.0.0:4318"
 ```
 
 </TabItem>
@@ -44,14 +44,24 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 
 ```shell
 OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_ENDPOINT="http://0.0.0.0:4317"
+```
+
+</TabItem>
+
+<TabItem value="laminar" label="Log to Laminar">
+
+```shell
+OTEL_EXPORTER="otlp_grpc"
+OTEL_ENDPOINT="https://api.lmnr.ai:8443"
+OTEL_HEADERS="authorization=Bearer <project-api-key>"
 ```
 
 </TabItem>
 
 </Tabs>
 
-Use just 2 lines of code, to instantly log your LLM responses **across all providers** with OpenTelemetry:
+Use just 1 line of code, to instantly log your LLM responses **across all providers** with OpenTelemetry:
 
 ```python
 litellm.callbacks = ["otel"]

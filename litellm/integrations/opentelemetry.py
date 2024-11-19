@@ -2,20 +2,23 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     EmbeddingResponse,
+    Function,
     ImageResponse,
     ModelResponse,
     StandardLoggingPayload,
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy._types import (
@@ -24,10 +27,12 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span
+    SpanExporter = _SpanExporter
     UserAPIKeyAuth = _UserAPIKeyAuth
     ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
 else:
     Span = Any
+    SpanExporter = Any
     UserAPIKeyAuth = Any
     ManagementEndpointLoggingPayload = Any
 
@@ -44,7 +49,6 @@ LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 @dataclass
 class OpenTelemetryConfig:
-    from opentelemetry.sdk.trace.export import SpanExporter
 
     exporter: Union[str, SpanExporter] = "console"
     endpoint: Optional[str] = None
@@ -77,13 +81,16 @@ class OpenTelemetryConfig:
 class OpenTelemetry(CustomLogger):
     def __init__(
         self,
-        config: OpenTelemetryConfig = OpenTelemetryConfig.from_env(),
+        config: Optional[OpenTelemetryConfig] = None,
         callback_name: Optional[str] = None,
         **kwargs,
     ):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
+
+        if config is None:
+            config = OpenTelemetryConfig.from_env()
 
         self.config = config
         self.OTEL_EXPORTER = self.config.exporter
@@ -281,21 +288,6 @@ class OpenTelemetry(CustomLogger):
             # End Parent OTEL Sspan
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
-    ):
-        from opentelemetry import trace
-        from opentelemetry.trace import Status, StatusCode
-
-        parent_otel_span = user_api_key_dict.parent_otel_span
-        if parent_otel_span is not None:
-            parent_otel_span.set_status(Status(StatusCode.OK))
-            # End Parent OTEL Sspan
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
-
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -334,8 +326,8 @@ class OpenTelemetry(CustomLogger):
 
         span.end(end_time=self._to_ns(end_time))
 
-        # if parent_otel_span is not None:
-        #     parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+        if parent_otel_span is not None:
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -413,7 +405,31 @@ class OpenTelemetry(CustomLogger):
         except Exception:
             return ""
 
-    def set_attributes(self, span: Span, kwargs, response_obj):  # noqa: PLR0915
+    @staticmethod
+    def _tool_calls_kv_pair(
+        tool_calls: List[ChatCompletionMessageToolCall],
+    ) -> Dict[str, Any]:
+        from litellm.proxy._types import SpanAttributes
+
+        kv_pairs: Dict[str, Any] = {}
+        for idx, tool_call in enumerate(tool_calls):
+            _function = tool_call.get("function")
+            if not _function:
+                continue
+
+            keys = Function.__annotations__.keys()
+            for key in keys:
+                _value = _function.get(key)
+                if _value:
+                    kv_pairs[
+                        f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.{key}"
+                    ] = _value
+
+        return kv_pairs
+
+    def set_attributes(  # noqa: PLR0915
+        self, span: Span, kwargs, response_obj: Optional[Any]
+    ):
         try:
             if self.callback_name == "arize":
                 from litellm.integrations.arize_ai import ArizeLogger
@@ -505,20 +521,20 @@ class OpenTelemetry(CustomLogger):
                 )
 
             # The unique identifier for the completion.
-            if response_obj.get("id"):
+            if response_obj and response_obj.get("id"):
                 self.safe_set_attribute(
                     span=span, key="gen_ai.response.id", value=response_obj.get("id")
                 )
 
             # The model used to generate the response.
-            if response_obj.get("model"):
+            if response_obj and response_obj.get("model"):
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_RESPONSE_MODEL,
                     value=response_obj.get("model"),
                 )
 
-            usage = response_obj.get("usage")
+            usage = response_obj and response_obj.get("usage")
             if usage:
                 self.safe_set_attribute(
                     span=span,
@@ -605,21 +621,16 @@ class OpenTelemetry(CustomLogger):
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
-                                    value=tool_calls[0].get("function").get("name"),
-                                )
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
-                                    value=tool_calls[0]
-                                    .get("function")
-                                    .get("arguments"),
-                                )
+                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
+                                for key, value in kv_pairs.items():
+                                    self.safe_set_attribute(
+                                        span=span,
+                                        key=key,
+                                        value=value,
+                                    )
 
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
 
@@ -713,10 +724,10 @@ class OpenTelemetry(CustomLogger):
             TraceContextTextMapPropagator,
         )
 
-        verbose_logger.debug("OpenTelemetry: GOT A TRACEPARENT {}".format(_traceparent))
         propagator = TraceContextTextMapPropagator()
-        _parent_context = propagator.extract(carrier={"traceparent": _traceparent})
-        verbose_logger.debug("OpenTelemetry: PARENT CONTEXT {}".format(_parent_context))
+        carrier = {"traceparent": _traceparent}
+        _parent_context = propagator.extract(carrier=carrier)
+
         return _parent_context
 
     def _get_span_context(self, kwargs):

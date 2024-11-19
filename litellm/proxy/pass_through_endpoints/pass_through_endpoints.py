@@ -665,7 +665,6 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
 
 @router.get(
     "/config/pass_through_endpoint",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=PassThroughEndpointResponse,
 )
@@ -715,7 +714,6 @@ async def get_pass_through_endpoints(
 
 @router.post(
     "/config/pass_through_endpoint/{endpoint_id}",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_pass_through_endpoints(request: Request, endpoint_id: str):
@@ -727,7 +725,6 @@ async def update_pass_through_endpoints(request: Request, endpoint_id: str):
 
 @router.post(
     "/config/pass_through_endpoint",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def create_pass_through_endpoints(
@@ -773,7 +770,6 @@ async def create_pass_through_endpoints(
 
 @router.delete(
     "/config/pass_through_endpoint",
-    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=PassThroughEndpointResponse,
 )

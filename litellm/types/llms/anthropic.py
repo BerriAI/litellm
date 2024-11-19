@@ -12,10 +12,16 @@ class AnthropicMessagesToolChoice(TypedDict, total=False):
     disable_parallel_tool_use: bool  # default is false
 
 
+class AnthropicInputSchema(TypedDict, total=False):
+    type: Optional[str]
+    properties: Optional[dict]
+    additionalProperties: Optional[bool]
+
+
 class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
-    input_schema: Required[dict]
+    input_schema: Optional[AnthropicInputSchema]
     type: Literal["custom"]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
@@ -74,7 +80,7 @@ class AnthopicMessagesAssistantMessageParam(TypedDict, total=False):
     """
 
 
-class AnthropicImageParamSource(TypedDict):
+class AnthropicContentParamSource(TypedDict):
     type: Literal["base64"]
     media_type: str
     data: str
@@ -82,7 +88,13 @@ class AnthropicImageParamSource(TypedDict):
 
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicImageParamSource]
+    source: Required[AnthropicContentParamSource]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+class AnthropicMessagesDocumentParam(TypedDict, total=False):
+    type: Required[Literal["document"]]
+    source: Required[AnthropicContentParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -108,6 +120,7 @@ AnthropicMessagesUserMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
+    AnthropicMessagesDocumentParam,
 ]
 
 

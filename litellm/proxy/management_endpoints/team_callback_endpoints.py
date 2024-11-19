@@ -55,6 +55,23 @@ async def add_team_callbacks(
 
     Use this if if you want different teams to have different success/failure callbacks
 
+    Parameters:
+    - callback_name (Literal["langfuse", "langsmith", "gcs"], required): The name of the callback to add
+    - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to add. One of:
+        - "success": Callback for successful LLM calls
+        - "failure": Callback for failed LLM calls
+        - "success_and_failure": Callback for both successful and failed LLM calls
+    - callback_vars (StandardCallbackDynamicParams, required): A dictionary of variables to pass to the callback
+        - langfuse_public_key: The public key for the Langfuse callback
+        - langfuse_secret_key: The secret key for the Langfuse callback
+        - langfuse_secret: The secret for the Langfuse callback
+        - langfuse_host: The host for the Langfuse callback
+        - gcs_bucket_name: The name of the GCS bucket
+        - gcs_path_service_account: The path to the GCS service account
+        - langsmith_api_key: The API key for the Langsmith callback
+        - langsmith_project: The project for the Langsmith callback
+        - langsmith_base_url: The base URL for the Langsmith callback
+
     Example curl:
     ```
     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
@@ -201,6 +218,20 @@ async def disable_team_logging(
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Disable all logging callbacks for a team
+
+    Parameters:
+    - team_id (str, required): The unique identifier for the team
+
+    Example curl:
+    ```
+    curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging' \
+        -H 'Authorization: Bearer sk-1234'
+    ```
+
+
+    """
     try:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -288,6 +319,9 @@ async def get_team_callbacks(
 ):
     """
     Get the success/failure callbacks and variables for a team
+
+    Parameters:
+    - team_id (str, required): The unique identifier for the team
 
     Example curl:
     ```

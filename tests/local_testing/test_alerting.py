@@ -438,7 +438,7 @@ async def test_send_daily_reports_ignores_zero_values():
     slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
         return_value=[None, 0, 10, 0, 0, None]
     )
-    slack_alerting.internal_usage_cache.async_batch_set_cache = AsyncMock()
+    slack_alerting.internal_usage_cache.async_set_cache_pipeline = AsyncMock()
 
     router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
 
