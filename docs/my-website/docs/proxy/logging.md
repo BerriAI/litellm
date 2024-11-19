@@ -4,6 +4,7 @@ Log Proxy input, output, and exceptions using:
 
 - Langfuse
 - OpenTelemetry
+- GCS and s3 Buckets
 - Custom Callbacks
 - Langsmith
 - DataDog
@@ -47,7 +48,19 @@ A number of these headers could be useful for troubleshooting, but the
 `x-litellm-call-id` is the one that is most useful for tracking a request across
 components in your system, including in logging tools.
 
-## Redacting UserAPIKeyInfo 
+
+## Logging Features
+
+### Conditional Logging by Virtual Keys, Teams
+
+Use this to:
+1. Conditionally enable logging for some virtual keys/teams
+2. Set different logging providers for different virtual keys/teams
+
+[👉 **Get Started** - Team/Key Based Logging](team_logging)
+
+
+### Redacting UserAPIKeyInfo 
 
 Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
 
@@ -57,6 +70,41 @@ Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
 litellm_settings: 
   callbacks: ["langfuse"]
   redact_user_api_key_info: true
+```
+
+
+### Redact Messages, Response Content
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata will still be logged.
+
+
+Example config.yaml
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+  turn_off_message_logging: True # 👈 Key Change
+```
+
+If you have this feature turned on, you can override it for specific requests by
+setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'LiteLLM-Disable-Message-Redaction: true' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
 ```
 
 Removes any field with `user_api_key_*` from metadata.
@@ -147,10 +195,6 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     call_type: str
     custom_pricing: Optional[bool]
 ```
-
-## Conditional Logging for Virtual Keys / Teams
-
-[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging)
 
 
 ## Langfuse
@@ -304,38 +348,6 @@ print(response)
 
 </TabItem>
 </Tabs>
-
-### Redact Messages, Response Content
-
-Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
-
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  success_callback: ["langfuse"]
-  turn_off_message_logging: True
-```
-
-If you have this feature turned on, you can override it for specific requests by
-setting a request header `LiteLLM-Disable-Message-Redaction: true`.
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --header 'LiteLLM-Disable-Message-Redaction: true' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-}'
-```
 
 
 ### LiteLLM Tags - `cache_hit`, `cache_key`
@@ -839,6 +851,151 @@ Only use this for self hosted LLMs, this can cause Bedrock, VertexAI calls to fa
 litellm_settings:
   forward_traceparent_to_llm_provider: True
 ```
+
+## Google Cloud Storage Buckets
+
+Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?hl=en)
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LLM Input/Output to cloud storage buckets |
+| Load Test Benchmarks | [Benchmarks](https://docs.litellm.ai/docs/benchmarks) |
+| Google Docs on Cloud Storage | [Google Cloud Storage](https://cloud.google.com/storage?hl=en) |
+
+
+
+#### Usage
+
+1. Add `gcs_bucket` to LiteLLM Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  callbacks: ["gcs_bucket"] # 👈 KEY CHANGE # 👈 KEY CHANGE
+```
+
+2. Set required env variables
+
+```shell
+GCS_BUCKET_NAME="<your-gcs-bucket-name>"
+GCS_PATH_SERVICE_ACCOUNT="/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
+```
+
+3. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+4. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+#### Expected Logs on GCS Buckets
+
+<Image img={require('../../img/gcs_bucket.png')} />
+
+#### Fields Logged on GCS Buckets
+
+[**The standard logging object is logged on GCS Bucket**](../proxy/logging)
+
+
+#### Getting `service_account.json` from Google Cloud Console
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Search for IAM & Admin
+3. Click on Service Accounts
+4. Select a Service Account
+5. Click on 'Keys' -> Add Key -> Create New Key -> JSON
+6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
+
+
+## s3 Buckets
+
+We will use the `--config` to set 
+
+- `litellm.success_callback = ["s3"]` 
+
+This will log all successfull LLM calls to s3 Bucket
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["s3"]
+  s3_callback_params:
+    s3_bucket_name: logs-bucket-litellm   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
+    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "Azure OpenAI GPT-4 East",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+Your logs should be available on the specified s3 Bucket
+
 
 ## Custom Callback Class [Async]
 
