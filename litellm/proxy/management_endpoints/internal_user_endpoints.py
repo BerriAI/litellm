@@ -37,6 +37,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -268,7 +269,7 @@ async def user_info(  # noqa: PLR0915
 
     Example request
     ```
-    curl -X GET 'http://localhost:8000/user/info?user_id=krrish7%40berri.ai' \
+    curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
     --header 'Authorization: Bearer sk-1234'
     ```
     """
@@ -418,21 +419,7 @@ async def user_info(  # noqa: PLR0915
                 str(e)
             )
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -665,7 +652,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/user/delete' \
+    curl --location 'http://0.0.0.0:4000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 
