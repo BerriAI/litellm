@@ -1,3 +1,19 @@
+"""
+Provider budget limiting strategy
+
+Use this if you want to set $ budget limits for each provider.
+
+Example:
+```
+openai:
+	budget_limit: 0.000000000001
+	time_period: 1d
+anthropic:
+	budget_limit: 100
+	time_period: 7d
+```
+"""
+
 import random
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
@@ -21,20 +37,6 @@ else:
     Span = Any
 
 
-class ProviderSpend(TypedDict, total=False):
-    """
-    Provider spend data
-
-    {
-        "openai": 300.0,
-        "anthropic": 100.0
-    }
-    """
-
-    provider: str
-    spend: float
-
-
 class ProviderBudgetLimiting(CustomLogger):
     def __init__(self, router_cache: DualCache, provider_budget_config: dict):
         self.router_cache = router_cache
@@ -49,7 +51,14 @@ class ProviderBudgetLimiting(CustomLogger):
         request_kwargs: Optional[Dict] = None,
     ) -> Optional[Dict]:
         """
-        Filter list of healthy deployments based on provider budget
+        For all deployments, check their LLM provider budget is less than their budget limit.
+
+        If multiple deployments are available, randomly pick one.
+
+        Example:
+        if deployment = openai/gpt-3.5-turbo
+            check if openai budget limit is exceeded
+
         """
         potential_deployments: List[Dict] = []
 
@@ -119,6 +128,15 @@ class ProviderBudgetLimiting(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Increment provider spend in DualCache (InMemory + Redis)
+
+        Handles saving current provider spend to Redis.
+
+        Spend is stored as:
+            provider_spend:{provider}:{time_period}
+            ex. provider_spend:openai:1d
+            ex. provider_spend:anthropic:7d
+
+        The time period is tracked for time_periods set in the provider budget config.
         """
         verbose_router_logger.debug("in ProviderBudgetLimiting.async_log_success_event")
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
@@ -174,18 +192,6 @@ class ProviderBudgetLimiting(CustomLogger):
             raise e
         return custom_llm_provider
 
-    def _get_unique_custom_llm_providers_in_deployments(
-        self, deployments: List[Dict]
-    ) -> list:
-        """
-        Get unique custom LLM providers in deployments
-        """
-        unique_providers = set()
-        for deployment in deployments:
-            provider = self._get_llm_provider_for_deployment(deployment)
-            unique_providers.add(provider)
-        return list(unique_providers)
-
     def get_ttl_seconds(self, time_period: str) -> int:
         """
         Convert time period (e.g., '1d', '30d') to seconds for Redis TTL
@@ -194,19 +200,3 @@ class ProviderBudgetLimiting(CustomLogger):
             days = int(time_period[:-1])
             return days * 24 * 60 * 60
         raise ValueError(f"Unsupported time period format: {time_period}")
-
-    def get_budget_limit(self, custom_llm_provider: str, time_period: str) -> float:
-        """
-        Fetch the budget limit for a given provider and time period.
-        This can be fetched from a config or database.
-        """
-        _provider_budget_settings = self.provider_budget_config.get(
-            custom_llm_provider, None
-        )
-        if _provider_budget_settings is None:
-            return float("inf")
-
-        verbose_router_logger.debug(
-            f"Provider budget settings: {_provider_budget_settings}"
-        )
-        return _provider_budget_settings.budget_limit
