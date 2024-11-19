@@ -444,7 +444,55 @@ async def user_update(
         "user_role": "proxy_admin_viewer"
     }'
 
-    See below for all params 
+    Parameters:
+        user_id: Optional[str]
+            Unique identifier for the user to update
+        
+        user_email: Optional[str]
+            Email address for the user
+        
+        password: Optional[str]
+            Password for the user
+        
+        user_role: Optional[Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]]
+            Role assigned to the user. Can be one of:
+            - proxy_admin: Full admin access
+            - proxy_admin_viewer: Read-only admin access
+            - internal_user: Standard internal user
+            - internal_user_viewer: Read-only internal user
+        
+        models: Optional[list]
+            List of model names the user is allowed to access
+        
+        spend: Optional[float]
+            Current spend amount for the user
+        
+        max_budget: Optional[float]
+            Maximum budget allowed for the user
+        
+        team_id: Optional[str]
+            ID of the team the user belongs to
+        
+        max_parallel_requests: Optional[int]
+            Maximum number of concurrent requests allowed
+        
+        metadata: Optional[dict]
+            Additional metadata associated with the user
+        
+        tpm_limit: Optional[int]
+            Maximum tokens per minute allowed
+        
+        rpm_limit: Optional[int]
+            Maximum requests per minute allowed
+        
+        budget_duration: Optional[str]
+            Duration for budget renewal (e.g., "30d" for 30 days)
+        
+        allowed_cache_controls: Optional[list]
+            List of allowed cache control options
+        
+        soft_budget: Optional[float]
+            Soft budget limit for alerting purposes
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
