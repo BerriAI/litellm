@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team/Key Based Logging
+# Team/Key Based Logging
 
 Allow each key/team to use their own Langfuse Project / custom callbacks
 
