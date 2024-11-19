@@ -37,6 +37,9 @@ async def block_user(data: BlockUsers):
     """
     [BETA] Reject calls with this end-user id
 
+    Parameters:
+    - user_ids (List[str], required): The unique `user_id`s for the users to block
+
         (any /chat/completion call with this user={end-user-id} param, will be rejected.)
 
         ```
@@ -288,6 +291,18 @@ async def end_user_info(
         description="End User ID in the request parameters"
     ),
 ):
+    """
+    Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+
+    Parameters:
+    - end_user_id (str, required): The unique identifier for the end-user
+
+    Example curl:
+    ```
+    curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4' \
+        -H 'Authorization: Bearer sk-1234'
+    ```
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -326,6 +341,20 @@ async def update_end_user(
     """
     Example curl 
 
+    Parameters:
+    - user_id: str
+    - alias: Optional[str] = None  # human-friendly alias
+    - blocked: bool = False  # allow/disallow requests for this end-user
+    - max_budget: Optional[float] = None
+    - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    - allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    - default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+
+    Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/update' \
     --header 'Authorization: Bearer sk-1234' \
@@ -418,8 +447,12 @@ async def delete_end_user(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Example curl 
+    Delete multiple end-users.
 
+    Parameters:
+    - user_ids (List[str], required): The unique `user_id`s for the users to delete
+
+    Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/delete' \
         --header 'Authorization: Bearer sk-1234' \
@@ -510,10 +543,12 @@ async def list_end_user(
     """
     [Admin-only] List all available customers
 
+    Example curl:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/customer/list' \
         --header 'Authorization: Bearer sk-1234'
     ```
+
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
