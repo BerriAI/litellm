@@ -5189,7 +5189,7 @@ class Router:
             ):
                 deployment = (
                     await self.provider_budget_logger.async_get_available_deployments(
-                        model_group=model,
+                        request_kwargs=request_kwargs,
                         healthy_deployments=healthy_deployments,  # type: ignore
                     )
                 )
