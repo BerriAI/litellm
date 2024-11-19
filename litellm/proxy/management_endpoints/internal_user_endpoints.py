@@ -632,6 +632,18 @@ async def get_users(
 
     Used by the UI to populate the user lists.
 
+    Parameters:
+        role: Optional[str]
+            Filter users by role. Can be one of:
+            - proxy_admin
+            - proxy_admin_viewer
+            - internal_user
+            - internal_user_viewer
+        page: int
+            The page number to return
+        page_size: int
+            The number of items per page
+
     Currently - admin-only endpoint.
     """
     from litellm.proxy.proxy_server import prisma_client
