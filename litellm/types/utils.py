@@ -1542,6 +1542,7 @@ class StandardLoggingPayload(TypedDict):
     model_id: Optional[str]
     model_group: Optional[str]
     api_base: str
+    custom_llm_provider: Optional[str]
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]

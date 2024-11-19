@@ -2359,6 +2359,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _in_memory_loggers.append(_mlflow_logger)
         return _mlflow_logger  # type: ignore
 
+
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
@@ -2850,6 +2851,7 @@ def get_standard_logging_object_payload(
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=litellm_params.get("api_base", ""),
+            custom_llm_provider=litellm_params.get("custom_llm_provider", None),
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
