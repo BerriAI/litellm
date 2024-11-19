@@ -381,7 +381,7 @@ const Team: React.FC<TeamProps> = ({
       if (accessToken != null && teams != null) {
         message.info("Adding Member");
         const user_role: Member = {
-          role: "user",
+          role: formValues.role,
           user_email: formValues.user_email,
           user_id: formValues.user_id,
         };
@@ -808,6 +808,12 @@ const Team: React.FC<TeamProps> = ({
                     name="user_id"
                     className="px-3 py-2 border rounded-md w-full"
                   />
+                </Form.Item>
+                <Form.Item label="Member Role" name="role" className="mb-4">
+                  <Select2 defaultValue="user">
+                    <Select2.Option value="user">user</Select2.Option>
+                    <Select2.Option value="admin">admin</Select2.Option>
+                  </Select2>
                 </Form.Item>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>
