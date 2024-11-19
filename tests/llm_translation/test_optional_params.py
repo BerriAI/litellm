@@ -942,3 +942,12 @@ def test_forward_user_param():
     )
 
     assert optional_params["metadata"]["user_id"] == "test_user"
+
+def test_lm_studio_embedding_params():
+    optional_params = get_optional_params_embeddings(
+        model="lm_studio/gemma2-9b-it",
+        custom_llm_provider="lm_studio",
+        dimensions=1024,
+        drop_params=True,
+    )
+    assert len(optional_params) == 0

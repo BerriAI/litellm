@@ -76,8 +76,10 @@ from litellm.proxy.proxy_server import (
     image_generation,
     model_list,
     moderations,
-    new_end_user,
     user_api_key_auth,
+)
+from litellm.proxy.management_endpoints.customer_endpoints import (
+    new_end_user,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
@@ -3467,6 +3469,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     """
     from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
     from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
+
     from litellm.proxy.hooks.key_management_event_hooks import (
         LITELLM_PREFIX_STORED_VIRTUAL_KEYS,
     )
@@ -3515,6 +3518,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     await asyncio.sleep(2)
 
     # read from the secret manager
+
     result = await aws_secret_manager_client.async_read_secret(
         secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
     )
@@ -3535,6 +3539,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     await asyncio.sleep(2)
 
     # Assert the key is deleted from the secret manager
+
     result = await aws_secret_manager_client.async_read_secret(
         secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
     )
