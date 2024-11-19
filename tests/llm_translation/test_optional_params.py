@@ -923,13 +923,13 @@ def test_watsonx_text_top_k():
     assert optional_params["top_k"] == 10
 
 
-
 def test_together_ai_model_params():
     optional_params = get_optional_params(
         model="together_ai", custom_llm_provider="together_ai", logprobs=1
     )
     print(optional_params)
     assert optional_params["logprobs"] == 1
+
 
 def test_forward_user_param():
     from litellm.utils import get_supported_openai_params, get_optional_params
@@ -943,6 +943,7 @@ def test_forward_user_param():
 
     assert optional_params["metadata"]["user_id"] == "test_user"
 
+
 def test_lm_studio_embedding_params():
     optional_params = get_optional_params_embeddings(
         model="lm_studio/gemma2-9b-it",
@@ -951,3 +952,12 @@ def test_lm_studio_embedding_params():
         drop_params=True,
     )
     assert len(optional_params) == 0
+
+
+def test_vertex_ft_models_optional_params():
+    optional_params = get_optional_params(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        custom_llm_provider="vertex_ai",
+        max_retries=3,
+    )
+    assert "max_retries" not in optional_params
