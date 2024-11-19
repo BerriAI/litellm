@@ -628,3 +628,16 @@ class RoutingStrategy(enum.Enum):
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
+    PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
+
+
+class DayToBudgetLimit(TypedDict):
+    day: str
+    budget_limit: float
+
+
+class ProviderBudgetConfig(TypedDict):
+    custom_llm_provider: str  # The name of the provider (e.g., OpenAI, Azure)
+    budgets: (
+        DayToBudgetLimit  # Time periods (e.g., '1d', '30d') mapped to budget limits
+    )
