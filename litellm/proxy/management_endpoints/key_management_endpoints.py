@@ -1152,9 +1152,9 @@ async def regenerate_key_fn(
         updated_token_dict = {}
         if updated_token is not None:
             _updated_token = dict(updated_token)
-            updated_token_dict = _updated_token["data"]
-
+            updated_token_dict.update(_updated_token["data"])
         updated_token_dict["key"] = new_token
+        updated_token_dict.pop("token")
 
         ### 3. remove existing key entry from cache
         ######################################################################
