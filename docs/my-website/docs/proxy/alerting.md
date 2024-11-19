@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🚨 Alerting / Webhooks
+# Alerting / Webhooks
 
 Get alerts for:
 
