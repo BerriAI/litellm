@@ -1,4 +1,4 @@
-# Google AI Studio
+# Google AI Studio SDK
 
 Pass-through endpoints for Google AI Studio - call provider-specific endpoint, in native format (no translation).
 

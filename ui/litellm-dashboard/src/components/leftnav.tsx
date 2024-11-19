@@ -9,118 +9,68 @@ const { Sider } = Layout;
 interface SidebarProps {
   setPage: React.Dispatch<React.SetStateAction<string>>;
   userRole: string;
-  defaultSelectedKey: string[] | null;
+  defaultSelectedKey: string;
 }
 
+// Create a more comprehensive menu item configuration
+interface MenuItem {
+  key: string;
+  page: string;
+  label: string;
+  roles?: string[];
+}
+
+const old_admin_roles = ["Admin", "Admin Viewer"];
+const v2_admin_role_names = ["proxy_admin", "proxy_admin_viewer", "org_admin"];
+const all_admin_roles = [...old_admin_roles, ...v2_admin_role_names];
 const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"];
 
+
+// Note: If a menu item does not have a role, it is visible to all roles.
+const menuItems: MenuItem[] = [
+  { key: "1", page: "api-keys", label: "Virtual Keys" }, // all roles
+  { key: "3", page: "llm-playground", label: "Test Key" }, // all roles
+  { key: "2", page: "models", label: "Models", roles: all_admin_roles },
+  { key: "4", page: "usage", label: "Usage"}, // all roles
+  { key: "6", page: "teams", label: "Teams", roles: all_admin_roles },
+  { key: "5", page: "users", label: "Internal Users", roles: all_admin_roles },
+  { key: "8", page: "settings", label: "Logging & Alerts", roles: all_admin_roles },
+  { key: "9", page: "caching", label: "Caching", roles: all_admin_roles },
+  { key: "10", page: "budgets", label: "Budgets", roles: all_admin_roles },
+  { key: "11", page: "general-settings", label: "Router Settings", roles: all_admin_roles },
+  { key: "12", page: "pass-through-settings", label: "Pass-Through", roles: all_admin_roles },
+  { key: "13", page: "admin-panel", label: "Admin Settings", roles: all_admin_roles },
+  { key: "14", page: "api_ref", label: "API Reference" }, // all roles
+  { key: "16", page: "model-hub", label: "Model Hub" }, // all roles
+];
+
+// The Sidebar component can now be simplified to:
 const Sidebar: React.FC<SidebarProps> = ({
   setPage,
   userRole,
   defaultSelectedKey,
 }) => {
-  if (userRole == "Admin Viewer") {
-    return (
-      <Layout style={{ minHeight: "100vh", maxWidth: "120px" }}>
-        <Sider width={120}>
-          <Menu
-            mode="inline"
-            defaultSelectedKeys={
-              defaultSelectedKey ? defaultSelectedKey : ["4"]
-            }
-            style={{ height: "100%", borderRight: 0 }}
-          >
-            <Menu.Item key="1" onClick={() => setPage("usage")}>
-              Usage
-            </Menu.Item>
-            <Menu.Item key="6" onClick={() => setPage("teams")}>
-              <Text>Teams</Text>
-            </Menu.Item>
-            <Menu.Item key="9" onClick={() => setPage("caching")}>
-              <Text>Caching</Text>
-            </Menu.Item>
-          </Menu>
-        </Sider>
-      </Layout>
-    );
-  }
+  // Find the menu item that matches the default page to get its key
+  const selectedMenuItem = menuItems.find(item => item.page === defaultSelectedKey);
+  const selectedMenuKey = selectedMenuItem?.key || "1";
+
+  const filteredMenuItems = menuItems.filter(item => 
+    !item.roles || item.roles.includes(userRole)
+  );
+
   return (
-    <Layout style={{ minHeight: "100vh", maxWidth: "145px" }}>
-      <Sider width={145}>
+    <Layout style={{ minHeight: "100vh", maxWidth: userRole === "Admin Viewer" ? "120px" : "145px" }}>
+      <Sider width={userRole === "Admin Viewer" ? 120 : 145}>
         <Menu
           mode="inline"
-          defaultSelectedKeys={defaultSelectedKey ? defaultSelectedKey : ["1"]}
+          selectedKeys={[selectedMenuKey]}
           style={{ height: "100%", borderRight: 0 }}
         >
-          <Menu.Item key="1" onClick={() => setPage("api-keys")}>
-            <Text>Virtual Keys</Text>
-          </Menu.Item>
-          <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
-            <Text>Test Key</Text>
-          </Menu.Item>
-
-          {userRole == "Admin" ? (
-            <Menu.Item key="2" onClick={() => setPage("models")}>
-              <Text>Models</Text>
+          {filteredMenuItems.map(item => (
+            <Menu.Item key={item.key} onClick={() => setPage(item.page)}>
+              <Text>{item.label}</Text>
             </Menu.Item>
-          ) : null}
-          {rolesAllowedToSeeUsage.includes(userRole) ? (
-            <Menu.Item key="4" onClick={() => setPage("usage")}>
-              <Text>Usage</Text>
-            </Menu.Item>
-          ) : null}
-
-          {userRole == "Admin" ? (
-            <Menu.Item key="6" onClick={() => setPage("teams")}>
-              <Text>Teams</Text>
-            </Menu.Item>
-          ) : null}
-
-          {userRole == "Admin" ? (
-            <Menu.Item key="5" onClick={() => setPage("users")}>
-              <Text>Internal Users</Text>
-            </Menu.Item>
-          ) : null}
-
-          {userRole == "Admin" ? (
-            <Menu.Item key="8" onClick={() => setPage("settings")}>
-              <Text>Logging & Alerts</Text>
-            </Menu.Item>
-          ) : null}
-          {userRole == "Admin" ? (
-            <Menu.Item key="9" onClick={() => setPage("caching")}>
-              <Text>Caching</Text>
-            </Menu.Item>
-          ) : null}
-
-          {userRole == "Admin" ? (
-            <Menu.Item key="10" onClick={() => setPage("budgets")}>
-              <Text>Budgets</Text>
-            </Menu.Item>
-          ) : null}
-          
-          {userRole == "Admin" ? (
-            <Menu.Item key="11" onClick={() => setPage("general-settings")}>
-              <Text>Router Settings</Text>
-            </Menu.Item>
-          ) : null}
-          
-          {userRole == "Admin" ? (
-            <Menu.Item key="12" onClick={() => setPage("pass-through-settings")}>
-              <Text>Pass-Through</Text>
-            </Menu.Item>
-          ) : null}
-          {userRole == "Admin" ? (
-            <Menu.Item key="13" onClick={() => setPage("admin-panel")}>
-              <Text>Admin Settings</Text>
-            </Menu.Item>
-          ) : null}
-          <Menu.Item key="14" onClick={() => setPage("api_ref")}>
-            <Text>API Reference</Text>
-          </Menu.Item>
-          <Menu.Item key="16" onClick={() => setPage("model-hub")}>
-            <Text>Model Hub</Text>
-          </Menu.Item>
+          ))}
         </Menu>
       </Sider>
     </Layout>

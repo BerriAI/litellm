@@ -1,5 +1,5 @@
 
-# ✨ IP Address Filtering
+# IP Address Filtering
 
 :::info
 

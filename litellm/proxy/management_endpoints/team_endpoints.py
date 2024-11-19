@@ -935,6 +935,9 @@ async def delete_team(
     """
     delete team and associated team keys
 
+    Parameters:
+    - team_ids: List[str] - Required. List of team IDs to delete. Example: ["team-1234", "team-5678"]
+
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
     --header 'Authorization: Bearer sk-1234' \
@@ -1024,6 +1027,9 @@ async def team_info(
 ):
     """
     get info on team + related keys
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to get info on.
 
     ```
     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
@@ -1159,6 +1165,25 @@ async def block_team(
 ):
     """
     Blocks all calls from keys with this team id.
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to block.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated team record with blocked=True
+
+
+
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
@@ -1174,6 +1199,12 @@ async def block_team(
         where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
     )
 
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
     return record
 
 
@@ -1188,6 +1219,19 @@ async def unblock_team(
 ):
     """
     Blocks all calls from keys with this team id.
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to unblock.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/unblock' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234"
+    }'
+    ```
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
@@ -1202,6 +1246,12 @@ async def unblock_team(
     record = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
     )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     return record
 
@@ -1222,6 +1272,9 @@ async def list_team(
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
         --header 'Authorization: Bearer sk-1234'
     ```
+
+    Parameters:
+    - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
