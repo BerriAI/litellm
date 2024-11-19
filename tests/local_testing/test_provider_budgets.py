@@ -133,3 +133,79 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded
+
+
+def test_get_ttl_seconds():
+    """
+    Test the get_ttl_seconds helper method"
+
+    """
+    provider_budget = ProviderBudgetLimiting(
+        router_cache=DualCache(), provider_budget_config={}
+    )
+
+    assert provider_budget.get_ttl_seconds("1d") == 86400  # 1 day in seconds
+    assert provider_budget.get_ttl_seconds("7d") == 604800  # 7 days in seconds
+    assert provider_budget.get_ttl_seconds("30d") == 2592000  # 30 days in seconds
+
+    with pytest.raises(ValueError, match="Unsupported time period format"):
+        provider_budget.get_ttl_seconds("1h")
+
+
+def test_get_llm_provider_for_deployment():
+    """
+    Test the _get_llm_provider_for_deployment helper method
+
+    """
+    provider_budget = ProviderBudgetLimiting(
+        router_cache=DualCache(), provider_budget_config={}
+    )
+
+    # Test OpenAI deployment
+    openai_deployment = {"litellm_params": {"model": "openai/gpt-4"}}
+    assert (
+        provider_budget._get_llm_provider_for_deployment(openai_deployment) == "openai"
+    )
+
+    # Test Azure deployment
+    azure_deployment = {
+        "litellm_params": {
+            "model": "azure/gpt-4",
+            "api_key": "test",
+            "api_base": "test",
+        }
+    }
+    assert provider_budget._get_llm_provider_for_deployment(azure_deployment) == "azure"
+
+    # should not raise error for unknown deployment
+    unknown_deployment = {}
+    assert provider_budget._get_llm_provider_for_deployment(unknown_deployment) is None
+
+
+def test_get_budget_config_for_provider():
+    """
+    Test the _get_budget_config_for_provider helper method
+
+    """
+    config = {
+        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+        "anthropic": ProviderBudgetInfo(time_period="7d", budget_limit=500),
+    }
+
+    provider_budget = ProviderBudgetLimiting(
+        router_cache=DualCache(), provider_budget_config=config
+    )
+
+    # Test existing providers
+    openai_config = provider_budget._get_budget_config_for_provider("openai")
+    assert openai_config is not None
+    assert openai_config.time_period == "1d"
+    assert openai_config.budget_limit == 100
+
+    anthropic_config = provider_budget._get_budget_config_for_provider("anthropic")
+    assert anthropic_config is not None
+    assert anthropic_config.time_period == "7d"
+    assert anthropic_config.budget_limit == 500
+
+    # Test non-existent provider
+    assert provider_budget._get_budget_config_for_provider("unknown") is None

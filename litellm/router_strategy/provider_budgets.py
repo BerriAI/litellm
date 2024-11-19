@@ -72,6 +72,8 @@ class ProviderBudgetLimiting(CustomLogger):
         _provider_configs: Dict[str, Optional[ProviderBudgetInfo]] = {}
         for deployment in healthy_deployments:
             provider = self._get_llm_provider_for_deployment(deployment)
+            if provider is None:
+                continue
             budget_config = self._get_budget_config_for_provider(provider)
             _provider_configs[provider] = budget_config
 
@@ -102,6 +104,8 @@ class ProviderBudgetLimiting(CustomLogger):
         # Filter healthy deployments based on budget constraints
         for deployment in healthy_deployments:
             provider = self._get_llm_provider_for_deployment(deployment)
+            if provider is None:
+                continue
             budget_config = provider_configs.get(provider)
 
             if not budget_config:
@@ -179,17 +183,20 @@ class ProviderBudgetLimiting(CustomLogger):
     ) -> Optional[ProviderBudgetInfo]:
         return self.provider_budget_config.get(provider, None)
 
-    def _get_llm_provider_for_deployment(self, deployment: Dict) -> str:
+    def _get_llm_provider_for_deployment(self, deployment: Dict) -> Optional[str]:
         try:
             _litellm_params: LiteLLM_Params = LiteLLM_Params(
-                **deployment["litellm_params"]
+                **deployment.get("litellm_params", {"model": ""})
             )
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=_litellm_params.model,
                 litellm_params=_litellm_params,
             )
-        except Exception as e:
-            raise e
+        except Exception:
+            verbose_router_logger.error(
+                f"Error getting LLM provider for deployment: {deployment}"
+            )
+            return None
         return custom_llm_provider
 
     def get_ttl_seconds(self, time_period: str) -> int:
