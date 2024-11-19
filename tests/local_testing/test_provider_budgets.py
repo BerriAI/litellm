@@ -82,3 +82,48 @@ async def test_provider_budgets_e2e_test():
         await asyncio.sleep(0.5)
 
         assert response._hidden_params.get("custom_llm_provider") == "azure"
+
+
+@pytest.mark.asyncio
+async def test_provider_budgets_e2e_test_expect_to_fail():
+    """
+    Expected behavior:
+    - first request passes, all subsequent requests fail
+
+    """
+    provider_budget_config: ProviderBudgetConfigType = {
+        "anthropic": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
+    }
+
+    router = Router(
+        routing_strategy="provider-budget-routing",
+        routing_strategy_args=provider_budget_config,
+        model_list=[
+            {
+                "model_name": "anthropic/*",  # openai model name
+                "litellm_params": {
+                    "model": "anthropic/*",
+                },
+            },
+        ],
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        model="anthropic/claude-3-5-sonnet-20240620",
+    )
+    print(response)
+
+    await asyncio.sleep(0.5)
+
+    for _ in range(3):
+        with pytest.raises(Exception) as exc_info:
+            response = await router.acompletion(
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="anthropic/claude-3-5-sonnet-20240620",
+            )
+            print(response)
+            print("response.hidden_params", response._hidden_params)
+
+        await asyncio.sleep(0.5)
+        # Verify the error is related to budget exceeded
