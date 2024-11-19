@@ -2385,6 +2385,16 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
+    elif custom_llm_provider == "lm_studio":
+        supported_params = (
+            litellm.LmStudioEmbeddingConfig().get_supported_openai_params()
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.LmStudioEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "bedrock":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
         if "amazon.titan-embed-text-v1" in model:

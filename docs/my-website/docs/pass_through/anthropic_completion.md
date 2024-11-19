@@ -1,4 +1,4 @@
-# Anthropic SDK
+# Anthropic `/v1/messages`
 
 Pass-through endpoints for Anthropic - call provider-specific endpoint, in native format (no translation).
 
