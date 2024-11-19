@@ -48,7 +48,19 @@ A number of these headers could be useful for troubleshooting, but the
 `x-litellm-call-id` is the one that is most useful for tracking a request across
 components in your system, including in logging tools.
 
-## Redacting UserAPIKeyInfo 
+
+## Logging Features
+
+### Conditional Logging by Virtual Keys, Teams
+
+Use this to:
+1. Conditionally enable logging for some virtual keys/teams
+2. Set different logging providers for different virtual keys/teams
+
+[👉 **Get Started** - Team/Key Based Logging](team_logging)
+
+
+### Redacting UserAPIKeyInfo 
 
 Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
 
@@ -58,6 +70,41 @@ Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
 litellm_settings: 
   callbacks: ["langfuse"]
   redact_user_api_key_info: true
+```
+
+
+### Redact Messages, Response Content
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata will still be logged.
+
+
+Example config.yaml
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+  turn_off_message_logging: True # 👈 Key Change
+```
+
+If you have this feature turned on, you can override it for specific requests by
+setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'LiteLLM-Disable-Message-Redaction: true' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
 ```
 
 Removes any field with `user_api_key_*` from metadata.
@@ -148,10 +195,6 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     call_type: str
     custom_pricing: Optional[bool]
 ```
-
-## Conditional Logging for Virtual Keys / Teams
-
-[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging)
 
 
 ## Langfuse
@@ -305,38 +348,6 @@ print(response)
 
 </TabItem>
 </Tabs>
-
-### Redact Messages, Response Content
-
-Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
-
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  success_callback: ["langfuse"]
-  turn_off_message_logging: True
-```
-
-If you have this feature turned on, you can override it for specific requests by
-setting a request header `LiteLLM-Disable-Message-Redaction: true`.
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --header 'LiteLLM-Disable-Message-Redaction: true' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-}'
-```
 
 
 ### LiteLLM Tags - `cache_hit`, `cache_key`
