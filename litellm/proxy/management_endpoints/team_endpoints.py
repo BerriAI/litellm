@@ -932,6 +932,9 @@ async def delete_team(
     """
     delete team and associated team keys
 
+    Parameters:
+    - team_ids: List[str] - Required. List of team IDs to delete. Example: ["team-1234", "team-5678"]
+
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
     --header 'Authorization: Bearer sk-1234' \
