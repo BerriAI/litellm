@@ -631,13 +631,9 @@ class RoutingStrategy(enum.Enum):
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 
-class DayToBudgetLimit(TypedDict):
-    day: str
+class ProviderBudgetInfo(BaseModel):
+    time_period: str  # e.g., '1d', '30d'
     budget_limit: float
 
 
-class ProviderBudgetConfig(TypedDict):
-    custom_llm_provider: str  # The name of the provider (e.g., OpenAI, Azure)
-    budgets: (
-        DayToBudgetLimit  # Time periods (e.g., '1d', '30d') mapped to budget limits
-    )
+ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]

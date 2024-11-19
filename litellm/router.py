@@ -59,6 +59,7 @@ from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_strategy.provider_budgets import ProviderBudgetLimiting
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.batch_utils import (
@@ -234,8 +235,9 @@ class Router:
             "latency-based-routing",
             "cost-based-routing",
             "usage-based-routing-v2",
+            "provider-budget-routing",
         ] = "simple-shuffle",
-        routing_strategy_args: dict = {},  # just for latency-based routing
+        routing_strategy_args: dict = {},  # just for latency-based,
         semaphore: Optional[asyncio.Semaphore] = None,
         alerting_config: Optional[AlertingConfig] = None,
         router_general_settings: Optional[
@@ -644,6 +646,16 @@ class Router:
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowestcost_logger)  # type: ignore
+        elif (
+            routing_strategy == RoutingStrategy.PROVIDER_BUDGET_LIMITING.value
+            or routing_strategy == RoutingStrategy.PROVIDER_BUDGET_LIMITING
+        ):
+            self.provider_budget_logger = ProviderBudgetLimiting(
+                router_cache=self.cache,
+                provider_budget_config=routing_strategy_args,
+            )
+            if isinstance(litellm.callbacks, list):
+                litellm.callbacks.append(self.provider_budget_logger)  # type: ignore
         else:
             pass
 
@@ -5055,6 +5067,7 @@ class Router:
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
+            and self.routing_strategy != "provider-budget-routing"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -5166,6 +5179,16 @@ class Router:
             ):
                 deployment = (
                     await self.leastbusy_logger.async_get_available_deployments(
+                        model_group=model,
+                        healthy_deployments=healthy_deployments,  # type: ignore
+                    )
+                )
+            elif (
+                self.routing_strategy == "provider-budget-routing"
+                and self.provider_budget_logger is not None
+            ):
+                deployment = (
+                    await self.provider_budget_logger.async_get_available_deployments(
                         model_group=model,
                         healthy_deployments=healthy_deployments,  # type: ignore
                     )
