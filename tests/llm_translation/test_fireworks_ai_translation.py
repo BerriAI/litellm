@@ -30,3 +30,41 @@ def test_map_openai_params_tool_choice():
     # Test case 4: tool_choice is None
     result = fireworks.map_openai_params({"tool_choice": None}, {}, "some_model")
     assert result == {"tool_choice": None}
+
+
+def test_map_response_format():
+    response_format = {
+        'type': 'json_schema',
+        'json_schema': {
+            'schema': {
+                'properties': {
+                    'result': {
+                        'type': 'boolean'
+                    }
+                },
+                'required': [
+                    'result'
+                ],
+                'type': 'object',
+            },
+            'name': 'BooleanResponse',
+            'strict': True
+        }
+    }
+    result = fireworks.map_openai_params({"response_format":response_format}, {}, "some_model")
+    assert result == {
+        "response_format" : {
+            'type': 'json_object',
+            'schema': {
+                'properties': {
+                    'result': {
+                        'type': 'boolean'
+                    }
+                },
+                'required': [
+                    'result'
+                ],
+                'type': 'object',
+            },
+        }
+    }
