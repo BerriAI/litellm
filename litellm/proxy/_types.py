@@ -1773,6 +1773,7 @@ class SpendLogsPayload(TypedDict):
     model_id: Optional[str]
     model_group: Optional[str]
     api_base: str
+    custom_llm_provider: Optional[str]
     user: str
     metadata: str  # json str
     cache_hit: str
