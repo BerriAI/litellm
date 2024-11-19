@@ -4,6 +4,7 @@ Log Proxy input, output, and exceptions using:
 
 - Langfuse
 - OpenTelemetry
+- GCS and s3 Buckets
 - Custom Callbacks
 - Langsmith
 - DataDog
