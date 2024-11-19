@@ -255,7 +255,7 @@ async def generate_key_fn(  # noqa: PLR0915
                 str(e)
             )
         )
-        handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 def prepare_key_update_data(
@@ -558,7 +558,7 @@ async def delete_key_fn(
 
         return {"deleted_keys": keys}
     except Exception as e:
-        handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -627,7 +627,7 @@ async def info_key_fn_v2(
         return {"key": data.keys, "info": filtered_key_info}
 
     except Exception as e:
-        handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -714,7 +714,7 @@ async def info_key_fn(
         key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
-        handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 async def generate_key_helper_fn(  # noqa: PLR0915
@@ -1176,7 +1176,7 @@ async def regenerate_key_fn(
             **updated_token_dict,
         )
     except Exception as e:
-        handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -1301,7 +1301,7 @@ async def block_key(
     ),
 ) -> Optional[LiteLLM_VerificationToken]:
     """
-    Block a Virtual key from making any requests.
+    Block an Virtual key from making any requests.
 
     Parameters:
     - key: str - The key to block. Can be either the unhashed key (sk-...) or the hashed key value

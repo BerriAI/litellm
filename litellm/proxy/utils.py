@@ -26,6 +26,8 @@ from typing import (
     overload,
 )
 
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
 try:
     import backoff
 except ImportError:
@@ -3097,24 +3099,22 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
-def handle_exception_on_proxy(e: Exception):
+def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
-    Raises an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
+    Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
     """
     from fastapi import status
 
-    from litellm.proxy._types import ProxyErrorTypes, ProxyException
-
     if isinstance(e, HTTPException):
-        raise ProxyException(
+        return ProxyException(
             message=getattr(e, "detail", f"error({str(e)})"),
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
         )
     elif isinstance(e, ProxyException):
-        raise e
-    raise ProxyException(
+        return e
+    return ProxyException(
         message="Internal Server Error, " + str(e),
         type=ProxyErrorTypes.internal_server_error,
         param=getattr(e, "param", "None"),
