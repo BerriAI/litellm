@@ -786,7 +786,51 @@ class DeleteUserRequest(LiteLLMBase):
 AllowedModelRegion = Literal["eu", "us"]
 
 
-class NewCustomerRequest(LiteLLMBase):
+class BudgetNew(LiteLLMBase):
+    budget_id: Optional[str] = Field(default=None, description="The unique budget id.")
+    max_budget: Optional[float] = Field(
+        default=None,
+        description="Requests will fail if this budget (in USD) is exceeded.",
+    )
+    soft_budget: Optional[float] = Field(
+        default=None,
+        description="Requests will NOT fail if this is exceeded. Will fire alerting though.",
+    )
+    max_parallel_requests: Optional[int] = Field(
+        default=None, description="Max concurrent requests allowed for this budget id."
+    )
+    tpm_limit: Optional[int] = Field(
+        default=None, description="Max tokens per minute, allowed for this budget id."
+    )
+    rpm_limit: Optional[int] = Field(
+        default=None, description="Max requests per minute, allowed for this budget id."
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
+    )
+
+
+class BudgetRequest(LiteLLMBase):
+    budgets: List[str]
+
+
+class BudgetDeleteRequest(LiteLLMBase):
+    id: str
+
+
+class CustomerBase(LiteLLMBase):
+    user_id: str
+    alias: Optional[str] = None
+    spend: float = 0.0
+    allowed_model_region: Optional[AllowedModelRegion] = None
+    default_model: Optional[str] = None
+    budget_id: Optional[str] = None
+    litellm_budget_table: Optional[BudgetNew] = None
+    blocked: bool = False
+
+
+class NewCustomerRequest(BudgetNew):
     """
     Create a new customer, allocate a budget to them
     """
@@ -794,7 +838,6 @@ class NewCustomerRequest(LiteLLMBase):
     user_id: str
     alias: Optional[str] = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
-    max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
@@ -1081,39 +1124,6 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
 
 class OrganizationRequest(LiteLLMBase):
     organizations: List[str]
-
-
-class BudgetNew(LiteLLMBase):
-    budget_id: str = Field(default=None, description="The unique budget id.")
-    max_budget: Optional[float] = Field(
-        default=None,
-        description="Requests will fail if this budget (in USD) is exceeded.",
-    )
-    soft_budget: Optional[float] = Field(
-        default=None,
-        description="Requests will NOT fail if this is exceeded. Will fire alerting though.",
-    )
-    max_parallel_requests: Optional[int] = Field(
-        default=None, description="Max concurrent requests allowed for this budget id."
-    )
-    tpm_limit: Optional[int] = Field(
-        default=None, description="Max tokens per minute, allowed for this budget id."
-    )
-    rpm_limit: Optional[int] = Field(
-        default=None, description="Max requests per minute, allowed for this budget id."
-    )
-    budget_duration: Optional[str] = Field(
-        default=None,
-        description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
-    )
-
-
-class BudgetRequest(LiteLLMBase):
-    budgets: List[str]
-
-
-class BudgetDeleteRequest(LiteLLMBase):
-    id: str
 
 
 class KeyManagementSystem(enum.Enum):

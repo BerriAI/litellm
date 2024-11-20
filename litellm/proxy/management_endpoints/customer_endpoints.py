@@ -129,6 +129,26 @@ async def unblock_user(data: BlockUsers):
     return {"blocked_users": litellm.blocked_user_list}
 
 
+def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNew]:
+    """
+    Return a new budget object if new budget params are passed.
+    """
+    budget_params = BudgetNew.model_fields.keys()
+    budget_kv_pairs = {}
+
+    # Get the actual values from the data object using getattr
+    for field_name in budget_params:
+        if field_name == "budget_id":
+            continue
+        value = getattr(data, field_name, None)
+        if value is not None:
+            budget_kv_pairs[field_name] = value
+
+    if budget_kv_pairs:
+        return BudgetNew(**budget_kv_pairs)
+    return None
+
+
 @router.post(
     "/end_user/new",
     tags=["Customer Management"],
@@ -223,14 +243,19 @@ async def new_end_user(
         new_end_user_obj: Dict = {}
 
         ## CREATE BUDGET ## if set
-        if data.max_budget is not None:
-            budget_record = await prisma_client.db.litellm_budgettable.create(
-                data={
-                    "max_budget": data.max_budget,
-                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
-                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                }
-            )
+        _new_budget = new_budget_request(data)
+        if _new_budget is not None:
+            try:
+                budget_record = await prisma_client.db.litellm_budgettable.create(
+                    data={
+                        **_new_budget.model_dump(exclude_unset=True),
+                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                        "updated_by": user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                    }
+                )
+            except Exception as e:
+                raise HTTPException(status_code=422, detail={"error": str(e)})
 
             new_end_user_obj["budget_id"] = budget_record.budget_id
         elif data.budget_id is not None:
@@ -239,16 +264,22 @@ async def new_end_user(
         _user_data = data.dict(exclude_none=True)
 
         for k, v in _user_data.items():
-            if k != "max_budget" and k != "budget_id":
+            if k not in BudgetNew.model_fields.keys():
                 new_end_user_obj[k] = v
 
         ## WRITE TO DB ##
         end_user_record = await prisma_client.db.litellm_endusertable.create(
-            data=new_end_user_obj  # type: ignore
+            data=new_end_user_obj,  # type: ignore
+            include={"litellm_budget_table": True},
         )
 
         return end_user_record
     except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.management_endpoints.customer_endpoints.new_end_user(): Exception occured - {}".format(
+                str(e)
+            )
+        )
         if "Unique constraint failed on the fields: (`user_id`)" in str(e):
             raise ProxyException(
                 message=f"Customer already exists, passed user_id={data.user_id}. Please pass a new user_id.",
