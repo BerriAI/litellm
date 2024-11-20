@@ -59,6 +59,7 @@ from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_strategy.provider_budgets import ProviderBudgetLimiting
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.batch_utils import (
@@ -119,6 +120,7 @@ from litellm.types.router import (
     LiteLLMParamsTypedDict,
     ModelGroupInfo,
     ModelInfo,
+    ProviderBudgetConfigType,
     RetryPolicy,
     RouterErrors,
     RouterGeneralSettings,
@@ -235,7 +237,8 @@ class Router:
             "cost-based-routing",
             "usage-based-routing-v2",
         ] = "simple-shuffle",
-        routing_strategy_args: dict = {},  # just for latency-based routing
+        routing_strategy_args: dict = {},  # just for latency-based
+        provider_budget_config: Optional[ProviderBudgetConfigType] = None,
         semaphore: Optional[asyncio.Semaphore] = None,
         alerting_config: Optional[AlertingConfig] = None,
         router_general_settings: Optional[
@@ -272,6 +275,7 @@ class Router:
             routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy. Defaults to "simple-shuffle".
             routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
+            provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -517,6 +521,12 @@ class Router:
         )
         self.service_logger_obj = ServiceLogging()
         self.routing_strategy_args = routing_strategy_args
+        self.provider_budget_config = provider_budget_config
+        if self.provider_budget_config is not None:
+            self.provider_budget_logger = ProviderBudgetLimiting(
+                router_cache=self.cache,
+                provider_budget_config=self.provider_budget_config,
+            )
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
             if isinstance(retry_policy, dict):
@@ -5108,6 +5118,14 @@ class Router:
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
+
+            if self.provider_budget_config is not None:
+                healthy_deployments = (
+                    await self.provider_budget_logger.async_filter_deployments(
+                        healthy_deployments=healthy_deployments,
+                        request_kwargs=request_kwargs,
+                    )
+                )
 
             if len(healthy_deployments) == 0:
                 exception = await async_raise_no_deployment_exception(
