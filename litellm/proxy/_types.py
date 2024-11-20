@@ -623,6 +623,7 @@ class GenerateRequestBase(LiteLLMBase):
     Overlapping schema between key and user generate/update requests
     """
 
+    key_alias: Optional[str] = None
     duration: Optional[str] = None
     models: Optional[list] = []
     spend: Optional[float] = 0
@@ -652,7 +653,6 @@ class GenerateRequestBase(LiteLLMBase):
 
 
 class _GenerateKeyRequest(GenerateRequestBase):
-    key_alias: Optional[str] = None
     key: Optional[str] = None
 
 

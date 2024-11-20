@@ -122,6 +122,7 @@ async def new_user(
     - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
     - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
+    - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
 
     Returns:
     - key: (str) The generated api key for the user
@@ -487,7 +488,8 @@ async def user_update(
         - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
         - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
-        - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
+        - duration: Optional[str] - [NOT IMPLEMENTED].
+        - key_alias: Optional[str] - [NOT IMPLEMENTED].
             
     ```
     """
