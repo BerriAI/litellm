@@ -20,6 +20,7 @@ from litellm.types.router import (
 from litellm.caching.caching import DualCache
 import logging
 from litellm._logging import verbose_router_logger
+import litellm
 
 verbose_router_logger.setLevel(logging.DEBUG)
 
@@ -215,3 +216,68 @@ def test_get_budget_config_for_provider():
 
     # Test non-existent provider
     assert provider_budget._get_budget_config_for_provider("unknown") is None
+
+
+@pytest.mark.asyncio
+async def test_prometheus_metric_tracking():
+    """
+    Test that the Prometheus metric for provider budget is tracked correctly
+    """
+    from unittest.mock import MagicMock
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    # Create a mock PrometheusLogger
+    mock_prometheus = MagicMock(spec=PrometheusLogger)
+
+    # Setup provider budget limiting
+    provider_budget = ProviderBudgetLimiting(
+        router_cache=DualCache(),
+        provider_budget_config={
+            "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100)
+        },
+    )
+
+    litellm._async_success_callback = [mock_prometheus]
+
+    provider_budget_config: ProviderBudgetConfigType = {
+        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
+        "azure": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+    }
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "model_info": {"id": "azure-model-id"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                },
+                "model_info": {"id": "openai-model-id"},
+            },
+        ],
+        provider_budget_config=provider_budget_config,
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_port=int(os.getenv("REDIS_PORT")),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        model="openai/gpt-4o-mini",
+        mock_response="hi",
+    )
+    print(response)
+
+    await asyncio.sleep(0.5)
+
+    # Verify the mock was called correctly
+    mock_prometheus.track_provider_remaining_budget.assert_called_once()
