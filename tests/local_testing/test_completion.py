@@ -1268,6 +1268,8 @@ async def test_acompletion_claude2_1():
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
+    except litellm.InternalServerError:
+        pytest.skip("model is overloaded.")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

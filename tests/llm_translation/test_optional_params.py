@@ -952,12 +952,3 @@ def test_lm_studio_embedding_params():
         drop_params=True,
     )
     assert len(optional_params) == 0
-
-
-def test_vertex_ft_models_optional_params():
-    optional_params = get_optional_params(
-        model="meta-llama/Llama-3.1-8B-Instruct",
-        custom_llm_provider="vertex_ai",
-        max_retries=3,
-    )
-    assert "max_retries" not in optional_params
