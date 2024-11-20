@@ -140,12 +140,15 @@ class BaseLLMChatTest(ABC):
             },
         ]
 
-        response = litellm.completion(
-            **base_completion_call_args,
-            messages=messages,
-            response_format={"type": "json_object"},
-            stream=True,
-        )
+        try:
+            response = litellm.completion(
+                **base_completion_call_args,
+                messages=messages,
+                response_format={"type": "json_object"},
+                stream=True,
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
         print(response)
 
