@@ -25,6 +25,9 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.router_utils.cooldown_callbacks import (
+    _get_prometheus_logger_from_callbacks,
+)
 from litellm.types.router import (
     LiteLLM_Params,
     ProviderBudgetConfigType,
@@ -148,6 +151,11 @@ class ProviderBudgetLimiting(CustomLogger):
             verbose_router_logger.debug(
                 f"Current spend for {provider}: {current_spend}, budget limit: {budget_limit}"
             )
+            self._track_provider_remaining_budget_prometheus(
+                provider=provider,
+                spend=current_spend,
+                budget_limit=budget_limit,
+            )
 
             if current_spend >= budget_limit:
                 debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {budget_limit}"
@@ -242,3 +250,21 @@ class ProviderBudgetLimiting(CustomLogger):
             days = int(time_period[:-1])
             return days * 24 * 60 * 60
         raise ValueError(f"Unsupported time period format: {time_period}")
+
+    def _track_provider_remaining_budget_prometheus(
+        self, provider: str, spend: float, budget_limit: float
+    ):
+        """
+        Optional helper - emit provider remaining budget metric to Prometheus
+
+        This is helpful for debugging and monitoring provider budget limits.
+        """
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        prometheus_logger = _get_prometheus_logger_from_callbacks()
+        if prometheus_logger:
+            prometheus_logger.track_provider_remaining_budget(
+                provider=provider,
+                spend=spend,
+                budget_limit=budget_limit,
+            )

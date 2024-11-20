@@ -228,6 +228,13 @@ class PrometheusLogger(CustomLogger):
                     "api_key_alias",
                 ],
             )
+            # llm api provider budget metrics
+            self.litellm_provider_remaining_budget_metric = Gauge(
+                "litellm_provider_remaining_budget_metric",
+                "Remaining budget for provider - used when you set provider budget limits",
+                labelnames=["api_provider"],
+            )
+
             # Get all keys
             _logged_llm_labels = [
                 "litellm_model_name",
@@ -1129,6 +1136,19 @@ class PrometheusLogger(CustomLogger):
         self.litellm_deployment_cooled_down.labels(
             litellm_model_name, model_id, api_base, api_provider, exception_status
         ).inc()
+
+    def track_provider_remaining_budget(
+        self, provider: str, spend: float, budget_limit: float
+    ):
+        """
+        Track provider remaining budget in Prometheus
+        """
+        self.litellm_provider_remaining_budget_metric.labels(provider).set(
+            self._safe_get_remaining_budget(
+                max_budget=budget_limit,
+                spend=spend,
+            )
+        )
 
     def _safe_get_remaining_budget(
         self, max_budget: Optional[float], spend: Optional[float]

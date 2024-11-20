@@ -1,14 +1,18 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/fake
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
+router_settings:
+  provider_budget_config: 
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d 
+    azure:
+      budget_limit: 100
+      time_period: 1d
 
-general_settings:
-  key_management_system: "aws_secret_manager" 
-  key_management_settings: 
-    store_virtual_keys: true
-    access_mode: "write_only"
+litellm_settings:
+  callbacks: ["prometheus"]
