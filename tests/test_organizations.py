@@ -34,7 +34,7 @@ async def list_organization(session, i):
     url = "http://0.0.0.0:4000/organization/list"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
 
-    async with session.post(url, headers=headers) as response:
+    async with session.get(url, headers=headers) as response:
         status = response.status
         response_json = await response.json()
 
