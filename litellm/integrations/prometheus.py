@@ -15,7 +15,6 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadAccessors
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
@@ -338,6 +337,9 @@ class PrometheusLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadAccessors,
+        )
         from litellm.types.utils import StandardLoggingPayload
 
         verbose_logger.debug(
