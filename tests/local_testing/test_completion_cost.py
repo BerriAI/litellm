@@ -770,7 +770,7 @@ def test_vertex_ai_claude_completion_cost():
             )
         ],
         created=1700775391,
-        model="vertex_ai/claude-3-sonnet@20240229",
+        model="claude-3-sonnet",
         object="chat.completion",
         system_fingerprint=None,
         usage=Usage(
@@ -780,7 +780,7 @@ def test_vertex_ai_claude_completion_cost():
         ),
     )
     cost = litellm.completion_cost(
-        model="vertex_ai/claude-3-sonnet@20240229",
+        model="vertex_ai/claude-3-sonnet",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
