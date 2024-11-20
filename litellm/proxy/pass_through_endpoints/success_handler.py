@@ -8,6 +8,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
@@ -23,6 +24,9 @@ class PassThroughEndpointLogging:
             "predict",
         ]
 
+        # Anthropic
+        self.TRACKED_ANTHROPIC_ROUTES = ["/messages"]
+
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
@@ -36,6 +40,17 @@ class PassThroughEndpointLogging:
     ):
         if self.is_vertex_route(url_route):
             await self.vertex_passthrough_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                **kwargs,
+            )
+        elif self.is_anthropic_route(url_route):
+            await self.anthropic_passthrough_handler(
                 httpx_response=httpx_response,
                 logging_obj=logging_obj,
                 url_route=url_route,
@@ -76,12 +91,34 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
+    def is_anthropic_route(self, url_route: str):
+        for route in self.TRACKED_ANTHROPIC_ROUTES:
+            if route in url_route:
+                return True
+        return False
+
     def extract_model_from_url(self, url: str) -> str:
         pattern = r"/models/([^:]+)"
         match = re.search(pattern, url)
         if match:
             return match.group(1)
         return "unknown"
+
+    async def anthropic_passthrough_handler(
+        self,
+        httpx_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        **kwargs,
+    ):
+        """
+        Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
+        """
+        pass
 
     async def vertex_passthrough_handler(
         self,
