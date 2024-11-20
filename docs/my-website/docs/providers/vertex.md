@@ -572,6 +572,96 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
 
   </Tabs>
 
+
+## Authentication - vertex_project, vertex_location, etc. 
+
+Set your vertex credentials via:
+- dynamic params
+OR
+- env vars 
+
+
+### **Dynamic Params**
+
+You can set:
+- `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
+- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
+
+as dynamic params for a `litellm.completion` call. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+
+response = completion(
+  model="vertex_ai/gemini-pro",
+  messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
+  vertex_credentials=vertex_credentials_json,
+  vertex_project="my-special-project", 
+  vertex_location="my-special-location"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+    - model_name: gemini-1.5-pro
+      litellm_params:
+        model: gemini-1.5-pro
+        vertex_credentials: os.environ/VERTEX_FILE_PATH_ENV_VAR # os.environ["VERTEX_FILE_PATH_ENV_VAR"] = "/path/to/service_account.json" 
+        vertex_project: "my-special-project"
+        vertex_location: "my-special-location:
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+### **Environment Variables**
+
+You can set:
+- `GOOGLE_APPLICATION_CREDENTIALS` - store the filepath for your service_account.json in here (used by vertex sdk directly).
+- VERTEXAI_LOCATION - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- VERTEXAI_PROJECT - Optional[str] - use if vertex project different from the one in vertex_credentials
+
+1. GOOGLE_APPLICATION_CREDENTIALS
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json"
+```
+
+2. VERTEXAI_LOCATION
+
+```bash
+export VERTEXAI_LOCATION="us-central1" # can be any vertex location
+```
+
+3. VERTEXAI_PROJECT
+
+```bash
+export VERTEXAI_PROJECT="my-test-project" # ONLY use if model project is different from service account project
+```
+
+
 ## Specifying Safety Settings 
 In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
 
@@ -2302,97 +2392,6 @@ print("response from proxy", response)
 
 </TabItem>
 </Tabs>
-
-
-
-## Authentication - vertex_project, vertex_location, etc. 
-
-Set your vertex credentials via:
-- dynamic params
-OR
-- env vars 
-
-
-### **Dynamic Params**
-
-You can set:
-- `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
-- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
-- `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
-
-as dynamic params for a `litellm.completion` call. 
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import json 
-
-## GET CREDENTIALS 
-file_path = 'path/to/vertex_ai_service_account.json'
-
-# Load the JSON file
-with open(file_path, 'r') as file:
-    vertex_credentials = json.load(file)
-
-# Convert to JSON string
-vertex_credentials_json = json.dumps(vertex_credentials)
-
-
-response = completion(
-  model="vertex_ai/gemini-pro",
-  messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
-  vertex_credentials=vertex_credentials_json,
-  vertex_project="my-special-project", 
-  vertex_location="my-special-location"
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```yaml
-model_list:
-    - model_name: gemini-1.5-pro
-      litellm_params:
-        model: gemini-1.5-pro
-        vertex_credentials: os.environ/VERTEX_FILE_PATH_ENV_VAR # os.environ["VERTEX_FILE_PATH_ENV_VAR"] = "/path/to/service_account.json" 
-        vertex_project: "my-special-project"
-        vertex_location: "my-special-location:
-```
-
-</TabItem>
-</Tabs>
-
-
-
-
-### **Environment Variables**
-
-You can set:
-- `GOOGLE_APPLICATION_CREDENTIALS` - store the filepath for your service_account.json in here (used by vertex sdk directly).
-- VERTEXAI_LOCATION - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
-- VERTEXAI_PROJECT - Optional[str] - use if vertex project different from the one in vertex_credentials
-
-1. GOOGLE_APPLICATION_CREDENTIALS
-
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json"
-```
-
-2. VERTEXAI_LOCATION
-
-```bash
-export VERTEXAI_LOCATION="us-central1" # can be any vertex location
-```
-
-3. VERTEXAI_PROJECT
-
-```bash
-export VERTEXAI_PROJECT="my-test-project" # ONLY use if model project is different from service account project
-```
-
 
 ## Extra
 

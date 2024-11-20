@@ -3129,9 +3129,12 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
         assert all(isinstance(x, float) for x in embedding["embedding"])
 
 
+@pytest.mark.parametrize("max_retries", [None, 3])
 @pytest.mark.asyncio
 @pytest.mark.respx
-async def test_vertexai_model_garden_model_completion(respx_mock: MockRouter):
+async def test_vertexai_model_garden_model_completion(
+    respx_mock: MockRouter, max_retries
+):
     """
     Relevant issue: https://github.com/BerriAI/litellm/issues/6480
 
@@ -3189,6 +3192,7 @@ async def test_vertexai_model_garden_model_completion(respx_mock: MockRouter):
         messages=messages,
         vertex_project="633608382793",
         vertex_location="us-central1",
+        max_retries=max_retries,
     )
 
     # Assert request was made correctly

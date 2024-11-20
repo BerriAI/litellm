@@ -51,10 +51,15 @@ from litellm import Router
         ),
     ],
 )
-@pytest.mark.parametrize("response_format", ["json", "vtt"])
+@pytest.mark.parametrize(
+    "response_format, timestamp_granularities",
+    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
+)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_transcription(model, api_key, api_base, response_format, sync_mode):
+async def test_transcription(
+    model, api_key, api_base, response_format, sync_mode, timestamp_granularities
+):
     if sync_mode:
         transcript = litellm.transcription(
             model=model,
@@ -62,6 +67,7 @@ async def test_transcription(model, api_key, api_base, response_format, sync_mod
             api_key=api_key,
             api_base=api_base,
             response_format=response_format,
+            timestamp_granularities=timestamp_granularities,
             drop_params=True,
         )
     else:

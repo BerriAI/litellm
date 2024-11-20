@@ -470,6 +470,9 @@ class DatabricksChatCompletion(BaseLLM):
                 optional_params[k] = v
 
         stream: bool = optional_params.get("stream", None) or False
+        optional_params.pop(
+            "max_retries", None
+        )  # [TODO] add max retry support at llm api call level
         optional_params["stream"] = stream
 
         data = {
