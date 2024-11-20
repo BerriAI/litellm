@@ -39,8 +39,6 @@ async def test_provider_budgets_e2e_test():
     }
 
     router = Router(
-        routing_strategy="provider-budget-routing",
-        routing_strategy_args=provider_budget_config,
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
@@ -60,6 +58,7 @@ async def test_provider_budgets_e2e_test():
                 "model_info": {"id": "openai-model-id"},
             },
         ],
+        provider_budget_config=provider_budget_config,
         redis_host=os.getenv("REDIS_HOST"),
         redis_port=int(os.getenv("REDIS_PORT")),
         redis_password=os.getenv("REDIS_PASSWORD"),
@@ -99,8 +98,6 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     }
 
     router = Router(
-        routing_strategy="provider-budget-routing",
-        routing_strategy_args=provider_budget_config,
         model_list=[
             {
                 "model_name": "anthropic/*",  # openai model name
@@ -112,6 +109,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         redis_host=os.getenv("REDIS_HOST"),
         redis_port=int(os.getenv("REDIS_PORT")),
         redis_password=os.getenv("REDIS_PASSWORD"),
+        provider_budget_config=provider_budget_config,
     )
 
     response = await router.acompletion(
