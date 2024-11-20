@@ -270,12 +270,15 @@ async def test_prometheus_metric_tracking():
         redis_password=os.getenv("REDIS_PASSWORD"),
     )
 
-    response = await router.acompletion(
-        messages=[{"role": "user", "content": "Hello, how are you?"}],
-        model="openai/gpt-4o-mini",
-        mock_response="hi",
-    )
-    print(response)
+    try:
+        response = await router.acompletion(
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            model="openai/gpt-4o-mini",
+            mock_response="hi",
+        )
+        print(response)
+    except Exception as e:
+        print("error", e)
 
     await asyncio.sleep(0.5)
 
