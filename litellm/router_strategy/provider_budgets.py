@@ -29,6 +29,7 @@ from litellm.types.router import (
     LiteLLM_Params,
     ProviderBudgetConfigType,
     ProviderBudgetInfo,
+    RouterErrors,
 )
 from litellm.types.utils import StandardLoggingPayload
 
@@ -83,6 +84,10 @@ class ProviderBudgetLimiting(CustomLogger):
         if isinstance(healthy_deployments, dict):
             healthy_deployments = [healthy_deployments]
 
+        # Don't do any filtering if there are no healthy deployments
+        if len(healthy_deployments) == 0:
+            return healthy_deployments
+
         potential_deployments: List[Dict] = []
 
         # Extract the parent OpenTelemetry span for tracing
@@ -125,6 +130,7 @@ class ProviderBudgetLimiting(CustomLogger):
             provider_spend_map[provider] = float(current_spends[idx] or 0.0)
 
         # Filter healthy deployments based on budget constraints
+        deployment_above_budget_info: str = ""  # used to return in error message
         for deployment in healthy_deployments:
             provider = self._get_llm_provider_for_deployment(deployment)
             if provider is None:
@@ -142,12 +148,17 @@ class ProviderBudgetLimiting(CustomLogger):
             )
 
             if current_spend >= budget_limit:
-                verbose_router_logger.debug(
-                    f"Skipping deployment {deployment} for provider {provider} as spend limit exceeded"
-                )
+                debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {budget_limit}"
+                verbose_router_logger.debug(debug_msg)
+                deployment_above_budget_info += f"{debug_msg}\n"
                 continue
 
             potential_deployments.append(deployment)
+
+        if len(potential_deployments) == 0:
+            raise ValueError(
+                f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: {deployment_above_budget_info}"
+            )
 
         return potential_deployments
 
