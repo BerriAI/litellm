@@ -159,9 +159,14 @@ def main():
         "info_key_fn",
         "update_key_fn",
         "delete_key_fn",
+        "new_user",
+        "user_update",
+        "/user/delete",
+        "/user/info",
+        "/user/list",
     ]
-    # directory = "../../litellm/proxy/management_endpoints"
-    directory = "./litellm/proxy/management_endpoints"
+    directory = "../../litellm/proxy/management_endpoints"
+    # directory = "./litellm/proxy/management_endpoints"
 
     # Convert function names to set for faster lookup
     target_functions = set(function_names)
