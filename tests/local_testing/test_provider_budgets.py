@@ -138,6 +138,8 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         await asyncio.sleep(0.5)
         # Verify the error is related to budget exceeded
 
+        assert "Exceeded budget for provider" in str(exc_info.value)
+
 
 def test_get_ttl_seconds():
     """
