@@ -29,6 +29,7 @@ async def new_organization(session, i, organization_alias, max_budget=None):
 
         return await response.json()
 
+
 async def list_organization(session, i):
     url = "http://0.0.0.0:4000/organization/list"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -46,6 +47,7 @@ async def list_organization(session, i):
 
         return await response.json()
 
+
 @pytest.mark.asyncio
 async def test_organization_new():
     """
@@ -60,6 +62,7 @@ async def test_organization_new():
             for i in range(1, 20)
         ]
         await asyncio.gather(*tasks)
+
 
 @pytest.mark.asyncio
 async def test_organization_list():
@@ -77,8 +80,8 @@ async def test_organization_list():
         ]
         await asyncio.gather(*tasks)
 
-        response_json = await  list_organization(session)
+        response_json = await list_organization(session, i=0)
         print(len(response_json))
 
-        if len(response_json)==0:
-            raise Exception(f"Return empty list of organization")
+        if len(response_json) == 0:
+            raise Exception("Return empty list of organization")
