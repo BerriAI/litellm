@@ -4,9 +4,6 @@ import TabItem from '@theme/TabItem';
 # Provider Budget Routing
 Use this to set budgets for LLM Providers - example $100/day for OpenAI, $100/day for Azure.
 
-<Tabs>
-<TabItem value="proxy-config" label="LiteLLM Proxy Config.yaml">
-
 ```yaml
 model_list:
     - model_name: gpt-3.5-turbo
@@ -21,11 +18,10 @@ model_list:
         api_base: os.environ/AZURE_API_BASE
 
 router_settings:
-  routing_strategy: provider-budget-routing
   redis_host: <your-redis-host>
   redis_password: <your-redis-password>
   redis_port: <your-redis-port>
-  routing_strategy_args: 
+  provider_budget_config: 
 	openai: 
 		budget_limit: 0.000000000001 # float of $ value budget for time period
 		time_period: 1d # can be 1d, 2d, 30d 
@@ -46,13 +42,6 @@ general_settings:
   master_key: sk-1234
 ```
 
-</TabItem>
-
-<TabItem value="python-sdk" label="Python SDK">
-
-
-</TabItem>
-</Tabs>
 
 #### How provider-budget-routing works
 
