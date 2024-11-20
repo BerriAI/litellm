@@ -1,3 +1,7 @@
+"""
+Unit tests for prometheus logging callback
+"""
+
 import io
 import os
 import sys
