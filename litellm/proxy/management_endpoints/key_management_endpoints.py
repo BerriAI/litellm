@@ -83,6 +83,13 @@ async def generate_key_fn(  # noqa: PLR0915
     - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
+    - blocked: Optional[bool] - Whether the key is blocked.
+    - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
+    - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+    - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -349,6 +356,8 @@ async def update_key_fn(
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - blocked: Optional[bool] - Whether the key is blocked
+    - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
+    - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
 
     Example:
     ```bash
