@@ -51,10 +51,12 @@ class ProviderBudgetLimiting(CustomLogger):
                 raise ValueError(
                     f"No budget config found for provider {provider}, provider_budget_config: {provider_budget_config}"
                 )
-            provider_budget_config[provider] = ProviderBudgetInfo(
-                budget_limit=config.get("budget_limit"),
-                time_period=config.get("time_period"),
-            )
+
+            if not isinstance(config, ProviderBudgetInfo):
+                provider_budget_config[provider] = ProviderBudgetInfo(
+                    budget_limit=config.get("budget_limit"),
+                    time_period=config.get("time_period"),
+                )
 
         self.provider_budget_config: ProviderBudgetConfigType = provider_budget_config
         verbose_router_logger.debug(

@@ -93,8 +93,14 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     - first request passes, all subsequent requests fail
 
     """
-    provider_budget_config: ProviderBudgetConfigType = {
-        "anthropic": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
+
+    # Note: We intentionally use a dictionary with string keys for budget_limit and time_period
+    # we want to test that the router can handle type conversion, since the proxy config yaml passes these values as a dictionary
+    provider_budget_config = {
+        "anthropic": {
+            "budget_limit": 0.000000000001,
+            "time_period": "1d",
+        }
     }
 
     router = Router(
