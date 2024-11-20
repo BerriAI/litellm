@@ -173,8 +173,8 @@ def main():
         "delete_organization",
         "list_organization",
     ]
-    directory = "../../litellm/proxy/management_endpoints"
-    # directory = "./litellm/proxy/management_endpoints"
+    # directory = "../../litellm/proxy/management_endpoints"
+    directory = "./litellm/proxy/management_endpoints"
 
     # Convert function names to set for faster lookup
     target_functions = set(function_names)
