@@ -1,3 +1,14 @@
+"""
+TEAM MANAGEMENT
+
+All /team management endpoints 
+
+/team/new
+/team/info
+/team/update
+/team/delete
+"""
+
 import asyncio
 import copy
 import json
@@ -121,6 +132,10 @@ async def new_team(  # noqa: PLR0915
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
+    - members: Optional[List] - Control team members via `/team/member/add` and `/team/member/delete`. 
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
+    - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -353,6 +368,8 @@ async def update_team(
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
 
     Example - update team TPM Limit
 

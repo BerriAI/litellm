@@ -164,6 +164,10 @@ def main():
         "/user/delete",
         "/user/info",
         "/user/list",
+        "new_team",
+        "team_info",
+        "update_team",
+        "delete_team",
     ]
     directory = "../../litellm/proxy/management_endpoints"
     # directory = "./litellm/proxy/management_endpoints"
