@@ -3192,8 +3192,9 @@ async def chat_completion(  # noqa: PLR0915
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
 
+        litellm.drop_params = True
         # handle workday gateway
-        if data.get("model", "") == "workday_gateway":
+        if "workday_gateway" in data.get("model", ""):
             from litellm.proxy.raga.workday_gateway import call_workday_gateway
             return await call_workday_gateway(data)
 
@@ -3202,7 +3203,6 @@ async def chat_completion(  # noqa: PLR0915
         data, err = modify_user_request(data)
         if err is not None:
             return err
-
         data = await add_litellm_data_to_request(
             data=data,
             request=request,
@@ -9586,3 +9586,7 @@ app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
+
+
+from litellm.proxy.raga.apis import router as RagaRouter
+app.include_router(RagaRouter)
