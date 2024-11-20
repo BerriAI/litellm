@@ -125,7 +125,19 @@ def init_guardrails_v2(  # noqa: PLR0915
                 litellm_params["api_base"] = str(get_secret(litellm_params["api_base"]))  # type: ignore
 
         # Init guardrail CustomLoggerClass
-        if litellm_params["guardrail"] == SupportedGuardrailIntegrations.APORIA.value:
+        if litellm_params["guardrail"] == SupportedGuardrailIntegrations.ACUVITY.value:
+            from litellm.proxy.guardrails.guardrail_hooks.acuvity import (
+                AcuvityGuardrail,
+            )
+
+            _acuvity_callback = AcuvityGuardrail(
+                api_base=litellm_params["api_base"],
+                api_key=litellm_params["api_key"],
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
+            litellm.callbacks.append(_acuvity_callback)  # type: ignore
+        elif litellm_params["guardrail"] == SupportedGuardrailIntegrations.APORIA.value:
             from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
                 AporiaGuardrail,
             )

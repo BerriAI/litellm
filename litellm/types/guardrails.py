@@ -20,6 +20,7 @@ litellm_settings:
 
 
 class SupportedGuardrailIntegrations(Enum):
+    ACUVITY = "acuvity"
     APORIA = "aporia"
     BEDROCK = "bedrock"
     GURDRAILS_AI = "guardrails_ai"

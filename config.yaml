@@ -1,0 +1,24 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: huggingface/bigcode/starcoder
+      #api_base: os.environ/AZURE_API_BASE
+      #api_key: "os.environ/AZURE_API_KEY"
+      #api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+
+guardrails:
+  - guardrail_name: "acuvity-pre-guard"
+    litellm_params:
+      guardrail: acuvity
+      mode: "pre_call"
+      api_key: os.environ/ACUVITY_TOKEN
+  - guardrail_name: "acuvity-during-guard"
+    litellm_params:
+      guardrail: acuvity
+      mode: "during_call"
+      api_key: os.environ/ACUVITY_TOKEN
+  - guardrail_name: "acuvity-post-guard"
+    litellm_params:
+      guardrail: acuvity
+      mode: "post_call"
+      api_key: os.environ/ACUVITY_TOKEN
