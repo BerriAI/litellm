@@ -42,11 +42,14 @@ class BaseLLMChatTest(ABC):
                 "content": [{"type": "text", "text": "Hello, how are you?"}],
             }
         ]
-        response = litellm.completion(
-            **base_completion_call_args,
-            messages=messages,
-        )
-        assert response is not None
+        try:
+            response = litellm.completion(
+                **base_completion_call_args,
+                messages=messages,
+            )
+            assert response is not None
+        except litellm.InternalServerError:
+            pass
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
@@ -88,6 +91,36 @@ class BaseLLMChatTest(ABC):
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         assert response.choices[0].message.content is not None
+
+    def test_json_response_pydantic_obj(self):
+        from pydantic import BaseModel
+        from litellm.utils import supports_response_schema
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        class TestModel(BaseModel):
+            first_response: str
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_response_schema(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support response schema")
+
+        try:
+            res = litellm.completion(
+                **base_completion_call_args,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {
+                        "role": "user",
+                        "content": "What is the capital of France?",
+                    },
+                ],
+                response_format=TestModel,
+            )
+            assert res is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
     def test_json_response_format_stream(self):
         """

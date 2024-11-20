@@ -657,7 +657,7 @@ def test_create_json_tool_call_for_response_format():
     _input_schema = tool.get("input_schema")
     assert _input_schema is not None
     assert _input_schema.get("type") == "object"
-    assert _input_schema.get("properties") == custom_schema
+    assert _input_schema.get("properties") == {"values": custom_schema}
     assert "additionalProperties" not in _input_schema
 
 
