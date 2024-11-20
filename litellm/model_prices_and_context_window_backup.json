@@ -2767,6 +2767,18 @@
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "vertex_ai/claude-3-sonnet": {
+        "max_tokens": 4096,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
+    },
     "vertex_ai/claude-3-sonnet@20240229": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -2779,7 +2791,31 @@
         "supports_vision": true,
         "supports_assistant_prefill": true
     },
+    "vertex_ai/claude-3-5-sonnet": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
+    },
     "vertex_ai/claude-3-5-sonnet@20240620": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_assistant_prefill": true
+    },
+    "vertex_ai/claude-3-5-sonnet-v2": {
         "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -2803,10 +2839,10 @@
         "supports_vision": true,
         "supports_assistant_prefill": true
     },
-    "vertex_ai/claude-3-5-haiku@20241022": {
-        "max_tokens": 8192, 
+    "vertex_ai/claude-3-haiku": {
+        "max_tokens": 4096, 
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000125,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -2827,6 +2863,17 @@
         "supports_vision": true,
         "supports_assistant_prefill": true
     },
+    "vertex_ai/claude-3-5-haiku": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000005,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
+    },
     "vertex_ai/claude-3-5-haiku@20241022": {
         "max_tokens": 8192,
         "max_input_tokens": 200000,
@@ -2836,6 +2883,18 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_assistant_prefill": true
+    },
+    "vertex_ai/claude-3-opus": {
+        "max_tokens": 4096,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000075,
+        "litellm_provider": "vertex_ai-anthropic_models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
         "supports_assistant_prefill": true
     },
     "vertex_ai/claude-3-opus@20240229": {
