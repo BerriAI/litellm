@@ -109,9 +109,10 @@ def analyze_function(func_info: FunctionInfo) -> Dict:
 
     for name, type_name in func_info.parameters:
         if type_name.endswith("Request") or type_name.endswith("Response"):
-            pydantic_model = getattr(litellm.proxy._types, type_name)
-            for param in pydantic_model.model_fields.keys():
-                pydantic_params.add(param)
+            pydantic_model = getattr(litellm.proxy._types, type_name, None)
+            if pydantic_model is not None:
+                for param in pydantic_model.model_fields.keys():
+                    pydantic_params.add(param)
 
     print(f"pydantic_params: {pydantic_params}")
 
@@ -152,7 +153,13 @@ def print_validation_results(results: Dict) -> None:
 
 
 def main():
-    function_names = ["new_end_user"]
+    function_names = [
+        "new_end_user",
+        "generate_key_fn",
+        "info_key_fn",
+        "update_key_fn",
+        "delete_key_fn",
+    ]
     # directory = "../../litellm/proxy/management_endpoints"
     directory = "./litellm/proxy/management_endpoints"
 
