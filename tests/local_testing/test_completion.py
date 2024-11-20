@@ -4490,19 +4490,22 @@ async def test_dynamic_azure_params(stream, sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_ai21_chat():
     litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="jamba-1.5-large",
-        user="ishaan",
-        tool_choice="auto",
-        seed=123,
-        messages=[{"role": "user", "content": "what does the document say"}],
-        documents=[
-            {
-                "content": "hello world",
-                "metadata": {"source": "google", "author": "ishaan"},
-            }
-        ],
-    )
+    try:
+        response = await litellm.acompletion(
+            model="jamba-1.5-large",
+            user="ishaan",
+            tool_choice="auto",
+            seed=123,
+            messages=[{"role": "user", "content": "what does the document say"}],
+            documents=[
+                {
+                    "content": "hello world",
+                    "metadata": {"source": "google", "author": "ishaan"},
+                }
+            ],
+        )
+    except litellm.InternalServerError:
+        pytest.skip("Model is overloaded")
 
 
 @pytest.mark.parametrize(
