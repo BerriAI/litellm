@@ -943,17 +943,10 @@ def _gemini_tool_call_invoke_helper(
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
     arguments_dict = json.loads(arguments)
-    function_call: Optional[litellm.types.llms.vertex_ai.FunctionCall] = None
-    for k, v in arguments_dict.items():
-        inferred_protocol_value = infer_protocol_value(value=v)
-        _field = litellm.types.llms.vertex_ai.Field(
-            key=k, value={inferred_protocol_value: v}
-        )
-        _fields = litellm.types.llms.vertex_ai.FunctionCallArgs(fields=_field)
-        function_call = litellm.types.llms.vertex_ai.FunctionCall(
-            name=name,
-            args=_fields,
-        )
+    function_call = litellm.types.llms.vertex_ai.FunctionCall(
+        name=name,
+        args=arguments_dict,
+    )
     return function_call
 
 
@@ -978,54 +971,26 @@ def convert_to_gemini_tool_call_invoke(
     },
     """
     """
-    Gemini tool call invokes: - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#submit-api-output
-    content {
-        role: "model"
-        parts [
+    Gemini tool call invokes:
+    {
+      "role": "model",
+      "parts": [
         {
-            function_call {
-            name: "get_current_weather"
-            args {
-                fields {
-                    key: "unit"
-                    value {
-                    string_value: "fahrenheit"
-                    }
-                }
-                fields {
-                    key: "predicted_temperature"
-                    value {
-                    number_value: 45
-                    }
-                }
-                fields {
-                    key: "location"
-                    value {
-                    string_value: "Boston, MA"
-                    }
-                }
+          "functionCall": {
+            "name": "get_current_weather",
+            "args": {
+              "unit": "fahrenheit",
+              "predicted_temperature": 45,
+              "location": "Boston, MA",
             }
-        },
-        {
-            function_call {
-            name: "get_current_weather"
-            args {
-                fields {
-                key: "location"
-                value {
-                    string_value: "San Francisco"
-                }
-                }
-            }
-            }
+          }
         }
-        ]
+      ]
     }
     """
 
     """
-    - json.load the arguments 
-    - iterate through arguments -> create a FunctionCallArgs for each field
+    - json.load the arguments
     """
     try:
         _parts_list: List[litellm.types.llms.vertex_ai.PartType] = []
@@ -1128,16 +1093,8 @@ def convert_to_gemini_tool_call_result(
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
-    inferred_content_value = infer_protocol_value(value=content_str)
-
-    _field = litellm.types.llms.vertex_ai.Field(
-        key="content", value={inferred_content_value: content_str}
-    )
-
-    _function_call_args = litellm.types.llms.vertex_ai.FunctionCallArgs(fields=_field)
-
     _function_response = litellm.types.llms.vertex_ai.FunctionResponse(
-        name=name, response=_function_call_args  # type: ignore
+        name=name, response={"content": content_str}  # type: ignore
     )
 
     _part = litellm.types.llms.vertex_ai.PartType(function_response=_function_response)
