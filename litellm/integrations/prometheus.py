@@ -15,6 +15,7 @@ import requests  # type: ignore
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadAccessors
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
@@ -327,6 +328,7 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                     "user",
+                    CUSTOM_LLM_PROVIDER,
                 ],
             )
 
@@ -369,6 +371,9 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
+        custom_llm_provider = StandardLoggingPayloadAccessors.get_custom_llm_provider_from_standard_logging_payload(
+            standard_logging_payload
+        )
 
         print_verbose(
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
@@ -393,6 +398,7 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias=user_api_team_alias,
             user_id=user_id,
             response_cost=response_cost,
+            custom_llm_provider=custom_llm_provider,
         )
 
         # input, output, total token metrics
@@ -535,6 +541,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias: Optional[str],
         user_id: Optional[str],
         response_cost: float,
+        custom_llm_provider: Optional[str],
     ):
         self.litellm_requests_metric.labels(
             end_user_id,
@@ -544,6 +551,7 @@ class PrometheusLogger(CustomLogger):
             user_api_team,
             user_api_team_alias,
             user_id,
+            custom_llm_provider,
         ).inc()
         self.litellm_spend_metric.labels(
             end_user_id,
@@ -553,6 +561,7 @@ class PrometheusLogger(CustomLogger):
             user_api_team,
             user_api_team_alias,
             user_id,
+            custom_llm_provider,
         ).inc(response_cost)
 
     def _set_virtual_key_rate_limit_metrics(

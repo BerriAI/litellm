@@ -2730,7 +2730,7 @@ class StandardLoggingPayloadAccessors:
 
     @staticmethod
     def get_custom_llm_provider_from_standard_logging_payload(
-        standard_logging_payload: Optional[StandardLoggingPayload],
+        standard_logging_payload: Optional[Union[StandardLoggingPayload, dict]],
     ) -> Optional[str]:
         """
         Accessor method to safely get custom_llm_provider from standard_logging_payload
