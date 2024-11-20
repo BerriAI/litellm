@@ -28,11 +28,24 @@ import litellm
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import SpendLogsMetadata, SpendLogsPayload  # noqa: E402
 
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingModelInformation,
+    StandardLoggingMetadata,
+    StandardLoggingHiddenParams,
+    ModelInfo,
+)
+
 
 def test_spend_logs_payload():
     """
     Ensure only expected values are logged in spend logs payload.
     """
+
+    standard_logging_payload = _create_standard_logging_payload()
+    standard_logging_payload["model_map_information"]["model_map_value"][
+        "litellm_provider"
+    ] = "very-obscure-name"
 
     input_args: dict = {
         "kwargs": {
@@ -47,6 +60,7 @@ def test_spend_logs_payload():
                 "user": "116544810872468347480",
                 "extra_body": {},
             },
+            "standard_logging_object": standard_logging_payload,
             "litellm_params": {
                 "acompletion": True,
                 "api_key": "23c217a5b59f41b6b7a198017f4792f2",
@@ -205,6 +219,9 @@ def test_spend_logs_payload():
     assert (
         payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
     )
+    print("payload['custom_llm_provider']", payload["custom_llm_provider"])
+    # Ensures custom llm provider is logged + read from standard logging payload
+    assert payload["custom_llm_provider"] == "very-obscure-name"
 
 
 def test_spend_logs_payload_whisper():
@@ -292,3 +309,61 @@ def test_spend_logs_payload_whisper():
 
     assert payload["call_type"] == "atranscription"
     assert payload["spend"] == 0.00023398580000000003
+
+
+def _create_standard_logging_payload() -> StandardLoggingPayload:
+    """
+    helper function that creates a standard logging payload for testing
+
+    in the test you can edit the values in SLP that you would need
+    """
+    return StandardLoggingPayload(
+        id="test_id",
+        type="test_id",
+        call_type="completion",
+        response_cost=0.1,
+        response_cost_failure_debug_info=None,
+        status="success",
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=1234567890.5,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo",
+            model_map_value=ModelInfo(litellm_provider="azure"),
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_org_id=None,
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response={"choices": [{"message": {"content": "Hi there!"}}]},
+        error_str=None,
+        model_parameters={"stream": True},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.1",
+            additional_headers=None,
+        ),
+    )
