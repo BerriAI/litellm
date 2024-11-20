@@ -2,12 +2,16 @@ import json
 import re
 import threading
 from datetime import datetime
-from typing import Union
+from typing import Optional, Union
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import (
+    get_standard_logging_object_payload,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
@@ -30,6 +34,7 @@ class PassThroughEndpointLogging:
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
+        response_body: Optional[dict],
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -52,6 +57,7 @@ class PassThroughEndpointLogging:
         elif self.is_anthropic_route(url_route):
             await self.anthropic_passthrough_handler(
                 httpx_response=httpx_response,
+                response_body=response_body or {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -107,6 +113,7 @@ class PassThroughEndpointLogging:
     async def anthropic_passthrough_handler(
         self,
         httpx_response: httpx.Response,
+        response_body: dict,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -118,6 +125,55 @@ class PassThroughEndpointLogging:
         """
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
+        model = response_body.get("model", "")
+        litellm_model_response: litellm.ModelResponse = (
+            AnthropicConfig._process_response(
+                response=httpx_response,
+                model_response=litellm.ModelResponse(),
+                model=model,
+                stream=False,
+                messages=[],
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                data={},
+                print_verbose=litellm.print_verbose,
+                encoding=None,
+                json_mode=False,
+            )
+        )
+
+        response_cost = litellm.completion_cost(
+            completion_response=litellm_model_response,
+            model=model,
+        )
+        kwargs["response_cost"] = response_cost
+        kwargs["model"] = model
+
+        # Make standard logging object for Vertex AI
+        standard_logging_object = get_standard_logging_object_payload(
+            kwargs=kwargs,
+            init_response_obj=litellm_model_response,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        # pretty print standard logging object
+        verbose_proxy_logger.debug(
+            "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
+        )
+        kwargs["standard_logging_object"] = standard_logging_object
+
+        await logging_obj.async_success_handler(
+            result=litellm_model_response,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
+
         pass
 
     async def vertex_passthrough_handler(
