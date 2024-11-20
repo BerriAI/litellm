@@ -623,6 +623,7 @@ class GenerateRequestBase(LiteLLMBase):
     Overlapping schema between key and user generate/update requests
     """
 
+    duration: Optional[str] = None
     models: Optional[list] = []
     spend: Optional[float] = 0
     max_budget: Optional[float] = None
@@ -651,7 +652,6 @@ class GenerateRequestBase(LiteLLMBase):
 
 
 class _GenerateKeyRequest(GenerateRequestBase):
-    duration: Optional[str] = None
     key_alias: Optional[str] = None
     key: Optional[str] = None
 
@@ -2091,3 +2091,45 @@ JWKKeyValue = Union[List[JWTKeyItem], JWTKeyItem]
 
 class JWKUrlResponse(TypedDict, total=False):
     keys: JWKKeyValue
+
+
+class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
+    user_id_doc_str = (
+        "Optional[str] - Specify a user id. If not set, a unique id will be generated."
+    )
+    user_alias_doc_str = (
+        "Optional[str] - A descriptive name for you to know who this user id refers to."
+    )
+    teams_doc_str = "Optional[list] - specify a list of team id's a user belongs to."
+    user_email_doc_str = "Optional[str] - Specify a user email."
+    send_invite_email_doc_str = (
+        "Optional[bool] - Specify if an invite email should be sent."
+    )
+    user_role_doc_str = """Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`"""
+    max_budget_doc_str = """Optional[float] - Specify max budget for a given user."""
+    budget_duration_doc_str = """Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo")."""
+    models_doc_str = """Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)"""
+    tpm_limit_doc_str = (
+        """Optional[int] - Specify tpm limit for a given user (Tokens per minute)"""
+    )
+    rpm_limit_doc_str = (
+        """Optional[int] - Specify rpm limit for a given user (Requests per minute)"""
+    )
+    auto_create_key_doc_str = """bool - Default=True. Flag used for returning a key as part of the /user/new response"""
+    aliases_doc_str = """Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)"""
+    config_doc_str = """Optional[dict] - [DEPRECATED PARAM] User-specific config."""
+    allowed_cache_controls_doc_str = """Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-"""
+    blocked_doc_str = (
+        """Optional[bool] - [Not Implemented Yet] Whether the user is blocked."""
+    )
+    guardrails_doc_str = """Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user"""
+    permissions_doc_str = """Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking."""
+    metadata_doc_str = """Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }"""
+    max_parallel_requests_doc_str = """Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x."""
+    soft_budget_doc_str = """Optional[float] - Get alerts when user crosses given budget, doesn't block requests."""
+    model_max_budget_doc_str = """Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)"""
+    model_rpm_limit_doc_str = """Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
+    model_tpm_limit_doc_str = """Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
+    spend_doc_str = """Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used."""
+    team_id_doc_str = """Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None."""
+    duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""

@@ -163,7 +163,6 @@ def main():
         "update_key_fn",
         "delete_key_fn",
         "new_user",
-        "user_update",
         "new_team",
         "team_info",
         "update_team",
@@ -172,9 +171,10 @@ def main():
         "update_organization",
         "delete_organization",
         "list_organization",
+        "user_update",
     ]
-    # directory = "../../litellm/proxy/management_endpoints"
-    directory = "./litellm/proxy/management_endpoints"
+    directory = "../../litellm/proxy/management_endpoints"  # LOCAL
+    # directory = "./litellm/proxy/management_endpoints"
 
     # Convert function names to set for faster lookup
     target_functions = set(function_names)
@@ -189,16 +189,17 @@ def main():
                 found_functions.update(found)
 
     # Analyze and output results
-    results = []
     for func_name in function_names:
         if func_name in found_functions:
             result = analyze_function(found_functions[func_name])
-            results.append(result)
-            print_validation_results(result)
+            if not result["is_valid"]:
+                raise Exception(print_validation_results(result))
+    #         results.append(result)
+    #         print_validation_results(result)
 
-    # Exit with error code if any validation failed
-    if any(not r["is_valid"] for r in results):
-        exit(1)
+    # # Exit with error code if any validation failed
+    # if any(not r["is_valid"] for r in results):
+    #     exit(1)
 
 
 if __name__ == "__main__":
