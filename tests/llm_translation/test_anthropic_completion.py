@@ -697,6 +697,15 @@ class TestAnthropicCompletion(BaseLLMChatTest):
             assert _document_validation["source"]["media_type"] == "application/pdf"
             assert _document_validation["source"]["type"] == "base64"
 
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        from litellm.llms.prompt_templates.factory import (
+            convert_to_anthropic_tool_invoke,
+        )
+
+        result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
+        print(result)
+
 
 def test_convert_tool_response_to_message_with_values():
     """Test converting a tool response with 'values' key to a message"""

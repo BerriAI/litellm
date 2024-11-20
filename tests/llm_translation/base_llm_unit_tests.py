@@ -162,6 +162,25 @@ class BaseLLMChatTest(ABC):
         assert len(content) > 0
 
     @pytest.fixture
+    def tool_call_no_arguments(self):
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_2c384bc6-de46-4f29-8adc-60dd5805d305",
+                    "function": {"name": "Get-FAQ", "arguments": "{}"},
+                    "type": "function",
+                }
+            ],
+        }
+
+    @abstractmethod
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    @pytest.fixture
     def pdf_messages(self):
         import base64
 
