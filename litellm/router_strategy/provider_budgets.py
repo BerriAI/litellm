@@ -1,7 +1,11 @@
 """
-Provider budget limiting strategy
+Provider budget limiting
 
 Use this if you want to set $ budget limits for each provider.
+
+Note: This is a filter, like tag-routing
+
+This means you can use this with weighted-pick, lowest-latency, simple-shuffle, routing etc
 
 Example:
 ```
@@ -45,7 +49,11 @@ class ProviderBudgetLimiting(CustomLogger):
             f"Initalized Provider budget config: {self.provider_budget_config}"
         )
 
-    async def async_get_available_deployments(
+        # Add self to litellm callbacks if it's a list
+        if isinstance(litellm.callbacks, list):
+            litellm.callbacks.append(self)  # type: ignore
+
+    async def async_filter_deployments(
         self,
         healthy_deployments: List[Dict],
         request_kwargs: Optional[Dict] = None,
