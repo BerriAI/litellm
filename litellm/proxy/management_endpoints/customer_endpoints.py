@@ -1,3 +1,14 @@
+"""
+CUSTOMER MANAGEMENT
+
+All /customer management endpoints 
+
+/customer/new   
+/customer/info
+/customer/update
+/customer/delete
+"""
+
 #### END-USER/CUSTOMER MANAGEMENT ####
 import asyncio
 import copy

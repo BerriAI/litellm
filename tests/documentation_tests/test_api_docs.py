@@ -155,15 +155,15 @@ def print_validation_results(results: Dict) -> None:
 def main():
     function_names = [
         "new_end_user",
+        "end_user_info",
+        "update_end_user",
+        "delete_end_user",
         "generate_key_fn",
         "info_key_fn",
         "update_key_fn",
         "delete_key_fn",
         "new_user",
         "user_update",
-        "/user/delete",
-        "/user/info",
-        "/user/list",
         "new_team",
         "team_info",
         "update_team",
@@ -173,8 +173,8 @@ def main():
         "delete_organization",
         "list_organization",
     ]
-    # directory = "../../litellm/proxy/management_endpoints"
-    directory = "./litellm/proxy/management_endpoints"
+    directory = "../../litellm/proxy/management_endpoints"
+    # directory = "./litellm/proxy/management_endpoints"
 
     # Convert function names to set for faster lookup
     target_functions = set(function_names)
