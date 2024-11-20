@@ -314,13 +314,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               className="px-3 py-2 border rounded-md w-full"
             />
           </Form.Item>
-          {/* <div className="text-center mb-4">OR</div>
-          <Form.Item label="User ID" name="user_id" className="mb-4">
-            <Input
-              name="user_id"
-              className="px-3 py-2 border rounded-md w-full"
-            />
-          </Form.Item> */}
         </>
         <div style={{ textAlign: "right", marginTop: "10px" }} className="mt-4">
           <Button2 htmlType="submit">Add member</Button2>

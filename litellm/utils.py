@@ -2125,6 +2125,7 @@ def get_optional_params_transcription(
     prompt: Optional[str] = None,
     response_format: Optional[str] = None,
     temperature: Optional[int] = None,
+    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
     custom_llm_provider: Optional[str] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
