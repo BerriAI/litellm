@@ -333,15 +333,30 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         user_api_team_alias="team_alias1",
         user_id="user1",
         response_cost=0.1,
+        custom_llm_provider="openai",
     )
 
     prometheus_logger.litellm_requests_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        "user1",
+        "key1",
+        "alias1",
+        "gpt-3.5-turbo",
+        "team1",
+        "team_alias1",
+        "user1",
+        "openai",
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
     prometheus_logger.litellm_spend_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        "user1",
+        "key1",
+        "alias1",
+        "gpt-3.5-turbo",
+        "team1",
+        "team_alias1",
+        "user1",
+        "openai",
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
