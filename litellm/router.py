@@ -522,6 +522,11 @@ class Router:
         self.service_logger_obj = ServiceLogging()
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
+        if self.provider_budget_config is not None:
+            self.provider_budget_logger = ProviderBudgetLimiting(
+                router_cache=self.cache,
+                provider_budget_config=self.provider_budget_config,
+            )
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
             if isinstance(retry_policy, dict):
@@ -5113,6 +5118,14 @@ class Router:
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
+
+            if self.provider_budget_config is not None:
+                healthy_deployments = (
+                    await self.provider_budget_logger.async_filter_deployments(
+                        healthy_deployments=healthy_deployments,
+                        request_kwargs=request_kwargs,
+                    )
+                )
 
             if len(healthy_deployments) == 0:
                 exception = await async_raise_no_deployment_exception(

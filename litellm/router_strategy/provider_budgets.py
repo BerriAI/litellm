@@ -55,19 +55,23 @@ class ProviderBudgetLimiting(CustomLogger):
 
     async def async_filter_deployments(
         self,
-        healthy_deployments: List[Dict],
+        healthy_deployments: Union[List[Dict[str, Any]], Dict[str, Any]],
         request_kwargs: Optional[Dict] = None,
-    ) -> Optional[Dict]:
+    ):
         """
-        For all deployments, check their LLM provider budget is less than their budget limit.
+        Filter out deployments that have exceeded their provider budget limit.
 
-        If multiple deployments are available, randomly pick one.
 
         Example:
         if deployment = openai/gpt-3.5-turbo
-            check if openai budget limit is exceeded
-
+            and openai spend > openai budget limit
+                then skip this deployment
         """
+
+        # If a single deployment is passed, convert it to a list
+        if isinstance(healthy_deployments, dict):
+            healthy_deployments = [healthy_deployments]
+
         potential_deployments: List[Dict] = []
 
         # Extract the parent OpenTelemetry span for tracing
@@ -134,8 +138,7 @@ class ProviderBudgetLimiting(CustomLogger):
 
             potential_deployments.append(deployment)
 
-        # Randomly pick one deployment from potential deployments
-        return random.choice(potential_deployments) if potential_deployments else None
+        return potential_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
