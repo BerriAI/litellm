@@ -3,7 +3,7 @@ Provider budget limiting
 
 Use this if you want to set $ budget limits for each provider.
 
-Note: This is a filter, like tag-routing
+Note: This is a filter, like tag-routing. Meaning it will accept healthy deployments and then filter out deployments that have exceeded their budget limit.
 
 This means you can use this with weighted-pick, lowest-latency, simple-shuffle, routing etc
 
@@ -18,7 +18,6 @@ anthropic:
 ```
 """
 
-import random
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
 import litellm
