@@ -3127,6 +3127,7 @@ def _get_docs_url() -> Optional[str]:
     # default to "/"
     return "/"
 
+
 def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
@@ -3148,4 +3149,3 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         param=getattr(e, "param", "None"),
         code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
-
