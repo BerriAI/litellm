@@ -159,7 +159,7 @@ Router provides 4 strategies for routing your calls across multiple deployments:
 <Tabs>
 <TabItem value="usage-based-v2" label="Rate-Limit Aware v2 (ASYNC)">
 
-This is an async implementation of usage-based-routing.
+**🎉 NEW** This is an async implementation of usage-based-routing.
 
 **Filters out deployment if tpm/rpm limit exceeded** - If you pass in the deployment's tpm/rpm limits.
 
@@ -502,88 +502,6 @@ asyncio.run(router_acompletion())
 </Tabs>
 
 </TabItem>
-
-<TabItem value="provider-budget" label="Provider Budgets">
-
-Use this to set budgets for LLM Providers - example $100/day for OpenAI, $100/day for Azure.
-
-<Tabs>
-<TabItem value="proxy-config" label="LiteLLM Proxy Config.yaml">
-
-```yaml
-model_list:
-    - model_name: gpt-3.5-turbo
-      litellm_params:
-        model: openai/gpt-3.5-turbo
-        api_key: os.environ/OPENAI_API_KEY
-    - model_name: gpt-3.5-turbo
-      litellm_params:
-        model: azure/chatgpt-functioncalling
-        api_key: os.environ/AZURE_API_KEY
-        api_version: os.environ/AZURE_API_VERSION
-        api_base: os.environ/AZURE_API_BASE
-
-router_settings:
-  routing_strategy: provider-budget-routing
-  redis_host: <your-redis-host>
-  redis_password: <your-redis-password>
-  redis_port: <your-redis-port>
-  routing_strategy_args: 
-	openai: 
-		budget_limit: 0.000000000001 # float of $ value budget for time period
-		time_period: 1d # can be 1d, 2d, 30d 
-	azure:
-		budget_limit: 100
-		time_period: 1d
-	anthropic:
-		budget_limit: 100
-		time_period: 10d
-	vertexai:
-		budget_limit: 100
-		time_period: 12d
-	gemini:
-		budget_limit: 100
-		time_period: 12d
-
-general_settings:
-  master_key: sk-1234
-```
-
-</TabItem>
-
-<TabItem value="python-sdk" label="Python SDK">
-
-
-</TabItem>
-</Tabs>
-
-#### How provider-budget-routing works
-
-1. **Budget Tracking**: 
-   - Uses Redis to track spend for each provider
-   - Tracks spend over specified time periods (e.g., "1d", "30d")
-   - Automatically resets spend after time period expires
-
-2. **Routing Logic**:
-   - Routes requests to providers under their budget limits
-   - Skips providers that have exceeded their budget
-   - If all providers exceed budget, raises an error
-
-3. **Supported Time Periods**:
-   - Format: "Xd" where X is number of days
-   - Examples: "1d" (1 day), "30d" (30 days)
-
-4. **Requirements**:
-   - Redis required for tracking spend across instances
-   - Provider names must be litellm provider names. See [Supported Providers](https://docs.litellm.ai/docs/providers)
-
-
-</TabItem>
-
-<!-- 
-
-This is the v0 `usage-based` routing strategy, use usage-based-routing-v2
-
 <TabItem value="usage-based" label="Rate-Limit Aware">
 
 This will route to the deployment with the lowest TPM usage for that minute. 
@@ -643,8 +561,7 @@ print(response)
 ```
 
 
-</TabItem> -->
-
+</TabItem>
 <TabItem value="least-busy" label="Least-Busy">
 
 
@@ -695,7 +612,7 @@ asyncio.run(router_acompletion())
 
 </TabItem>
 
-<TabItem value="custom" label="Custom Strategy">
+<TabItem value="custom" label="Custom Routing Strategy">
 
 **Plugin a custom routing strategy to select deployments**
 
@@ -810,7 +727,7 @@ for _ in range(10):
 
 </TabItem>
 
-<TabItem value="lowest-cost" label="Lowest Cost">
+<TabItem value="lowest-cost" label="Lowest Cost Routing (Async)">
 
 Picks a deployment based on the lowest cost
 
