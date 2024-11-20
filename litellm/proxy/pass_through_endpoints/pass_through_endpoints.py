@@ -45,11 +45,11 @@ router = APIRouter()
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 
-def get_response_body(response: httpx.Response):
+def get_response_body(response: httpx.Response) -> Optional[dict]:
     try:
         return response.json()
     except Exception:
-        return response.text
+        return None
 
 
 async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optional[dict]:
@@ -519,10 +519,12 @@ async def pass_through_request(  # noqa: PLR0915
         content = await response.aread()
 
         ## LOG SUCCESS
-        passthrough_logging_payload["response_body"] = get_response_body(response)
+        response_body: Optional[dict] = get_response_body(response)
+        passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
         await pass_through_endpoint_logging.pass_through_async_success_handler(
             httpx_response=response,
+            response_body=response_body,
             url_route=str(url),
             result="",
             start_time=start_time,
