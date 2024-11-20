@@ -434,6 +434,9 @@ class RouterErrors(enum.Enum):
     no_deployments_with_tag_routing = (
         "Not allowed to access model due to tags configuration"
     )
+    no_deployments_with_provider_budget_routing = (
+        "No deployments available - crossed budget for provider"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):

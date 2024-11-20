@@ -4,18 +4,16 @@ import TabItem from '@theme/TabItem';
 # Provider Budget Routing
 Use this to set budgets for LLM Providers - example $100/day for OpenAI, $100/day for Azure.
 
+## Quick Start
+
+Set provider budgets in your `proxy_config.yaml` file
+### Proxy Config setup
 ```yaml
 model_list:
     - model_name: gpt-3.5-turbo
       litellm_params:
         model: openai/gpt-3.5-turbo
         api_key: os.environ/OPENAI_API_KEY
-    - model_name: gpt-3.5-turbo
-      litellm_params:
-        model: azure/chatgpt-functioncalling
-        api_key: os.environ/AZURE_API_KEY
-        api_version: os.environ/AZURE_API_VERSION
-        api_base: os.environ/AZURE_API_BASE
 
 router_settings:
   redis_host: <your-redis-host>
@@ -42,8 +40,66 @@ general_settings:
   master_key: sk-1234
 ```
 
+### Make a test request
 
-#### How provider-budget-routing works
+We expect the first request to succeed, and the second request to fail since we cross the budget for `openai`
+
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+
+<Tabs>
+<TabItem label="Successful Call " value = "allowed">
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "hi my name is test request"}
+    ]
+  }'
+```
+
+</TabItem>
+<TabItem label="Unsuccessful call" value = "not-allowed">
+
+Expect this to fail since since `ishaan@berri.ai` in the request is PII
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "hi my name is test request"}
+    ]
+  }'
+```
+
+Expected response on failure
+
+```json
+{
+  "error": {
+    "message": "No deployments available - crossed budget for provider: Exceeded budget for provider openai: 0.0007350000000000001 >= 1e-12",
+    "type": "None",
+    "param": "None",
+    "code": "429"
+  }
+}
+```
+
+</TabItem>
+
+
+</Tabs>
+
+
+
+## How provider budget routing works
 
 1. **Budget Tracking**: 
    - Uses Redis to track spend for each provider
@@ -62,3 +118,33 @@ general_settings:
 4. **Requirements**:
    - Redis required for tracking spend across instances
    - Provider names must be litellm provider names. See [Supported Providers](https://docs.litellm.ai/docs/providers)
+
+## Monitoring Provider Remaining Budget
+
+LiteLLM will emit the following metric on Prometheus to track the remaining budget for each provider
+
+This metric indicates the remaining budget for a provider in dollars (USD)
+
+```
+litellm_provider_remaining_budget_metric{api_provider="openai"} 10
+```
+
+
+## Spec for provider_budget_config
+
+The `provider_budget_config` is a dictionary where:
+- **Key**: Provider name (string) - Must be a valid [LiteLLM provider name](https://docs.litellm.ai/docs/providers)
+- **Value**: Budget configuration object with the following parameters:
+  - `budget_limit`: Float value representing the budget in USD
+  - `time_period`: String in the format "Xd" where X is the number of days (e.g., "1d", "30d")
+
+Example structure:
+```yaml
+provider_budget_config:
+  openai:
+    budget_limit: 100.0    # $100 USD
+    time_period: "1d"      # 1 day period
+  azure:
+    budget_limit: 500.0    # $500 USD
+    time_period: "30d"     # 30 day period
+```

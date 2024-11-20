@@ -25,10 +25,14 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.router_utils.cooldown_callbacks import (
+    _get_prometheus_logger_from_callbacks,
+)
 from litellm.types.router import (
     LiteLLM_Params,
     ProviderBudgetConfigType,
     ProviderBudgetInfo,
+    RouterErrors,
 )
 from litellm.types.utils import StandardLoggingPayload
 
@@ -43,6 +47,20 @@ else:
 class ProviderBudgetLimiting(CustomLogger):
     def __init__(self, router_cache: DualCache, provider_budget_config: dict):
         self.router_cache = router_cache
+
+        # cast elements of provider_budget_config to ProviderBudgetInfo
+        for provider, config in provider_budget_config.items():
+            if config is None:
+                raise ValueError(
+                    f"No budget config found for provider {provider}, provider_budget_config: {provider_budget_config}"
+                )
+
+            if not isinstance(config, ProviderBudgetInfo):
+                provider_budget_config[provider] = ProviderBudgetInfo(
+                    budget_limit=config.get("budget_limit"),
+                    time_period=config.get("time_period"),
+                )
+
         self.provider_budget_config: ProviderBudgetConfigType = provider_budget_config
         verbose_router_logger.debug(
             f"Initalized Provider budget config: {self.provider_budget_config}"
@@ -70,6 +88,10 @@ class ProviderBudgetLimiting(CustomLogger):
         # If a single deployment is passed, convert it to a list
         if isinstance(healthy_deployments, dict):
             healthy_deployments = [healthy_deployments]
+
+        # Don't do any filtering if there are no healthy deployments
+        if len(healthy_deployments) == 0:
+            return healthy_deployments
 
         potential_deployments: List[Dict] = []
 
@@ -113,6 +135,7 @@ class ProviderBudgetLimiting(CustomLogger):
             provider_spend_map[provider] = float(current_spends[idx] or 0.0)
 
         # Filter healthy deployments based on budget constraints
+        deployment_above_budget_info: str = ""  # used to return in error message
         for deployment in healthy_deployments:
             provider = self._get_llm_provider_for_deployment(deployment)
             if provider is None:
@@ -128,14 +151,24 @@ class ProviderBudgetLimiting(CustomLogger):
             verbose_router_logger.debug(
                 f"Current spend for {provider}: {current_spend}, budget limit: {budget_limit}"
             )
+            self._track_provider_remaining_budget_prometheus(
+                provider=provider,
+                spend=current_spend,
+                budget_limit=budget_limit,
+            )
 
             if current_spend >= budget_limit:
-                verbose_router_logger.debug(
-                    f"Skipping deployment {deployment} for provider {provider} as spend limit exceeded"
-                )
+                debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {budget_limit}"
+                verbose_router_logger.debug(debug_msg)
+                deployment_above_budget_info += f"{debug_msg}\n"
                 continue
 
             potential_deployments.append(deployment)
+
+        if len(potential_deployments) == 0:
+            raise ValueError(
+                f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: {deployment_above_budget_info}"
+            )
 
         return potential_deployments
 
@@ -217,3 +250,21 @@ class ProviderBudgetLimiting(CustomLogger):
             days = int(time_period[:-1])
             return days * 24 * 60 * 60
         raise ValueError(f"Unsupported time period format: {time_period}")
+
+    def _track_provider_remaining_budget_prometheus(
+        self, provider: str, spend: float, budget_limit: float
+    ):
+        """
+        Optional helper - emit provider remaining budget metric to Prometheus
+
+        This is helpful for debugging and monitoring provider budget limits.
+        """
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        prometheus_logger = _get_prometheus_logger_from_callbacks()
+        if prometheus_logger:
+            prometheus_logger.track_provider_remaining_budget(
+                provider=provider,
+                spend=spend,
+                budget_limit=budget_limit,
+            )
