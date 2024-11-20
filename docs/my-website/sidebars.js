@@ -100,7 +100,7 @@ const sidebars = {
         {
           type: "category",
           label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
+          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing",],
         },
         {
           type: "category",
