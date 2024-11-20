@@ -635,10 +635,6 @@ class GenerateRequestBase(LiteLLMBase):
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
     soft_budget: Optional[float] = None
-
-
-class _GenerateKeyRequest(GenerateRequestBase):
-    aliases: Optional[dict] = {}
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = (
@@ -651,13 +647,17 @@ class _GenerateKeyRequest(GenerateRequestBase):
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     blocked: Optional[bool] = None
+    aliases: Optional[dict] = {}
+
+
+class _GenerateKeyRequest(GenerateRequestBase):
+    duration: Optional[str] = None
+    key_alias: Optional[str] = None
+    key: Optional[str] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
     tags: Optional[List[str]] = None
-    duration: Optional[str] = None
-    key_alias: Optional[str] = None
-    key: Optional[str] = None
 
 
 class GenerateKeyResponse(_GenerateKeyRequest):
@@ -719,7 +719,7 @@ class LiteLLM_ModelTable(LiteLLMBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class NewUserRequest(_GenerateKeyRequest):
+class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
     user_alias: Optional[str] = None

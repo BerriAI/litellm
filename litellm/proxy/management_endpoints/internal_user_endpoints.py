@@ -144,7 +144,9 @@ async def new_user(
 
     data_json = data.json()  # type: ignore
     data_json = _update_internal_user_params(data_json, data)
-    response = await generate_key_helper_fn(request_type="user", **data_json)
+    response = await generate_key_helper_fn(
+        request_type="user", duration=None, **data_json
+    )
 
     # Admin UI Logic
     # Add User to Team and Organization
