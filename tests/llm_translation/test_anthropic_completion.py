@@ -712,9 +712,7 @@ def test_convert_tool_response_to_message_with_values():
         )
     ]
 
-    message = AnthropicChatCompletion._convert_tool_response_to_message(
-        tool_calls=tool_calls
-    )
+    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == '{"name": "John", "age": 30}'
@@ -739,9 +737,7 @@ def test_convert_tool_response_to_message_without_values():
         )
     ]
 
-    message = AnthropicChatCompletion._convert_tool_response_to_message(
-        tool_calls=tool_calls
-    )
+    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == '{"name": "John", "age": 30}'
@@ -760,9 +756,7 @@ def test_convert_tool_response_to_message_invalid_json():
         )
     ]
 
-    message = AnthropicChatCompletion._convert_tool_response_to_message(
-        tool_calls=tool_calls
-    )
+    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == "invalid json"
@@ -779,8 +773,6 @@ def test_convert_tool_response_to_message_no_arguments():
         )
     ]
 
-    message = AnthropicChatCompletion._convert_tool_response_to_message(
-        tool_calls=tool_calls
-    )
+    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is None
