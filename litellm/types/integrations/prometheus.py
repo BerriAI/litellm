@@ -1,4 +1,5 @@
 REQUESTED_MODEL = "requested_model"
+CUSTOM_LLM_PROVIDER = "api_provider"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
 EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]

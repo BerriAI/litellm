@@ -208,7 +208,7 @@ class PrometheusLogger(CustomLogger):
                 "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
                 labelnames=[
                     "model_group",
-                    "api_provider",
+                    CUSTOM_LLM_PROVIDER,
                     "api_base",
                     "litellm_model_name",
                     "hashed_api_key",
@@ -221,7 +221,7 @@ class PrometheusLogger(CustomLogger):
                 "remaining tokens for model, returned from LLM API Provider",
                 labelnames=[
                     "model_group",
-                    "api_provider",
+                    CUSTOM_LLM_PROVIDER,
                     "api_base",
                     "litellm_model_name",
                     "hashed_api_key",
@@ -233,7 +233,7 @@ class PrometheusLogger(CustomLogger):
                 "litellm_model_name",
                 "model_id",
                 "api_base",
-                "api_provider",
+                CUSTOM_LLM_PROVIDER,
             ]
             team_and_key_labels = [
                 "hashed_api_key",
@@ -790,7 +790,7 @@ class PrometheusLogger(CustomLogger):
 
             """
             log these labels
-            ["litellm_model_name", "model_id", "api_base", "api_provider"]
+            ["litellm_model_name", "model_id", "api_base", CUSTOM_LLM_PROVIDER]
             """
             self.set_deployment_partial_outage(
                 litellm_model_name=litellm_model_name,
@@ -882,7 +882,7 @@ class PrometheusLogger(CustomLogger):
             if remaining_requests:
                 """
                 "model_group",
-                "api_provider",
+                CUSTOM_LLM_PROVIDER,
                 "api_base",
                 "litellm_model_name"
                 """
@@ -907,7 +907,7 @@ class PrometheusLogger(CustomLogger):
 
             """
             log these labels
-            ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
+            ["litellm_model_name", "requested_model", model_id", "api_base", CUSTOM_LLM_PROVIDER]
             """
             self.set_deployment_healthy(
                 litellm_model_name=litellm_model_name,
