@@ -554,7 +554,6 @@ def mock_completion(
 
     Raises:
         Exception: If an error occurs during the generation of the mock completion response.
-
     Note:
         - This function is intended for testing or debugging purposes to generate mock completion responses.
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
