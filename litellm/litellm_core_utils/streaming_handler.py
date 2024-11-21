@@ -1793,7 +1793,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "bedrock"
                 or self.custom_llm_provider == "triton"
                 or self.custom_llm_provider == "watsonx"
-                or self.custom_llm_provider in litellm.openai_compatible_endpoints
+                or self.custom_llm_provider in litellm.openai_compatible_providers
                 or self.custom_llm_provider in litellm._custom_providers
             ):
                 async for chunk in self.completion_stream:
