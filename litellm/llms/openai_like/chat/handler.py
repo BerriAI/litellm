@@ -66,7 +66,7 @@ async def make_call(
         )
     elif fake_stream:
         model_response = ModelResponse(**response.json())
-        completion_stream: Any = MockResponseIterator(model_response=model_response)
+        completion_stream = MockResponseIterator(model_response=model_response)
     else:
         completion_stream = ModelResponseIterator(
             streaming_response=response.aiter_lines(), sync_stream=False
