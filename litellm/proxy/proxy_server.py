@@ -5654,6 +5654,7 @@ async def moderations(
     tags=["[beta] Anthropic `/v1/messages`"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AnthropicResponse,
+    include_in_schema=False,
 )
 async def anthropic_response(  # noqa: PLR0915
     anthropic_data: AnthropicMessagesRequest,
