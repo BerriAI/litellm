@@ -683,7 +683,7 @@ def test_completion_ollama_hosted_stream():
     [
         # "claude-3-5-haiku-20241022",
         # "claude-2",
-        # "mistral/mistral-medium",
+        # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],
 )
