@@ -7,13 +7,12 @@ import sys
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from litellm.cache import InMemoryCache
-
 logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion
+from litellm.cache import InMemoryCache
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
