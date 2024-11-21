@@ -382,7 +382,6 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     )
                     response.raise_for_status()
 
-                    response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise OpenAILikeError(
                         status_code=e.response.status_code,

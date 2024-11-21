@@ -306,6 +306,8 @@ def test_multiple_function_call():
         )
         assert len(r.choices) > 0
 
+        print(mock_post.call_args.kwargs["json"])
+
         assert mock_post.call_args.kwargs["json"] == {
             "contents": [
                 {"role": "user", "parts": [{"text": "do test"}]},
@@ -313,28 +315,8 @@ def test_multiple_function_call():
                     "role": "model",
                     "parts": [
                         {"text": "test"},
-                        {
-                            "function_call": {
-                                "name": "test",
-                                "args": {
-                                    "fields": {
-                                        "key": "arg",
-                                        "value": {"string_value": "test"},
-                                    }
-                                },
-                            }
-                        },
-                        {
-                            "function_call": {
-                                "name": "test2",
-                                "args": {
-                                    "fields": {
-                                        "key": "arg",
-                                        "value": {"string_value": "test2"},
-                                    }
-                                },
-                            }
-                        },
+                        {"function_call": {"name": "test", "args": {"arg": "test"}}},
+                        {"function_call": {"name": "test2", "args": {"arg": "test2"}}},
                     ],
                 },
                 {
@@ -342,23 +324,13 @@ def test_multiple_function_call():
                         {
                             "function_response": {
                                 "name": "test",
-                                "response": {
-                                    "fields": {
-                                        "key": "content",
-                                        "value": {"string_value": "42"},
-                                    }
-                                },
+                                "response": {"content": "42"},
                             }
                         },
                         {
                             "function_response": {
                                 "name": "test2",
-                                "response": {
-                                    "fields": {
-                                        "key": "content",
-                                        "value": {"string_value": "15"},
-                                    }
-                                },
+                                "response": {"content": "15"},
                             }
                         },
                     ]
