@@ -99,3 +99,12 @@ class GroqChatConfig(OpenAIGPTConfig):
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GROQ_API_KEY")
         return api_base, dynamic_api_key
+
+    def _should_fake_stream(self, optional_params: dict) -> bool:
+        """
+        Groq doesn't support 'response_format' while streaming
+        """
+        if optional_params.get("response_format") is not None:
+            return True
+
+        return False

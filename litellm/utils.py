@@ -6178,5 +6178,7 @@ class ProviderConfigManager:
             return litellm.OpenAIO1Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
+        elif litellm.LlmProviders.GROQ == provider:
+            return litellm.GroqChatConfig()
 
         return OpenAIGPTConfig()

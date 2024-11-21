@@ -1497,6 +1497,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 organization=organization,
                 custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
             )
         elif (
             model in litellm.open_ai_chat_completion_models
