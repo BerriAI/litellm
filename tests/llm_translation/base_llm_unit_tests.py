@@ -93,6 +93,7 @@ class BaseLLMChatTest(ABC):
         assert response.choices[0].message.content is not None
 
     def test_json_response_pydantic_obj(self):
+        litellm.set_verbose = True
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
 
@@ -119,6 +120,11 @@ class BaseLLMChatTest(ABC):
                 response_format=TestModel,
             )
             assert res is not None
+
+            print(res.choices[0].message)
+
+            assert res.choices[0].message.content is not None
+            assert res.choices[0].message.tool_calls is None
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 

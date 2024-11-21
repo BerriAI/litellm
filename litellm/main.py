@@ -1495,7 +1495,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,  # type: ignore
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
-                organization=organization,
                 custom_llm_provider=custom_llm_provider,
                 encoding=encoding,
             )

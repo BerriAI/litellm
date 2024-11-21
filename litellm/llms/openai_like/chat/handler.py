@@ -39,6 +39,7 @@ from litellm.utils import (
 )
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
+from .transformation import OpenAILikeChatConfig
 
 
 async def make_call(
@@ -190,6 +191,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         logger_fn=None,
         headers={},
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        json_mode: bool = False,
     ) -> ModelResponse:
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
@@ -202,8 +204,6 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 api_base, headers=headers, data=json.dumps(data), timeout=timeout
             )
             response.raise_for_status()
-
-            response_json = response.json()
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,
@@ -214,19 +214,22 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
 
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=response_json,
-            additional_args={"complete_input_dict": data},
+        return OpenAILikeChatConfig._transform_response(
+            model=model,
+            response=response,
+            model_response=model_response,
+            stream=stream,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=data,
+            messages=messages,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            json_mode=json_mode,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
         )
-        response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + (response.model or "")
-
-        if base_model is not None:
-            response._hidden_params["model"] = base_model
-        return response
 
     def completion(
         self,
@@ -268,6 +271,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
 
         stream: bool = optional_params.pop("stream", None) or False
         extra_body = optional_params.pop("extra_body", {})
+        json_mode = optional_params.pop("json_mode", None)
         if not fake_stream:
             optional_params["stream"] = stream
 
@@ -390,17 +394,19 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     )
                 except Exception as e:
                     raise OpenAILikeError(status_code=500, message=str(e))
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=response_json,
-            additional_args={"complete_input_dict": data},
+        return OpenAILikeChatConfig._transform_response(
+            model=model,
+            response=response,
+            model_response=model_response,
+            stream=stream,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=data,
+            messages=messages,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            json_mode=json_mode,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
         )
-        response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + (response.model or "")
-
-        if base_model is not None:
-            response._hidden_params["model"] = base_model
-
-        return response
