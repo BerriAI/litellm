@@ -39,7 +39,7 @@ def check_for_async_http_handler(file_path):
                 name.lower() for name in target_names
             ]:
                 raise ValueError(
-                    f"found violation in file {file_path} line: {node.lineno}"
+                    f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead."
                 )
     return violations
 
