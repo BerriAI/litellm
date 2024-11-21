@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion
-from litellm.cache import InMemoryCache
+from litellm.caching import InMemoryCache
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
