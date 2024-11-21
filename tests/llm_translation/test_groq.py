@@ -1,11 +1,10 @@
 from base_llm_unit_tests import BaseLLMChatTest
 
 
-# Test implementation
-class TestDeepSeekChatCompletion(BaseLLMChatTest):
+class TestGroq(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "deepseek/deepseek-chat",
+            "model": "groq/llama-3.1-70b-versatile",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):

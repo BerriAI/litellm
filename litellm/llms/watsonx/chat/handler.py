@@ -57,6 +57,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
 
     def completion(
         self,
+        *,
         model: str,
         messages: list,
         api_base: str,
@@ -75,9 +76,8 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         custom_endpoint: Optional[bool] = None,
-        streaming_decoder: Optional[
-            CustomStreamingDecoder
-        ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
+        streaming_decoder: Optional[CustomStreamingDecoder] = None,
+        fake_stream: bool = False,
     ):
         api_params = _get_api_params(optional_params, print_verbose=print_verbose)
 

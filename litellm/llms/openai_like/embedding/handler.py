@@ -62,7 +62,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
-                    message=response.text if response else str(e),
+                    message=e.response.text if e.response else str(e),
                 )
             except httpx.TimeoutException:
                 raise OpenAILikeError(

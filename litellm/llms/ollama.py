@@ -164,6 +164,30 @@ class OllamaConfig:
             "response_format",
         ]
 
+    def map_openai_params(
+        self, optional_params: dict, non_default_params: dict
+    ) -> dict:
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["num_predict"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "seed":
+                optional_params["seed"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "frequency_penalty":
+                optional_params["repeat_penalty"] = value
+            if param == "stop":
+                optional_params["stop"] = value
+            if param == "response_format" and isinstance(value, dict):
+                if value["type"] == "json_object":
+                    optional_params["format"] = "json"
+
+        return optional_params
+
     def _supports_function_calling(self, ollama_model_info: dict) -> bool:
         """
         Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.

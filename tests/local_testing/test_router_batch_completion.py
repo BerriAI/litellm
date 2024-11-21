@@ -64,6 +64,7 @@ async def test_batch_completion_multiple_models(mode):
         models_in_responses = []
         print(f"response: {response}")
         for individual_response in response:
+            print(f"individual_response: {individual_response}")
             _model = individual_response["model"]
             models_in_responses.append(_model)
 
