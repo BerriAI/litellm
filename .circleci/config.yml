@@ -1047,6 +1047,7 @@ jobs:
             docker rm my-app
 
       # Second Docker Container Run with Different Config
+      # NOTE: We intentionally pass a "bad" license here. We need to ensure proxy starts and serves request even with bad license
       - run:
           name: Run Second Docker container
           command: |
