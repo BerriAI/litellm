@@ -74,7 +74,10 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = AsyncHTTPHandler(timeout=timeout, concurrent_limit=1)
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.AZURE_AI,
+                params={"timeout": timeout},
+            )
 
         url = "{}/images/embeddings".format(api_base)
 
