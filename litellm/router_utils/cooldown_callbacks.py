@@ -44,7 +44,7 @@ async def router_cooldown_event_callback(
     _api_base = (
         litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params)
         or ""
-    )
+    ).rstrip("/")
     model_info = _deployment["model_info"]
     model_id = model_info.id
 

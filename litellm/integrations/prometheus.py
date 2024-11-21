@@ -789,7 +789,7 @@ class PrometheusLogger(CustomLogger):
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             litellm_model_name = request_kwargs.get("model", None)
             model_group = standard_logging_payload.get("model_group", None)
-            api_base = standard_logging_payload.get("api_base", None)
+            api_base = self._strip_trailing_slash(standard_logging_payload.get("api_base", None))
             model_id = standard_logging_payload.get("model_id", None)
             exception: Exception = request_kwargs.get("exception", None)
 
@@ -864,7 +864,7 @@ class PrometheusLogger(CustomLogger):
                 return
 
             model_group = standard_logging_payload["model_group"]
-            api_base = standard_logging_payload["api_base"]
+            api_base = self._strip_trailing_slash(standard_logging_payload["api_base"])
             _response_headers = request_kwargs.get("response_headers")
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
             _metadata = _litellm_params.get("metadata", {})
@@ -1093,7 +1093,7 @@ class PrometheusLogger(CustomLogger):
         self,
         litellm_model_name: str,
         model_id: str,
-        api_base: str,
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.set_litellm_deployment_state(
@@ -1160,3 +1160,13 @@ class PrometheusLogger(CustomLogger):
             return max_budget
 
         return max_budget - spend
+
+    def _strip_trailing_slash(
+        self, api_base: Optional[str]
+    ) -> Optional[str]:
+        """
+        Return api_base without a trailing slash
+        """
+        if api_base:
+            return api_base.rstrip("/")
+        return api_base

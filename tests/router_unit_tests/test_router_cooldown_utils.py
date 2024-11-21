@@ -11,6 +11,7 @@ from litellm.router import Deployment, LiteLLM_Params, ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
@@ -36,8 +37,8 @@ class CustomPrometheusLogger(PrometheusLogger):
     def set_deployment_complete_outage(
         self,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: Optional[str],
+        api_base: Optional[str],
         api_provider: str,
     ):
         self.deployment_complete_outages.append(
