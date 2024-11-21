@@ -17,22 +17,6 @@ from litellm.utils import CustomStreamWrapper
 
 class OpenAIO1ChatCompletion(OpenAIChatCompletion):
 
-    async def mock_async_streaming(
-        self,
-        response: Any,
-        model: Optional[str],
-        logging_obj: Any,
-    ):
-        model_response = await response
-        completion_stream = MockResponseIterator(model_response=model_response)
-        streaming_response = CustomStreamWrapper(
-            completion_stream=completion_stream,
-            model=model,
-            custom_llm_provider="openai",
-            logging_obj=logging_obj,
-        )
-        return streaming_response
-
     def completion(
         self,
         model_response: ModelResponse,
@@ -54,7 +38,7 @@ class OpenAIO1ChatCompletion(OpenAIChatCompletion):
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
     ):
-        stream: Optional[bool] = optional_params.pop("stream", False)
+        # stream: Optional[bool] = optional_params.pop("stream", False)
         response = super().completion(
             model_response,
             timeout,
@@ -76,20 +60,4 @@ class OpenAIO1ChatCompletion(OpenAIChatCompletion):
             drop_params,
         )
 
-        if stream is True:
-            if asyncio.iscoroutine(response):
-                return self.mock_async_streaming(
-                    response=response, model=model, logging_obj=logging_obj  # type: ignore
-                )
-
-            completion_stream = MockResponseIterator(model_response=response)
-            streaming_response = CustomStreamWrapper(
-                completion_stream=completion_stream,
-                model=model,
-                custom_llm_provider="openai",
-                logging_obj=logging_obj,
-            )
-
-            return streaming_response
-        else:
-            return response
+        return response
