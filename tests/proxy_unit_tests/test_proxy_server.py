@@ -1794,7 +1794,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 async def test_gemini_pass_through_endpoint():
     from starlette.datastructures import URL
 
-    from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         Request,
         Response,
         gemini_proxy_route,
