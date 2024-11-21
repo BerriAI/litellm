@@ -3265,24 +3265,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if max_tokens is not None:
-            optional_params["num_predict"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if seed is not None:
-            optional_params["seed"] = seed
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if frequency_penalty is not None:
-            optional_params["repeat_penalty"] = frequency_penalty
-        if stop is not None:
-            optional_params["stop"] = stop
-        if response_format is not None and response_format["type"] == "json_object":
-            optional_params["format"] = "json"
+        optional_params = litellm.OllamaConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+        )
     elif custom_llm_provider == "ollama_chat":
-        supported_params = litellm.OllamaChatConfig().get_supported_openai_params()
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
         _check_valid_arg(supported_params=supported_params)
 
