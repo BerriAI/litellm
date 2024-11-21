@@ -10,6 +10,8 @@ ALLOWED_FILES = [
     "./litellm/llms/custom_httpx/http_handler.py",
 ]
 
+warning_msg = "this is a serious violation that can impact latency. Creating Async clients per request can add +500ms per request"
+
 
 def check_for_async_http_handler(file_path):
     """
@@ -39,8 +41,16 @@ def check_for_async_http_handler(file_path):
                 name.lower() for name in target_names
             ]:
                 raise ValueError(
-                    f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead."
+                    f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead. {warning_msg}"
                 )
+            # Add check for httpx.AsyncClient
+            elif isinstance(node.func, ast.Attribute) and isinstance(
+                node.func.value, ast.Name
+            ):
+                if node.func.value.id == "httpx" and node.func.attr == "AsyncClient":
+                    raise ValueError(
+                        f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead. {warning_msg}"
+                    )
     return violations
 
 
