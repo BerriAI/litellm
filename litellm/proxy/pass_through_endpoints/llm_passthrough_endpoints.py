@@ -2,10 +2,8 @@
 What is this? 
 
 Provider-specific Pass-Through Endpoints
-"""
 
-"""
-1. Create pass-through endpoints for any LITELLM_BASE_URL/gemini/<endpoint> map to https://generativelanguage.googleapis.com/<endpoint>
+Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
 import ast

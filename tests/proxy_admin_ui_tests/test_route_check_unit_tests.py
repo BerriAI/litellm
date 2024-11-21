@@ -27,6 +27,9 @@ from fastapi import HTTPException, Request
 import pytest
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    router as llm_passthrough_router,
+)
 
 # Replace the actual hash_token function with our mock
 import litellm.proxy.auth.route_checks
@@ -56,11 +59,20 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/vertex-ai/text") is True
     assert RouteChecks.is_llm_api_route("/gemini/generate") is True
     assert RouteChecks.is_llm_api_route("/cohere/generate") is True
+    assert RouteChecks.is_llm_api_route("/anthropic/messages") is True
+    assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
+    assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
 
     # check non-matching routes
     assert RouteChecks.is_llm_api_route("/some/random/route") is False
     assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False
     assert RouteChecks.is_llm_api_route("/key/82akk800000000jjsk/delete") is False
+
+    # check all routes in llm_passthrough_router, ensure they are considered llm api routes
+    for route in llm_passthrough_router.routes:
+        route_path = str(route.path)
+        print("route_path", route_path)
+        assert RouteChecks.is_llm_api_route(route_path) is True
 
 
 # Test _route_matches_pattern
