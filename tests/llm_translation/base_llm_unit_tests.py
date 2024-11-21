@@ -49,7 +49,7 @@ class BaseLLMChatTest(ABC):
             )
             assert response is not None
         except litellm.InternalServerError:
-            pass
+            pytest.skip("Model is overloaded")
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
