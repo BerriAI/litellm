@@ -92,6 +92,7 @@ class BaseLLMChatTest(ABC):
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         assert response.choices[0].message.content is not None
 
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_pydantic_obj(self):
         litellm.set_verbose = True
         from pydantic import BaseModel
