@@ -289,13 +289,18 @@ def forward_headers_from_request(
     return headers
 
 
-def get_response_headers(headers: httpx.Headers) -> dict:
+def get_response_headers(
+    headers: httpx.Headers, litellm_call_id: Optional[str] = None
+) -> dict:
     excluded_headers = {"transfer-encoding", "content-encoding"}
+
     return_headers = {
         key: value
         for key, value in headers.items()
         if key.lower() not in excluded_headers
     }
+    if litellm_call_id:
+        return_headers["x-litellm-call-id"] = litellm_call_id
 
     return return_headers
 
@@ -361,6 +366,8 @@ async def pass_through_request(  # noqa: PLR0915
 
         async_client = httpx.AsyncClient(timeout=600)
 
+        litellm_call_id = str(uuid.uuid4())
+
         # create logging object
         start_time = datetime.now()
         logging_obj = Logging(
@@ -369,27 +376,20 @@ async def pass_through_request(  # noqa: PLR0915
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
-            litellm_call_id=str(uuid.uuid4()),
+            litellm_call_id=litellm_call_id,
             function_id="1245",
         )
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
         )
-
+        kwargs = _init_kwargs_for_pass_through_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            _parsed_body=_parsed_body,
+            passthrough_logging_payload=passthrough_logging_payload,
+            litellm_call_id=litellm_call_id,
+        )
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
-        kwargs = {
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key": user_api_key_dict.api_key,
-                    "user_api_key_user_id": user_api_key_dict.user_id,
-                    "user_api_key_team_id": user_api_key_dict.team_id,
-                    "user_api_key_end_user_id": user_api_key_dict.user_id,
-                }
-            },
-            "call_type": "pass_through_endpoint",
-            "passthrough_logging_payload": passthrough_logging_payload,
-        }
         logging_obj.update_environment_variables(
             model="unknown",
             user="unknown",
@@ -397,6 +397,7 @@ async def pass_through_request(  # noqa: PLR0915
             litellm_params=kwargs["litellm_params"],
             call_type="pass_through_endpoint",
         )
+        logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
         # combine url with query params for logging
 
@@ -456,7 +457,10 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=get_response_headers(response.headers),
+                headers=get_response_headers(
+                    headers=response.headers,
+                    litellm_call_id=litellm_call_id,
+                ),
                 status_code=response.status_code,
             )
 
@@ -496,7 +500,10 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=get_response_headers(response.headers),
+                headers=get_response_headers(
+                    headers=response.headers,
+                    litellm_call_id=litellm_call_id,
+                ),
                 status_code=response.status_code,
             )
 
@@ -531,7 +538,10 @@ async def pass_through_request(  # noqa: PLR0915
         return Response(
             content=content,
             status_code=response.status_code,
-            headers=get_response_headers(response.headers),
+            headers=get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            ),
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -554,6 +564,33 @@ async def pass_through_request(  # noqa: PLR0915
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+
+
+def _init_kwargs_for_pass_through_endpoint(
+    user_api_key_dict: UserAPIKeyAuth,
+    passthrough_logging_payload: PassthroughStandardLoggingPayload,
+    _parsed_body: Optional[dict] = None,
+    litellm_call_id: Optional[str] = None,
+) -> dict:
+    _parsed_body = _parsed_body or {}
+    _litellm_metadata: Optional[dict] = _parsed_body.pop("litellm_metadata", None)
+    _metadata = {
+        "user_api_key": user_api_key_dict.api_key,
+        "user_api_key_user_id": user_api_key_dict.user_id,
+        "user_api_key_team_id": user_api_key_dict.team_id,
+        "user_api_key_end_user_id": user_api_key_dict.user_id,
+    }
+    if _litellm_metadata:
+        _metadata.update(_litellm_metadata)
+    kwargs = {
+        "litellm_params": {
+            "metadata": _metadata,
+        },
+        "call_type": "pass_through_endpoint",
+        "litellm_call_id": litellm_call_id,
+        "passthrough_logging_payload": passthrough_logging_payload,
+    }
+    return kwargs
 
 
 def create_pass_through_route(
