@@ -1085,6 +1085,7 @@ def test_cohere_img_embeddings(input, input_type):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_embedding_with_extra_headers(sync_mode):
+
     input = ["hello world"]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
