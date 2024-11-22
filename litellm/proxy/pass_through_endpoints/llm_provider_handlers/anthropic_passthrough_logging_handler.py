@@ -118,6 +118,8 @@ class AnthropicPassthroughLoggingHandler:
 
         # set litellm_call_id to logging response object
         litellm_model_response.id = logging_obj.litellm_call_id
+        litellm_model_response.model = model
+        logging_obj.model_call_details["model"] = model
         return kwargs
 
     @staticmethod
