@@ -1,6 +1,7 @@
 import os
 import litellm
 
+
 # METHOD 1: Using keywordsai as the LLM proxy
 litellm.api_base = "https://api.keywordsai.co/api/"
 KEYWORDS_AI_API_KEY = os.getenv("KEYWORDS_AI_API_KEY")
@@ -17,9 +18,6 @@ print(response)
 # ================================================================================================================
 # METHOD 2: Use keywordsai callback:
 
-
-
-import litellm
 from litellm import completion, acompletion
 # litellm.set_verbose = True
 litellm.api_base = None
