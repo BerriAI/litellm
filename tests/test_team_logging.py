@@ -97,6 +97,7 @@ async def test_aaateam_logging():
             langfuse_client = langfuse.Langfuse(
                 public_key=os.getenv("LANGFUSE_PROJECT1_PUBLIC"),
                 secret_key=os.getenv("LANGFUSE_PROJECT1_SECRET"),
+                host="https://cloud.langfuse.com",
             )
 
             await asyncio.sleep(30)
@@ -177,6 +178,7 @@ async def test_team_2logging():
             langfuse_client_1 = langfuse.Langfuse(
                 public_key=os.getenv("LANGFUSE_PROJECT1_PUBLIC"),
                 secret_key=os.getenv("LANGFUSE_PROJECT1_SECRET"),
+                host="https://cloud.langfuse.com",
             )
 
             generations_team_1 = langfuse_client_1.get_generations(
