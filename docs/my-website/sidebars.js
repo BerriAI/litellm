@@ -205,6 +205,7 @@ const sidebars = {
       items: [
         "exception_mapping",
         "completion/provider_specific_params",
+        "guides/finetuned_models",
         "completion/audio",
         "completion/vision",
         "completion/json_mode",
@@ -220,6 +221,7 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
+        
       ]
     },
     {
