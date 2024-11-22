@@ -298,7 +298,6 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=12, delay=2)
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -334,11 +333,11 @@ async def test_langfuse_masked_input_output(langfuse_client):
             reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
         )
 
-        assert expected_input in trace.input
-        assert expected_output in trace.output
+        assert expected_input in str(trace.input)
+        assert expected_output in str(trace.output)
         if len(generations) > 0:
-            assert expected_input in generations[0].input
-            assert expected_output in generations[0].output
+            assert expected_input in str(generations[0].input)
+            assert expected_output in str(generations[0].output)
 
 
 @pytest.mark.asyncio
