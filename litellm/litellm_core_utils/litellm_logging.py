@@ -1368,8 +1368,11 @@ class Logging:
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
-                            "success callbacks: Running Custom Callback Function"
+                            "success callbacks: Running Custom Callback Function - {}".format(
+                                callback
+                            )
                         )
+
                         customLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
@@ -2358,6 +2361,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _mlflow_logger = MlflowLogger()
         _in_memory_loggers.append(_mlflow_logger)
         return _mlflow_logger  # type: ignore
+
 
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,

@@ -14,6 +14,7 @@ from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -26,7 +27,7 @@ else:
 class AnthropicPassthroughLoggingHandler:
 
     @staticmethod
-    async def anthropic_passthrough_handler(
+    def anthropic_passthrough_handler(
         httpx_response: httpx.Response,
         response_body: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -36,7 +37,7 @@ class AnthropicPassthroughLoggingHandler:
         end_time: datetime,
         cache_hit: bool,
         **kwargs,
-    ):
+    ) -> PassThroughEndpointLoggingTypedDict:
         """
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
@@ -67,15 +68,10 @@ class AnthropicPassthroughLoggingHandler:
             logging_obj=logging_obj,
         )
 
-        await logging_obj.async_success_handler(
-            result=litellm_model_response,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=cache_hit,
-            **kwargs,
-        )
-
-        pass
+        return {
+            "result": litellm_model_response,
+            "kwargs": kwargs,
+        }
 
     @staticmethod
     def _create_anthropic_response_logging_payload(
@@ -123,7 +119,7 @@ class AnthropicPassthroughLoggingHandler:
         return kwargs
 
     @staticmethod
-    async def _handle_logging_anthropic_collected_chunks(
+    def _handle_logging_anthropic_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -132,7 +128,7 @@ class AnthropicPassthroughLoggingHandler:
         start_time: datetime,
         all_chunks: List[str],
         end_time: datetime,
-    ):
+    ) -> PassThroughEndpointLoggingTypedDict:
         """
         Takes raw chunks from Anthropic passthrough endpoint and logs them in litellm callbacks
 
@@ -152,7 +148,10 @@ class AnthropicPassthroughLoggingHandler:
             verbose_proxy_logger.error(
                 "Unable to build complete streaming response for Anthropic passthrough endpoint, not logging..."
             )
-            return
+            return {
+                "result": None,
+                "kwargs": {},
+            }
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
@@ -161,13 +160,11 @@ class AnthropicPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=litellm_logging_obj,
         )
-        await litellm_logging_obj.async_success_handler(
-            result=complete_streaming_response,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=False,
-            **kwargs,
-        )
+
+        return {
+            "result": complete_streaming_response,
+            "kwargs": kwargs,
+        }
 
     @staticmethod
     def _build_complete_streaming_response(

@@ -337,14 +337,14 @@ class ProxyLogging:
                 alert_to_webhook_url=self.alert_to_webhook_url,
             )
 
-            if (
-                self.alerting is not None
-                and "slack" in self.alerting
-                and "daily_reports" in self.alert_types
-            ):
+            if self.alerting is not None and "slack" in self.alerting:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
-                litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
+                if "daily_reports" in self.alert_types:
+                    litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
+                litellm.success_callback.append(
+                    self.slack_alerting_instance.response_taking_too_long_callback
+                )
 
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
@@ -354,9 +354,6 @@ class ProxyLogging:
         litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
         litellm.callbacks.append(self.cache_control_check)  # type: ignore
         litellm.callbacks.append(self.service_logging_obj)  # type: ignore
-        litellm.success_callback.append(
-            self.slack_alerting_instance.response_taking_too_long_callback
-        )
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore

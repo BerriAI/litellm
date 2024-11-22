@@ -12,7 +12,15 @@ from typing_extensions import Annotated, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
-from litellm.types.utils import ProviderField, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ProviderField,
+    StandardCallbackDynamicParams,
+    StandardPassThroughResponseObject,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2133,3 +2141,17 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     spend_doc_str = """Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used."""
     team_id_doc_str = """Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None."""
     duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""
+
+
+PassThroughEndpointLoggingResultValues = Union[
+    ModelResponse,
+    TextCompletionResponse,
+    ImageResponse,
+    EmbeddingResponse,
+    StandardPassThroughResponseObject,
+]
+
+
+class PassThroughEndpointLoggingTypedDict(TypedDict):
+    result: Optional[PassThroughEndpointLoggingResultValues]
+    kwargs: dict
