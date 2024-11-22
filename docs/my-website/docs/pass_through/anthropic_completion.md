@@ -1,10 +1,18 @@
-# Anthropic `/v1/messages`
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Anthropic SDK
 
 Pass-through endpoints for Anthropic - call provider-specific endpoint, in native format (no translation).
 
-Just replace `https://api.anthropic.com` with `LITELLM_PROXY_BASE_URL/anthropic` 🚀
+Just replace `https://api.anthropic.com` with `LITELLM_PROXY_BASE_URL/anthropic`
 
 #### **Example Usage**
+
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
 ```bash
 curl --request POST \
   --url http://0.0.0.0:4000/anthropic/v1/messages \
@@ -19,6 +27,33 @@ curl --request POST \
         ]
     }'
 ```
+
+</TabItem>
+<TabItem value="python" label="Anthropic Python SDK">
+
+```python
+from anthropic import Anthropic
+
+# Initialize client with proxy base URL
+client = Anthropic(
+    base_url="http://0.0.0.0:4000/anthropic", # <proxy-base-url>/anthropic
+    api_key="sk-anything" # proxy virtual key
+)
+
+# Make a completion request
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello, world"}
+    ]
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
 
 Supports **ALL** Anthropic Endpoints (including streaming).
 
