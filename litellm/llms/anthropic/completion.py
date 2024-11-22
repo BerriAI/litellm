@@ -13,7 +13,11 @@ import httpx
 import requests
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ..base import BaseLLM
@@ -162,7 +166,10 @@ class AnthropicTextCompletion(BaseLLM):
         client=None,
     ):
         if client is None:
-            client = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC,
+                params={"timeout": httpx.Timeout(timeout=600.0, connect=5.0)},
+            )
 
         response = await client.post(api_base, headers=headers, data=json.dumps(data))
 
@@ -198,7 +205,10 @@ class AnthropicTextCompletion(BaseLLM):
         client=None,
     ):
         if client is None:
-            client = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC,
+                params={"timeout": httpx.Timeout(timeout=600.0, connect=5.0)},
+            )
 
         response = await client.post(api_base, headers=headers, data=json.dumps(data))
 

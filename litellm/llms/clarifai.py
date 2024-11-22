@@ -9,7 +9,10 @@ import httpx
 import requests
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from .prompt_templates.factory import custom_prompt, prompt_factory
@@ -185,7 +188,10 @@ async def async_completion(
     headers={},
 ):
 
-    async_handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+    async_handler = get_async_httpx_client(
+        llm_provider=litellm.LlmProviders.CLARIFAI,
+        params={"timeout": 600.0},
+    )
     response = await async_handler.post(
         url=model, headers=headers, data=json.dumps(data)
     )

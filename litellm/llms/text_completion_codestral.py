@@ -18,7 +18,10 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.types.llms.databricks import GenericStreamingChunk
 from litellm.utils import (
     Choices,
@@ -479,8 +482,9 @@ class CodestralTextCompletion(BaseLLM):
         headers={},
     ) -> TextCompletionResponse:
 
-        async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=timeout), concurrent_limit=1
+        async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL,
+            params={"timeout": timeout},
         )
         try:
 

@@ -5,9 +5,14 @@ from typing import Any, Coroutine, Literal, Optional, Union
 import httpx
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
@@ -26,8 +31,9 @@ class VertexFineTuningAPI(VertexLLM):
 
     def __init__(self) -> None:
         super().__init__()
-        self.async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        self.async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI,
+            params={"timeout": 600.0},
         )
 
     def convert_response_created_at(self, response: ResponseTuningJob):
