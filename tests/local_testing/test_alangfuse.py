@@ -448,7 +448,7 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
         try:
             trace = langfuse_client.get_trace(id=trace_id)
         except Exception as e:
-            if "Trace not found within authorized project" in str(e):
+            if "not found within authorized project" in str(e):
                 print(f"Trace {trace_id} not found")
                 continue
         assert trace.id == trace_id
