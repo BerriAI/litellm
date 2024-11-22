@@ -781,6 +781,14 @@ class ModelResponseIterator:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+        """
+        Convert a string chunk to a GenericStreamingChunk
+
+        Note: This is used for Anthropic pass through streaming logging
+
+        We can move __anext__, and __next__ to use this function since it's common logic.
+        Did not migrate them to minmize changes made in 1 PR.
+        """
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
             str_line = chunk.decode("utf-8")  # Convert bytes to string
