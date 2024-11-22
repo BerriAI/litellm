@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.llms.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -93,11 +94,15 @@ def _get_client_cache_key(
 
 
 def _get_client_from_cache(client_cache_key: str):
-    return litellm.in_memory_llm_clients_cache.get(client_cache_key, None)
+    return litellm.in_memory_llm_clients_cache.get_cache(client_cache_key)
 
 
 def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
-    litellm.in_memory_llm_clients_cache[client_cache_key] = vertex_llm_model
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key=client_cache_key,
+        value=vertex_llm_model,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
 
 
 def completion(  # noqa: PLR0915

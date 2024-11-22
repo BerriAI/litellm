@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion
+from litellm.caching import InMemoryCache
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
@@ -29,15 +30,20 @@ def langfuse_client():
         f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
     )
     # use a in memory langfuse client for testing, RAM util on ci/cd gets too high when we init many langfuse clients
-    if _langfuse_cache_key in litellm.in_memory_llm_clients_cache:
-        langfuse_client = litellm.in_memory_llm_clients_cache[_langfuse_cache_key]
+
+    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_langfuse_cache_key)
+    if _cached_client:
+        langfuse_client = _cached_client
     else:
         langfuse_client = langfuse.Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
             host=None,
         )
-        litellm.in_memory_llm_clients_cache[_langfuse_cache_key] = langfuse_client
+        litellm.in_memory_llm_clients_cache.set_cache(
+            key=_langfuse_cache_key,
+            value=langfuse_client,
+        )
 
         print("NEW LANGFUSE CLIENT")
 

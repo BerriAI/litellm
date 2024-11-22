@@ -263,7 +263,11 @@ def get_hf_task_for_model(model: str) -> Tuple[hf_tasks, str]:
         return "text-generation-inference", model  # default to tgi
 
 
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 
 
 def get_hf_task_embedding_for_model(
@@ -301,7 +305,9 @@ async def async_get_hf_task_embedding_for_model(
                     task_type, hf_tasks_embeddings
                 )
             )
-    http_client = AsyncHTTPHandler(concurrent_limit=1)
+    http_client = get_async_httpx_client(
+        llm_provider=litellm.LlmProviders.HUGGINGFACE,
+    )
 
     model_info = await http_client.get(url=api_base)
 
@@ -1067,7 +1073,9 @@ class Huggingface(BaseLLM):
         )
         ## COMPLETION CALL
         if client is None:
-            client = AsyncHTTPHandler(concurrent_limit=1)
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.HUGGINGFACE,
+            )
 
         response = await client.post(api_base, headers=headers, data=json.dumps(data))
 
