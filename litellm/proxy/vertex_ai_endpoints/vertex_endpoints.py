@@ -119,7 +119,6 @@ async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -127,6 +126,20 @@ async def vertex_proxy_route(
 
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
+
+    # TODO - clean this up before merging
+    litellm_api_key = request.headers.get("X-Litellm-Api-Key")
+    api_key_to_use = ""
+    if litellm_api_key:
+        api_key_to_use = f"Bearer {litellm_api_key}"
+    else:
+        api_key_to_use = request.headers.get("Authorization")
+
+    api_key_to_use = api_key_to_use or ""
+    user_api_key_dict = await user_api_key_auth(
+        request=request,
+        api_key=api_key_to_use,
+    )
 
     vertex_project = None
     vertex_location = None
