@@ -11,61 +11,64 @@ https://github.com/BerriAI/litellm
 
 ## Using Keywords AI with LiteLLM
 
-LiteLLM provides `callbacks`, allowing you to easily log data to Keywords AI based on the status of your responses.
-
-### Supported LLM Providers
-
-Keywords AI can log requests across [various LLM providers](https://docs.keywordsai.co/integration/supported-models)
-
-### Integration Methods
-
-There are two main approaches to integrate Keywords AI with LiteLLM:
-
-1. Using callbacks
+LiteLLM provides two methods to integrate with Keywords AI:
+1. Using callbacks (recommended)
 2. Using Keywords AI as a proxy
 
-### Approach 1: Use Callbacks
+### Approach 1: Using Callbacks (Recommended)
 
-Use just 2 line of code to log your responses with Keywords AI:
+This method works across all LiteLLM-supported models. Simply set Keywords AI as a success callback:
 
 ```python
-litellm.callbacks = ["keywordsai"]
+import litellm
+from litellm import completion
+import os
+# Set up Keywords AI callback
+os.environ["KEYWORDSAI_API_KEY"]="YOUR_KEYWORDSAI_API_KEY"
+litellm.success_callback = ["keywordsai"]
+
+# Optional: Add additional logging parameters
+extra_params = {
+    "keywordsai_params": {
+        "customer_params": {
+            "customer_identifier": "your_customer_id",
+            "email": "user@example.com",
+            "name": "user name"
+        },
+        "thread_identifier": "thread_123",
+        "metadata": {"key": "value"},
+        "evaluation_identifier": "eval_123",
+        "prompt_id": "prompt_123",
+    }
+}
+
+# Make completion call with any LiteLLM-supported model
+response = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello!"}],
+    metadata=extra_params  # Pass additional logging parameters
+)
+
+print(response)
 ```
 
-Complete Code
+### Approach 2: Using Keywords AI as a proxy
+
+Alternatively, you can route requests through Keywords AI's API:
 
 ```python
 import os
-from litellm import completion
-litellm.callbacks = ["keywordsai"]
-## Set env variables
-os.environ["KEYWORDS_AI_API_KEY"] = "KEYWORDS_AI_API_KEY"
+import litellm
 
-# OpenAI call
-response = completion(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hi, Keywords AI!!"}],
-)
-
-print(response)
-```
-
-### Approach 2: Use Keywords AI as a proxy
-
-To use Keywords AI as a proxy for your LLM requests:
-
-Complete Code:
-
-```python
+# Set Keywords AI as the API base
 litellm.api_base = "https://api.keywordsai.co/api/"
-KEYWORDS_AI_API_KEY = os.getenv("KEYWORDS_AI_API_KEY")
+KEYWORDSAI_API_KEY = os.getenv("KEYWORDSAI_API_KEY")
 
 response = litellm.completion(
-    api_key=KEYWORDS_AI_API_KEY, # !!!!!!! Use the keyowrdsai api key in your completion call !!!!!!!
+    api_key=KEYWORDSAI_API_KEY,  # Use Keywords AI API key
     model="gpt-3.5-turbo",
-    messages=[{"role": "user", "content": "How does a court case get to the Supreme Court?"}]
+    messages=[{"role": "user", "content": "Hello!"}]
 )
 
-print(response)
-# Go to https://platform.keywordsai.co/ to see the log
+# View logs at https://platform.keywordsai.co/
 ```

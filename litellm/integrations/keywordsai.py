@@ -7,7 +7,7 @@ from litellm.utils import ModelResponse
 
 class KeywordsAILogger:
     def __init__(self):
-        self.api_key = os.getenv("KEYWORDS_AI_API_KEY")
+        self.api_key = os.getenv("KEYWORDSAI_API_KEY")
         self.api_base = "https://api.keywordsai.co/api/request-logs/create/"
 
     def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs):
@@ -29,13 +29,12 @@ class KeywordsAILogger:
                 "prompt_messages": messages,
                 "tool_choice": kwargs.get("tool_choice"),
                 "tools": kwargs.get("tools"),
-                "customer_identifier": keywordsai_params.get("customer_identifier", ""),
-                "thread_identifier": keywordsai_params.get("thread_identifier", ""),
-                "metadata": keywordsai_params.get("metadata"),
                 "completion_message": response_obj["choices"][0]["message"],
                 "tool_calls": response_obj["choices"][0].get("tool_calls"),
                 "latency": (end_time - start_time).total_seconds(),
-                "status_code": 200
+                "status_code": 200,
+                "stream": kwargs.get("stream", False),
+                **keywordsai_params
             }
 
             # Make request to Keywords AI
@@ -52,8 +51,10 @@ class KeywordsAILogger:
 
             if response.status_code == 200:
                 print_verbose("Keywords AI Logging - Success!")
+
             else:
                 print_verbose(f"Keywords AI Logging - Error: {response.status_code}, {response.text}")
+
 
         except Exception as e:
             print_verbose(f"Keywords AI Logging Error: {str(e)}")
