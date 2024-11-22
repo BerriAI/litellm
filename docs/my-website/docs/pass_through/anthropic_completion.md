@@ -315,3 +315,57 @@ curl --request POST \
     ]
   }'
 ```
+
+
+### Send `litellm_metadata` (tags)
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl --request POST \
+  --url http://0.0.0.0:4000/anthropic/v1/messages \
+  --header 'accept: application/json' \
+  --header 'content-type: application/json' \
+  --header "Authorization: bearer sk-anything" \
+  --data '{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
+    "messages": [
+        {"role": "user", "content": "Hello, world"}
+    ],
+    "litellm_metadata": {
+        "tags": ["test-tag-1", "test-tag-2"]
+    }
+  }'
+```
+
+</TabItem>
+<TabItem value="python" label="Anthropic Python SDK">
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://0.0.0.0:4000/anthropic",
+    api_key="sk-anything"
+)
+
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello, world"}
+    ],
+    extra_body={
+        "litellm_metadata": {
+            "tags": ["test-tag-1", "test-tag-2"]
+        }
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
