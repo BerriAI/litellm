@@ -1602,3 +1602,16 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_api_key: Optional[str]
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
+
+
+class TeamUIKeyGenerationConfig(TypedDict):
+    allowed_team_member_roles: List[str]
+
+
+class PersonalUIKeyGenerationConfig(TypedDict):
+    allowed_user_roles: List[str]
+
+
+class StandardKeyGenerationConfig(TypedDict, total=False):
+    team_key_generation: TeamUIKeyGenerationConfig
+    personal_key_generation: PersonalUIKeyGenerationConfig

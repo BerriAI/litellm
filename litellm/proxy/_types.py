@@ -892,10 +892,6 @@ class DeleteCustomerRequest(LiteLLMBase):
 
 class Member(LiteLLMBase):
     role: Literal[
-        LitellmUserRoles.ORG_ADMIN,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        # older Member roles
         "admin",
         "user",
     ]
