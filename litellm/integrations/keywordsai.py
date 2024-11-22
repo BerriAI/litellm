@@ -28,11 +28,12 @@ def setup_keywordsai_params(model, messages, kwargs):
         "Content-Type": "application/json",
     }
 
-    keywordsai_params = kwargs.get("extra_body", {}).pop("keywordsai_params", {})
-    kwargs["keywordsai_url"] = url
-    kwargs["keywordsai_headers"] = headers
-    kwargs["keywordsai_stream_collector"] = []
-    kwargs["keywordsai_payload"] = {
+    metadata = kwargs.get("metadata", {})
+    keywordsai_params = metadata.get("keywordsai_params", {})
+    metadata["keywordsai_url"] = url
+    metadata["keywordsai_headers"] = headers
+    metadata["keywordsai_stream_collector"] = []
+    metadata["keywordsai_payload"] = {
         "model": kwargs.get("model"),
         "prompt_messages": kwargs.get("messages"),
         "tool_choice": kwargs.get("tool_choice"),
@@ -47,30 +48,31 @@ def setup_keywordsai_params(model, messages, kwargs):
 def modify_params(
     kwargs, response_obj, start_time: datetime.datetime, end_time, status_code=200
 ):
+    metadata = kwargs.get("metadata", {})
     stream = kwargs.get("stream", False)
     if stream:
         if (
-            "time_to_first_token" not in kwargs["keywordsai_payload"]
+            "time_to_first_token" not in metadata["keywordsai_payload"]
             and end_time is not None
         ):
             time_to_first_token = (end_time - start_time).total_seconds()
-            kwargs["keywordsai_payload"]["time_to_first_token"] = time_to_first_token
+            metadata["keywordsai_payload"]["time_to_first_token"] = time_to_first_token
 
         if isinstance(response_obj, ModelResponse):
             if stream:
-                kwargs["keywordsai_stream_collector"].append(response_obj)
+                metadata["keywordsai_stream_collector"].append(response_obj)
             else:
-                kwargs["keywordsai_payload"][
+                metadata["keywordsai_payload"][
                     "full_response"
                 ] = response_obj.model_dump()
     else:
         original_response = kwargs.get("original_response")
         if isinstance(original_response, str):
-            kwargs["keywordsai_payload"]["full_response"] = json.loads(
+            metadata["keywordsai_payload"]["full_response"] = json.loads(
                 original_response
             )
         elif isinstance(original_response, ModelResponse):
-            kwargs["keywordsai_payload"][
+            metadata["keywordsai_payload"][
                 "full_response"
             ] = original_response.model_dump()
 

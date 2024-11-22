@@ -88,6 +88,7 @@ from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
+from ..integrations.keywordsai import KeywordsAILogger
 from .exception_mapping_utils import _get_response_headers
 from .logging_utils import _assemble_complete_response_from_streaming_chunks
 
@@ -2463,6 +2464,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):
+                return callback
+    elif logging_integration == "keywordsai":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, KeywordsAILogger):
                 return callback
 
     return None

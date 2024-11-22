@@ -29,8 +29,7 @@ There are two main approaches to integrate Keywords AI with LiteLLM:
 Use just 2 line of code to log your responses with Keywords AI:
 
 ```python
-from litellm.integrations.keywordsai import KeywordsAILogger
-litellm.callbacks = [KeywordsAILogger]
+litellm.callbacks = ["keywordsai"]
 ```
 
 Complete Code
@@ -38,8 +37,7 @@ Complete Code
 ```python
 import os
 from litellm import completion
-from litellm.integrations.keywordsai import KeywordsAILogger
-litellm.callbacks = [KeywordsAILogger]
+litellm.callbacks = ["keywordsai"]
 ## Set env variables
 os.environ["KEYWORDS_AI_API_KEY"] = "KEYWORDS_AI_API_KEY"
 
