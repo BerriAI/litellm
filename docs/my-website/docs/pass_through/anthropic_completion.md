@@ -257,14 +257,14 @@ curl https://api.anthropic.com/v1/messages/batches \
 ```
 
 
-## Advanced - Use with Virtual Keys 
+## Advanced
 
 Pre-requisites
 - [Setup proxy with DB](../proxy/virtual_keys.md#setup)
 
 Use this, to avoid giving developers the raw Anthropic API key, but still letting them use Anthropic endpoints.
 
-### Usage
+### Use with Virtual Keys 
 
 1. Setup environment
 
