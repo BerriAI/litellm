@@ -198,7 +198,7 @@ class AnthropicPassthroughLoggingHandler:
                 )
                 if litellm_chunk is not None:
                     all_openai_chunks.append(litellm_chunk)
-            except (StopIteration, StopAsyncIteration) as e:
+            except (StopIteration, StopAsyncIteration):
                 break
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks
