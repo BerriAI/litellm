@@ -194,14 +194,16 @@ async def vertex_proxy_route(
     verbose_proxy_logger.debug("updated url %s", updated_url)
 
     ## check for streaming
+    target = str(updated_url)
     is_streaming_request = False
     if "stream" in str(updated_url):
         is_streaming_request = True
+        target += "?alt=sse"
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
-        target=str(updated_url),
+        target=target,
         custom_headers=headers,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
