@@ -7,6 +7,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
+from litellm.caching import InMemoryCache
 
 from .types import httpxSpecialProvider
 
@@ -26,6 +27,7 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+_DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
 
 class AsyncHTTPHandler:
@@ -476,8 +478,9 @@ def get_async_httpx_client(
                 pass
 
     _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
-    if _cache_key_name in litellm.in_memory_llm_clients_cache:
-        return litellm.in_memory_llm_clients_cache[_cache_key_name]
+    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
+    if _cached_client:
+        return _cached_client
 
     if params is not None:
         _new_client = AsyncHTTPHandler(**params)
@@ -485,7 +488,11 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-    litellm.in_memory_llm_clients_cache[_cache_key_name] = _new_client
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key=_cache_key_name,
+        value=_new_client,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
     return _new_client
 
 
@@ -505,13 +512,18 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
                 pass
 
     _cache_key_name = "httpx_client" + _params_key_name
-    if _cache_key_name in litellm.in_memory_llm_clients_cache:
-        return litellm.in_memory_llm_clients_cache[_cache_key_name]
+    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
+    if _cached_client:
+        return _cached_client
 
     if params is not None:
         _new_client = HTTPHandler(**params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
-    litellm.in_memory_llm_clients_cache[_cache_key_name] = _new_client
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key=_cache_key_name,
+        value=_new_client,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
     return _new_client

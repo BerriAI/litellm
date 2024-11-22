@@ -13,23 +13,14 @@ from typing_extensions import (
 )
 
 
-class Field(TypedDict):
-    key: str
-    value: Dict[str, Any]
-
-
-class FunctionCallArgs(TypedDict):
-    fields: Field
-
-
 class FunctionResponse(TypedDict):
     name: str
-    response: FunctionCallArgs
+    response: Optional[dict]
 
 
 class FunctionCall(TypedDict):
     name: str
-    args: FunctionCallArgs
+    args: Optional[dict]
 
 
 class FileDataType(TypedDict):
