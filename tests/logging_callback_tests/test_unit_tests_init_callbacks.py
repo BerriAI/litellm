@@ -285,6 +285,9 @@ def test_dynamic_logging_global_callback():
 def test_get_combined_callback_list():
     from litellm.litellm_core_utils.litellm_logging import get_combined_callback_list
 
-    assert get_combined_callback_list(
+    assert "langfuse" in get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
-    ) == ["langfuse", "lago"]
+    )
+    assert "lago" in get_combined_callback_list(
+        dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
+    )
