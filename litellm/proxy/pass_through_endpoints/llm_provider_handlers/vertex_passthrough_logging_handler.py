@@ -132,7 +132,7 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response = (
             VertexPassthroughLoggingHandler._build_complete_streaming_response(
