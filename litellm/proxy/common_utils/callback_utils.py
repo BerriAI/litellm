@@ -242,7 +242,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
         if "prometheus" in value:
             if premium_user is not True:
-                raise Exception(CommonProxyErrors.not_premium_user.value)
+                verbose_proxy_logger.warning(
+                    f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+                )
             from litellm.proxy.proxy_server import app
 
             verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")

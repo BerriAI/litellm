@@ -45,7 +45,10 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         response = None
         try:
             if client is None or isinstance(client, AsyncHTTPHandler):
-                self.async_client = AsyncHTTPHandler(timeout=timeout)  # type: ignore
+                self.async_client = get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.OPENAI,
+                    params={"timeout": timeout},
+                )
             else:
                 self.async_client = client
 
@@ -62,7 +65,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
-                    message=response.text if response else str(e),
+                    message=e.response.text if e.response else str(e),
                 )
             except httpx.TimeoutException:
                 raise OpenAILikeError(

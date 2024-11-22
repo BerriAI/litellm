@@ -2867,6 +2867,7 @@ def test_gemini_function_call_parameter_in_messages():
             print(e)
 
         # mock_client.assert_any_call()
+
         assert {
             "contents": [
                 {
@@ -2879,12 +2880,7 @@ def test_gemini_function_call_parameter_in_messages():
                         {
                             "function_call": {
                                 "name": "search",
-                                "args": {
-                                    "fields": {
-                                        "key": "queries",
-                                        "value": {"list_value": ["weather in boston"]},
-                                    }
-                                },
+                                "args": {"queries": ["weather in boston"]},
                             }
                         }
                     ],
@@ -2895,12 +2891,7 @@ def test_gemini_function_call_parameter_in_messages():
                             "function_response": {
                                 "name": "search",
                                 "response": {
-                                    "fields": {
-                                        "key": "content",
-                                        "value": {
-                                            "string_value": "The current weather in Boston is 22°F."
-                                        },
-                                    }
+                                    "content": "The current weather in Boston is 22°F."
                                 },
                             }
                         }
@@ -2935,6 +2926,7 @@ def test_gemini_function_call_parameter_in_messages():
 
 
 def test_gemini_function_call_parameter_in_messages_2():
+    litellm.set_verbose = True
     from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
@@ -2958,6 +2950,7 @@ def test_gemini_function_call_parameter_in_messages_2():
 
     returned_contents = _gemini_convert_messages_with_history(messages=messages)
 
+    print(f"returned_contents: {returned_contents}")
     assert returned_contents == [
         {
             "role": "user",
@@ -2970,12 +2963,7 @@ def test_gemini_function_call_parameter_in_messages_2():
                 {
                     "function_call": {
                         "name": "search",
-                        "args": {
-                            "fields": {
-                                "key": "queries",
-                                "value": {"list_value": ["weather in boston"]},
-                            }
-                        },
+                        "args": {"queries": ["weather in boston"]},
                     }
                 },
             ],
@@ -2986,12 +2974,7 @@ def test_gemini_function_call_parameter_in_messages_2():
                     "function_response": {
                         "name": "search",
                         "response": {
-                            "fields": {
-                                "key": "content",
-                                "value": {
-                                    "string_value": "The weather in Boston is 100 degrees."
-                                },
-                            }
+                            "content": "The weather in Boston is 100 degrees."
                         },
                     }
                 }
@@ -3129,9 +3112,12 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
         assert all(isinstance(x, float) for x in embedding["embedding"])
 
 
+@pytest.mark.parametrize("max_retries", [None, 3])
 @pytest.mark.asyncio
 @pytest.mark.respx
-async def test_vertexai_model_garden_model_completion(respx_mock: MockRouter):
+async def test_vertexai_model_garden_model_completion(
+    respx_mock: MockRouter, max_retries
+):
     """
     Relevant issue: https://github.com/BerriAI/litellm/issues/6480
 
@@ -3189,6 +3175,7 @@ async def test_vertexai_model_garden_model_completion(respx_mock: MockRouter):
         messages=messages,
         vertex_project="633608382793",
         vertex_location="us-central1",
+        max_retries=max_retries,
     )
 
     # Assert request was made correctly

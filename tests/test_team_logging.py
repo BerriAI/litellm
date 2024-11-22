@@ -97,9 +97,10 @@ async def test_aaateam_logging():
             langfuse_client = langfuse.Langfuse(
                 public_key=os.getenv("LANGFUSE_PROJECT1_PUBLIC"),
                 secret_key=os.getenv("LANGFUSE_PROJECT1_SECRET"),
+                host="https://us.cloud.langfuse.com",
             )
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
             print(f"searching for trace_id={_trace_id} on langfuse")
 
@@ -163,7 +164,7 @@ async def test_team_2logging():
                 host=langfuse_host,
             )
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
             print(f"searching for trace_id={_trace_id} on langfuse")
 
@@ -177,6 +178,7 @@ async def test_team_2logging():
             langfuse_client_1 = langfuse.Langfuse(
                 public_key=os.getenv("LANGFUSE_PROJECT1_PUBLIC"),
                 secret_key=os.getenv("LANGFUSE_PROJECT1_SECRET"),
+                host="https://us.cloud.langfuse.com",
             )
 
             generations_team_1 = langfuse_client_1.get_generations(

@@ -113,7 +113,7 @@ const config = {
           {
             sidebarId: 'tutorialSidebar',
             position: 'left',
-            label: '🚀 Hosted',
+            label: 'Hosted',
             to: "docs/hosted"
           },
           {

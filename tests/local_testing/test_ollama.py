@@ -67,7 +67,8 @@ def test_ollama_json_mode():
         assert converted_params == {
             "temperature": 0.5,
             "format": "json",
-        }, f"{converted_params} != {'temperature': 0.5, 'format': 'json'}"
+            "stream": False,
+        }, f"{converted_params} != {'temperature': 0.5, 'format': 'json', 'stream': False}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

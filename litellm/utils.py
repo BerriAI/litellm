@@ -1739,15 +1739,15 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
 
     Does not raise error. Defaults to 'False'. Outputs logging.error.
     """
+    ## GET LLM PROVIDER ##
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    if custom_llm_provider == "predibase":  # predibase supports this globally
+        return True
+
     try:
-        ## GET LLM PROVIDER ##
-        model, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if custom_llm_provider == "predibase":  # predibase supports this globally
-            return True
-
         ## GET MODEL INFO
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
@@ -1755,12 +1755,17 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
 
         if model_info.get("supports_response_schema", False) is True:
             return True
-        return False
     except Exception:
-        verbose_logger.error(
-            f"Model not supports response_schema. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+        ## check if provider supports response schema globally
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            request_type="chat_completion",
         )
-        return False
+        if supported_params is not None and "response_schema" in supported_params:
+            return True
+
+    return False
 
 
 def supports_function_calling(
@@ -2125,6 +2130,7 @@ def get_optional_params_transcription(
     prompt: Optional[str] = None,
     response_format: Optional[str] = None,
     temperature: Optional[int] = None,
+    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
     custom_llm_provider: Optional[str] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
@@ -2382,6 +2388,16 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             kwargs,
         ) = litellm.VertexAITextEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+    elif custom_llm_provider == "lm_studio":
+        supported_params = (
+            litellm.LmStudioEmbeddingConfig().get_supported_openai_params()
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.LmStudioEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}
         )
         final_params = {**optional_params, **kwargs}
         return final_params
@@ -2699,6 +2715,7 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params["response_format"] = type_to_response_format_param(
             response_format=non_default_params["response_format"]
         )
+
     if "tools" in non_default_params and isinstance(
         non_default_params, list
     ):  # fixes https://github.com/BerriAI/litellm/issues/4933
@@ -3248,24 +3265,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if max_tokens is not None:
-            optional_params["num_predict"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if seed is not None:
-            optional_params["seed"] = seed
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if frequency_penalty is not None:
-            optional_params["repeat_penalty"] = frequency_penalty
-        if stop is not None:
-            optional_params["stop"] = stop
-        if response_format is not None and response_format["type"] == "json_object":
-            optional_params["format"] = "json"
+        optional_params = litellm.OllamaConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+        )
     elif custom_llm_provider == "ollama_chat":
-        supported_params = litellm.OllamaChatConfig().get_supported_openai_params()
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
         _check_valid_arg(supported_params=supported_params)
 
@@ -3483,24 +3490,16 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream is not None:
-            optional_params["stream"] = stream
-        if stop is not None:
-            optional_params["stop"] = stop
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if response_format is not None:
-            optional_params["response_format"] = response_format
-        if seed is not None:
-            optional_params["seed"] = seed
+        optional_params = litellm.GroqChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "deepseek":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6167,5 +6166,7 @@ class ProviderConfigManager:
             return litellm.OpenAIO1Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
+        elif litellm.LlmProviders.GROQ == provider:
+            return litellm.GroqChatConfig()
 
         return OpenAIGPTConfig()

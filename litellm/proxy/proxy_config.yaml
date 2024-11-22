@@ -1,14 +1,9 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/fake
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-
-
-general_settings:
-  key_management_system: "aws_secret_manager" 
-  key_management_settings: 
-    store_virtual_keys: true
-    access_mode: "write_only"
+default_vertex_config:
+  vertex_project: "adroit-crow-413218"
+  vertex_location: "us-central1"

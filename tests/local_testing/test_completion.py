@@ -24,7 +24,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -1222,32 +1222,6 @@ def test_completion_mistral_api_modified_input():
             pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_claude2_1():
-    try:
-        litellm.set_verbose = True
-        print("claude2.1 test request")
-        messages = [
-            {
-                "role": "system",
-                "content": "Your goal is generate a joke on the topic user gives.",
-            },
-            {"role": "user", "content": "Generate a 3 liner joke for me"},
-        ]
-        # test without max tokens
-        response = completion(model="claude-2.1", messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-        print(response.usage)
-        print(response.usage.completion_tokens)
-        print(response["usage"]["completion_tokens"])
-        # print("new cost tracking")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_claude2_1()
-
-
 @pytest.mark.asyncio
 async def test_acompletion_claude2_1():
     try:
@@ -1268,6 +1242,8 @@ async def test_acompletion_claude2_1():
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
+    except litellm.InternalServerError:
+        pytest.skip("model is overloaded.")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -4514,19 +4490,22 @@ async def test_dynamic_azure_params(stream, sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_ai21_chat():
     litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="jamba-1.5-large",
-        user="ishaan",
-        tool_choice="auto",
-        seed=123,
-        messages=[{"role": "user", "content": "what does the document say"}],
-        documents=[
-            {
-                "content": "hello world",
-                "metadata": {"source": "google", "author": "ishaan"},
-            }
-        ],
-    )
+    try:
+        response = await litellm.acompletion(
+            model="jamba-1.5-large",
+            user="ishaan",
+            tool_choice="auto",
+            seed=123,
+            messages=[{"role": "user", "content": "what does the document say"}],
+            documents=[
+                {
+                    "content": "hello world",
+                    "metadata": {"source": "google", "author": "ishaan"},
+                }
+            ],
+        )
+    except litellm.InternalServerError:
+        pytest.skip("Model is overloaded")
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team/Key Based Logging
+# Team/Key Based Logging
 
 Allow each key/team to use their own Langfuse Project / custom callbacks
 
@@ -11,15 +11,13 @@ Allow each key/team to use their own Langfuse Project / custom callbacks
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
 Team 3 -> Disabled Logging (for GDPR compliance)
-
 ```
 
 ## Team Based Logging
 
-[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging.md)
 
 
-## Logging / Caching
+### Setting Team Logging via `config.yaml`
 
 Turn on/off logging and caching for a specific team id. 
 

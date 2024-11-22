@@ -1,3 +1,14 @@
+"""
+TEAM MANAGEMENT
+
+All /team management endpoints 
+
+/team/new
+/team/info
+/team/update
+/team/delete
+"""
+
 import asyncio
 import copy
 import json
@@ -39,7 +50,10 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import get_team_object
+from litellm.proxy.auth.auth_checks import (
+    allowed_route_check_inside_route,
+    get_team_object,
+)
 from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -118,6 +132,10 @@ async def new_team(  # noqa: PLR0915
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
+    - members: Optional[List] - Control team members via `/team/member/add` and `/team/member/delete`. 
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
+    - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -350,6 +368,8 @@ async def update_team(
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
 
     Example - update team TPM Limit
 
@@ -932,6 +952,9 @@ async def delete_team(
     """
     delete team and associated team keys
 
+    Parameters:
+    - team_ids: List[str] - Required. List of team IDs to delete. Example: ["team-1234", "team-5678"]
+
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
     --header 'Authorization: Bearer sk-1234' \
@@ -1021,6 +1044,9 @@ async def team_info(
 ):
     """
     get info on team + related keys
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to get info on.
 
     ```
     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
@@ -1156,6 +1182,25 @@ async def block_team(
 ):
     """
     Blocks all calls from keys with this team id.
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to block.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/block' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234"
+    }'
+    ```
+
+    Returns:
+    - The updated team record with blocked=True
+
+
+
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
@@ -1171,6 +1216,12 @@ async def block_team(
         where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
     )
 
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
+
     return record
 
 
@@ -1185,6 +1236,19 @@ async def unblock_team(
 ):
     """
     Blocks all calls from keys with this team id.
+
+    Parameters:
+    - team_id: str - Required. The unique identifier of the team to unblock.
+
+    Example:
+    ```
+    curl --location 'http://0.0.0.0:4000/team/unblock' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234"
+    }'
+    ```
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
@@ -1199,6 +1263,12 @@ async def unblock_team(
     record = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
     )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     return record
 
@@ -1219,6 +1289,9 @@ async def list_team(
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
         --header 'Authorization: Bearer sk-1234'
     ```
+
+    Parameters:
+    - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
     """
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
@@ -1227,10 +1300,8 @@ async def list_team(
         prisma_client,
     )
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-        and user_api_key_dict.user_id != user_id
+    if not allowed_route_check_inside_route(
+        user_api_key_dict=user_api_key_dict, requested_user_id=user_id
     ):
         raise HTTPException(
             status_code=401,

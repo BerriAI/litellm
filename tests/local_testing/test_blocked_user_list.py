@@ -44,7 +44,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     info_key_fn,
     update_key_fn,
 )
-from litellm.proxy.proxy_server import block_user, user_api_key_auth
+from litellm.proxy.proxy_server import user_api_key_auth
+from litellm.proxy.management_endpoints.customer_endpoints import block_user
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
     spend_user_fn,

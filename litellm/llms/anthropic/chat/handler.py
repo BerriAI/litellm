@@ -45,9 +45,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk
-from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
@@ -201,163 +199,6 @@ class AnthropicChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def _process_response(
-        self,
-        model: str,
-        response: Union[requests.Response, httpx.Response],
-        model_response: ModelResponse,
-        stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
-        optional_params: dict,
-        api_key: str,
-        data: Union[dict, str],
-        messages: List,
-        print_verbose,
-        encoding,
-        json_mode: bool,
-    ) -> ModelResponse:
-        _hidden_params: Dict = {}
-        _hidden_params["additional_headers"] = process_anthropic_headers(
-            dict(response.headers)
-        )
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-        print_verbose(f"raw model_response: {response.text}")
-        ## RESPONSE OBJECT
-        try:
-            completion_response = response.json()
-        except Exception as e:
-            response_headers = getattr(response, "headers", None)
-            raise AnthropicError(
-                message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), response.text
-                ),
-                status_code=response.status_code,
-                headers=response_headers,
-            )
-        if "error" in completion_response:
-            response_headers = getattr(response, "headers", None)
-            raise AnthropicError(
-                message=str(completion_response["error"]),
-                status_code=response.status_code,
-                headers=response_headers,
-            )
-        else:
-            text_content = ""
-            tool_calls: List[ChatCompletionToolCallChunk] = []
-            for idx, content in enumerate(completion_response["content"]):
-                if content["type"] == "text":
-                    text_content += content["text"]
-                ## TOOL CALLING
-                elif content["type"] == "tool_use":
-                    tool_calls.append(
-                        ChatCompletionToolCallChunk(
-                            id=content["id"],
-                            type="function",
-                            function=ChatCompletionToolCallFunctionChunk(
-                                name=content["name"],
-                                arguments=json.dumps(content["input"]),
-                            ),
-                            index=idx,
-                        )
-                    )
-
-            _message = litellm.Message(
-                tool_calls=tool_calls,
-                content=text_content or None,
-            )
-
-            ## HANDLE JSON MODE - anthropic returns single function call
-            if json_mode and len(tool_calls) == 1:
-                json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
-                    "arguments"
-                )
-                if json_mode_content_str is not None:
-                    _converted_message = self._convert_tool_response_to_message(
-                        tool_calls=tool_calls,
-                    )
-                    if _converted_message is not None:
-                        completion_response["stop_reason"] = "stop"
-                        _message = _converted_message
-            model_response.choices[0].message = _message  # type: ignore
-            model_response._hidden_params["original_response"] = completion_response[
-                "content"
-            ]  # allow user to access raw anthropic tool calling response
-
-            model_response.choices[0].finish_reason = map_finish_reason(
-                completion_response["stop_reason"]
-            )
-
-        ## CALCULATING USAGE
-        prompt_tokens = completion_response["usage"]["input_tokens"]
-        completion_tokens = completion_response["usage"]["output_tokens"]
-        _usage = completion_response["usage"]
-        cache_creation_input_tokens: int = 0
-        cache_read_input_tokens: int = 0
-
-        model_response.created = int(time.time())
-        model_response.model = model
-        if "cache_creation_input_tokens" in _usage:
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if "cache_read_input_tokens" in _usage:
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
-
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cache_read_input_tokens
-        )
-        total_tokens = prompt_tokens + completion_tokens
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            prompt_tokens_details=prompt_tokens_details,
-            cache_creation_input_tokens=cache_creation_input_tokens,
-            cache_read_input_tokens=cache_read_input_tokens,
-        )
-
-        setattr(model_response, "usage", usage)  # type: ignore
-
-        model_response._hidden_params = _hidden_params
-        return model_response
-
-    @staticmethod
-    def _convert_tool_response_to_message(
-        tool_calls: List[ChatCompletionToolCallChunk],
-    ) -> Optional[LitellmMessage]:
-        """
-        In JSON mode, Anthropic API returns JSON schema as a tool call, we need to convert it to a message to follow the OpenAI format
-
-        """
-        ## HANDLE JSON MODE - anthropic returns single function call
-        json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
-            "arguments"
-        )
-        try:
-            if json_mode_content_str is not None:
-                args = json.loads(json_mode_content_str)
-                if (
-                    isinstance(args, dict)
-                    and (values := args.get("values")) is not None
-                ):
-                    _message = litellm.Message(content=json.dumps(values))
-                    return _message
-                else:
-                    # a lot of the times the `values` key is not present in the tool response
-                    # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-                    _message = litellm.Message(content=json.dumps(args))
-                    return _message
-        except json.JSONDecodeError:
-            # json decode error does occur, return the original tool response str
-            return litellm.Message(content=json_mode_content_str)
-        return None
-
     async def acompletion_stream_function(
         self,
         model: str,
@@ -454,7 +295,7 @@ class AnthropicChatCompletion(BaseLLM):
                 headers=error_headers,
             )
 
-        return self._process_response(
+        return AnthropicConfig._process_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -630,7 +471,7 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=error_headers,
                     )
 
-        return self._process_response(
+        return AnthropicConfig._process_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -855,7 +696,7 @@ class ModelResponseIterator:
             tool_use: The ChatCompletionToolCallChunk to use in the chunk response
         """
         if self.json_mode is True and tool_use is not None:
-            message = AnthropicChatCompletion._convert_tool_response_to_message(
+            message = AnthropicConfig._convert_tool_response_to_message(
                 tool_calls=[tool_use]
             )
             if message is not None:
@@ -938,3 +779,32 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+        """
+        Convert a string chunk to a GenericStreamingChunk
+
+        Note: This is used for Anthropic pass through streaming logging
+
+        We can move __anext__, and __next__ to use this function since it's common logic.
+        Did not migrate them to minmize changes made in 1 PR.
+        """
+        str_line = chunk
+        if isinstance(chunk, bytes):  # Handle binary data
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
+            index = str_line.find("data:")
+            if index != -1:
+                str_line = str_line[index:]
+
+        if str_line.startswith("data:"):
+            data_json = json.loads(str_line[5:])
+            return self.chunk_parser(chunk=data_json)
+        else:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )

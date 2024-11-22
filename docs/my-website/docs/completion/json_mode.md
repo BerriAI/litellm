@@ -76,6 +76,8 @@ Works for:
 - Vertex AI models (Gemini + Anthropic)
 - Bedrock Models
 - Anthropic API Models
+- Groq Models
+- Ollama Models
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

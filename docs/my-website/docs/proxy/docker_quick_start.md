@@ -1,3 +1,7 @@
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Getting Started - E2E Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
@@ -9,13 +13,29 @@ End-to-End tutorial for LiteLLM Proxy to:
 
 ## Pre-Requisites 
 
-- Install LiteLLM Docker Image 
+- Install LiteLLM Docker Image ** OR ** LiteLLM CLI (pip package)
+
+<Tabs>
+
+<TabItem value="docker" label="Docker">
 
 ```
 docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 [**See all docker images**](https://github.com/orgs/BerriAI/packages)
+
+</TabItem>
+
+<TabItem value="pip" label="LiteLLM CLI (pip package)">
+
+```shell
+$ pip install 'litellm[proxy]'
+```
+
+</TabItem>
+
+</Tabs>
 
 ## 1. Add a model 
 
@@ -58,6 +78,11 @@ LiteLLM Proxy is 100% OpenAI-compatible. Test your azure model via the `/chat/co
 
 Save your config.yaml from step 1. as `litellm_config.yaml`.
 
+<Tabs>
+
+
+<TabItem value="docker" label="Docker">
+
 ```bash
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
@@ -69,6 +94,20 @@ docker run \
 
 # RUNNING on http://0.0.0.0:4000
 ```
+
+</TabItem>
+
+<TabItem value="pip" label="LiteLLM CLI (pip package)">
+
+```shell
+$ litellm --config /app/config.yaml --detailed_debug
+```
+
+</TabItem>
+
+
+</Tabs>
+
 
 Confirm your config.yaml got mounted correctly
 

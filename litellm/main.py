@@ -554,7 +554,6 @@ def mock_completion(
 
     Raises:
         Exception: If an error occurs during the generation of the mock completion response.
-
     Note:
         - This function is intended for testing or debugging purposes to generate mock completion responses.
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
@@ -1496,8 +1495,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,  # type: ignore
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
-                organization=organization,
                 custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
             )
         elif (
             model in litellm.open_ai_chat_completion_models
@@ -3183,6 +3182,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "azure_ai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "openai_like"
+            or custom_llm_provider == "jina_ai"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -4729,6 +4729,7 @@ def transcription(
     response_format: Optional[
         Literal["json", "text", "srt", "verbose_json", "vtt"]
     ] = None,
+    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
     temperature: Optional[int] = None,  # openai defaults this to 0
     ## LITELLM PARAMS ##
     user: Optional[str] = None,
@@ -4778,6 +4779,7 @@ def transcription(
         language=language,
         prompt=prompt,
         response_format=response_format,
+        timestamp_granularities=timestamp_granularities,
         temperature=temperature,
         custom_llm_provider=custom_llm_provider,
         drop_params=drop_params,

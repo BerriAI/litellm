@@ -24,7 +24,10 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
@@ -710,10 +713,13 @@ class RequestManager:
         if stream:
             request_params["stream"] = stream
         try:
-            self.async_handler = AsyncHTTPHandler(
-                timeout=httpx.Timeout(
-                    timeout=request_params.pop("timeout", 600.0), connect=5.0
-                ),
+            self.async_handler = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.WATSONX,
+                params={
+                    "timeout": httpx.Timeout(
+                        timeout=request_params.pop("timeout", 600.0), connect=5.0
+                    ),
+                },
             )
             if "json" in request_params:
                 request_params["data"] = json.dumps(request_params.pop("json", {}))

@@ -1026,7 +1026,9 @@ async def make_call(
     logging_obj,
 ):
     if client is None:
-        client = AsyncHTTPHandler()  # Create a new client if none provided
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI,
+        )
 
     try:
         response = await client.post(api_base, headers=headers, data=data, stream=True)

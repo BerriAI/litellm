@@ -4,9 +4,10 @@ import traceback
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
-from httpx import USE_CLIENT_DEFAULT
+from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
+from litellm.caching import InMemoryCache
 
 from .types import httpxSpecialProvider
 
@@ -26,6 +27,7 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+_DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
 
 class AsyncHTTPHandler:
@@ -60,8 +62,10 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
+        transport = self._create_async_transport()
 
         return httpx.AsyncClient(
+            transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
             limits=httpx.Limits(
@@ -297,6 +301,18 @@ class AsyncHTTPHandler:
         except Exception:
             pass
 
+    def _create_async_transport(self) -> Optional[AsyncHTTPTransport]:
+        """
+        Create an async transport with IPv4 only if litellm.force_ipv4 is True.
+        Otherwise, return None.
+
+        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+        """
+        if litellm.force_ipv4:
+            return AsyncHTTPTransport(local_address="0.0.0.0")
+        else:
+            return None
+
 
 class HTTPHandler:
     def __init__(
@@ -316,8 +332,11 @@ class HTTPHandler:
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
         if client is None:
+            transport = self._create_sync_transport()
+
             # Create a client with a connection pool
             self.client = httpx.Client(
+                transport=transport,
                 timeout=timeout,
                 limits=httpx.Limits(
                     max_connections=concurrent_limit,
@@ -427,6 +446,18 @@ class HTTPHandler:
         except Exception:
             pass
 
+    def _create_sync_transport(self) -> Optional[HTTPTransport]:
+        """
+        Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
+        Otherwise, return None.
+
+        Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+        """
+        if litellm.force_ipv4:
+            return HTTPTransport(local_address="0.0.0.0")
+        else:
+            return None
+
 
 def get_async_httpx_client(
     llm_provider: Union[LlmProviders, httpxSpecialProvider],
@@ -447,8 +478,9 @@ def get_async_httpx_client(
                 pass
 
     _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
-    if _cache_key_name in litellm.in_memory_llm_clients_cache:
-        return litellm.in_memory_llm_clients_cache[_cache_key_name]
+    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
+    if _cached_client:
+        return _cached_client
 
     if params is not None:
         _new_client = AsyncHTTPHandler(**params)
@@ -456,7 +488,11 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-    litellm.in_memory_llm_clients_cache[_cache_key_name] = _new_client
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key=_cache_key_name,
+        value=_new_client,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
     return _new_client
 
 
@@ -476,13 +512,18 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
                 pass
 
     _cache_key_name = "httpx_client" + _params_key_name
-    if _cache_key_name in litellm.in_memory_llm_clients_cache:
-        return litellm.in_memory_llm_clients_cache[_cache_key_name]
+    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
+    if _cached_client:
+        return _cached_client
 
     if params is not None:
         _new_client = HTTPHandler(**params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
-    litellm.in_memory_llm_clients_cache[_cache_key_name] = _new_client
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key=_cache_key_name,
+        value=_new_client,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
     return _new_client

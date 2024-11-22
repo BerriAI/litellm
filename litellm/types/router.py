@@ -434,6 +434,9 @@ class RouterErrors(enum.Enum):
     no_deployments_with_tag_routing = (
         "Not allowed to access model due to tags configuration"
     )
+    no_deployments_with_provider_budget_routing = (
+        "No deployments available - crossed budget for provider"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -628,3 +631,12 @@ class RoutingStrategy(enum.Enum):
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
+    PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
+
+
+class ProviderBudgetInfo(BaseModel):
+    time_period: str  # e.g., '1d', '30d'
+    budget_limit: float
+
+
+ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]
