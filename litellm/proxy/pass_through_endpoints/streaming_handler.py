@@ -20,6 +20,9 @@ from litellm.types.utils import GenericStreamingChunk
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.vertex_passthrough_logging_handler import (
+    VertexPassthroughLoggingHandler,
+)
 from .success_handler import PassThroughEndpointLogging
 from .types import EndpointType
 
@@ -100,7 +103,16 @@ async def _route_streaming_logging_to_handler(
             end_time=end_time,
         )
     elif endpoint_type == EndpointType.VERTEX_AI:
-        pass
+        await VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+            litellm_logging_obj=litellm_logging_obj,
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=endpoint_type,
+            start_time=start_time,
+            all_chunks=all_chunks,
+            end_time=end_time,
+        )
     elif endpoint_type == EndpointType.GENERIC:
         # No logging is supported for generic streaming endpoints
         pass
