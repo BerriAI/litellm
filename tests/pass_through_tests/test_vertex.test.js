@@ -1,4 +1,8 @@
 const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { writeFileSync } = require('fs');
 
 
 // Import fetch if the SDK uses it
@@ -13,6 +17,45 @@ global.fetch = async function patchedFetch(url, options) {
     console.log('Patched fetch sending request to:', url);
     return originalFetch(url, options);
 };
+
+function loadVertexAiCredentials() {
+    console.log("loading vertex ai credentials");
+    const filepath = path.dirname(__filename);
+    const vertexKeyPath = path.join(filepath, "vertex_key.json");
+
+    // Initialize default empty service account data
+    let serviceAccountKeyData = {};
+
+    // Try to read existing vertex_key.json
+    try {
+        const content = fs.readFileSync(vertexKeyPath, 'utf8');
+        if (content && content.trim()) {
+            serviceAccountKeyData = JSON.parse(content);
+        }
+    } catch (error) {
+        // File doesn't exist or is invalid, continue with empty object
+    }
+
+    // Update with environment variables
+    const privateKeyId = process.env.VERTEX_AI_PRIVATE_KEY_ID || "";
+    const privateKey = (process.env.VERTEX_AI_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+    
+    serviceAccountKeyData.private_key_id = privateKeyId;
+    serviceAccountKeyData.private_key = privateKey;
+
+    // Create temporary file
+    const tempFilePath = path.join(os.tmpdir(), `vertex-credentials-${Date.now()}.json`);
+    writeFileSync(tempFilePath, JSON.stringify(serviceAccountKeyData, null, 2));
+    
+    // Set environment variable
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = tempFilePath;
+}
+
+// Run credential loading before tests
+beforeAll(() => {
+    loadVertexAiCredentials();
+});
+
 
 
 describe('Vertex AI Tests', () => {
