@@ -48,7 +48,8 @@ async def chunk_processor(
                 continue
 
             # Handle SSE format - pass through the raw SSE format
-            chunk = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+            if isinstance(chunk, bytes):
+                chunk = chunk.decode("utf-8")
 
             # Store the chunk for post-processing
             if chunk.strip():  # Only store non-empty chunks
