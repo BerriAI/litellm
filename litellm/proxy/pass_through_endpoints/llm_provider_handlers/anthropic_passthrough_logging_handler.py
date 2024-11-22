@@ -115,6 +115,9 @@ class AnthropicPassthroughLoggingHandler:
             "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
         )
         kwargs["standard_logging_object"] = standard_logging_object
+
+        # set litellm_call_id to logging response object
+        litellm_model_response.id = logging_obj.litellm_call_id
         return kwargs
 
     @staticmethod
