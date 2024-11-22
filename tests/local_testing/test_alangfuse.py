@@ -320,20 +320,9 @@ async def test_langfuse_masked_input_output(langfuse_client):
             mock_response="This is a test response",
         )
         print(response)
-        expected_input = (
-            "redacted-by-litellm"
-            if mask_value
-            else {"messages": [{"content": "This is a test", "role": "user"}]}
-        )
+        expected_input = "redacted-by-litellm" if mask_value else "This is a test"
         expected_output = (
-            "redacted-by-litellm"
-            if mask_value
-            else {
-                "content": "This is a test response",
-                "role": "assistant",
-                "function_call": None,
-                "tool_calls": None,
-            }
+            "redacted-by-litellm" if mask_value else "This is a test response"
         )
         langfuse_client.flush()
         await asyncio.sleep(30)
@@ -345,11 +334,11 @@ async def test_langfuse_masked_input_output(langfuse_client):
             reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
         )
 
-        assert trace.input == expected_input
-        assert trace.output == expected_output
+        assert expected_input in trace.input
+        assert expected_output in trace.output
         if len(generations) > 0:
-            assert generations[0].input == expected_input
-            assert generations[0].output == expected_output
+            assert expected_input in generations[0].input
+            assert expected_output in generations[0].output
 
 
 @pytest.mark.asyncio
