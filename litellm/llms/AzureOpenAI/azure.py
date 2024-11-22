@@ -12,7 +12,11 @@ from typing_extensions import overload
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import (
     CustomStreamWrapper,
@@ -977,7 +981,10 @@ class AzureChatCompletion(BaseLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            async_handler = AsyncHTTPHandler(**_params)  # type: ignore
+            async_handler = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.AZURE,
+                params=_params,
+            )
         else:
             async_handler = client  # type: ignore
 

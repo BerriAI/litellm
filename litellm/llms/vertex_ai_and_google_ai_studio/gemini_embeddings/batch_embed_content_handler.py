@@ -7,8 +7,13 @@ from typing import Any, List, Literal, Optional, Union
 
 import httpx
 
+import litellm
 from litellm import EmbeddingResponse
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
     VertexAIBatchEmbeddingsRequestBody,
@@ -150,7 +155,10 @@ class GoogleBatchEmbeddings(VertexLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            async_handler: AsyncHTTPHandler = AsyncHTTPHandler(**_params)  # type: ignore
+            async_handler: AsyncHTTPHandler = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.VERTEX_AI,
+                params={"timeout": timeout},
+            )
         else:
             async_handler = client  # type: ignore
 
