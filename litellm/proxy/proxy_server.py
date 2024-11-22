@@ -203,6 +203,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
 from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    router as llm_passthrough_router,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
@@ -232,9 +235,6 @@ from litellm.proxy.utils import (
     hash_token,
     reset_budget,
     update_spend,
-)
-from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
-    router as gemini_router,
 )
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
@@ -9128,7 +9128,7 @@ app.include_router(router)
 app.include_router(rerank_router)
 app.include_router(fine_tuning_router)
 app.include_router(vertex_router)
-app.include_router(gemini_router)
+app.include_router(llm_passthrough_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)
 app.include_router(health_router)

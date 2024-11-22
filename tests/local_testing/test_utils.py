@@ -749,6 +749,7 @@ def test_convert_model_response_object():
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
         ("gpt-3.5-turbo", False),
+        ("groq/llama3-70b-8192", True),
     ],
 )
 def test_supports_response_schema(model, expected_bool):

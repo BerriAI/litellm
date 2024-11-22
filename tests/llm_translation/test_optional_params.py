@@ -952,3 +952,17 @@ def test_lm_studio_embedding_params():
         drop_params=True,
     )
     assert len(optional_params) == 0
+
+
+def test_ollama_pydantic_obj():
+    from pydantic import BaseModel
+
+    class ResponseFormat(BaseModel):
+        x: str
+        y: str
+
+    get_optional_params(
+        model="qwen2:0.5b",
+        custom_llm_provider="ollama",
+        response_format=ResponseFormat,
+    )

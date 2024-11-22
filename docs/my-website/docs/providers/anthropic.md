@@ -10,6 +10,35 @@ LiteLLM supports all anthropic models.
 - `claude-2.1`
 - `claude-instant-1.2`
 
+
+| Property | Details |
+|-------|-------|
+| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. |
+| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`) |
+| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview) |
+| API Endpoint for Provider | https://api.anthropic.com |
+| Supported Endpoints | `/chat/completions` |
+
+
+## Supported OpenAI Parameters
+
+Check this in code, [here](../completion/input.md#translated-openai-params)
+
+```
+"stream",
+"stop",
+"temperature",
+"top_p",
+"max_tokens",
+"max_completion_tokens",
+"tools",
+"tool_choice",
+"extra_headers",
+"parallel_tool_calls",
+"response_format",
+"user"
+```
+
 :::info
 
 Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
@@ -1006,20 +1035,3 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
-
-## All Supported OpenAI Params
-
-```
-"stream",
-"stop",
-"temperature",
-"top_p",
-"max_tokens",
-"max_completion_tokens",
-"tools",
-"tool_choice",
-"extra_headers",
-"parallel_tool_calls",
-"response_format",
-"user"
-```

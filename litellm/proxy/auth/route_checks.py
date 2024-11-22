@@ -192,6 +192,10 @@ class RouteChecks:
             return True
         if "/langfuse/" in route:
             return True
+        if "/anthropic/" in route:
+            return True
+        if "/azure/" in route:
+            return True
         return False
 
     @staticmethod
