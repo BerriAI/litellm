@@ -308,26 +308,6 @@ def get_endpoint_type(url: str) -> EndpointType:
     return EndpointType.GENERIC
 
 
-async def stream_response(
-    response: httpx.Response,
-    request_body: Optional[dict],
-    logging_obj: LiteLLMLoggingObj,
-    endpoint_type: EndpointType,
-    start_time: datetime,
-    url: str,
-) -> AsyncIterable[Union[str, bytes]]:
-    async for chunk in chunk_processor(
-        response=response,
-        request_body=request_body,
-        litellm_logging_obj=logging_obj,
-        endpoint_type=endpoint_type,
-        start_time=start_time,
-        passthrough_success_handler_obj=pass_through_endpoint_logging,
-        url_route=str(url),
-    ):
-        yield chunk
-
-
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
@@ -448,7 +428,6 @@ async def pass_through_request(  # noqa: PLR0915
                 "headers": headers,
             },
         )
-
         if stream:
             req = async_client.build_request(
                 "POST",
@@ -468,13 +447,14 @@ async def pass_through_request(  # noqa: PLR0915
                 )
 
             return StreamingResponse(
-                stream_response(
+                chunk_processor(
                     response=response,
                     request_body=_parsed_body,
-                    logging_obj=logging_obj,
+                    litellm_logging_obj=logging_obj,
                     endpoint_type=endpoint_type,
                     start_time=start_time,
-                    url=str(url),
+                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                    url_route=str(url),
                 ),
                 headers=get_response_headers(response.headers),
                 status_code=response.status_code,
@@ -507,13 +487,14 @@ async def pass_through_request(  # noqa: PLR0915
                 )
 
             return StreamingResponse(
-                stream_response(
+                chunk_processor(
                     response=response,
                     request_body=_parsed_body,
-                    logging_obj=logging_obj,
+                    litellm_logging_obj=logging_obj,
                     endpoint_type=endpoint_type,
                     start_time=start_time,
-                    url=str(url),
+                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                    url_route=str(url),
                 ),
                 headers=get_response_headers(response.headers),
                 status_code=response.status_code,
