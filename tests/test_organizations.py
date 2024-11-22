@@ -39,13 +39,12 @@ async def list_organization(session, i):
         response_json = await response.json()
 
         print(f"Response {i} (Status code: {status}):")
-        print(response_json)
         print()
 
         if status != 200:
             raise Exception(f"Request {i} did not return a 200 status code: {status}")
 
-        return await response.json()
+        return response_json
 
 
 @pytest.mark.asyncio
