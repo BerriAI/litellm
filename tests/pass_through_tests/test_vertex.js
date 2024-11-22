@@ -1,43 +1,40 @@
+const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
 
-const {
-    FunctionDeclarationSchemaType,
-    HarmBlockThreshold,
-    HarmCategory,
-    VertexAI,
-    RequestOptions
-  } = require('@google-cloud/vertexai');
-  
-  const project = 'adroit-crow-413218';
-  const location = 'us-central1';
-  const textModel =  'gemini-1.0-pro';
-  const visionModel = 'gemini-1.0-pro-vision';
+const vertexAI = new VertexAI({
+    project: 'adroit-crow-413218',
+    location: 'us-central1',
+    apiEndpoint: "localhost:4000/vertex-ai"
+});
 
-  
-  const vertexAI = new VertexAI({project: project, location: location, apiEndpoint: "localhost:4000/vertex-ai"});
-  
-  // Instantiate Gemini models
-  const generativeModel = vertexAI.getGenerativeModel({
-      model: textModel,
-      // The following parameters are optional
-      // They can also be passed to individual content generation requests
-      safetySettings: [{category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE}],
-      generationConfig: {maxOutputTokens: 256},
-      systemInstruction: {
-        role: 'system',
-        parts: [{"text": `For example, you are a helpful customer service agent. tell me your name. in 5 pages`}]
-      },
-  })
+// Create customHeaders using Headers
+const customHeaders = new Headers({
+    "X-Litellm-Api-Key": "sk-1234"
+});
 
-async function streamGenerateContent() {
-    const request = {
-      contents: [{role: 'user', parts: [{text: 'How are you doing today?'}]}],
-    };
-    const streamingResult = await generativeModel.generateContentStream(request);
-    for await (const item of streamingResult.stream) {
-      console.log('stream chunk: ', JSON.stringify(item));
+// Use customHeaders in RequestOptions
+const requestOptions = {
+    customHeaders: customHeaders
+};
+
+const generativeModel = vertexAI.getGenerativeModel(
+    { model: 'gemini-1.0-pro' },
+    requestOptions
+);
+
+async function testModel() {
+    try {
+        const request = {
+            contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
+          };
+        const streamingResult = await generativeModel.generateContentStream(request);
+        for await (const item of streamingResult.stream) {
+            console.log('stream chunk: ', JSON.stringify(item));
+        }
+        const aggregatedResponse = await streamingResult.response;
+        console.log('aggregated response: ', JSON.stringify(aggregatedResponse));
+    } catch (error) {
+        console.error('Error:', error);
     }
-    const aggregatedResponse = await streamingResult.response;
-    console.log('aggregated response: ', JSON.stringify(aggregatedResponse));
-  };
-  
-  streamGenerateContent();
+}
+
+testModel();
