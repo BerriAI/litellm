@@ -99,7 +99,7 @@ async def test_aaateam_logging():
                 secret_key=os.getenv("LANGFUSE_PROJECT1_SECRET"),
             )
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
             print(f"searching for trace_id={_trace_id} on langfuse")
 
@@ -163,7 +163,7 @@ async def test_team_2logging():
                 host=langfuse_host,
             )
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
             print(f"searching for trace_id={_trace_id} on langfuse")
 
