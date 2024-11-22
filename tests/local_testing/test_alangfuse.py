@@ -38,7 +38,7 @@ def langfuse_client():
         langfuse_client = langfuse.Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=None,
+            host="https://us.cloud.langfuse.com",
         )
         litellm.in_memory_llm_clients_cache.set_cache(
             key=_langfuse_cache_key,
@@ -268,8 +268,8 @@ audio_file = open(file_path, "rb")
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=12, delay=2)
-async def test_langfuse_logging_audio_transcriptions(langfuse_client):
+@pytest.mark.flaky(retries=4, delay=2)
+async def test_langfuse_logging_audio_transcriptions():
     """
     Test that creates a trace with masked input and output
     """
@@ -287,9 +287,10 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     )
 
     langfuse_client.flush()
-    await asyncio.sleep(5)
+    await asyncio.sleep(20)
 
     # get trace with _unique_trace_name
+    print("lookiing up trace", _unique_trace_name)
     trace = langfuse_client.get_trace(id=_unique_trace_name)
     generations = list(
         reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
@@ -341,10 +342,11 @@ async def test_langfuse_masked_input_output(langfuse_client):
             }
         )
         langfuse_client.flush()
-        await asyncio.sleep(2)
+        await asyncio.sleep(30)
 
         # get trace with _unique_trace_name
         trace = langfuse_client.get_trace(id=_unique_trace_name)
+        print("trace_from_langfuse", trace)
         generations = list(
             reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
         )
