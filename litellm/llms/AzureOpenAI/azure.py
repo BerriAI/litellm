@@ -1528,7 +1528,8 @@ class AzureChatCompletion(BaseLLM):
         prompt: Optional[str] = None,
     ) -> dict:
         client_session = (
-            litellm.aclient_session or httpx.AsyncClient()
+            litellm.aclient_session
+            or get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE).client
         )  # handle dall-e-2 calls
 
         if "gateway.ai.cloudflare.com" in api_base:

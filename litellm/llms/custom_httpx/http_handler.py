@@ -8,8 +8,7 @@ from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
 from litellm.caching import InMemoryCache
-
-from .types import httpxSpecialProvider
+from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
     from litellm import LlmProviders
