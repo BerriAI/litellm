@@ -1435,7 +1435,7 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            npx playwright test --reporter=html --output=test-results
+            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
           no_output_timeout: 120m
       - store_test_results:
           path: test-results
