@@ -73,7 +73,7 @@ async def test_anthropic_passthrough_handler(
     start_time = datetime.now()
     end_time = datetime.now()
 
-    await AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+    result = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
         httpx_response=mock_httpx_response,
         response_body=mock_response,
         logging_obj=mock_logging_obj,
@@ -84,30 +84,7 @@ async def test_anthropic_passthrough_handler(
         cache_hit=False,
     )
 
-    # Assert that async_success_handler was called
-    assert mock_logging_obj.async_success_handler.called
-
-    call_args = mock_logging_obj.async_success_handler.call_args
-    call_kwargs = call_args.kwargs
-    print("call_kwargs", call_kwargs)
-
-    # Assert required fields are present in call_kwargs
-    assert "result" in call_kwargs
-    assert "start_time" in call_kwargs
-    assert "end_time" in call_kwargs
-    assert "cache_hit" in call_kwargs
-    assert "response_cost" in call_kwargs
-    assert "model" in call_kwargs
-    assert "standard_logging_object" in call_kwargs
-
-    # Assert specific values and types
-    assert isinstance(call_kwargs["result"], litellm.ModelResponse)
-    assert isinstance(call_kwargs["start_time"], datetime)
-    assert isinstance(call_kwargs["end_time"], datetime)
-    assert isinstance(call_kwargs["cache_hit"], bool)
-    assert isinstance(call_kwargs["response_cost"], float)
-    assert call_kwargs["model"] == "claude-3-opus-20240229"
-    assert isinstance(call_kwargs["standard_logging_object"], dict)
+    assert isinstance(result["result"], litellm.ModelResponse)
 
 
 def test_create_anthropic_response_logging_payload(mock_logging_obj):

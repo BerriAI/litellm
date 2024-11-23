@@ -153,6 +153,11 @@ class VertexPassthroughLoggingHandler:
             verbose_proxy_logger.error(
                 "Unable to build complete streaming response for Vertex passthrough endpoint, not logging..."
             )
+            return {
+                "result": None,
+                "kwargs": kwargs,
+            }
+
         kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
             litellm_model_response=complete_streaming_response,
             model=model,
