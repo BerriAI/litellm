@@ -6170,3 +6170,13 @@ class ProviderConfigManager:
             return litellm.GroqChatConfig()
 
         return OpenAIGPTConfig()
+
+
+def get_end_user_id_for_cost_tracking(litellm_params: dict) -> Optional[str]:
+    """
+    Used for enforcing `disable_end_user_cost_tracking` param.
+    """
+    proxy_server_request = litellm_params.get("proxy_server_request") or {}
+    if litellm.disable_end_user_cost_tracking:
+        return None
+    return proxy_server_request.get("body", {}).get("user", None)

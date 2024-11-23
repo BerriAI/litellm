@@ -1012,3 +1012,23 @@ def test_models_by_provider():
 
     for provider in providers:
         assert provider in models_by_provider.keys()
+
+
+@pytest.mark.parametrize(
+    "litellm_params, disable_end_user_cost_tracking, expected_end_user_id",
+    [
+        ({}, False, None),
+        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
+        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+    ],
+)
+def test_get_end_user_id_for_cost_tracking(
+    litellm_params, disable_end_user_cost_tracking, expected_end_user_id
+):
+    from litellm.utils import get_end_user_id_for_cost_tracking
+
+    litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
+    assert (
+        get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
+        == expected_end_user_id
+    )

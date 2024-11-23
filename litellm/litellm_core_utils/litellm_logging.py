@@ -934,19 +934,10 @@ class Logging:
                         status="success",
                     )
                 )
-            if self.dynamic_success_callbacks is not None and isinstance(
-                self.dynamic_success_callbacks, list
-            ):
-                callbacks = self.dynamic_success_callbacks
-                ## keep the internal functions ##
-                for callback in litellm.success_callback:
-                    if (
-                        isinstance(callback, CustomLogger)
-                        and "_PROXY_" in callback.__class__.__name__
-                    ):
-                        callbacks.append(callback)
-            else:
-                callbacks = litellm.success_callback
+            callbacks = get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_success_callbacks,
+                global_callbacks=litellm.success_callback,
+            )
 
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
@@ -1368,8 +1359,11 @@ class Logging:
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
-                            "success callbacks: Running Custom Callback Function"
+                            "success callbacks: Running Custom Callback Function - {}".format(
+                                callback
+                            )
                         )
+
                         customLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
@@ -1466,21 +1460,10 @@ class Logging:
                     status="success",
                 )
             )
-        if self.dynamic_async_success_callbacks is not None and isinstance(
-            self.dynamic_async_success_callbacks, list
-        ):
-            callbacks = self.dynamic_async_success_callbacks
-            ## keep the internal functions ##
-            for callback in litellm._async_success_callback:
-                callback_name = ""
-                if isinstance(callback, CustomLogger):
-                    callback_name = callback.__class__.__name__
-                if callable(callback):
-                    callback_name = callback.__name__
-                if "_PROXY_" in callback_name:
-                    callbacks.append(callback)
-        else:
-            callbacks = litellm._async_success_callback
+        callbacks = get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_async_success_callbacks,
+            global_callbacks=litellm._async_success_callback,
+        )
 
         result = redact_message_input_output_from_logging(
             model_call_details=(
@@ -1747,21 +1730,10 @@ class Logging:
                 start_time=start_time,
                 end_time=end_time,
             )
-            callbacks = []  # init this to empty incase it's not created
-
-            if self.dynamic_failure_callbacks is not None and isinstance(
-                self.dynamic_failure_callbacks, list
-            ):
-                callbacks = self.dynamic_failure_callbacks
-                ## keep the internal functions ##
-                for callback in litellm.failure_callback:
-                    if (
-                        isinstance(callback, CustomLogger)
-                        and "_PROXY_" in callback.__class__.__name__
-                    ):
-                        callbacks.append(callback)
-            else:
-                callbacks = litellm.failure_callback
+            callbacks = get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_failure_callbacks,
+                global_callbacks=litellm.failure_callback,
+            )
 
             result = None  # result sent to all loggers, init this to None incase it's not created
 
@@ -1944,21 +1916,10 @@ class Logging:
             end_time=end_time,
         )
 
-        callbacks = []  # init this to empty incase it's not created
-
-        if self.dynamic_async_failure_callbacks is not None and isinstance(
-            self.dynamic_async_failure_callbacks, list
-        ):
-            callbacks = self.dynamic_async_failure_callbacks
-            ## keep the internal functions ##
-            for callback in litellm._async_failure_callback:
-                if (
-                    isinstance(callback, CustomLogger)
-                    and "_PROXY_" in callback.__class__.__name__
-                ):
-                    callbacks.append(callback)
-        else:
-            callbacks = litellm._async_failure_callback
+        callbacks = get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+            global_callbacks=litellm._async_failure_callback,
+        )
 
         result = None  # result sent to all loggers, init this to None incase it's not created
         for callback in callbacks:
@@ -2358,6 +2319,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _mlflow_logger = MlflowLogger()
         _in_memory_loggers.append(_mlflow_logger)
         return _mlflow_logger  # type: ignore
+
 
 def get_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
@@ -2949,3 +2911,11 @@ def modify_integration(integration_name, integration_params):
     if integration_name == "supabase":
         if "table_name" in integration_params:
             Supabase.supabase_table_name = integration_params["table_name"]
+
+
+def get_combined_callback_list(
+    dynamic_success_callbacks: Optional[List], global_callbacks: List
+) -> List:
+    if dynamic_success_callbacks is None:
+        return global_callbacks
+    return list(set(dynamic_success_callbacks + global_callbacks))

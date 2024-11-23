@@ -2,6 +2,7 @@ import enum
 import json
 import os
 import sys
+import traceback
 import uuid
 from dataclasses import fields
 from datetime import datetime
@@ -12,7 +13,15 @@ from typing_extensions import Annotated, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
-from litellm.types.utils import ProviderField, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ProviderField,
+    StandardCallbackDynamicParams,
+    StandardPassThroughResponseObject,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -882,15 +891,7 @@ class DeleteCustomerRequest(LiteLLMBase):
     user_ids: List[str]
 
 
-class Member(LiteLLMBase):
-    role: Literal[
-        LitellmUserRoles.ORG_ADMIN,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        # older Member roles
-        "admin",
-        "user",
-    ]
+class MemberBase(LiteLLMBase):
     user_id: Optional[str] = None
     user_email: Optional[str] = None
 
@@ -902,6 +903,21 @@ class Member(LiteLLMBase):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class Member(MemberBase):
+    role: Literal[
+        "admin",
+        "user",
+    ]
+
+
+class OrgMember(MemberBase):
+    role: Literal[
+        LitellmUserRoles.ORG_ADMIN,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ]
 
 
 class TeamBase(LiteLLMBase):
@@ -1966,6 +1982,26 @@ class MemberAddRequest(LiteLLMBase):
             # Replace member_data with the single Member object
             data["member"] = member
         # Call the superclass __init__ method to initialize the object
+        traceback.print_stack()
+        super().__init__(**data)
+
+
+class OrgMemberAddRequest(LiteLLMBase):
+    member: Union[List[OrgMember], OrgMember]
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [OrgMember(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = OrgMember(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
         super().__init__(**data)
 
 
@@ -2017,7 +2053,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
 
 
 # Organization Member Requests
-class OrganizationMemberAddRequest(MemberAddRequest):
+class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str
     max_budget_in_organization: Optional[float] = (
         None  # Users max budget within the organization
@@ -2133,3 +2169,17 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     spend_doc_str = """Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used."""
     team_id_doc_str = """Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None."""
     duration_doc_str = """Optional[str] - Duration for the key auto-created on `/user/new`. Default is None."""
+
+
+PassThroughEndpointLoggingResultValues = Union[
+    ModelResponse,
+    TextCompletionResponse,
+    ImageResponse,
+    EmbeddingResponse,
+    StandardPassThroughResponseObject,
+]
+
+
+class PassThroughEndpointLoggingTypedDict(TypedDict):
+    result: Optional[PassThroughEndpointLoggingResultValues]
+    kwargs: dict

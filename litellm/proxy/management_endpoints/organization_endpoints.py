@@ -352,7 +352,7 @@ async def organization_member_add(
                 },
             )
 
-        members: List[Member]
+        members: List[OrgMember]
         if isinstance(data.member, List):
             members = data.member
         else:
@@ -397,7 +397,7 @@ async def organization_member_add(
 
 
 async def add_member_to_organization(
-    member: Member,
+    member: OrgMember,
     organization_id: str,
     prisma_client: PrismaClient,
 ) -> Tuple[LiteLLM_UserTable, LiteLLM_OrganizationMembershipTable]:

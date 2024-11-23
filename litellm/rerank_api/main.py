@@ -91,6 +91,7 @@ def rerank(
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
     user = kwargs.get("user", None)
+    client = kwargs.get("client", None)
     try:
         _is_async = kwargs.pop("arerank", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -150,7 +151,7 @@ def rerank(
                 or optional_params.api_base
                 or litellm.api_base
                 or get_secret("COHERE_API_BASE")  # type: ignore
-                or "https://api.cohere.com/v1/rerank"
+                or "https://api.cohere.com"
             )
 
             if api_base is None:
@@ -173,6 +174,7 @@ def rerank(
                 _is_async=_is_async,
                 headers=headers,
                 litellm_logging_obj=litellm_logging_obj,
+                client=client,
             )
         elif _custom_llm_provider == "azure_ai":
             api_base = (

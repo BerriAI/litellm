@@ -4,6 +4,7 @@ import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.cohere.rerank import CohereRerank
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.rerank import RerankResponse
 
 
@@ -73,6 +74,7 @@ class AzureAIRerank(CohereRerank):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         _is_async: Optional[bool] = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
 
         if headers is None:

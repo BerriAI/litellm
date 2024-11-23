@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -49,53 +50,69 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         **kwargs,
     ):
+        standard_logging_response_object: Optional[
+            PassThroughEndpointLoggingResultValues
+        ] = None
         if self.is_vertex_route(url_route):
-            await VertexPassthroughLoggingHandler.vertex_passthrough_handler(
-                httpx_response=httpx_response,
-                logging_obj=logging_obj,
-                url_route=url_route,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                **kwargs,
+            vertex_passthrough_logging_handler_result = (
+                VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                    httpx_response=httpx_response,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    **kwargs,
+                )
             )
+            standard_logging_response_object = (
+                vertex_passthrough_logging_handler_result["result"]
+            )
+            kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif self.is_anthropic_route(url_route):
-            await AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
-                httpx_response=httpx_response,
-                response_body=response_body or {},
-                logging_obj=logging_obj,
-                url_route=url_route,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                **kwargs,
+            anthropic_passthrough_logging_handler_result = (
+                AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+                    httpx_response=httpx_response,
+                    response_body=response_body or {},
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    **kwargs,
+                )
             )
-        else:
+
+            standard_logging_response_object = (
+                anthropic_passthrough_logging_handler_result["result"]
+            )
+            kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
+        if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
-            threading.Thread(
-                target=logging_obj.success_handler,
-                args=(
-                    standard_logging_response_object,
-                    start_time,
-                    end_time,
-                    cache_hit,
-                ),
-            ).start()
-            await logging_obj.async_success_handler(
-                result=(
-                    json.dumps(result)
-                    if isinstance(result, dict)
-                    else standard_logging_response_object
-                ),
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=False,
-                **kwargs,
-            )
+        threading.Thread(
+            target=logging_obj.success_handler,
+            args=(
+                standard_logging_response_object,
+                start_time,
+                end_time,
+                cache_hit,
+            ),
+        ).start()
+        await logging_obj.async_success_handler(
+            result=(
+                json.dumps(result)
+                if isinstance(result, dict)
+                else standard_logging_response_object
+            ),
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            **kwargs,
+        )
 
     def is_vertex_route(self, url_route: str):
         for route in self.TRACKED_VERTEX_ROUTES:
