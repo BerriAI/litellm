@@ -1604,11 +1604,17 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_base_url: Optional[str]
 
 
-class TeamUIKeyGenerationConfig(TypedDict):
+class KeyGenerationConfig(TypedDict, total=False):
+    required_params: List[
+        str
+    ]  # specify params that must be present in the key generation request
+
+
+class TeamUIKeyGenerationConfig(KeyGenerationConfig):
     allowed_team_member_roles: List[str]
 
 
-class PersonalUIKeyGenerationConfig(TypedDict):
+class PersonalUIKeyGenerationConfig(KeyGenerationConfig):
     allowed_user_roles: List[str]
 
 

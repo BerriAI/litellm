@@ -671,7 +671,8 @@ export const teamInfoCall = async (
 };
 
 export const teamListCall = async (
-  accessToken: String,
+  accessToken: String, 
+  userID: String | null = null
 ) => {
   /**
    * Get all available teams on proxy
@@ -679,6 +680,9 @@ export const teamListCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/list` : `/team/list`;
     console.log("in teamInfoCall");
+    if (userID) {
+      url += `?user_id=${userID}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
