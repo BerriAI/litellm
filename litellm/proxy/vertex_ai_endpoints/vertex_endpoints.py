@@ -119,7 +119,6 @@ async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -127,6 +126,11 @@ async def vertex_proxy_route(
 
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
+    api_key_to_use = get_litellm_virtual_key(request=request)
+    user_api_key_dict = await user_api_key_auth(
+        request=request,
+        api_key=api_key_to_use,
+    )
 
     vertex_project = None
     vertex_location = None
@@ -214,3 +218,18 @@ async def vertex_proxy_route(
     )
 
     return received_value
+
+
+def get_litellm_virtual_key(request: Request) -> str:
+    """
+    Extract and format API key from request headers.
+    Prioritizes x-litellm-api-key over Authorization header.
+
+
+    Vertex JS SDK uses `Authorization` header, we use `x-litellm-api-key` to pass litellm virtual key
+
+    """
+    litellm_api_key = request.headers.get("x-litellm-api-key")
+    if litellm_api_key:
+        return f"Bearer {litellm_api_key}"
+    return request.headers.get("Authorization", "")

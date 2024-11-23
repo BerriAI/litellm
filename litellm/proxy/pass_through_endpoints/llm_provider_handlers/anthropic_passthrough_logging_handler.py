@@ -96,7 +96,7 @@ class AnthropicPassthroughLoggingHandler:
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
 
-        # Make standard logging object for Vertex AI
+        # Make standard logging object for Anthropic
         standard_logging_object = get_standard_logging_object_payload(
             kwargs=kwargs,
             init_response_obj=litellm_model_response,
