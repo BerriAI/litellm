@@ -74,6 +74,7 @@ async def async_embedding(
         },
     )
     ## COMPLETION CALL
+
     if client is None:
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.COHERE,
@@ -151,6 +152,11 @@ def embedding(
             api_key=api_key,
             headers=headers,
             encoding=encoding,
+            client=(
+                client
+                if client is not None and isinstance(client, AsyncHTTPHandler)
+                else None
+            ),
         )
 
     ## LOGGING

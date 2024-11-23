@@ -18,6 +18,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import get_end_user_id_for_cost_tracking
 
 
 class PrometheusLogger(CustomLogger):
@@ -364,8 +365,7 @@ class PrometheusLogger(CustomLogger):
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
-        proxy_server_request = litellm_params.get("proxy_server_request") or {}
-        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -664,13 +664,11 @@ class PrometheusLogger(CustomLogger):
 
         # unpack kwargs
         model = kwargs.get("model", "")
-        litellm_params = kwargs.get("litellm_params", {}) or {}
         standard_logging_payload: StandardLoggingPayload = kwargs.get(
             "standard_logging_object", {}
         )
-        proxy_server_request = litellm_params.get("proxy_server_request") or {}
-
-        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
