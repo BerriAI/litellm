@@ -5,9 +5,19 @@ ALLOWED_FILES = [
     # local files
     "../../litellm/__init__.py",
     "../../litellm/llms/custom_httpx/http_handler.py",
+    "../../litellm/router_utils/client_initalization_utils.py",
+    "../../litellm/llms/custom_httpx/http_handler.py",
+    "../../litellm/llms/huggingface_restapi.py",
+    "../../litellm/llms/base.py",
+    "../../litellm/llms/custom_httpx/httpx_handler.py",
     # when running on ci/cd
     "./litellm/__init__.py",
     "./litellm/llms/custom_httpx/http_handler.py",
+    "./litellm/router_utils/client_initalization_utils.py",
+    "./litellm/llms/custom_httpx/http_handler.py",
+    "./litellm/llms/huggingface_restapi.py",
+    "./litellm/llms/base.py",
+    "./litellm/llms/custom_httpx/httpx_handler.py",
 ]
 
 warning_msg = "this is a serious violation that can impact latency. Creating Async clients per request can add +500ms per request"
