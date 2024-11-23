@@ -20,14 +20,12 @@ const vertexAI = new VertexAI({
     apiEndpoint: "localhost:4000/vertex-ai"
 });
 
-// Create customHeaders using Headers
-const customHeaders = new Headers({
-    "X-Litellm-Api-Key": "sk-1234"
-});
 
 // Use customHeaders in RequestOptions
 const requestOptions = {
-    customHeaders: customHeaders
+    customHeaders: new Headers({
+        "X-Litellm-Api-Key": "sk-1234"
+    })
 };
 
 const generativeModel = vertexAI.getGenerativeModel(
