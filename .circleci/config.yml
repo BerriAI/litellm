@@ -1179,6 +1179,15 @@ jobs:
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
             pip install anthropic
+            python -m pip install -r requirements.txt
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -1214,6 +1223,26 @@ jobs:
       - run:
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 5m
+      # New steps to run Node.js test
+      - run:
+          name: Install Node.js
+          command: |
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            node --version
+            npm --version
+
+      - run:
+          name: Install Node.js dependencies
+          command: |
+            npm install @google-cloud/vertexai
+            npm install --save-dev jest
+
+      - run:
+          name: Run Vertex AI tests
+          command: |
+            npx jest tests/pass_through_tests/test_vertex.test.js --verbose
+          no_output_timeout: 30m
       - run:
           name: Run tests
           command: |
@@ -1221,7 +1250,6 @@ jobs:
             ls
             python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
-
       # Store test results
       - store_test_results:
           path: test-results
