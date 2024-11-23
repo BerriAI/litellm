@@ -556,7 +556,7 @@ def test_extract_from_regex(duration, unit):
     assert _unit == unit
 
 
-def testduration_in_seconds():
+def test_duration_in_seconds():
     """
     Test if duration int is correctly calculated for different str
     """
