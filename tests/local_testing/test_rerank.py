@@ -215,7 +215,10 @@ async def test_rerank_custom_api_base():
         args_to_api = kwargs["json"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert _url[0] == "https://exampleopenaiendpoint-production.up.railway.app/"
+        assert (
+            _url[0]
+            == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
+        )
         assert args_to_api == expected_payload
         assert response.id is not None
         assert response.results is not None
