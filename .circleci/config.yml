@@ -1373,6 +1373,7 @@ jobs:
           name: Install Dependencies
           command: |
             npm install -D @playwright/test
+            npm install @google-cloud/vertexai
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
