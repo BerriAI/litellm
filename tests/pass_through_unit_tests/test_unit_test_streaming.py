@@ -91,3 +91,28 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     assert b"".join(received_chunks) == b"".join(
         raw_chunks
     ), "Collected chunks do not match raw chunks"
+
+
+def test_convert_raw_bytes_to_str_lines():
+    """
+    Test that the _convert_raw_bytes_to_str_lines method correctly converts raw bytes to a list of strings
+    """
+    # Test case 1: Single chunk
+    raw_bytes = [b'data: {"content": "Hello"}\n']
+    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+    assert result == ['data: {"content": "Hello"}']
+
+    # Test case 2: Multiple chunks
+    raw_bytes = [b'data: {"content": "Hello"}\n', b'data: {"content": "World"}\n']
+    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+    assert result == ['data: {"content": "Hello"}', 'data: {"content": "World"}']
+
+    # Test case 3: Empty input
+    raw_bytes = []
+    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+    assert result == []
+
+    # Test case 4: Chunks with empty lines
+    raw_bytes = [b'data: {"content": "Hello"}\n\n', b'\ndata: {"content": "World"}\n']
+    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+    assert result == ['data: {"content": "Hello"}', 'data: {"content": "World"}']
