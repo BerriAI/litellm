@@ -43,6 +43,19 @@ def check_for_async_http_handler(file_path):
                 raise ValueError(
                     f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead. {warning_msg}"
                 )
+            # Check for attribute calls like httpx.AsyncClient()
+            elif isinstance(node.func, ast.Attribute):
+                full_name = ""
+                current = node.func
+                while isinstance(current, ast.Attribute):
+                    full_name = "." + current.attr + full_name
+                    current = current.value
+                if isinstance(current, ast.Name):
+                    full_name = current.id + full_name
+                    if full_name.lower() in [name.lower() for name in target_names]:
+                        raise ValueError(
+                            f"found violation in file {file_path} line: {node.lineno}. Please use `get_async_httpx_client` instead. {warning_msg}"
+                        )
     return violations
 
 
