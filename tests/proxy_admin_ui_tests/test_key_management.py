@@ -653,16 +653,18 @@ def test_personal_key_generation_check():
     }
 
     assert _personal_key_generation_check(
-        UserAPIKeyAuth(
+        user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
-        )
+        ),
+        data=GenerateKeyRequest(),
     )
 
     with pytest.raises(HTTPException):
         _personal_key_generation_check(
-            UserAPIKeyAuth(
+            user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 api_key="sk-1234",
                 user_id="admin",
-            )
+            ),
+            data=GenerateKeyRequest(),
         )
