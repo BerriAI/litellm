@@ -213,6 +213,44 @@ class OllamaChatConfig:
         return optional_params
 
 
+# ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
+# and convert to jpeg if necessary.
+def _convert_image(image):
+    import base64
+    import io
+
+    try:
+        from PIL import Image
+    except Exception:
+        raise Exception(
+            "ollama image conversion failed please run `pip install Pillow`"
+        )
+
+    orig = image
+    if image.startswith("data:"):
+        image = image.split(",")[-1]
+    try:
+        image_data = Image.open(io.BytesIO(base64.b64decode(image)))
+        if image_data.format in ["JPEG", "PNG"]:
+            return image
+    except Exception:
+        return orig
+    jpeg_image = io.BytesIO()
+    image_data.convert("RGB").save(jpeg_image, "JPEG")
+    jpeg_image.seek(0)
+    return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
+
+
+def _get_messages_prompt(message):
+    prompt = ""
+    message_content = message.get("content", None)
+    if message_content and isinstance(message_content, list):
+        for content in message_content:
+            prompt += content.get("text", "")
+    elif message_content and isinstance(message_content, str):
+        prompt = message_content
+    return prompt
+
 # ollama implementation
 def get_ollama_response(  # noqa: PLR0915
     model_response: litellm.ModelResponse,
@@ -249,6 +287,20 @@ def get_ollama_response(  # noqa: PLR0915
             m, BaseModel
         ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
             m = m.model_dump(exclude_none=True)
+        if m["role"] == "user":
+            ## translate user message
+            message_content = m.get("content")
+            if message_content and isinstance(message_content, list):
+                user_text = ""
+                images = []
+                for content in message_content:
+                    if content["type"] == "text":
+                        user_text += content["text"]
+                    elif content["type"] == "image_url":
+                        images.append(content["image_url"]["url"])
+                m["content"] = user_text
+                if images:
+                    m["images"] = [_convert_image(image) for image in images]
         if m.get("tool_calls") is not None and isinstance(m["tool_calls"], list):
             new_tools: List[OllamaToolCall] = []
             for tool in m["tool_calls"]:
@@ -363,7 +415,9 @@ def get_ollama_response(  # noqa: PLR0915
         model_response.choices[0].message = _message  # type: ignore
     model_response.created = int(time.time())
     model_response.model = "ollama_chat/" + model
-    prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
+    prompt_tokens = response_json.get("prompt_eval_count", len(
+            encoding.encode("".join(_get_messages_prompt(prompt) for prompt in messages))
+        ))
     completion_tokens = response_json.get(
         "eval_count", litellm.token_counter(text=response_json["message"]["content"])
     )
