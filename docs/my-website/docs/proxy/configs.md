@@ -754,6 +754,8 @@ general_settings:
 | cache_params.s3_endpoint_url | string | Optional - The endpoint URL for the S3 bucket. |
 | cache_params.supported_call_types | array of strings | The types of calls to cache. [Further docs](./caching) |
 | cache_params.mode | string | The mode of the cache. [Further docs](./caching) |
+| disable_end_user_cost_tracking | boolean | If true, turns off end user cost tracking on prometheus metrics + litellm spend logs table on proxy. |
+| key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 
 ### general_settings - Reference
 

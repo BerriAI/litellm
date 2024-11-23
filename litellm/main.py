@@ -3440,6 +3440,10 @@ def embedding(  # noqa: PLR0915
                 or litellm.openai_key
                 or get_secret_str("OPENAI_API_KEY")
             )
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
             api_type = "openai"
             api_version = None
 

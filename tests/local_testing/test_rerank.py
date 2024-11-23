@@ -215,7 +215,10 @@ async def test_rerank_custom_api_base():
         args_to_api = kwargs["json"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert _url[0] == "https://exampleopenaiendpoint-production.up.railway.app/"
+        assert (
+            _url[0]
+            == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
+        )
         assert args_to_api == expected_payload
         assert response.id is not None
         assert response.results is not None
@@ -258,3 +261,32 @@ async def test_rerank_custom_callbacks():
     assert custom_logger.kwargs.get("response_cost") > 0.0
     assert custom_logger.response_obj is not None
     assert custom_logger.response_obj.results is not None
+
+
+def test_complete_base_url_cohere():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    litellm.api_base = "http://localhost:4000"
+    litellm.set_verbose = True
+
+    text = "Hello there!"
+    list_texts = ["Hello there!", "How are you?", "How do you do?"]
+
+    rerank_model = "rerank-multilingual-v3.0"
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            litellm.rerank(
+                model=rerank_model,
+                query=text,
+                documents=list_texts,
+                custom_llm_provider="cohere",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        print("mock_post.call_args", mock_post.call_args)
+        mock_post.assert_called_once()
+        assert "http://localhost:4000/v1/rerank" in mock_post.call_args.kwargs["url"]

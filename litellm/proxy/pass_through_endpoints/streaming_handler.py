@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from datetime import datetime
 from enum import Enum
 from typing import AsyncIterable, Dict, List, Optional, Union
@@ -15,7 +16,12 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexAIIterator,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.types.utils import (
+    GenericStreamingChunk,
+    ModelResponse,
+    StandardPassThroughResponseObject,
+)
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -87,8 +93,12 @@ class PassThroughStreamingHandler:
         all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(
             raw_bytes
         )
+        standard_logging_response_object: Optional[
+            PassThroughEndpointLoggingResultValues
+        ] = None
+        kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
-            await AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            anthropic_passthrough_logging_handler_result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
                 litellm_logging_obj=litellm_logging_obj,
                 passthrough_success_handler_obj=passthrough_success_handler_obj,
                 url_route=url_route,
@@ -98,20 +108,48 @@ class PassThroughStreamingHandler:
                 all_chunks=all_chunks,
                 end_time=end_time,
             )
+            standard_logging_response_object = anthropic_passthrough_logging_handler_result[
+                "result"
+            ]
+            kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.VERTEX_AI:
-            await VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
-                litellm_logging_obj=litellm_logging_obj,
-                passthrough_success_handler_obj=passthrough_success_handler_obj,
-                url_route=url_route,
-                request_body=request_body,
-                endpoint_type=endpoint_type,
-                start_time=start_time,
-                all_chunks=all_chunks,
-                end_time=end_time,
+            vertex_passthrough_logging_handler_result = (
+                VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=request_body,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    all_chunks=all_chunks,
+                    end_time=end_time,
+                )
             )
-        elif endpoint_type == EndpointType.GENERIC:
-            # No logging is supported for generic streaming endpoints
-            pass
+            standard_logging_response_object = vertex_passthrough_logging_handler_result[
+                "result"
+            ]
+            kwargs = vertex_passthrough_logging_handler_result["kwargs"]
+
+        if standard_logging_response_object is None:
+            standard_logging_response_object = StandardPassThroughResponseObject(
+                response=f"cannot parse chunks to standard response object. Chunks={all_chunks}"
+            )
+        threading.Thread(
+            target=litellm_logging_obj.success_handler,
+            args=(
+                standard_logging_response_object,
+                start_time,
+                end_time,
+                False,
+            ),
+        ).start()
+        await litellm_logging_obj.async_success_handler(
+            result=standard_logging_response_object,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            **kwargs,
+        )
 
     @staticmethod
     def _convert_raw_bytes_to_str_lines(raw_bytes: List[bytes]) -> List[str]:

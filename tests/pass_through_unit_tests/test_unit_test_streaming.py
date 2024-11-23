@@ -64,6 +64,7 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     litellm_logging_obj = MagicMock()
     start_time = datetime.now()
     passthrough_success_handler_obj = MagicMock()
+    litellm_logging_obj.async_success_handler = AsyncMock()
 
     # Capture yielded chunks and perform detailed assertions
     received_chunks = []

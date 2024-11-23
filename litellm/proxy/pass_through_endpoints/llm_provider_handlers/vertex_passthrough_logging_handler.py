@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -25,7 +26,7 @@ else:
 
 class VertexPassthroughLoggingHandler:
     @staticmethod
-    async def vertex_passthrough_handler(
+    def vertex_passthrough_handler(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -34,7 +35,7 @@ class VertexPassthroughLoggingHandler:
         end_time: datetime,
         cache_hit: bool,
         **kwargs,
-    ):
+    ) -> PassThroughEndpointLoggingTypedDict:
         if "generateContent" in url_route:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
@@ -65,13 +66,11 @@ class VertexPassthroughLoggingHandler:
                 logging_obj=logging_obj,
             )
 
-            await logging_obj.async_success_handler(
-                result=litellm_model_response,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                **kwargs,
-            )
+            return {
+                "result": litellm_model_response,
+                "kwargs": kwargs,
+            }
+
         elif "predict" in url_route:
             from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
                 VertexImageGeneration,
@@ -112,16 +111,18 @@ class VertexPassthroughLoggingHandler:
             logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
 
-            await logging_obj.async_success_handler(
-                result=litellm_prediction_response,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                **kwargs,
-            )
+            return {
+                "result": litellm_prediction_response,
+                "kwargs": kwargs,
+            }
+        else:
+            return {
+                "result": None,
+                "kwargs": kwargs,
+            }
 
     @staticmethod
-    async def _handle_logging_vertex_collected_chunks(
+    def _handle_logging_vertex_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -130,7 +131,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         all_chunks: List[str],
         end_time: datetime,
-    ):
+    ) -> PassThroughEndpointLoggingTypedDict:
         """
         Takes raw chunks from Vertex passthrough endpoint and logs them in litellm callbacks
 
@@ -152,7 +153,11 @@ class VertexPassthroughLoggingHandler:
             verbose_proxy_logger.error(
                 "Unable to build complete streaming response for Vertex passthrough endpoint, not logging..."
             )
-            return
+            return {
+                "result": None,
+                "kwargs": kwargs,
+            }
+
         kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
             litellm_model_response=complete_streaming_response,
             model=model,
@@ -161,13 +166,11 @@ class VertexPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=litellm_logging_obj,
         )
-        await litellm_logging_obj.async_success_handler(
-            result=complete_streaming_response,
-            start_time=start_time,
-            end_time=end_time,
-            cache_hit=False,
-            **kwargs,
-        )
+
+        return {
+            "result": complete_streaming_response,
+            "kwargs": kwargs,
+        }
 
     @staticmethod
     def _build_complete_streaming_response(

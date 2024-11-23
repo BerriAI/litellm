@@ -268,6 +268,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RouterGeneralSettings
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import get_end_user_id_for_cost_tracking
 
 try:
     from litellm._version import version
@@ -763,8 +764,7 @@ async def _PROXY_track_cost_callback(
         )
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        proxy_server_request = litellm_params.get("proxy_server_request") or {}
-        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
         metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
         user_id = metadata.get("user_api_key_user_id", None)
         team_id = metadata.get("user_api_key_team_id", None)
