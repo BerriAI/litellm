@@ -26,7 +26,11 @@ from typing import (
     overload,
 )
 
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import (
+    _extract_from_regex,
+    duration_in_seconds,
+    get_last_day_of_month,
+)
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
 try:
