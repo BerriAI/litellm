@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator,
 )
@@ -35,6 +36,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
@@ -363,8 +365,11 @@ async def pass_through_request(  # noqa: PLR0915
             data=_parsed_body,
             call_type="pass_through_endpoint",
         )
-
-        async_client = httpx.AsyncClient(timeout=600)
+        async_client_obj = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+            params={"timeout": 600},
+        )
+        async_client = async_client_obj.client
 
         litellm_call_id = str(uuid.uuid4())
 
