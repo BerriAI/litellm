@@ -16,25 +16,27 @@ model_list:
         api_key: os.environ/OPENAI_API_KEY
 
 router_settings:
-  redis_host: <your-redis-host>
-  redis_password: <your-redis-password>
-  redis_port: <your-redis-port>
   provider_budget_config: 
-	openai: 
-		budget_limit: 0.000000000001 # float of $ value budget for time period
-		time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
-	azure:
-		budget_limit: 100
-		time_period: 1d
-	anthropic:
-		budget_limit: 100
-		time_period: 10d
-	vertex_ai:
-		budget_limit: 100
-		time_period: 12d
-	gemini:
-		budget_limit: 100
-		time_period: 12d
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
+    azure:
+      budget_limit: 100
+      time_period: 1d
+    anthropic:
+      budget_limit: 100
+      time_period: 10d
+    vertex_ai:
+      budget_limit: 100
+      time_period: 12d
+    gemini:
+      budget_limit: 100
+      time_period: 12d
+  
+  # OPTIONAL: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
 
 general_settings:
   master_key: sk-1234
@@ -132,6 +134,31 @@ This metric indicates the remaining budget for a provider in dollars (USD)
 litellm_provider_remaining_budget_metric{api_provider="openai"} 10
 ```
 
+## Multi-instance setup
+
+If you are using a multi-instance setup, you will need to set the Redis host, port, and password in the `proxy_config.yaml` file. Redis is used to sync the spend across LiteLLM instances.
+
+```yaml
+model_list:
+    - model_name: gpt-3.5-turbo
+      litellm_params:
+        model: openai/gpt-3.5-turbo
+        api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  provider_budget_config: 
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
+  
+  # 👇 Add this: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+
+general_settings:
+  master_key: sk-1234
+```
 
 ## Spec for provider_budget_config
 

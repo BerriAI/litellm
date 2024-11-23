@@ -18,6 +18,7 @@ anthropic:
 ```
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
 import litellm
@@ -44,10 +45,13 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+DEFAULT_REDIS_SYNC_INTERVAL = 60
+
 
 class ProviderBudgetLimiting(CustomLogger):
     def __init__(self, router_cache: DualCache, provider_budget_config: dict):
         self.router_cache = router_cache
+        asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
 
         # cast elements of provider_budget_config to ProviderBudgetInfo
         for provider, config in provider_budget_config.items():
@@ -221,6 +225,74 @@ class ProviderBudgetLimiting(CustomLogger):
         verbose_router_logger.debug(
             f"Incremented spend for {spend_key} by {response_cost}, ttl: {ttl_seconds}"
         )
+
+    async def periodic_sync_in_memory_spend_with_redis(self):
+        """
+        Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
+
+        Required for multi-instance environment usage of provider budgets
+        """
+        while True:
+            try:
+                await self._sync_in_memory_spend_with_redis()
+                await asyncio.sleep(
+                    DEFAULT_REDIS_SYNC_INTERVAL
+                )  # Wait for 5 seconds before next sync
+            except Exception as e:
+                verbose_router_logger.error(f"Error in periodic sync task: {str(e)}")
+                await asyncio.sleep(
+                    DEFAULT_REDIS_SYNC_INTERVAL
+                )  # Still wait 5 seconds on error before retrying
+
+    async def _sync_in_memory_spend_with_redis(self):
+        """
+        Ensures in-memory cache is updated with latest Redis values for all provider spends.
+
+        Why Do we need this?
+        - Redis is our source of truth for provider spend
+        - In-memory cache goes out of sync if it does not get updated with the values from Redis
+
+        Why not just rely on DualCache ?
+        - DualCache does not handle synchronization between in-memory and Redis
+
+        In a multi-instance evironment, each instance needs to periodically get the provider spend from Redis to ensure it is consistent across all instances.
+        """
+
+        try:
+            # No need to sync if Redis cache is not initialized
+            if self.router_cache.redis_cache is None:
+                return
+
+            # Get all providers and their budget configs
+            cache_keys = []
+            for provider, config in self.provider_budget_config.items():
+                if config is None:
+                    continue
+                cache_keys.append(f"provider_spend:{provider}:{config.time_period}")
+
+            # Batch fetch current spend values from Redis
+            redis_values = await self.router_cache.redis_cache.async_batch_get_cache(
+                key_list=cache_keys
+            )
+
+            # Update in-memory cache with Redis values
+            if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
+                for key, value in redis_values.items():
+                    if value is not None:
+                        self.router_cache.in_memory_cache.set_cache(
+                            key=key, value=float(value)
+                        )
+                        verbose_router_logger.debug(
+                            f"Updated in-memory cache for {key}: {value}"
+                        )
+
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            verbose_router_logger.error(
+                f"Error syncing in-memory cache with Redis: {str(e)}"
+            )
 
     def _get_budget_config_for_provider(
         self, provider: str
