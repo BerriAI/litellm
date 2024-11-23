@@ -32,7 +32,7 @@ const menuItems: MenuItem[] = [
   { key: "3", page: "llm-playground", label: "Test Key" }, // all roles
   { key: "2", page: "models", label: "Models", roles: all_admin_roles },
   { key: "4", page: "usage", label: "Usage"}, // all roles
-  { key: "6", page: "teams", label: "Teams", roles: all_admin_roles },
+  { key: "6", page: "teams", label: "Teams" },
   { key: "5", page: "users", label: "Internal Users", roles: all_admin_roles },
   { key: "8", page: "settings", label: "Logging & Alerts", roles: all_admin_roles },
   { key: "9", page: "caching", label: "Caching", roles: all_admin_roles },
