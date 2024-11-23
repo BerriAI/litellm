@@ -551,7 +551,7 @@ def test_is_team_key():
     assert not _is_team_key(GenerateKeyRequest(user_id="test_user_id"))
 
 
-def test_team_key_generation_check():
+def test_team_key_generation_team_member_check():
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _team_key_generation_check,
     )
@@ -578,6 +578,68 @@ def test_team_key_generation_check():
                 team_member=Member(role="user", user_id="test_user_id"),
             )
         )
+
+
+@pytest.mark.parametrize(
+    "team_key_generation_settings, input_data, expected_result",
+    [
+        ({"required_params": ["tags"]}, GenerateKeyRequest(tags=["test_tags"]), True),
+        ({}, GenerateKeyRequest(), True),
+        (
+            {"required_params": ["models"]},
+            GenerateKeyRequest(tags=["test_tags"]),
+            False,
+        ),
+    ],
+)
+@pytest.mark.parametrize("key_type", ["team_key", "personal_key"])
+def test_key_generation_required_params_check(
+    team_key_generation_settings, input_data, expected_result, key_type
+):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _team_key_generation_check,
+        _personal_key_generation_check,
+    )
+    from litellm.types.utils import (
+        TeamUIKeyGenerationConfig,
+        StandardKeyGenerationConfig,
+        PersonalUIKeyGenerationConfig,
+    )
+    from fastapi import HTTPException
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-1234",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        team_member=Member(role="admin", user_id="test_user_id"),
+    )
+
+    if key_type == "team_key":
+        litellm.key_generation_settings = StandardKeyGenerationConfig(
+            team_key_generation=TeamUIKeyGenerationConfig(
+                **team_key_generation_settings
+            )
+        )
+    elif key_type == "personal_key":
+        litellm.key_generation_settings = StandardKeyGenerationConfig(
+            personal_key_generation=PersonalUIKeyGenerationConfig(
+                **team_key_generation_settings
+            )
+        )
+
+    if expected_result:
+        if key_type == "team_key":
+            assert _team_key_generation_check(user_api_key_dict, input_data)
+        elif key_type == "personal_key":
+            assert _personal_key_generation_check(user_api_key_dict, input_data)
+    else:
+        if key_type == "team_key":
+            with pytest.raises(HTTPException):
+                _team_key_generation_check(user_api_key_dict, input_data)
+        elif key_type == "personal_key":
+            with pytest.raises(HTTPException):
+                _personal_key_generation_check(user_api_key_dict, input_data)
 
 
 def test_personal_key_generation_check():

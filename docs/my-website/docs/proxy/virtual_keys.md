@@ -820,6 +820,7 @@ litellm_settings:
   key_generation_settings:
     team_key_generation:
       allowed_team_member_roles: ["admin"]
+      required_params: ["tags"] # require team admins to set tags for cost-tracking when generating a team key
     personal_key_generation: # maps to 'Default Team' on UI 
       allowed_user_roles: ["proxy_admin"]
 ```
@@ -829,10 +830,12 @@ litellm_settings:
 ```python
 class TeamUIKeyGenerationConfig(TypedDict):
     allowed_team_member_roles: List[str]
+    required_params: List[str] # require params on `/key/generate` to be set if a team key (team_id in request) is being generated
 
 
 class PersonalUIKeyGenerationConfig(TypedDict):
     allowed_user_roles: List[LitellmUserRoles] 
+    required_params: List[str] # require params on `/key/generate` to be set if a personal key (no team_id in request) is being generated
 
 
 class StandardKeyGenerationConfig(TypedDict, total=False):
