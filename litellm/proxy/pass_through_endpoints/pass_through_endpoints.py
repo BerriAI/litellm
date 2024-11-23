@@ -36,7 +36,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.secret_managers.main import get_secret_str
 
-from .streaming_handler import chunk_processor
+from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .types import EndpointType, PassthroughStandardLoggingPayload
 
@@ -448,7 +448,7 @@ async def pass_through_request(  # noqa: PLR0915
                 )
 
             return StreamingResponse(
-                chunk_processor(
+                PassThroughStreamingHandler.chunk_processor(
                     response=response,
                     request_body=_parsed_body,
                     litellm_logging_obj=logging_obj,
@@ -491,7 +491,7 @@ async def pass_through_request(  # noqa: PLR0915
                 )
 
             return StreamingResponse(
-                chunk_processor(
+                PassThroughStreamingHandler.chunk_processor(
                     response=response,
                     request_body=_parsed_body,
                     litellm_logging_obj=logging_obj,
