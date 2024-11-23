@@ -31,8 +31,8 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.custom_httpx.types import httpxSpecialProvider
 from litellm.proxy._types import KeyManagementSystem
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 
 class AWSSecretsManagerV2(BaseAWSLLM):
