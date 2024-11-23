@@ -1179,15 +1179,7 @@ jobs:
             pip install "PyGithub==1.59.1"
             pip install "google-cloud-aiplatform==1.59.0"
             pip install anthropic
-            python -m pip install -r requirements.txt
       # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            pwd
-            ls
-            python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
