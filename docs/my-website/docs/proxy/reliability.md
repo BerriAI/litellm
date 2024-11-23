@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Fallbacks, Load Balancing, Retries
+# Proxy - Fallbacks, Retries
 
 - Quick Start [load balancing](#test---load-balancing)
 - Quick Start [client side fallbacks](#test---client-side-fallbacks)
