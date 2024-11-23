@@ -24,7 +24,7 @@ const vertexAI = new VertexAI({
 // Use customHeaders in RequestOptions
 const requestOptions = {
     customHeaders: new Headers({
-        "X-Litellm-Api-Key": "sk-1234"
+        "x-litellm-api-key": "sk-1234"
     })
 };
 

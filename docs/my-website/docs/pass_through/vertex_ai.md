@@ -50,7 +50,7 @@ const model = vertexAI.getGenerativeModel({
     model: 'gemini-1.0-pro'
 }, {
     customHeaders: {
-        "X-Litellm-Api-Key": "sk-1234" // Your litellm Virtual Key
+        "x-litellm-api-key": "sk-1234" // Your litellm Virtual Key
     }
 });
 
