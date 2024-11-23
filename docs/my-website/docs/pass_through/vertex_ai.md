@@ -12,6 +12,71 @@ Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vert
 
 :::
 
+Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
+
+Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex-ai`
+
+
+#### **Example Usage**
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "contents":[{
+      "role": "user", 
+      "parts":[{"text": "How are you doing today?"}]
+    }]
+  }'
+```
+
+</TabItem>
+<TabItem value="js" label="Vertex Node.js SDK">
+
+```javascript
+const { VertexAI } = require('@google-cloud/vertexai');
+
+const vertexAI = new VertexAI({
+    project: 'your-project-id', // enter your vertex project id
+    location: 'us-central1', // enter your vertex region
+    apiEndpoint: "localhost:4000/vertex-ai" // <proxy-server-url>/vertex-ai # note, do not include 'https://' in the url
+});
+
+const model = vertexAI.getGenerativeModel({
+    model: 'gemini-1.0-pro'
+}, {
+    customHeaders: {
+        "x-litellm-api-key": "sk-1234" // Your litellm Virtual Key
+    }
+});
+
+async function generateContent() {
+    try {
+        const prompt = {
+            contents: [{
+                role: 'user',
+                parts: [{ text: 'How are you doing today?' }]
+            }]
+        };
+
+        const response = await model.generateContent(prompt);
+        console.log('Response:', response);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+generateContent();
+```
+
+</TabItem>
+</Tabs>
+
+
 ## Supported API Endpoints
 
 - Gemini API
