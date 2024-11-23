@@ -33,7 +33,7 @@ const generativeModel = vertexAI.getGenerativeModel(
     requestOptions
 );
 
-async function testModel() {
+async function streamingResponse() {
     try {
         const request = {
             contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
@@ -49,4 +49,20 @@ async function testModel() {
     }
 }
 
-testModel();
+
+async function nonStreamingResponse() {
+    try {
+        const request = {
+            contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
+          };
+        const response = await generativeModel.generateContent(request);
+        console.log('non streaming response: ', JSON.stringify(response));
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+
+
+streamingResponse();
+nonStreamingResponse();
