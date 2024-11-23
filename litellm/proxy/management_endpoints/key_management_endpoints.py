@@ -160,7 +160,10 @@ def key_generation_check(
     """
     Check if admin has restricted key creation to certain roles for teams or individuals
     """
-    if litellm.key_generation_settings is None:
+    if (
+        litellm.key_generation_settings is None
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
         return True
 
     ## check if key is for team or individual
