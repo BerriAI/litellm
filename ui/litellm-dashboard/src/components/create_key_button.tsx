@@ -355,6 +355,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     placeholder="Enter metadata as JSON"
                   />
                 </Form.Item>
+                <Form.Item label="Tags" name="tags" className="mt-8" help={`Tags for tracking spend and/or doing tag-based routing.`}>
+                <Select
+                    mode="tags"
+                    style={{ width: '100%' }}
+                    placeholder="Enter tags"
+                    tokenSeparators={[',']}
+                    open={false}
+                  />
+                </Form.Item>
               </AccordionBody>
             </Accordion>
           </>
