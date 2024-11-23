@@ -542,3 +542,65 @@ async def test_list_teams(prisma_client):
 
     # Clean up
     await prisma_client.delete_data(team_id_list=[team_id], table_name="team")
+
+
+def test_is_team_key():
+    from litellm.proxy.management_endpoints.key_management_endpoints import _is_team_key
+
+    assert _is_team_key(GenerateKeyRequest(team_id="test_team_id"))
+    assert not _is_team_key(GenerateKeyRequest(user_id="test_user_id"))
+
+
+def test_team_key_generation_check():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _team_key_generation_check,
+    )
+    from fastapi import HTTPException
+
+    litellm.key_generation_settings = {
+        "team_key_generation": {"allowed_team_member_roles": ["admin"]}
+    }
+
+    assert _team_key_generation_check(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-1234",
+            team_member=Member(role="admin", user_id="test_user_id"),
+        )
+    )
+
+    with pytest.raises(HTTPException):
+        _team_key_generation_check(
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-1234",
+                user_id="test_user_id",
+                team_member=Member(role="user", user_id="test_user_id"),
+            )
+        )
+
+
+def test_personal_key_generation_check():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _personal_key_generation_check,
+    )
+    from fastapi import HTTPException
+
+    litellm.key_generation_settings = {
+        "personal_key_generation": {"allowed_user_roles": ["proxy_admin"]}
+    }
+
+    assert _personal_key_generation_check(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        )
+    )
+
+    with pytest.raises(HTTPException):
+        _personal_key_generation_check(
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-1234",
+                user_id="admin",
+            )
+        )

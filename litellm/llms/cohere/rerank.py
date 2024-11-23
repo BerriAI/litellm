@@ -6,10 +6,14 @@ LiteLLM supports the re rank API format, no paramter transformation occurs
 
 from typing import Any, Dict, List, Optional, Union
 
+import httpx
+
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
@@ -34,6 +38,23 @@ class CohereRerank(BaseLLM):
         # Merge other headers, overriding any default ones except Authorization
         return {**default_headers, **headers}
 
+    def ensure_rerank_endpoint(self, api_base: str) -> str:
+        """
+        Ensures the `/v1/rerank` endpoint is appended to the given `api_base`.
+        If `/v1/rerank` is already present, the original URL is returned.
+
+        :param api_base: The base API URL.
+        :return: A URL with `/v1/rerank` appended if missing.
+        """
+        # Parse the base URL to ensure proper structure
+        url = httpx.URL(api_base)
+
+        # Check if the URL already ends with `/v1/rerank`
+        if not url.path.endswith("/v1/rerank"):
+            url = url.copy_with(path=f"{url.path.rstrip('/')}/v1/rerank")
+
+        return str(url)
+
     def rerank(
         self,
         model: str,
@@ -48,9 +69,10 @@ class CohereRerank(BaseLLM):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         _is_async: Optional[bool] = False,  # New parameter
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
         headers = self.validate_environment(api_key=api_key, headers=headers)
-
+        api_base = self.ensure_rerank_endpoint(api_base)
         request_data = RerankRequest(
             model=model,
             query=query,
@@ -76,9 +98,13 @@ class CohereRerank(BaseLLM):
         if _is_async:
             return self.async_rerank(request_data=request_data, api_key=api_key, api_base=api_base, headers=headers)  # type: ignore # Call async method
 
-        client = _get_httpx_client()
+        if client is not None and isinstance(client, HTTPHandler):
+            client = client
+        else:
+            client = _get_httpx_client()
+
         response = client.post(
-            api_base,
+            url=api_base,
             headers=headers,
             json=request_data_dict,
         )
@@ -100,10 +126,13 @@ class CohereRerank(BaseLLM):
         api_key: str,
         api_base: str,
         headers: dict,
+        client: Optional[AsyncHTTPHandler] = None,
     ) -> RerankResponse:
         request_data_dict = request_data.dict(exclude_none=True)
 
-        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.COHERE)
+        client = client or get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.COHERE
+        )
 
         response = await client.post(
             api_base,

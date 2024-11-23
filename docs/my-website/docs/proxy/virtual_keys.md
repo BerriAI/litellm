@@ -811,6 +811,75 @@ litellm_settings:
     team_id: "core-infra"
 ```
 
+### Restricting Key Generation
+
+Use this to control who can generate keys. Useful when letting others create keys on the UI. 
+
+```yaml
+litellm_settings:
+  key_generation_settings:
+    team_key_generation:
+      allowed_team_member_roles: ["admin"]
+    personal_key_generation: # maps to 'Default Team' on UI 
+      allowed_user_roles: ["proxy_admin"]
+```
+
+#### Spec 
+
+```python
+class TeamUIKeyGenerationConfig(TypedDict):
+    allowed_team_member_roles: List[str]
+
+
+class PersonalUIKeyGenerationConfig(TypedDict):
+    allowed_user_roles: List[LitellmUserRoles] 
+
+
+class StandardKeyGenerationConfig(TypedDict, total=False):
+    team_key_generation: TeamUIKeyGenerationConfig
+    personal_key_generation: PersonalUIKeyGenerationConfig
+
+
+class LitellmUserRoles(str, enum.Enum):
+    """
+    Admin Roles:
+    PROXY_ADMIN: admin over the platform
+    PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+    ORG_ADMIN: admin over a specific organization, can create teams, users only within their organization
+
+    Internal User Roles:
+    INTERNAL_USER: can login, view/create/delete their own keys, view their spend
+    INTERNAL_USER_VIEW_ONLY: can login, view their own keys, view their own spend
+
+
+    Team Roles:
+    TEAM: used for JWT auth
+
+
+    Customer Roles:
+    CUSTOMER: External users -> these are customers
+
+    """
+
+    # Admin Roles
+    PROXY_ADMIN = "proxy_admin"
+    PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
+
+    # Organization admins
+    ORG_ADMIN = "org_admin"
+
+    # Internal User Roles
+    INTERNAL_USER = "internal_user"
+    INTERNAL_USER_VIEW_ONLY = "internal_user_viewer"
+
+    # Team Roles
+    TEAM = "team"
+
+    # Customer Roles - External users of proxy
+    CUSTOMER = "customer"
+```
+
+
 ## **Next Steps - Set Budgets, Rate Limits per Virtual Key**
 
 [Follow this doc to set budgets, rate limiters per virtual key with LiteLLM](users)
