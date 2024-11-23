@@ -562,21 +562,23 @@ def test_team_key_generation_team_member_check():
     }
 
     assert _team_key_generation_check(
-        UserAPIKeyAuth(
+        user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.INTERNAL_USER,
             api_key="sk-1234",
             team_member=Member(role="admin", user_id="test_user_id"),
-        )
+        ),
+        data=GenerateKeyRequest(),
     )
 
     with pytest.raises(HTTPException):
         _team_key_generation_check(
-            UserAPIKeyAuth(
+            user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 api_key="sk-1234",
                 user_id="test_user_id",
                 team_member=Member(role="user", user_id="test_user_id"),
-            )
+            ),
+            data=GenerateKeyRequest(),
         )
 
 
