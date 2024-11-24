@@ -30,7 +30,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _duration_in_seconds,
+    duration_in_seconds,
     generate_key_helper_fn,
 )
 from litellm.proxy.management_helpers.utils import (
@@ -516,7 +516,7 @@ async def user_update(
             is_internal_user = True
 
         if "budget_duration" in non_default_values:
-            duration_s = _duration_in_seconds(
+            duration_s = duration_in_seconds(
                 duration=non_default_values["budget_duration"]
             )
             user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
@@ -535,7 +535,7 @@ async def user_update(
                 non_default_values["budget_duration"] = (
                     litellm.internal_user_budget_duration
                 )
-                duration_s = _duration_in_seconds(
+                duration_s = duration_in_seconds(
                     duration=non_default_values["budget_duration"]
                 )
                 user_reset_at = datetime.now(timezone.utc) + timedelta(
@@ -725,8 +725,8 @@ async def delete_user(
     - user_ids: List[str] - The list of user id's to be deleted.
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
         user_api_key_cache,

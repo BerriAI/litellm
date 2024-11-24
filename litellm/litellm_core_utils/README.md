@@ -8,4 +8,5 @@ Core files:
 - `exception_mapping_utils.py`: utils for mapping exceptions to openai-compatible error types. 
 - `default_encoding.py`: code for loading the default encoding (tiktoken)
 - `get_llm_provider_logic.py`: code for inferring the LLM provider from a given model name. 
+- `duration_parser.py`: code for parsing durations - e.g. "1d", "1mo", "10s"
 
