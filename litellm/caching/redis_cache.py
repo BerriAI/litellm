@@ -926,7 +926,7 @@ class RedisCache(BaseCache):
         """
         # don't waste a network request if there's nothing to increment
         if len(increment_list) == 0:
-            return
+            return None
 
         from redis.asyncio import Redis
 
