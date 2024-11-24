@@ -34,8 +34,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
-    _duration_in_seconds,
     _hash_token_if_needed,
+    duration_in_seconds,
     handle_exception_on_proxy,
 )
 from litellm.secret_managers.main import get_secret
@@ -321,10 +321,10 @@ async def generate_key_fn(  # noqa: PLR0915
                                 )
                         # Compare durations
                         elif key in ["budget_duration", "duration"]:
-                            upperbound_duration = _duration_in_seconds(
+                            upperbound_duration = duration_in_seconds(
                                 duration=upperbound_value
                             )
-                            user_duration = _duration_in_seconds(duration=value)
+                            user_duration = duration_in_seconds(duration=value)
                             if user_duration > upperbound_duration:
                                 raise HTTPException(
                                     status_code=400,
@@ -421,7 +421,7 @@ def prepare_key_update_data(
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
         if duration and (isinstance(duration, str)) and len(duration) > 0:
-            duration_s = _duration_in_seconds(duration=duration)
+            duration_s = duration_in_seconds(duration=duration)
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
 
@@ -432,7 +432,7 @@ def prepare_key_update_data(
             and (isinstance(budget_duration, str))
             and len(budget_duration) > 0
         ):
-            duration_s = _duration_in_seconds(duration=budget_duration)
+            duration_s = duration_in_seconds(duration=budget_duration)
             key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = key_reset_at
 
@@ -932,19 +932,19 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if duration is None:  # allow tokens that never expire
         expires = None
     else:
-        duration_s = _duration_in_seconds(duration=duration)
+        duration_s = duration_in_seconds(duration=duration)
         expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
     else:
-        duration_s = _duration_in_seconds(duration=key_budget_duration)
+        duration_s = duration_in_seconds(duration=key_budget_duration)
         key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     if budget_duration is None:  # one-time budget
         reset_at = None
     else:
-        duration_s = _duration_in_seconds(duration=budget_duration)
+        duration_s = duration_in_seconds(duration=budget_duration)
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     aliases_json = json.dumps(aliases)
