@@ -25,23 +25,25 @@ import litellm
 verbose_router_logger.setLevel(logging.DEBUG)
 
 
-@pytest.fixture(autouse=True)
-async def cleanup_redis():
+def cleanup_redis():
     """Cleanup Redis cache before each test"""
     try:
         import redis
+
+        print("cleaning up redis..")
 
         redis_client = redis.Redis(
             host=os.getenv("REDIS_HOST"),
             port=int(os.getenv("REDIS_PORT")),
             password=os.getenv("REDIS_PASSWORD"),
         )
+        print("scan iter result", redis_client.scan_iter("provider_spend:*"))
         # Delete all provider spend keys
         for key in redis_client.scan_iter("provider_spend:*"):
+            print("deleting key", key)
             redis_client.delete(key)
     except Exception as e:
         print(f"Error cleaning up Redis: {str(e)}")
-    yield
 
 
 @pytest.mark.asyncio
@@ -53,6 +55,7 @@ async def test_provider_budgets_e2e_test():
     - Next 3 requests all go to Azure
 
     """
+    cleanup_redis()
     # Modify for test
     setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     provider_budget_config: ProviderBudgetConfigType = {
@@ -115,6 +118,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     - first request passes, all subsequent requests fail
 
     """
+    cleanup_redis()
     setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     # Note: We intentionally use a dictionary with string keys for budget_limit and time_period
     # we want to test that the router can handle type conversion, since the proxy config yaml passes these values as a dictionary
@@ -169,6 +173,7 @@ async def test_get_llm_provider_for_deployment():
     Test the _get_llm_provider_for_deployment helper method
 
     """
+    cleanup_redis()
     provider_budget = ProviderBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
@@ -200,6 +205,7 @@ async def test_get_budget_config_for_provider():
     Test the _get_budget_config_for_provider helper method
 
     """
+    cleanup_redis()
     config = {
         "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
         "anthropic": ProviderBudgetInfo(time_period="7d", budget_limit=500),
@@ -229,6 +235,7 @@ async def test_prometheus_metric_tracking():
     """
     Test that the Prometheus metric for provider budget is tracked correctly
     """
+    cleanup_redis()
     setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     from unittest.mock import MagicMock
     from litellm.integrations.prometheus import PrometheusLogger
