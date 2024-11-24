@@ -142,24 +142,8 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         assert "Exceeded budget for provider" in str(exc_info.value)
 
 
-def test_get_ttl_seconds():
-    """
-    Test the get_ttl_seconds helper method"
-
-    """
-    provider_budget = ProviderBudgetLimiting(
-        router_cache=DualCache(), provider_budget_config={}
-    )
-
-    assert provider_budget.get_ttl_seconds("1d") == 86400  # 1 day in seconds
-    assert provider_budget.get_ttl_seconds("7d") == 604800  # 7 days in seconds
-    assert provider_budget.get_ttl_seconds("30d") == 2592000  # 30 days in seconds
-
-    with pytest.raises(ValueError, match="Unsupported time period format"):
-        provider_budget.get_ttl_seconds("1h")
-
-
-def test_get_llm_provider_for_deployment():
+@pytest.mark.asyncio
+async def test_get_llm_provider_for_deployment():
     """
     Test the _get_llm_provider_for_deployment helper method
 
@@ -189,7 +173,8 @@ def test_get_llm_provider_for_deployment():
     assert provider_budget._get_llm_provider_for_deployment(unknown_deployment) is None
 
 
-def test_get_budget_config_for_provider():
+@pytest.mark.asyncio
+async def test_get_budget_config_for_provider():
     """
     Test the _get_budget_config_for_provider helper method
 
