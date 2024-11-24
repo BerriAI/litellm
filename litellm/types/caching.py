@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, TypedDict
+from typing import Literal, Optional, TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
@@ -32,4 +32,4 @@ class RedisPipelineIncrementOperation(TypedDict):
 
     key: str
     increment_value: float
-    ttl_seconds: int
+    ttl: Optional[int]

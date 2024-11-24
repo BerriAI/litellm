@@ -902,11 +902,11 @@ class RedisCache(BaseCache):
         for increment_op in increment_list:
             cache_key = self.check_and_fix_namespace(key=increment_op["key"])
             print_verbose(
-                f"Increment ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {increment_op['increment_value']}\nttl={increment_op['ttl_seconds']}"
+                f"Increment ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {increment_op['increment_value']}\nttl={increment_op['ttl']}"
             )
             pipe.incrbyfloat(cache_key, increment_op["increment_value"])
-            if increment_op["ttl_seconds"] is not None:
-                _td = timedelta(seconds=increment_op["ttl_seconds"])
+            if increment_op["ttl"] is not None:
+                _td = timedelta(seconds=increment_op["ttl"])
                 pipe.expire(cache_key, _td)
         # Execute the pipeline and return results
         results = await pipe.execute()
