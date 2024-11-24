@@ -267,3 +267,72 @@ async def test_prometheus_metric_tracking():
 
     # Verify the mock was called correctly
     mock_prometheus.track_provider_remaining_budget.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_redis_sync_e2e():
+    """
+    Test that the in-memory cache gets properly synced with Redis values through the periodic sync mechanism
+
+    Critical test for using provider budgets in a multi-instance environment
+    """
+    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
+
+    provider_budget_config = {
+        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+    }
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                },
+            },
+        ],
+        provider_budget_config=provider_budget_config,
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_port=int(os.getenv("REDIS_PORT")),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+    )
+
+    if router.cache is None:
+        raise ValueError("Router cache is not initialized")
+    if router.cache.redis_cache is None:
+        raise ValueError("Redis cache is not initialized")
+
+    # Get the ProviderBudgetLimiting instance
+    spend_key = "provider_spend:openai:1d"
+
+    # Set initial values
+    test_spend_1 = 50.0
+    await router.cache.redis_cache.async_set_cache(key=spend_key, value=test_spend_1)
+
+    # Make a completion call to trigger spend tracking
+    response = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello"}],
+        mock_response="Hello there!",
+    )
+
+    # Wait for periodic sync (should be less than DEFAULT_REDIS_SYNC_INTERVAL)
+    await asyncio.sleep(2.5)
+
+    # Verify in-memory cache matches Redis
+    in_memory_spend = float(router.cache.in_memory_cache.get_cache(spend_key) or 0)
+    redis_spend = float(await router.cache.redis_cache.async_get_cache(spend_key) or 0)
+    assert (
+        abs(in_memory_spend - redis_spend) < 0.01
+    )  # Allow for small floating point differences
+
+    # Update Redis with new value from a "different litellm proxy instance"
+    test_spend_2 = 75.0
+    await router.cache.redis_cache.async_set_cache(key=spend_key, value=test_spend_2)
+
+    # Wait for periodic sync
+    await asyncio.sleep(2.5)
+
+    # Verify in-memory cache was updated
+    in_memory_spend = float(router.cache.in_memory_cache.get_cache(spend_key) or 0)
+    assert abs(in_memory_spend - test_spend_2) < 0.01
