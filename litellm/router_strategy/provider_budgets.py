@@ -25,6 +25,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
@@ -207,7 +208,7 @@ class ProviderBudgetLimiting(CustomLogger):
             )
 
         spend_key = f"provider_spend:{custom_llm_provider}:{budget_config.time_period}"
-        ttl_seconds = self.get_ttl_seconds(budget_config.time_period)
+        ttl_seconds = duration_in_seconds(duration=budget_config.time_period)
         verbose_router_logger.debug(
             f"Incrementing spend for {spend_key} by {response_cost}, ttl: {ttl_seconds}"
         )
@@ -241,15 +242,6 @@ class ProviderBudgetLimiting(CustomLogger):
             )
             return None
         return custom_llm_provider
-
-    def get_ttl_seconds(self, time_period: str) -> int:
-        """
-        Convert time period (e.g., '1d', '30d') to seconds for Redis TTL
-        """
-        if time_period.endswith("d"):
-            days = int(time_period[:-1])
-            return days * 24 * 60 * 60
-        raise ValueError(f"Unsupported time period format: {time_period}")
 
     def _track_provider_remaining_budget_prometheus(
         self, provider: str, spend: float, budget_limit: float

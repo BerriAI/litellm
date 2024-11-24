@@ -17,7 +17,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.proxy.utils import (
-    _duration_in_seconds,
+    duration_in_seconds,
     _extract_from_regex,
     get_last_day_of_month,
 )
@@ -593,7 +593,7 @@ def test_duration_in_seconds():
     duration_until_next_month = next_month - current_time
     expected_duration = int(duration_until_next_month.total_seconds())
 
-    value = _duration_in_seconds(duration="1mo")
+    value = duration_in_seconds(duration="1mo")
 
     assert value - expected_duration < 2
 
