@@ -291,7 +291,7 @@ async def test_in_memory_redis_sync_e2e():
     router = Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",
+                "model_name": "gpt-3.5-turbo-very-new",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
                 },
@@ -317,7 +317,7 @@ async def test_in_memory_redis_sync_e2e():
 
     # Make a completion call to trigger spend tracking
     response = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-3.5-turbo-very-new",
         messages=[{"role": "user", "content": "Hello"}],
         mock_response="Hello there!",
     )
