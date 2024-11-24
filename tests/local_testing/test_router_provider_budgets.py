@@ -57,7 +57,6 @@ async def test_provider_budgets_e2e_test():
     """
     cleanup_redis()
     # Modify for test
-    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     provider_budget_config: ProviderBudgetConfigType = {
         "openai": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
         "azure": ProviderBudgetInfo(time_period="1d", budget_limit=100),
@@ -119,7 +118,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
     """
     cleanup_redis()
-    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
+
     # Note: We intentionally use a dictionary with string keys for budget_limit and time_period
     # we want to test that the router can handle type conversion, since the proxy config yaml passes these values as a dictionary
     provider_budget_config = {
@@ -236,7 +235,6 @@ async def test_prometheus_metric_tracking():
     Test that the Prometheus metric for provider budget is tracked correctly
     """
     cleanup_redis()
-    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     from unittest.mock import MagicMock
     from litellm.integrations.prometheus import PrometheusLogger
 
