@@ -11,7 +11,7 @@ model_list:
 router_settings:
   provider_budget_config: 
     openai: 
-      budget_limit: 0.2 # float of $ value budget for time period
+      budget_limit: 0.3 # float of $ value budget for time period
       time_period: 1d # can be 1d, 2d, 30d 
     anthropic:
       budget_limit: 5
@@ -22,5 +22,3 @@ router_settings:
 
 litellm_settings:
   callbacks: ["prometheus"]
-
-
