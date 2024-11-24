@@ -2,7 +2,6 @@ import sys, os, asyncio, time, random
 from datetime import datetime
 import traceback
 from dotenv import load_dotenv
-from httpx import delete
 
 load_dotenv()
 import os, copy
@@ -35,6 +34,8 @@ async def test_provider_budgets_e2e_test():
     - Next 3 requests all go to Azure
 
     """
+    # Modify for test
+    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     provider_budget_config: ProviderBudgetConfigType = {
         "openai": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
         "azure": ProviderBudgetInfo(time_period="1d", budget_limit=100),
@@ -72,7 +73,7 @@ async def test_provider_budgets_e2e_test():
     )
     print(response)
 
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(2.5)
 
     for _ in range(3):
         response = await router.acompletion(
@@ -95,7 +96,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     - first request passes, all subsequent requests fail
 
     """
-
+    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     # Note: We intentionally use a dictionary with string keys for budget_limit and time_period
     # we want to test that the router can handle type conversion, since the proxy config yaml passes these values as a dictionary
     provider_budget_config = {
@@ -126,7 +127,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
     )
     print(response)
 
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(2.5)
 
     for _ in range(3):
         with pytest.raises(Exception) as exc_info:
@@ -143,7 +144,8 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         assert "Exceeded budget for provider" in str(exc_info.value)
 
 
-def test_get_llm_provider_for_deployment():
+@pytest.mark.asyncio
+async def test_get_llm_provider_for_deployment():
     """
     Test the _get_llm_provider_for_deployment helper method
 
@@ -173,7 +175,8 @@ def test_get_llm_provider_for_deployment():
     assert provider_budget._get_llm_provider_for_deployment(unknown_deployment) is None
 
 
-def test_get_budget_config_for_provider():
+@pytest.mark.asyncio
+async def test_get_budget_config_for_provider():
     """
     Test the _get_budget_config_for_provider helper method
 
@@ -207,6 +210,7 @@ async def test_prometheus_metric_tracking():
     """
     Test that the Prometheus metric for provider budget is tracked correctly
     """
+    setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
     from unittest.mock import MagicMock
     from litellm.integrations.prometheus import PrometheusLogger
 
@@ -264,7 +268,7 @@ async def test_prometheus_metric_tracking():
     except Exception as e:
         print("error", e)
 
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(2.5)
 
     # Verify the mock was called correctly
     mock_prometheus.track_provider_remaining_budget.assert_called_once()
