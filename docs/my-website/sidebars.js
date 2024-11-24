@@ -266,10 +266,10 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Load Balancing & Routing",
+      label: "Routing, Loadbalancing & Fallbacks",
       link: {
         type: "generated-index",
-        title: "Load Balancing & Routing",
+        title: "Routing, Loadbalancing & Fallbacks",
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
