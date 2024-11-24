@@ -2,6 +2,7 @@ import sys, os, asyncio, time, random
 from datetime import datetime
 import traceback
 from dotenv import load_dotenv
+from httpx import delete
 
 load_dotenv()
 import os, copy
@@ -276,6 +277,11 @@ async def test_in_memory_redis_sync_e2e():
 
     Critical test for using provider budgets in a multi-instance environment
     """
+    original_sync_interval = getattr(
+        litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL"
+    )
+
+    # Modify for test
     setattr(litellm.router_strategy.provider_budgets, "DEFAULT_REDIS_SYNC_INTERVAL", 2)
 
     provider_budget_config = {
@@ -336,3 +342,13 @@ async def test_in_memory_redis_sync_e2e():
     # Verify in-memory cache was updated
     in_memory_spend = float(router.cache.in_memory_cache.get_cache(spend_key) or 0)
     assert abs(in_memory_spend - test_spend_2) < 0.01
+
+    # clean up key from router cache
+    await router.cache.async_delete_cache(spend_key)
+
+    # Restore original value
+    setattr(
+        litellm.router_strategy.provider_budgets,
+        "DEFAULT_REDIS_SYNC_INTERVAL",
+        original_sync_interval,
+    )
