@@ -279,7 +279,7 @@ class ProviderBudgetLimiting(CustomLogger):
             if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
                 for key, value in redis_values.items():
                     if value is not None:
-                        self.router_cache.in_memory_cache.set_cache(
+                        await self.router_cache.in_memory_cache.async_set_cache(
                             key=key, value=float(value)
                         )
                         verbose_router_logger.debug(
@@ -287,9 +287,6 @@ class ProviderBudgetLimiting(CustomLogger):
                         )
 
         except Exception as e:
-            import traceback
-
-            traceback.print_exc()
             verbose_router_logger.error(
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
