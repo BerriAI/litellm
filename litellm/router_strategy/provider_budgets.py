@@ -246,9 +246,12 @@ class ProviderBudgetLimiting(CustomLogger):
 
     async def _push_in_memory_increments_to_redis(self):
         """
-        Sync in-memory spend to Redis.
+        This is a latency / speed optimization.
 
-        Pushes all increments from in-memory counter to Redis and resets the counter.
+        How this works:
+        - Collect all provider spend increments in `router_cache.in_memory_cache`, done in async_log_success_event
+        - Push all increments to Redis in this function
+        - Reset the in-memory `last_synced_values`
         """
         try:
             if not self.router_cache.redis_cache:
@@ -274,12 +277,12 @@ class ProviderBudgetLimiting(CustomLogger):
 
                 # Get the last synced value (default to 0 if not synced before)
                 last_synced = self.last_synced_values.get(key, 0.0)
-
                 # Calculate the delta to push to Redis
                 delta = float(current_value) - last_synced
                 if delta > 0:  # Only push if there is a positive increment
                     await self.router_cache.redis_cache.async_increment(
-                        key=key, value=delta
+                        key=key,
+                        value=delta,
                     )
                     verbose_router_logger.debug(
                         f"Pushed delta to Redis for {key}: {delta} (last synced: {last_synced}, current: {current_value})"
@@ -299,10 +302,8 @@ class ProviderBudgetLimiting(CustomLogger):
 
         Why Do we need this?
         - Redis is our source of truth for provider spend
-        - In-memory cache goes out of sync if it does not get updated with the values from Redis
+        - Optimization to hit ~100ms latency. Performance was impacted when redis was used for read/write per request
 
-        Why not just rely on DualCache ?
-        - DualCache does not handle synchronization between in-memory and Redis
 
         In a multi-instance evironment, each instance needs to periodically get the provider spend from Redis to ensure it is consistent across all instances.
         """
@@ -312,8 +313,10 @@ class ProviderBudgetLimiting(CustomLogger):
             if self.router_cache.redis_cache is None:
                 return
 
+            # Push all provider spend increments to Redis
             await self._push_in_memory_increments_to_redis()
 
+            # Handle Reading all current provider spend from Redis in Memory
             # Get all providers and their budget configs
             cache_keys = []
             for provider, config in self.provider_budget_config.items():
