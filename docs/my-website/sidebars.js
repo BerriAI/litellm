@@ -96,11 +96,10 @@ const sidebars = {
           label: "Spend Tracking + Budgets",
           items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
         },
-        "proxy/reliability",
         {
-          type: "category",
-          label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing",],
+          type: "link",
+          label: "Load Balancing, Routing, Fallbacks",
+          href: "https://docs.litellm.ai/docs/routing-load-balancing",
         },
         {
           type: "category",
@@ -267,8 +266,14 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Load Balancing",
-      items: ["routing", "scheduler"],
+      label: "Routing, Loadbalancing & Fallbacks",
+      link: {
+        type: "generated-index",
+        title: "Routing, Loadbalancing & Fallbacks",
+        description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
+        slug: "/routing-load-balancing",
+      },
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing"],
     },
     {
       type: "category",
