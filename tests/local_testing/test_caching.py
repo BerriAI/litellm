@@ -2433,3 +2433,48 @@ async def test_dual_cache_caching_batch_get_cache():
         await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
 
         assert mock_async_get_cache.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_increment_pipeline():
+    """Test Redis increment pipeline functionality"""
+    try:
+        from litellm.caching.redis_cache import RedisCache
+
+        litellm.set_verbose = True
+        redis_cache = RedisCache(
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+        )
+
+        # Create test increment operations
+        increment_list = [
+            {"key": "test_key1", "increment_value": 1.5, "ttl": 60},
+            {"key": "test_key1", "increment_value": 1.1, "ttl": 58},
+            {"key": "test_key1", "increment_value": 0.4, "ttl": 55},
+            {"key": "test_key2", "increment_value": 2.5, "ttl": 60},
+        ]
+
+        # Test pipeline increment
+        results = await redis_cache.async_increment_pipeline(increment_list)
+
+        # Verify results
+        assert len(results) == 8  # 4 increment operations + 4 expire operations
+
+        # Verify the values were actually set in Redis
+        value1 = await redis_cache.async_get_cache("test_key1")
+        print("result in cache for key=test_key1", value1)
+        value2 = await redis_cache.async_get_cache("test_key2")
+        print("result in cache for key=test_key2", value2)
+
+        assert float(value1) == 3.0
+        assert float(value2) == 2.5
+
+        # Clean up
+        await redis_cache.async_delete_cache("test_key1")
+        await redis_cache.async_delete_cache("test_key2")
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise e
