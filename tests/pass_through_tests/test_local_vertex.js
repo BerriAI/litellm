@@ -1,31 +1,22 @@
 const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
 
 
-// Import fetch if the SDK uses it
-const originalFetch = global.fetch || require('node-fetch');
-
-// Monkey-patch the fetch used internally
-global.fetch = async function patchedFetch(url, options) {
-    // Modify the URL to use HTTP instead of HTTPS
-    if (url.startsWith('https://localhost:4000')) {
-        url = url.replace('https://', 'http://');
-    }
-    console.log('Patched fetch sending request to:', url);
-    return originalFetch(url, options);
-};
 
 const vertexAI = new VertexAI({
     project: 'adroit-crow-413218',
     location: 'us-central1',
-    apiEndpoint: "localhost:4000/vertex-ai"
+    apiEndpoint: "127.0.0.1:4000/vertex-ai"
 });
 
+// Create customHeaders using Headers
+const customHeaders = new Headers({
+    "X-Litellm-Api-Key": "sk-1234",
+    tags: "vertexjs,test-2"
+});
 
 // Use customHeaders in RequestOptions
 const requestOptions = {
-    customHeaders: new Headers({
-        "x-litellm-api-key": "sk-1234"
-    })
+    customHeaders: customHeaders,
 };
 
 const generativeModel = vertexAI.getGenerativeModel(
@@ -33,7 +24,7 @@ const generativeModel = vertexAI.getGenerativeModel(
     requestOptions
 );
 
-async function streamingResponse() {
+async function testModel() {
     try {
         const request = {
             contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
@@ -49,20 +40,4 @@ async function streamingResponse() {
     }
 }
 
-
-async function nonStreamingResponse() {
-    try {
-        const request = {
-            contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
-          };
-        const response = await generativeModel.generateContent(request);
-        console.log('non streaming response: ', JSON.stringify(response));
-    } catch (error) {
-        console.error('Error:', error);
-    }
-}
-
-
-
-streamingResponse();
-nonStreamingResponse();
+testModel();

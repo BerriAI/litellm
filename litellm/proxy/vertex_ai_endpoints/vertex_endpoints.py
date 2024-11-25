@@ -113,7 +113,12 @@ def construct_target_url(
 
 
 @router.api_route(
-    "/vertex-ai/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
+    "/vertex-ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
+@router.api_route(
+    "/vertex_ai/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
 )
 async def vertex_proxy_route(
     endpoint: str,

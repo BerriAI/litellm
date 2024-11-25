@@ -393,6 +393,7 @@ async def pass_through_request(  # noqa: PLR0915
             _parsed_body=_parsed_body,
             passthrough_logging_payload=passthrough_logging_payload,
             litellm_call_id=litellm_call_id,
+            request=request,
         )
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
@@ -572,6 +573,7 @@ async def pass_through_request(  # noqa: PLR0915
 
 
 def _init_kwargs_for_pass_through_endpoint(
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth,
     passthrough_logging_payload: PassthroughStandardLoggingPayload,
     _parsed_body: Optional[dict] = None,
@@ -587,6 +589,12 @@ def _init_kwargs_for_pass_through_endpoint(
     }
     if _litellm_metadata:
         _metadata.update(_litellm_metadata)
+
+    _metadata = _update_metadata_with_tags_in_header(
+        request=request,
+        metadata=_metadata,
+    )
+
     kwargs = {
         "litellm_params": {
             "metadata": _metadata,
@@ -596,6 +604,13 @@ def _init_kwargs_for_pass_through_endpoint(
         "passthrough_logging_payload": passthrough_logging_payload,
     }
     return kwargs
+
+
+def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
+    _tags = request.headers.get("tags")
+    if _tags:
+        metadata["tags"] = _tags.split(",")
+    return metadata
 
 
 def create_pass_through_route(
