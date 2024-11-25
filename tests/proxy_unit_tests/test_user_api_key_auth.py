@@ -409,6 +409,8 @@ def test_is_api_route_allowed(route, user_role, expected_result):
         ("custom_engine/model-123", ["custom_engine/*"], True),
         ("custom_engine/model-123", ["custom_engine/*", "azure/*"], True),
         ("custom-engine/model-123", ["custom_engine/*", "azure/*"], False),
+        ("openai/gpt-4o", ["openai/*"], True),
+        ("openai/gpt-12", ["openai/*"], True),
         ("gpt-4", ["gpt-*"], True),
         ("gpt-4", ["claude-*"], False),
         # Mixed scenarios
@@ -430,6 +432,7 @@ def test_model_is_within_list_of_allowed_models(model, allowed_models, expected_
         ("gpt-4", ["gpt-*"], True),
         ("azure/gpt-4", ["azure/*"], True),
         ("custom_engine/model-123", ["custom_engine/*"], True),
+        ("openai/my-fake-model", ["openai/*"], True),
         ("custom_engine/model-123", ["custom_engine/*", "azure/*"], True),
         ("custom-engine/model-123", ["custom_engine/*", "azure/*"], False),
         # Multiple patterns
