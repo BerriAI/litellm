@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal
+from typing import Literal, Optional, TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
@@ -23,3 +23,13 @@ CachingSupportedCallTypes = Literal[
     "arerank",
     "rerank",
 ]
+
+
+class RedisPipelineIncrementOperation(TypedDict):
+    """
+    TypeDict for 1 Redis Pipeline Increment Operation
+    """
+
+    key: str
+    increment_value: float
+    ttl: Optional[int]
