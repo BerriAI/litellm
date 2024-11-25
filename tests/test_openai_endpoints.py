@@ -474,6 +474,24 @@ async def test_openai_wildcard_chat_completion():
 
 
 @pytest.mark.asyncio
+async def test_regex_pattern_matching_e2e_test():
+    """
+    - Create key for model = "custom-llm-engine/*" -> this has access to all models matching pattern = "custom-llm-engine/*"
+    - proxy_server_config.yaml has model = "custom-llm-engine/*"
+    - Make chat completion call
+
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, models=["custom-llm-engine/*"])
+        key = key_gen["key"]
+
+        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
+        await chat_completion(
+            session=session, key=key, model="custom-llm-engine/very-new-model"
+        )
+
+
+@pytest.mark.asyncio
 async def test_proxy_all_models():
     """
     - proxy_server_config.yaml has model = * / *

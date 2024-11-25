@@ -96,6 +96,11 @@ model_list:
     litellm_params:
       model: "groq/*"
       api_key: os.environ/GROQ_API_KEY
+  - model_name: "custom-llm-engine/*"
+    litellm_params:
+      model: "openai/my-fake-model"
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_key: fake-key
   - model_name: mistral-embed
     litellm_params:
       model: mistral/mistral-embed
