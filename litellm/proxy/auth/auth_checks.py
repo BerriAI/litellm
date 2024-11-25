@@ -893,6 +893,8 @@ def _model_is_within_list_of_allowed_models(
         return True
     if "all-proxy-models" in allowed_models:
         return True
+    if model in allowed_models:
+        return True
     if model_matches_patterns(model=model, allowed_models=allowed_models) is True:
         return True
 
