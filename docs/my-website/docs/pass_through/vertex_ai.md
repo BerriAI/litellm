@@ -4,17 +4,9 @@ import TabItem from '@theme/TabItem';
 
 # Vertex AI SDK
 
-Use VertexAI SDK to call endpoints on LiteLLM Gateway (native provider format)
-
-:::tip
-
-Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vertexAI with LiteLLM SDK or LiteLLM Proxy Server](../providers/vertex.md)
-
-:::
-
 Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
 
-Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex-ai`
+Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex_ai`
 
 
 #### **Example Usage**
@@ -23,9 +15,9 @@ Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.0-pro:generateContent \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{
     "contents":[{
       "role": "user", 
@@ -43,7 +35,7 @@ const { VertexAI } = require('@google-cloud/vertexai');
 const vertexAI = new VertexAI({
     project: 'your-project-id', // enter your vertex project id
     location: 'us-central1', // enter your vertex region
-    apiEndpoint: "localhost:4000/vertex-ai" // <proxy-server-url>/vertex-ai # note, do not include 'https://' in the url
+    apiEndpoint: "localhost:4000/vertex_ai" // <proxy-server-url>/vertex_ai # note, do not include 'https://' in the url
 });
 
 const model = vertexAI.getGenerativeModel({
@@ -87,7 +79,7 @@ generateContent();
 - Tuning API
 - CountTokens API
 
-## Authentication to Vertex AI
+#### Authentication to Vertex AI
 
 LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
 
@@ -116,9 +108,9 @@ from vertexai.preview.generative_models import GenerativeModel
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 vertexai.init(
-    project="<your-vertex-ai-project-id>", # enter your project id
-    location="<your-vertex-ai-location>", # enter your region
-    api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex-ai", # route on litellm
+    project="<your-vertex_ai-project-id>", # enter your project id
+    location="<your-vertex_ai-location>", # enter your region
+    api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai", # route on litellm
     api_transport="rest",
 )
 
@@ -158,7 +150,7 @@ from google.auth.credentials import Credentials
 from vertexai.generative_models import GenerativeModel
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -219,7 +211,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 vertexai.init(
     project="adroit-crow-413218",
@@ -247,7 +239,7 @@ from google.auth.credentials import Credentials
 from vertexai.generative_models import GenerativeModel
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -297,9 +289,9 @@ print(response.text)
 <TabItem value="Curl" label="Curl">
 
 ```shell
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-001:generateContent \
+curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-001:generateContent \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
 ```
 
@@ -320,7 +312,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -358,7 +350,7 @@ from google.auth.credentials import Credentials
 from vertexai.generative_models import GenerativeModel
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -413,9 +405,9 @@ def embed_text(
 <TabItem value="curl" label="Curl">
 
 ```shell
-curl http://localhost:4000/vertex-ai/publishers/google/models/textembedding-gecko@001:predict \
+curl http://localhost:4000/vertex_ai/publishers/google/models/textembedding-gecko@001:predict \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"instances":[{"content": "gm"}]}'
 ```
 
@@ -437,7 +429,7 @@ import vertexai
 from google.auth.credentials import Credentials
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -482,7 +474,7 @@ import vertexai
 from google.auth.credentials import Credentials
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -547,9 +539,9 @@ print(f"Created output image using {len(images[0]._image_bytes)} bytes")
 <TabItem value="curl" label="Curl">
 
 ```shell
-curl http://localhost:4000/vertex-ai/publishers/google/models/imagen-3.0-generate-001:predict \
+curl http://localhost:4000/vertex_ai/publishers/google/models/imagen-3.0-generate-001:predict \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"instances":[{"prompt": "make an otter"}], "parameters": {"sampleCount": 1}}'
 ```
 
@@ -571,7 +563,7 @@ from vertexai.generative_models import GenerativeModel
 import vertexai
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -614,7 +606,7 @@ import vertexai
 from google.auth.credentials import Credentials
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -677,9 +669,9 @@ print(f"Total Token Count: {usage_metadata.total_token_count}")
 
 
 ```shell
-curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-001:countTokens \
+curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.5-flash-001:countTokens \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
 ```
 
@@ -700,7 +692,7 @@ from vertexai.preview.tuning import sft
 import vertexai
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 
 vertexai.init(
@@ -741,7 +733,7 @@ import vertexai
 from google.auth.credentials import Credentials
 
 LITELLM_PROXY_API_KEY = "sk-1234"
-LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex_ai"
 
 import datetime
 
@@ -801,9 +793,9 @@ print(sft_tuning_job.experiment)
 <TabItem value="curl" label="Curl">
 
 ```shell
-curl http://localhost:4000/vertex-ai/tuningJobs \
+curl http://localhost:4000/vertex_ai/tuningJobs \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer sk-1234" \
+      -H "x-litellm-api-key: Bearer sk-1234" \
       -d '{
   "baseModel": "gemini-1.0-pro-002",
   "supervisedTuningSpec" : {
@@ -872,8 +864,8 @@ httpx_client = httpx.Client(timeout=30)
 
 print("Creating cached content")
 create_cache = httpx_client.post(
-    url=f"{LITELLM_BASE_URL}/vertex-ai/cachedContents",
-    headers={"Authorization": f"Bearer {LITELLM_PROXY_API_KEY}"},
+    url=f"{LITELLM_BASE_URL}/vertex_ai/cachedContents",
+    headers={"x-litellm-api-key": f"Bearer {LITELLM_PROXY_API_KEY}"},
     json={
         "model": "gemini-1.5-pro-001",
         "contents": [
@@ -918,6 +910,131 @@ response = client.chat.completions.create(
 )
 
 print("Response from proxy:", response)
+```
+
+</TabItem>
+</Tabs>
+
+
+## Advanced
+
+Pre-requisites
+- [Setup proxy with DB](../proxy/virtual_keys.md#setup)
+
+Use this, to avoid giving developers the raw Anthropic API key, but still letting them use Anthropic endpoints.
+
+### Use with Virtual Keys 
+
+1. Setup environment
+
+```bash
+export DATABASE_URL=""
+export LITELLM_MASTER_KEY=""
+```
+
+```bash
+litellm
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+2. Generate virtual key 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'x-litellm-api-key: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{}'
+```
+
+Expected Response 
+
+```bash
+{
+    ...
+    "key": "sk-1234ewknldferwedojwojw"
+}
+```
+
+3. Test it! 
+
+
+```bash
+curl http://localhost:4000/vertex_ai/publishers/google/models/gemini-1.0-pro:generateContent \
+  -H "Content-Type: application/json" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
+  -d '{
+    "contents":[{
+      "role": "user", 
+      "parts":[{"text": "How are you doing today?"}]
+    }]
+  }'
+```
+
+### Send `tags` in request headers
+
+Use this if you wants `tags` to be tracked in the LiteLLM DB and on logging callbacks
+
+Pass `tags` in request headers as a comma separated list. In the example below the following tags will be tracked 
+
+```
+tags: ["vertex-js-sdk", "pass-through-endpoint"]
+```
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.0-pro:generateContent \
+  -H "Content-Type: application/json" \
+  -H "x-litellm-api-key: Bearer sk-1234" \
+  -H "tags: vertex-js-sdk,pass-through-endpoint" \
+  -d '{
+    "contents":[{
+      "role": "user", 
+      "parts":[{"text": "How are you doing today?"}]
+    }]
+  }'
+```
+
+</TabItem>
+<TabItem value="js" label="Vertex Node.js SDK">
+
+```javascript
+const { VertexAI } = require('@google-cloud/vertexai');
+
+const vertexAI = new VertexAI({
+    project: 'your-project-id', // enter your vertex project id
+    location: 'us-central1', // enter your vertex region
+    apiEndpoint: "localhost:4000/vertex_ai" // <proxy-server-url>/vertex_ai # note, do not include 'https://' in the url
+});
+
+const model = vertexAI.getGenerativeModel({
+    model: 'gemini-1.0-pro'
+}, {
+    customHeaders: {
+        "x-litellm-api-key": "sk-1234", // Your litellm Virtual Key
+        "tags": "vertex-js-sdk,pass-through-endpoint"
+    }
+});
+
+async function generateContent() {
+    try {
+        const prompt = {
+            contents: [{
+                role: 'user',
+                parts: [{ text: 'How are you doing today?' }]
+            }]
+        };
+
+        const response = await model.generateContent(prompt);
+        console.log('Response:', response);
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+generateContent();
 ```
 
 </TabItem>
