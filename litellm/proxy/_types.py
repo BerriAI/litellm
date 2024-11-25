@@ -2111,6 +2111,7 @@ class SpecialHeaders(enum.Enum):
     openai_authorization = "Authorization"
     azure_authorization = "API-Key"
     anthropic_authorization = "x-api-key"
+    google_ai_studio_authorization = "x-goog-api-key"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):

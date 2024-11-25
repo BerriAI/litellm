@@ -61,10 +61,12 @@ async def gemini_proxy_route(
     fastapi_response: Response,
 ):
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
-    api_key = request.query_params.get("key")
+    google_ai_studio_api_key = request.query_params.get("key") or request.headers.get(
+        "x-goog-api-key"
+    )
 
     user_api_key_dict = await user_api_key_auth(
-        request=request, api_key="Bearer {}".format(api_key)
+        request=request, api_key=f"Bearer {google_ai_studio_api_key}"
     )
 
     base_target_url = "https://generativelanguage.googleapis.com"
