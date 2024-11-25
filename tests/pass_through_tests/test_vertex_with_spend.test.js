@@ -60,9 +60,9 @@ function loadVertexAiCredentials() {
 }
 
 // Run credential loading before tests
-// beforeAll(() => {
-//     loadVertexAiCredentials();
-// });
+beforeAll(() => {
+    loadVertexAiCredentials();
+});
 
 
 
