@@ -1,24 +1,5 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: custom_engine/*
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/custom_engine
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: fake-anthropic-endpoint
-    litellm_params:
-      model: anthropic/fake
-      api_base: https://exampleanthropicendpoint-production.up.railway.app/
-
-router_settings:
-  provider_budget_config: 
-    openai: 
-      budget_limit: 0.3 # float of $ value budget for time period
-      time_period: 1d # can be 1d, 2d, 30d 
-    anthropic:
-      budget_limit: 5
-      time_period: 1d
-  redis_host: os.environ/REDIS_HOST
-  redis_port: os.environ/REDIS_PORT
-  redis_password: os.environ/REDIS_PASSWORD
-
-litellm_settings:
-  callbacks: ["prometheus"]

@@ -9,6 +9,7 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 
+import re
 import time
 import traceback
 from datetime import datetime
@@ -34,6 +35,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
@@ -48,8 +50,8 @@ else:
 
 last_db_access_time = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry = 5  # refresh every 5s
-
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
+pattern_router = PatternMatchRouter()
 
 
 def common_checks(  # noqa: PLR0915
@@ -828,7 +830,7 @@ async def can_key_call_model(
     model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
 ) -> Literal[True]:
     """
-    Checks if token can call a given model
+    Checks if token can call a given model, supporting regex/wildcard patterns
 
     Returns:
         - True: if token allowed to call model
@@ -863,20 +865,18 @@ async def can_key_call_model(
 
     # Filter out models that are access_groups
     filtered_models = [m for m in valid_token.models if m not in access_groups]
-
     filtered_models += models_in_current_access_groups
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
-    all_model_access: bool = False
+    # Check for universal access patterns
+    if len(filtered_models) == 0:
+        return True
+    if "*" in filtered_models:
+        return True
+    if model_matches_patterns(model=model, allowed_models=filtered_models) is True:
+        return True
 
-    if (
-        len(filtered_models) == 0
-        or "*" in filtered_models
-        or "openai/*" in filtered_models
-    ):
-        all_model_access = True
-
-    if model is not None and model not in filtered_models and all_model_access is False:
+    if model is not None and model not in filtered_models:
         raise ValueError(
             f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
         )
@@ -885,3 +885,27 @@ async def can_key_call_model(
         f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
     )
     return True
+
+
+def model_matches_patterns(model: str, allowed_models: List[str]) -> bool:
+    """
+    Helper function to check if a model matches any of the allowed model patterns.
+
+    Args:
+        model (str): The model to check (e.g., "custom_engine/model-123")
+        allowed_models (List[str]): List of allowed model patterns (e.g., ["custom_engine/*", "azure/gpt-4*"])
+
+    Returns:
+        bool: True if model matches any allowed pattern, False otherwise
+    """
+    try:
+        # Create pattern router instance
+        for _model in allowed_models:
+            if "*" in _model:
+                regex_pattern = pattern_router._pattern_to_regex(_model)
+                if re.match(regex_pattern, model):
+                    return True
+        return False
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in model_matches_patterns: {str(e)}")
+        return False
