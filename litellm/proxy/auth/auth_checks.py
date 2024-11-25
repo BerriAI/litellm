@@ -886,6 +886,21 @@ async def can_key_call_model(
 def _model_is_within_list_of_allowed_models(
     model: str, allowed_models: List[str]
 ) -> bool:
+    """
+    Checks if a model is within a list of allowed models (includes pattern matching checks)
+
+    Args:
+        model (str): The model to check (e.g., "custom_engine/model-123")
+        allowed_models (List[str]): List of allowed model patterns (e.g., ["custom_engine/*", "azure/gpt-4", "claude-sonnet"])
+
+    Returns:
+        bool: True if
+            - len(allowed_models) == 0
+            - "*" in allowed_models (means all models are allowed)
+            - "all-proxy-models" in allowed_models (means all models are allowed)
+            - model is in allowed_models list
+            - model matches any allowed pattern
+    """
     # Check for universal access patterns
     if len(allowed_models) == 0:
         return True
@@ -895,13 +910,13 @@ def _model_is_within_list_of_allowed_models(
         return True
     if model in allowed_models:
         return True
-    if model_matches_patterns(model=model, allowed_models=allowed_models) is True:
+    if _model_matches_patterns(model=model, allowed_models=allowed_models) is True:
         return True
 
     return False
 
 
-def model_matches_patterns(model: str, allowed_models: List[str]) -> bool:
+def _model_matches_patterns(model: str, allowed_models: List[str]) -> bool:
     """
     Helper function to check if a model matches any of the allowed model patterns.
 
