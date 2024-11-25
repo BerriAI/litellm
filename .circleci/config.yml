@@ -1231,9 +1231,9 @@ jobs:
             npm install --save-dev jest
 
       - run:
-          name: Run Vertex AI tests
+          name: Run Vertex AI, Google AI Studio Node.js tests
           command: |
-            npx jest tests/pass_through_tests/test_vertex.test.js --verbose
+            npx jest tests/pass_through_tests --verbose
           no_output_timeout: 30m
       - run:
           name: Run tests
