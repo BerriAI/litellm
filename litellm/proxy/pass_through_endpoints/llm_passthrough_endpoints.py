@@ -54,12 +54,19 @@ def create_request_copy(request: Request):
     }
 
 
-@router.api_route("/gemini/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/gemini/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["Google AI Studio Pass-through", "pass-through"],
+)
 async def gemini_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
 ):
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)
+    """
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
     api_key = request.query_params.get("key")
 
@@ -111,13 +118,20 @@ async def gemini_proxy_route(
     return received_value
 
 
-@router.api_route("/cohere/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/cohere/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["Cohere Pass-through", "pass-through"],
+)
 async def cohere_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/cohere)
+    """
     base_target_url = "https://api.cohere.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -154,7 +168,9 @@ async def cohere_proxy_route(
 
 
 @router.api_route(
-    "/anthropic/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
+    "/anthropic/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["Anthropic Pass-through", "pass-through"],
 )
 async def anthropic_proxy_route(
     endpoint: str,
@@ -162,6 +178,9 @@ async def anthropic_proxy_route(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [Docs](https://docs.litellm.ai/docs/anthropic_completion)
+    """
     base_target_url = "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -201,13 +220,20 @@ async def anthropic_proxy_route(
     return received_value
 
 
-@router.api_route("/bedrock/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/bedrock/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["Bedrock Pass-through", "pass-through"],
+)
 async def bedrock_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
+    """
     create_request_copy(request)
 
     try:
@@ -275,13 +301,22 @@ async def bedrock_proxy_route(
     return received_value
 
 
-@router.api_route("/azure/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/azure/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["Azure Pass-through", "pass-through"],
+)
 async def azure_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Call any azure endpoint using the proxy.
+
+    Just use `{PROXY_BASE_URL}/azure/{endpoint:path}`
+    """
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
         raise Exception(

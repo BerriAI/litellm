@@ -113,13 +113,20 @@ def construct_target_url(
 
 
 @router.api_route(
-    "/vertex-ai/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
+    "/vertex-ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    tags=["Vertex AI Pass-through", "pass-through"],
 )
 async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
 ):
+    """
+    Call LiteLLM proxy via Vertex AI SDK.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+    """
     encoded_endpoint = httpx.URL(endpoint).path
 
     import re
