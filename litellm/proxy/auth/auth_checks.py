@@ -873,7 +873,7 @@ async def can_key_call_model(
         is False
     ):
         raise ValueError(
-            f"API Key not allowed to access model. List of allowed models={filtered_models}. Tried to access {model}"
+            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
         )
 
     valid_token.models = filtered_models
