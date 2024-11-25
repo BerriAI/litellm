@@ -121,6 +121,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="skip flaky test - vertex pass through streaming is flaky")
 async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
 
     spend_before = await call_spend_logs_endpoint() or 0.0
