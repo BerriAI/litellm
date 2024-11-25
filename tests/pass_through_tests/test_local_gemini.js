@@ -5,7 +5,10 @@ const modelParams = {
 };
   
 const requestOptions = {
-    baseUrl: 'http://127.0.0.1:4000/gemini'
+    baseUrl: 'http://127.0.0.1:4000/gemini',
+    customHeaders: {
+        "tags": "gemini-js-sdk,gemini-pro"
+    }
 };
   
 const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
