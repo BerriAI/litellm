@@ -52,7 +52,7 @@ def _get_vertex_env_vars() -> VertexPassThroughCredentials:
     )
 
 
-def set_default_vertex_config(config: Optional[dict]):
+def set_default_vertex_config(config: Optional[dict] = None):
     """Sets vertex configuration from provided config and/or environment variables
 
     Args:
@@ -69,9 +69,6 @@ def set_default_vertex_config(config: Optional[dict]):
     if config is None:
         default_vertex_config = _get_vertex_env_vars()
         return
-
-    if not isinstance(config, dict):
-        raise ValueError("invalid config, vertex default config must be a dictionary")
 
     if isinstance(config, dict):
         for key, value in config.items():
