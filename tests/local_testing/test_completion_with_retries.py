@@ -138,7 +138,7 @@ async def test_async_completion_num_retries(num_retries):
     ("Error", "expected_num_retries"),
     [
         (RateLimitError, 3),
-        (Timeout, 2),
+        (Timeout, 1),
     ],
 )
 def test_completion_retry_policy(Error, expected_num_retries):
@@ -146,11 +146,44 @@ def test_completion_retry_policy(Error, expected_num_retries):
     litellm.callbacks = [call_counter_handler]
     retry_policy = RetryPolicy(
         RateLimitErrorRetries=3,
-        TimeoutErrorRetries=2,
+        TimeoutErrorRetries=1,
     )
 
     with pytest.raises(Error):
         completion(
+            model="gpt-3.5-turbo",
+            messages=[{"gm": "vibe", "role": "user"}],
+            mock_response=(
+                Error(message="Bad!", llm_provider="openai", model="gpt-3.5-turbo")
+            ),
+            # Verify that the retry policy is used instead of the num_retries parameter
+            # when both are provided
+            # num_retries=100,
+            retry_policy=retry_policy,
+        )
+
+    assert (
+        call_counter_handler.api_call_count == expected_num_retries + 1
+    )  # 1 initial call + retries
+
+
+@pytest.mark.parametrize(
+    ("Error", "expected_num_retries"),
+    [
+        (RateLimitError, 3),
+        (Timeout, 2),
+    ],
+)
+async def test_async_completion_retry_policy(Error, expected_num_retries):
+    call_counter_handler = CallCounterHandler()
+    litellm.callbacks = [call_counter_handler]
+    retry_policy = RetryPolicy(
+        RateLimitErrorRetries=3,
+        TimeoutErrorRetries=1,
+    )
+
+    with pytest.raises(Error):
+        await completion(
             model="gpt-3.5-turbo",
             messages=[{"gm": "vibe", "role": "user"}],
             mock_response=(
