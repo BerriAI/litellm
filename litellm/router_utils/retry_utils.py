@@ -82,7 +82,7 @@ async def run_async_with_retries(
             raise
 
         # decides how long to sleep before retry
-        retry_after = _time_to_sleep_before_retry(  # type: ignore
+        retry_after = time_to_sleep_before_retry(  # type: ignore
             e=original_exception,
             remaining_retries=num_retries,
             num_retries=num_retries,
@@ -113,7 +113,7 @@ async def run_async_with_retries(
                     )
                 else:
                     _healthy_deployments = []
-                _timeout = _time_to_sleep_before_retry(
+                _timeout = time_to_sleep_before_retry(
                     e=original_exception,
                     remaining_retries=remaining_retries,
                     num_retries=num_retries,
@@ -289,7 +289,7 @@ def _get_num_retries_from_retry_policy(
         return retry_policy.ContentPolicyViolationErrorRetries
 
 
-def _time_to_sleep_before_retry(
+def time_to_sleep_before_retry(
     e: Exception,
     remaining_retries: int,
     num_retries: int,

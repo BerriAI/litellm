@@ -90,6 +90,7 @@ from litellm.router_utils.retry_utils import (
     handle_mock_testing_rate_limit_error,
     run_async_with_retries,
     should_retry_this_error,
+    time_to_sleep_before_retry,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -2960,50 +2961,6 @@ class Router:
                 break
         return fallback_model_group
 
-    def _time_to_sleep_before_retry(
-        self,
-        e: Exception,
-        remaining_retries: int,
-        num_retries: int,
-        healthy_deployments: Optional[List] = None,
-    ) -> Union[int, float]:
-        """
-        Calculate back-off, then retry
-
-        It should instantly retry only when:
-            1. there are healthy deployments in the same model group
-            2. there are fallbacks for the completion call
-        """
-        if (
-            healthy_deployments is not None
-            and isinstance(healthy_deployments, list)
-            and len(healthy_deployments) > 1
-        ):
-            return 0
-
-        response_headers: Optional[httpx.Headers] = None
-        if hasattr(e, "response") and hasattr(e.response, "headers"):  # type: ignore
-            response_headers = e.response.headers  # type: ignore
-        if hasattr(e, "litellm_response_headers"):
-            response_headers = e.litellm_response_headers  # type: ignore
-
-        if response_headers is not None:
-            timeout = litellm._calculate_retry_after(
-                remaining_retries=remaining_retries,
-                max_retries=num_retries,
-                response_headers=response_headers,
-                min_timeout=self.retry_after,
-            )
-
-        else:
-            timeout = litellm._calculate_retry_after(
-                remaining_retries=remaining_retries,
-                max_retries=num_retries,
-                min_timeout=self.retry_after,
-            )
-
-        return timeout
-
     def function_with_retries(self, *args, **kwargs):
         """
         Try calling the model 3 times. Shuffle-between available deployments.
@@ -3052,10 +3009,11 @@ class Router:
             )
 
             # decides how long to sleep before retry
-            _timeout = self._time_to_sleep_before_retry(
+            _timeout = time_to_sleep_before_retry(
                 e=original_exception,
                 remaining_retries=num_retries,
                 num_retries=num_retries,
+                retry_after=self.retry_after,
                 healthy_deployments=_healthy_deployments,
             )
 
@@ -3086,10 +3044,11 @@ class Router:
                         parent_otel_span=parent_otel_span,
                     )
                     remaining_retries = num_retries - current_attempt
-                    _timeout = self._time_to_sleep_before_retry(
+                    _timeout = time_to_sleep_before_retry(
                         e=e,
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
+                        retry_after=self.retry_after,
                         healthy_deployments=_healthy_deployments,
                     )
                     time.sleep(_timeout)
@@ -5210,57 +5169,6 @@ class Router:
                     )  # update in-memory cache for tracking
         except Exception as e:
             verbose_router_logger.error(f"Error in _track_deployment_metrics: {str(e)}")
-
-    def get_num_retries_from_retry_policy(
-        self, exception: Exception, model_group: Optional[str] = None
-    ):
-        """
-        BadRequestErrorRetries: Optional[int] = None
-        AuthenticationErrorRetries: Optional[int] = None
-        TimeoutErrorRetries: Optional[int] = None
-        RateLimitErrorRetries: Optional[int] = None
-        ContentPolicyViolationErrorRetries: Optional[int] = None
-        """
-        # if we can find the exception then in the retry policy -> return the number of retries
-        retry_policy: Optional[RetryPolicy] = self.retry_policy
-
-        if (
-            self.model_group_retry_policy is not None
-            and model_group is not None
-            and model_group in self.model_group_retry_policy
-        ):
-            retry_policy = self.model_group_retry_policy.get(model_group, None)  # type: ignore
-
-        if retry_policy is None:
-            return None
-        if isinstance(retry_policy, dict):
-            retry_policy = RetryPolicy(**retry_policy)
-
-        if (
-            isinstance(exception, litellm.BadRequestError)
-            and retry_policy.BadRequestErrorRetries is not None
-        ):
-            return retry_policy.BadRequestErrorRetries
-        if (
-            isinstance(exception, litellm.AuthenticationError)
-            and retry_policy.AuthenticationErrorRetries is not None
-        ):
-            return retry_policy.AuthenticationErrorRetries
-        if (
-            isinstance(exception, litellm.Timeout)
-            and retry_policy.TimeoutErrorRetries is not None
-        ):
-            return retry_policy.TimeoutErrorRetries
-        if (
-            isinstance(exception, litellm.RateLimitError)
-            and retry_policy.RateLimitErrorRetries is not None
-        ):
-            return retry_policy.RateLimitErrorRetries
-        if (
-            isinstance(exception, litellm.ContentPolicyViolationError)
-            and retry_policy.ContentPolicyViolationErrorRetries is not None
-        ):
-            return retry_policy.ContentPolicyViolationErrorRetries
 
     def get_allowed_fails_from_policy(self, exception: Exception):
         """
