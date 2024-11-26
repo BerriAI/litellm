@@ -2887,6 +2887,9 @@ class Router:
         if isinstance(retry_policy, dict):
             retry_policy = RetryPolicy(**retry_policy)
 
+        verbose_router_logger.debug(
+            f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
+        )
         return await async_run_with_retries(
             original_function=original_function,
             original_function_args=args,

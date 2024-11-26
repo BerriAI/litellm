@@ -80,10 +80,6 @@ async def async_run_with_retries(
         if model_list is not None:
             _metadata.update({"model_group_size": len(model_list)})
 
-    # TODO: Figure out logging - take a logger arg?
-    # verbose_router_logger.debug(
-    #     f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
-    # )
     try:
         handle_mock_testing_rate_limit_error(
             model_group=model_group, kwargs=original_function_kwargs
