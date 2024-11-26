@@ -3280,6 +3280,7 @@ def embedding(  # noqa: PLR0915
     cooldown_time = kwargs.get("cooldown_time", None)
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
     max_parallel_requests = kwargs.pop("max_parallel_requests", None)
+    azure_ad_token_provider = kwargs.pop("azure_ad_token_provider", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -3418,6 +3419,7 @@ def embedding(  # noqa: PLR0915
                 api_key=api_key,
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
