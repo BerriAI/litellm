@@ -1128,6 +1128,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
 
+            azure_ad_token_provider = optional_params.get("extra_body", {}).pop(
+                "azure_ad_token_provider", None
+            )
+            
             headers = headers or litellm.headers
 
             if extra_headers is not None:
@@ -1155,6 +1159,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_type=api_type,
                     dynamic_params=dynamic_params,
                     azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
@@ -1185,6 +1190,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_type=api_type,
                     dynamic_params=dynamic_params,
                     azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
@@ -1229,6 +1235,10 @@ def completion(  # type: ignore # noqa: PLR0915
             azure_ad_token = optional_params.get("extra_body", {}).pop(
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
+            
+            azure_ad_token_provider = optional_params.get("extra_body", {}).pop(
+                "azure_ad_token_provider", None
+            )
 
             headers = headers or litellm.headers
 
@@ -1253,6 +1263,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_version=api_version,
                 api_type=api_type,
                 azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
