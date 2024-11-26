@@ -10,6 +10,51 @@ from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_k
 from litellm.types.router import DeploymentTypedDict, RetryPolicy
 
 
+def run_with_retries(
+    original_function: Callable,
+    num_retries: int,
+    retry_after: int,  # min time to wait before retrying a failed request
+    retry_policy: Optional[
+        Union[RetryPolicy, Dict]
+    ],  # set custom retries for different exceptions
+    fallbacks: List,
+    context_window_fallbacks: List,
+    content_policy_fallbacks: List,
+    get_healthy_deployments: Callable,
+    log_retry: Callable,
+    model_list: Optional[List[DeploymentTypedDict]],
+    *args,
+    **kwargs,
+):
+    async_run_with_retries = run_async_with_retries(
+        original_function=original_function,
+        num_retries=num_retries,
+        retry_after=retry_after,
+        retry_policy=retry_policy,
+        fallbacks=fallbacks,
+        context_window_fallbacks=context_window_fallbacks,
+        content_policy_fallbacks=content_policy_fallbacks,
+        get_healthy_deployments=get_healthy_deployments,
+        log_retry=log_retry,
+        model_list=model_list,
+        *args,
+        **kwargs,
+    )
+    try:
+        # Check if an event loop is already running
+        loop = asyncio.get_running_loop()
+        # If running in an async context, return the coroutine for awaiting
+        return async_run_with_retries
+    except RuntimeError:
+        # If no event loop is running, create a new one and run the task
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(async_run_with_retries)
+        finally:
+            loop.close()
+
+
 async def run_async_with_retries(
     original_function: Callable,
     num_retries: int,

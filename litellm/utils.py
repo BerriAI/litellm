@@ -97,7 +97,7 @@ from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.router_utils.retry_utils import run_async_with_retries
+from litellm.router_utils.retry_utils import run_async_with_retries, run_with_retries
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -673,7 +673,44 @@ def client(original_function):  # noqa: PLR0915
             raise e
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):  # noqa: PLR0915
+    def wrapper(*args, **kwargs):
+        model: Optional[str] = None
+        try:
+            model = args[0] if len(args) > 0 else kwargs.pop("model")
+        except Exception:
+            model = None
+            call_type = original_function.__name__
+            if (
+                call_type != CallTypes.image_generation.value
+                and call_type != CallTypes.text_completion.value
+            ):
+                raise ValueError("model param not passed in.")
+
+        async def get_healthy_deployments(*args, **kwargs):
+            return [], []
+
+        return run_with_retries(
+            original_function=lambda *args, **kwargs: _wrapper(
+                original_function, model, *args, **kwargs
+            ),
+            num_retries=kwargs.get("num_retries", 0) or litellm.num_retries or 0,
+            retry_after=0,
+            retry_policy=kwargs.get("retry_policy"),
+            fallbacks=kwargs.get("fallbacks", []),
+            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
+                model, []
+            ),
+            content_policy_fallbacks=[],
+            # TODO: Explain
+            get_healthy_deployments=get_healthy_deployments,
+            # TODO: Explain
+            log_retry=lambda kwargs, _: kwargs,
+            model_list=[],
+            *args,
+            **kwargs,
+        )
+
+    def _wrapper(original_function, model, *args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -726,17 +763,6 @@ def client(original_function):  # noqa: PLR0915
         call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
-
-        model: Optional[str] = None
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except Exception:
-            model = None
-            if (
-                call_type != CallTypes.image_generation.value
-                and call_type != CallTypes.text_completion.value
-            ):
-                raise ValueError("model param not passed in.")
 
         try:
             if logging_obj is None:
@@ -847,7 +873,7 @@ def client(original_function):  # noqa: PLR0915
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {str(e)}")
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            result = original_function(*args, **{**kwargs, **{"model": model}})
             end_time = datetime.datetime.now()
             if "stream" in kwargs and kwargs["stream"] is True:
                 if (
@@ -964,7 +990,7 @@ def client(original_function):  # noqa: PLR0915
     async def wrapper_async(*args, **kwargs):
         model = ""
         try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
+            model = args[0] if len(args) > 0 else kwargs.pop("model")
         except Exception:
             call_type = original_function.__name__
             if (
@@ -978,7 +1004,9 @@ def client(original_function):  # noqa: PLR0915
             return [], []
 
         return await run_async_with_retries(
-            original_function=original_function,
+            original_function=lambda *args, **kwargs: _wrapper_async(
+                original_function, model, *args, **kwargs
+            ),
             num_retries=kwargs.get("num_retries", 0) or litellm.num_retries or 0,
             retry_after=0,
             retry_policy=kwargs.get("retry_policy"),
@@ -1054,7 +1082,8 @@ def client(original_function):  # noqa: PLR0915
             return _caching_handler_response.final_embedding_cached_response
 
         # MODEL CALL
-        result = await original_function(*args, **kwargs)
+        # TODO: Clean this up!
+        result = await original_function(*args, **{**kwargs, **{"model": model}})
         end_time = datetime.datetime.now()
         if "stream" in kwargs and kwargs["stream"] is True:
             if "complete_response" in kwargs and kwargs["complete_response"] is True:
