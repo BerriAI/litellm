@@ -70,6 +70,7 @@ except Exception as e:
     )
 
 
+print(f"documented_keys: {documented_keys}")
 # Compare and find undocumented keys
 undocumented_keys = env_keys - documented_keys
 
