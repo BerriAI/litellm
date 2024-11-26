@@ -4536,21 +4536,23 @@ class Router:
             return None, None
 
         for model in model_list:
-            id: str = model.get("model_info", {}).get("id")  # type: ignore
-            model = model.get("litellm_params", {}).get(
+            id: Optional[str] = model.get("model_info", {}).get("id")  # type: ignore
+            litellm_model: Optional[str] = model["litellm_params"].get(
                 "model"
             )  # USE THE MODEL SENT TO litellm.completion() - consistent with how global_router cache is written.
+            if id is None or litellm_model is None:
+                continue
             tpm_keys.append(
                 RouterCacheEnum.TPM.value.format(
                     id=id,
-                    model=model,
+                    model=litellm_model,
                     current_minute=current_minute,
                 )
             )
             rpm_keys.append(
                 RouterCacheEnum.RPM.value.format(
                     id=id,
-                    model=model,
+                    model=litellm_model,
                     current_minute=current_minute,
                 )
             )
