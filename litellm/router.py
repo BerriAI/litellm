@@ -4120,7 +4120,24 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
-    def get_router_model_info(self, deployment: dict) -> ModelMapInfo:
+    @overload
+    def get_router_model_info(
+        self, deployment: dict, received_model_name: str, id: None = None
+    ) -> ModelMapInfo:
+        pass
+
+    @overload
+    def get_router_model_info(
+        self, deployment: None, received_model_name: str, id: str
+    ) -> ModelMapInfo:
+        pass
+
+    def get_router_model_info(
+        self,
+        deployment: Optional[dict],
+        received_model_name: str,
+        id: Optional[str] = None,
+    ) -> ModelMapInfo:
         """
         For a given model id, return the model info (max tokens, input cost, output cost, etc.).
 
@@ -4134,6 +4151,14 @@ class Router:
         Raises:
         - ValueError -> If model is not mapped yet
         """
+        if id is not None:
+            _deployment = self.get_deployment(model_id=id)
+            if _deployment is not None:
+                deployment = _deployment.model_dump(exclude_none=True)
+
+        if deployment is None:
+            raise ValueError("Deployment not found")
+
         ## GET BASE MODEL
         base_model = deployment.get("model_info", {}).get("base_model", None)
         if base_model is None:
@@ -4155,10 +4180,27 @@ class Router:
         elif custom_llm_provider != "azure":
             model = _model
 
+            potential_models = self.pattern_router.route(received_model_name)
+            if "*" in model and potential_models is not None:  # if wildcard route
+                for potential_model in potential_models:
+                    try:
+                        if potential_model.get("model_info", {}).get(
+                            "id"
+                        ) == deployment.get("model_info", {}).get("id"):
+                            model = potential_model.get("litellm_params", {}).get(
+                                "model"
+                            )
+                            break
+                    except Exception:
+                        pass
+
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
-        model_info = litellm.get_model_info(
-            model="{}/{}".format(custom_llm_provider, model)
-        )
+        if not model.startswith(custom_llm_provider):
+            model_info_name = "{}/{}".format(custom_llm_provider, model)
+        else:
+            model_info_name = model
+
+        model_info = litellm.get_model_info(model=model_info_name)
 
         ## CHECK USER SET MODEL INFO
         user_model_info = deployment.get("model_info", {})
@@ -4807,10 +4849,12 @@ class Router:
                     base_model = deployment.get("litellm_params", {}).get(
                         "base_model", None
                     )
+                model_info = self.get_router_model_info(
+                    deployment=deployment, received_model_name=model
+                )
                 model = base_model or deployment.get("litellm_params", {}).get(
                     "model", None
                 )
-                model_info = self.get_router_model_info(deployment=deployment)
 
                 if (
                     isinstance(model_info, dict)

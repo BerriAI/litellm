@@ -174,3 +174,24 @@ async def test_update_kwargs_before_fallbacks(call_type):
 
             print(mock_client.call_args.kwargs)
             assert mock_client.call_args.kwargs["litellm_trace_id"] is not None
+
+
+def test_router_get_model_info_wildcard_routes():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1},
+            },
+        ]
+    )
+    model_info = router.get_router_model_info(
+        deployment=None, received_model_name="gemini/gemini-1.5-flash", id="1"
+    )
+    print(model_info)
+    assert model_info is not None
+    assert model_info["tpm"] is not None
+    assert model_info["rpm"] is not None
