@@ -57,7 +57,9 @@ try:
 
         # Find the section titled "general_settings - Reference"
         general_settings_section = re.search(
-            r"### environment variables - Reference(.*?)###", content, re.DOTALL
+            r"### environment variables - Reference(.*?)(?=\n###|\Z)",
+            content,
+            re.DOTALL | re.MULTILINE,
         )
         print(f"general_settings_section: {general_settings_section}")
         if general_settings_section:
