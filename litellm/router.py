@@ -122,6 +122,7 @@ from litellm.types.router import (
     ModelInfo,
     ProviderBudgetConfigType,
     RetryPolicy,
+    RouterCacheEnum,
     RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
@@ -503,6 +504,14 @@ class Router:
             litellm.success_callback.append(self.sync_deployment_callback_on_success)
         else:
             litellm.success_callback = [self.sync_deployment_callback_on_success]
+        if isinstance(litellm._async_failure_callback, list):
+            litellm._async_failure_callback.append(
+                self.async_deployment_callback_on_failure
+            )
+        else:
+            litellm._async_failure_callback = [
+                self.async_deployment_callback_on_failure
+            ]
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
             litellm.failure_callback.append(self.deployment_callback_on_failure)
@@ -3288,13 +3297,14 @@ class Router:
     ):
         """
         Track remaining tpm/rpm quota for model in model_list
-
-        Currently, only updates TPM usage.
         """
         try:
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
+                deployment_name = kwargs["litellm_params"]["metadata"].get(
+                    "deployment", None
+                )  # stable name - works for wildcard routes as well
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
@@ -3304,6 +3314,8 @@ class Router:
                     return
                 elif isinstance(id, int):
                     id = str(id)
+
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
 
                 _usage_obj = completion_response.get("usage")
                 total_tokens = _usage_obj.get("total_tokens", 0) if _usage_obj else 0
@@ -3316,17 +3328,29 @@ class Router:
                     "%H-%M"
                 )  # use the same timezone regardless of system clock
 
-                tpm_key = f"global_router:{id}:tpm:{current_minute}"
+                tpm_key = RouterCacheEnum.TPM.value.format(
+                    id=id, current_minute=current_minute, model=deployment_name
+                )
                 # ------------
                 # Update usage
                 # ------------
                 # update cache
 
-                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 ## TPM
                 await self.cache.async_increment_cache(
                     key=tpm_key,
                     value=total_tokens,
+                    parent_otel_span=parent_otel_span,
+                    ttl=RoutingArgs.ttl.value,
+                )
+
+                ## RPM
+                rpm_key = RouterCacheEnum.RPM.value.format(
+                    id=id, current_minute=current_minute, model=deployment_name
+                )
+                await self.cache.async_increment_cache(
+                    key=rpm_key,
+                    value=1,
                     parent_otel_span=parent_otel_span,
                     ttl=RoutingArgs.ttl.value,
                 )
@@ -3442,6 +3466,40 @@ class Router:
 
         except Exception as e:
             raise e
+
+    async def async_deployment_callback_on_failure(
+        self, kwargs, completion_response: Optional[Any], start_time, end_time
+    ):
+        """
+        Update RPM usage for a deployment
+        """
+        deployment_name = kwargs["litellm_params"]["metadata"].get(
+            "deployment", None
+        )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
+        model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+        model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+        id = model_info.get("id", None)
+        if model_group is None or id is None:
+            return
+        elif isinstance(id, int):
+            id = str(id)
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+
+        dt = get_utc_datetime()
+        current_minute = dt.strftime(
+            "%H-%M"
+        )  # use the same timezone regardless of system clock
+
+        ## RPM
+        rpm_key = RouterCacheEnum.RPM.value.format(
+            id=id, current_minute=current_minute, model=deployment_name
+        )
+        await self.cache.async_increment_cache(
+            key=rpm_key,
+            value=1,
+            parent_otel_span=parent_otel_span,
+            ttl=RoutingArgs.ttl.value,
+        )
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
@@ -4472,10 +4530,18 @@ class Router:
         for model in self.model_list:
             if "model_name" in model and model["model_name"] == model_group:
                 tpm_keys.append(
-                    f"global_router:{model['model_info']['id']}:tpm:{current_minute}"
+                    RouterCacheEnum.TPM.value.format(
+                        id=model["model_info"]["id"],
+                        model=model["model_name"],
+                        current_minute=current_minute,
+                    )
                 )
                 rpm_keys.append(
-                    f"global_router:{model['model_info']['id']}:rpm:{current_minute}"
+                    RouterCacheEnum.RPM.value.format(
+                        id=model["model_info"]["id"],
+                        model=model["model_name"],
+                        current_minute=current_minute,
+                    )
                 )
         combined_tpm_rpm_keys = tpm_keys + rpm_keys
 

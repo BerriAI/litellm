@@ -195,3 +195,71 @@ def test_router_get_model_info_wildcard_routes():
     assert model_info is not None
     assert model_info["tpm"] is not None
     assert model_info["rpm"] is not None
+
+
+@pytest.mark.asyncio
+async def test_call_router_callbacks_on_success():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1},
+            },
+        ]
+    )
+
+    with patch.object(
+        router.cache, "async_increment_cache", new=AsyncMock()
+    ) as mock_callback:
+        await router.acompletion(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            mock_response="Hello, I'm good.",
+        )
+        await asyncio.sleep(1)
+        assert mock_callback.call_count == 2
+
+        assert (
+            mock_callback.call_args_list[0]
+            .kwargs["key"]
+            .startswith("global_router:1:gemini/gemini-1.5-flash:tpm")
+        )
+        assert (
+            mock_callback.call_args_list[1]
+            .kwargs["key"]
+            .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
+        )
+
+
+@pytest.mark.asyncio
+async def test_call_router_callbacks_on_failure():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1},
+            },
+        ]
+    )
+
+    with patch.object(
+        router.cache, "async_increment_cache", new=AsyncMock()
+    ) as mock_callback:
+        with pytest.raises(litellm.RateLimitError):
+            await router.acompletion(
+                model="gemini/gemini-1.5-flash",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                mock_response="litellm.RateLimitError",
+                num_retries=0,
+            )
+        await asyncio.sleep(1)
+        print(mock_callback.call_args_list)
+        assert mock_callback.call_count == 1
+
+        assert (
+            mock_callback.call_args_list[0]
+            .kwargs["key"]
+            .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
+        )

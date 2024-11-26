@@ -640,3 +640,8 @@ class ProviderBudgetInfo(BaseModel):
 
 
 ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]
+
+
+class RouterCacheEnum(enum.Enum):
+    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
+    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
