@@ -10,6 +10,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import fastapi
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
 import httpx
 import pytest
 import litellm
@@ -320,3 +322,36 @@ async def test_pass_through_request_logging_failure_with_stream(
         assert content is not None
         if isinstance(content, bytes):
             assert len(content) > 0
+
+
+def test_pass_through_routes_support_all_methods():
+    """
+    Test that all pass-through routes support GET, POST, PUT, DELETE, PATCH methods
+    """
+    # Import the routers
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
+    )
+    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+        router as vertex_router,
+    )
+
+    # Expected HTTP methods
+    expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+
+    # Function to check routes in a router
+    def check_router_methods(router):
+        for route in router.routes:
+            if isinstance(route, APIRoute):
+                # Get path and methods for this route
+                path = route.path
+                methods = set(route.methods)
+                print("supported methods for route", path, "are", methods)
+                # Assert all expected methods are supported
+                assert (
+                    methods == expected_methods
+                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {expected_methods}"
+
+    # Check both routers
+    check_router_methods(llm_router)
+    check_router_methods(vertex_router)
