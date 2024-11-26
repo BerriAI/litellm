@@ -22,3 +22,4 @@ router_settings:
 
 litellm_settings:
   callbacks: ["prometheus"]
+  success_callback: ["langfuse"]

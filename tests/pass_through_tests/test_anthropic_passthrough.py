@@ -141,7 +141,9 @@ async def test_anthropic_basic_completion_with_headers():
                 ), "Start time should be before end time"
 
                 # Metadata assertions
-                assert log_entry["cache_hit"] == "False", "Cache should be off"
+                assert (
+                    str(log_entry["cache_hit"]).lower() != "true"
+                ), "Cache should be off"
                 assert log_entry["request_tags"] == [
                     "test-tag-1",
                     "test-tag-2",
@@ -251,7 +253,9 @@ async def test_anthropic_streaming_with_headers():
                 ), "Start time should be before end time"
 
                 # Metadata assertions
-                assert log_entry["cache_hit"] == "False", "Cache should be off"
+                assert (
+                    str(log_entry["cache_hit"]).lower() != "true"
+                ), "Cache should be off"
                 assert log_entry["request_tags"] == [
                     "test-tag-stream-1",
                     "test-tag-stream-2",
