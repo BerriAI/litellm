@@ -1,6 +1,6 @@
 import asyncio
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx
 import openai
@@ -12,6 +12,8 @@ from litellm.types.router import DeploymentTypedDict, RetryPolicy
 
 def run_with_retries(
     original_function: Callable,
+    original_function_args: Tuple,
+    original_function_kwargs: Dict[str, Any],
     num_retries: int,
     retry_after: int,  # min time to wait before retrying a failed request
     retry_policy: Optional[
@@ -23,11 +25,11 @@ def run_with_retries(
     get_healthy_deployments: Callable,
     log_retry: Callable,
     model_list: Optional[List[DeploymentTypedDict]],
-    *args,
-    **kwargs,
 ):
-    async_run_with_retries = run_async_with_retries(
+    async_task = async_run_with_retries(
         original_function=original_function,
+        original_function_args=original_function_args,
+        original_function_kwargs=original_function_kwargs,
         num_retries=num_retries,
         retry_after=retry_after,
         retry_policy=retry_policy,
@@ -37,26 +39,26 @@ def run_with_retries(
         get_healthy_deployments=get_healthy_deployments,
         log_retry=log_retry,
         model_list=model_list,
-        *args,
-        **kwargs,
     )
     try:
         # Check if an event loop is already running
         loop = asyncio.get_running_loop()
         # If running in an async context, return the coroutine for awaiting
-        return async_run_with_retries
+        return async_task
     except RuntimeError:
         # If no event loop is running, create a new one and run the task
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(async_run_with_retries)
+            return loop.run_until_complete(async_task)
         finally:
             loop.close()
 
 
-async def run_async_with_retries(
+async def async_run_with_retries(
     original_function: Callable,
+    original_function_args: Tuple,
+    original_function_kwargs: Dict[str, Any],
     num_retries: int,
     retry_after: int,  # min time to wait before retrying a failed request
     retry_policy: Optional[
@@ -68,14 +70,12 @@ async def run_async_with_retries(
     get_healthy_deployments: Callable,
     log_retry: Callable,
     model_list: Optional[List[DeploymentTypedDict]],
-    *args,
-    **kwargs,
 ):  # noqa: PLR0915
-    parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+    parent_otel_span = _get_parent_otel_span_from_kwargs(original_function_kwargs)
 
     ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
-    model_group: Optional[str] = kwargs.get("model")
-    _metadata: dict = kwargs.get("metadata") or {}
+    model_group: Optional[str] = original_function_kwargs.get("model")
+    _metadata: dict = original_function_kwargs.get("metadata") or {}
     if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
         if model_list is not None:
             _metadata.update({"model_group_size": len(model_list)})
@@ -85,10 +85,13 @@ async def run_async_with_retries(
     #     f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
     # )
     try:
-        handle_mock_testing_rate_limit_error(model_group=model_group, kwargs=kwargs)
+        handle_mock_testing_rate_limit_error(
+            model_group=model_group, kwargs=original_function_kwargs
+        )
         # if the function call is successful, no exception will be raised and we'll break out of the loop
-        response = await _make_call(original_function, *args, **kwargs)
-
+        response = await _make_call(
+            original_function, *original_function_args, **original_function_kwargs
+        )
         return response
     except Exception as e:
         current_attempt = None
@@ -98,7 +101,7 @@ async def run_async_with_retries(
         Retry Logic
         """
         _healthy_deployments, _all_deployments = await get_healthy_deployments(
-            model=kwargs.get("model") or "",
+            model=original_function_kwargs.get("model") or "",
             parent_otel_span=parent_otel_span,
         )
 
@@ -122,7 +125,10 @@ async def run_async_with_retries(
                 num_retries = _retry_policy_retries
         ## LOGGING
         if num_retries > 0:
-            kwargs = log_retry(kwargs=kwargs, e=original_exception)
+            original_function_kwargs = log_retry(
+                original_function_kwargs=original_function_kwargs,
+                e=original_exception,
+            )
         else:
             raise
 
@@ -139,7 +145,11 @@ async def run_async_with_retries(
         for current_attempt in range(num_retries):
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
-                response = await _make_call(original_function, *args, **kwargs)
+                response = await _make_call(
+                    original_function,
+                    *original_function_args,
+                    **original_function_kwargs,
+                )
                 if inspect.iscoroutinefunction(
                     response
                 ):  # async errors are often returned as coroutines
@@ -148,9 +158,12 @@ async def run_async_with_retries(
 
             except Exception as e:
                 ## LOGGING
-                kwargs = log_retry(kwargs=kwargs, e=e)
+                original_function_kwargs = log_retry(
+                    kwargs=original_function_kwargs,
+                    e=e,
+                )
                 remaining_retries = num_retries - current_attempt
-                _model: Optional[str] = kwargs.get("model")  # type: ignore
+                _model: Optional[str] = original_function_kwargs.get("model")  # type: ignore
                 if _model is not None:
                     _healthy_deployments, _ = await get_healthy_deployments(
                         model=_model,

@@ -87,8 +87,8 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.retry_utils import (
+    async_run_with_retries,
     handle_mock_testing_rate_limit_error,
-    run_async_with_retries,
     should_retry_this_error,
     time_to_sleep_before_retry,
 )
@@ -2887,8 +2887,10 @@ class Router:
         if isinstance(retry_policy, dict):
             retry_policy = RetryPolicy(**retry_policy)
 
-        return await run_async_with_retries(
+        return await async_run_with_retries(
             original_function=original_function,
+            original_function_args=args,
+            original_function_kwargs=kwargs,
             num_retries=num_retries,
             retry_after=self.retry_after,
             retry_policy=retry_policy,
@@ -2898,8 +2900,6 @@ class Router:
             get_healthy_deployments=self._async_get_healthy_deployments,
             log_retry=self.log_retry,
             model_list=self.get_model_list(),
-            *args,
-            **kwargs,
         )
 
     def function_with_fallbacks(self, *args, **kwargs):
