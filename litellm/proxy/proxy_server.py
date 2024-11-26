@@ -182,8 +182,8 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _duration_in_seconds,
     delete_verification_token,
+    duration_in_seconds,
     generate_key_helper_fn,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (

@@ -95,6 +95,11 @@ anthropic_api_key_header = APIKeyHeader(
     auto_error=False,
     description="If anthropic client used.",
 )
+google_ai_studio_api_key_header = APIKeyHeader(
+    name=SpecialHeaders.google_ai_studio_authorization.value,
+    auto_error=False,
+    description="If google ai studio client used.",
+)
 
 
 def _get_bearer_token(
@@ -197,6 +202,9 @@ async def user_api_key_auth(  # noqa: PLR0915
     anthropic_api_key_header: Optional[str] = fastapi.Security(
         anthropic_api_key_header
     ),
+    google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
+        google_ai_studio_api_key_header
+    ),
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -233,6 +241,8 @@ async def user_api_key_auth(  # noqa: PLR0915
             api_key = azure_api_key_header
         elif isinstance(anthropic_api_key_header, str):
             api_key = anthropic_api_key_header
+        elif isinstance(google_ai_studio_api_key_header, str):
+            api_key = google_ai_studio_api_key_header
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:

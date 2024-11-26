@@ -30,12 +30,16 @@ const sidebars = {
       items: [
         "proxy/docker_quick_start", 
         {
+          "type": "category", 
+          "label": "Config.yaml",
+          "items": ["proxy/configs", "proxy/config_settings"]
+        },
+        {
           type: "category",
           label: "Setup & Deployment",
           items: [
             "proxy/deploy", 
             "proxy/prod", 
-            "proxy/configs", 
             "proxy/cli",
             "proxy/model_management",
             "proxy/health",
@@ -47,7 +51,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture"],
         }, 
         {
           type: "link",
@@ -266,10 +270,10 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Load Balancing & Routing",
+      label: "Routing, Loadbalancing & Fallbacks",
       link: {
         type: "generated-index",
-        title: "Load Balancing & Routing",
+        title: "Routing, Loadbalancing & Fallbacks",
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },

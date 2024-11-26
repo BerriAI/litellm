@@ -169,8 +169,8 @@ async def new_team(  # noqa: PLR0915
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -289,7 +289,7 @@ async def new_team(  # noqa: PLR0915
 
     # If budget_duration is set, set `budget_reset_at`
     if complete_team_data.budget_duration is not None:
-        duration_s = _duration_in_seconds(duration=complete_team_data.budget_duration)
+        duration_s = duration_in_seconds(duration=complete_team_data.budget_duration)
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
         complete_team_data.budget_reset_at = reset_at
 
@@ -396,8 +396,8 @@ async def update_team(
     """
     from litellm.proxy.auth.auth_checks import _cache_team_object
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
@@ -425,7 +425,7 @@ async def update_team(
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
-        duration_s = _duration_in_seconds(duration=data.budget_duration)
+        duration_s = duration_in_seconds(duration=data.budget_duration)
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
         # set the budget_reset_at in DB
@@ -710,8 +710,8 @@ async def team_member_delete(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -830,8 +830,8 @@ async def team_member_update(
     Update team member budgets
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -966,8 +966,8 @@ async def delete_team(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -1055,8 +1055,8 @@ async def team_info(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -1204,8 +1204,8 @@ async def block_team(
 
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -1252,8 +1252,8 @@ async def unblock_team(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -1295,8 +1295,8 @@ async def list_team(
     - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )

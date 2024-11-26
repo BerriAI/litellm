@@ -16,25 +16,27 @@ model_list:
         api_key: os.environ/OPENAI_API_KEY
 
 router_settings:
-  redis_host: <your-redis-host>
-  redis_password: <your-redis-password>
-  redis_port: <your-redis-port>
   provider_budget_config: 
-	openai: 
-		budget_limit: 0.000000000001 # float of $ value budget for time period
-		time_period: 1d # can be 1d, 2d, 30d 
-	azure:
-		budget_limit: 100
-		time_period: 1d
-	anthropic:
-		budget_limit: 100
-		time_period: 10d
-	vertexai:
-		budget_limit: 100
-		time_period: 12d
-	gemini:
-		budget_limit: 100
-		time_period: 12d
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
+    azure:
+      budget_limit: 100
+      time_period: 1d
+    anthropic:
+      budget_limit: 100
+      time_period: 10d
+    vertex_ai:
+      budget_limit: 100
+      time_period: 12d
+    gemini:
+      budget_limit: 100
+      time_period: 12d
+  
+  # OPTIONAL: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
 
 general_settings:
   master_key: sk-1234
@@ -112,8 +114,11 @@ Expected response on failure
    - If all providers exceed budget, raises an error
 
 3. **Supported Time Periods**:
-   - Format: "Xd" where X is number of days
-   - Examples: "1d" (1 day), "30d" (30 days)
+   - Seconds: "Xs" (e.g., "30s")
+   - Minutes: "Xm" (e.g., "10m")
+   - Hours: "Xh" (e.g., "24h")
+   - Days: "Xd" (e.g., "1d", "30d")
+   - Months: "Xmo" (e.g., "1mo", "2mo")
 
 4. **Requirements**:
    - Redis required for tracking spend across instances
@@ -129,6 +134,31 @@ This metric indicates the remaining budget for a provider in dollars (USD)
 litellm_provider_remaining_budget_metric{api_provider="openai"} 10
 ```
 
+## Multi-instance setup
+
+If you are using a multi-instance setup, you will need to set the Redis host, port, and password in the `proxy_config.yaml` file. Redis is used to sync the spend across LiteLLM instances.
+
+```yaml
+model_list:
+    - model_name: gpt-3.5-turbo
+      litellm_params:
+        model: openai/gpt-3.5-turbo
+        api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  provider_budget_config: 
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
+  
+  # 👇 Add this: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+
+general_settings:
+  master_key: sk-1234
+```
 
 ## Spec for provider_budget_config
 
@@ -136,7 +166,12 @@ The `provider_budget_config` is a dictionary where:
 - **Key**: Provider name (string) - Must be a valid [LiteLLM provider name](https://docs.litellm.ai/docs/providers)
 - **Value**: Budget configuration object with the following parameters:
   - `budget_limit`: Float value representing the budget in USD
-  - `time_period`: String in the format "Xd" where X is the number of days (e.g., "1d", "30d")
+  - `time_period`: Duration string in one of the following formats:
+    - Seconds: `"Xs"` (e.g., "30s")
+    - Minutes: `"Xm"` (e.g., "10m")
+    - Hours: `"Xh"` (e.g., "24h")
+    - Days: `"Xd"` (e.g., "1d", "30d")
+    - Months: `"Xmo"` (e.g., "1mo", "2mo")
 
 Example structure:
 ```yaml
@@ -147,4 +182,10 @@ provider_budget_config:
   azure:
     budget_limit: 500.0    # $500 USD
     time_period: "30d"     # 30 day period
+  anthropic:
+    budget_limit: 200.0    # $200 USD
+    time_period: "1mo"     # 1 month period
+  gemini:
+    budget_limit: 50.0     # $50 USD
+    time_period: "24h"     # 24 hour period
 ```

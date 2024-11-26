@@ -18,6 +18,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
     get_litellm_virtual_key,
     vertex_proxy_route,
+    _get_vertex_env_vars,
+    set_default_vertex_config,
+    VertexPassThroughCredentials,
+    default_vertex_config,
 )
 
 
@@ -82,3 +86,84 @@ async def test_vertex_proxy_route_api_key_auth():
             mock_auth.assert_called_once()
             call_args = mock_auth.call_args[1]
             assert call_args["api_key"] == "Bearer test-key-123"
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_env_vars():
+    """Test that _get_vertex_env_vars correctly reads environment variables"""
+    # Set environment variables for the test
+    os.environ["DEFAULT_VERTEXAI_PROJECT"] = "test-project-123"
+    os.environ["DEFAULT_VERTEXAI_LOCATION"] = "us-central1"
+    os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/creds"
+
+    try:
+        result = _get_vertex_env_vars()
+        print(result)
+
+        # Verify the result
+        assert isinstance(result, VertexPassThroughCredentials)
+        assert result.vertex_project == "test-project-123"
+        assert result.vertex_location == "us-central1"
+        assert result.vertex_credentials == "/path/to/creds"
+
+    finally:
+        # Clean up environment variables
+        del os.environ["DEFAULT_VERTEXAI_PROJECT"]
+        del os.environ["DEFAULT_VERTEXAI_LOCATION"]
+        del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
+
+
+@pytest.mark.asyncio
+async def test_set_default_vertex_config():
+    """Test set_default_vertex_config with various inputs"""
+    # Test with None config - set environment variables first
+    os.environ["DEFAULT_VERTEXAI_PROJECT"] = "env-project"
+    os.environ["DEFAULT_VERTEXAI_LOCATION"] = "env-location"
+    os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "env-creds"
+    os.environ["GOOGLE_CREDS"] = "secret-creds"
+
+    try:
+        # Test with None config
+        set_default_vertex_config()
+        from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+            default_vertex_config,
+        )
+
+        assert default_vertex_config.vertex_project == "env-project"
+        assert default_vertex_config.vertex_location == "env-location"
+        assert default_vertex_config.vertex_credentials == "env-creds"
+
+        # Test with valid config.yaml settings on vertex_config
+        test_config = {
+            "vertex_project": "my-project-123",
+            "vertex_location": "us-central1",
+            "vertex_credentials": "path/to/creds",
+        }
+        set_default_vertex_config(test_config)
+        from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+            default_vertex_config,
+        )
+
+        assert default_vertex_config.vertex_project == "my-project-123"
+        assert default_vertex_config.vertex_location == "us-central1"
+        assert default_vertex_config.vertex_credentials == "path/to/creds"
+
+        # Test with environment variable reference
+        test_config = {
+            "vertex_project": "my-project-123",
+            "vertex_location": "us-central1",
+            "vertex_credentials": "os.environ/GOOGLE_CREDS",
+        }
+        set_default_vertex_config(test_config)
+        from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+            default_vertex_config,
+        )
+
+        assert default_vertex_config.vertex_credentials == "secret-creds"
+
+    finally:
+        # Clean up environment variables
+        del os.environ["DEFAULT_VERTEXAI_PROJECT"]
+        del os.environ["DEFAULT_VERTEXAI_LOCATION"]
+        del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
+        del os.environ["GOOGLE_CREDS"]

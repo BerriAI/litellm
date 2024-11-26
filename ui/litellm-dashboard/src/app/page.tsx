@@ -82,16 +82,26 @@ const CreateKeyPage = () => {
   const invitation_id = searchParams.get("invitation_id");
   const token = getCookie('token');
 
+  // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('selectedPage') || "api-keys";
-    }
-    return "api-keys";
+    return searchParams.get('page') || 'api-keys';
   });
 
-  useEffect(() => {
-    localStorage.setItem('selectedPage', page);
-  }, [page]);
+  // Custom setPage function that updates URL
+  const updatePage = (newPage: string) => {
+    // Update URL without full page reload
+    const newSearchParams = new URLSearchParams(searchParams);
+    newSearchParams.set('page', newPage);
+    
+    // Use Next.js router to update URL
+    window.history.pushState(
+      null, 
+      '', 
+      `?${newSearchParams.toString()}`
+    );
+    
+    setPage(newPage);
+  };
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
@@ -172,8 +182,8 @@ const CreateKeyPage = () => {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-                <Sidebar
-                setPage={setPage}
+              <Sidebar
+                setPage={updatePage}
                 userRole={userRole}
                 defaultSelectedKey={page}
               />            
@@ -289,7 +299,7 @@ const CreateKeyPage = () => {
             />
           )}
         </div>
-      </div>         
+      </div>
         )
       }
       
