@@ -46,7 +46,7 @@ print(env_keys)
 repo_base = "./"
 print(os.listdir(repo_base))
 docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
+    "../../docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
 )
 documented_keys = set()
 try:
