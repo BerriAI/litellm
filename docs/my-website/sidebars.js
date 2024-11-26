@@ -32,7 +32,7 @@ const sidebars = {
         {
           "type": "category", 
           "label": "Config.yaml",
-          "items": ["proxy/configs", "proxy/config_settings"]
+          "items": ["proxy/configs", "proxy/config_management", "proxy/config_settings"]
         },
         {
           type: "category",
