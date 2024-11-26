@@ -1236,9 +1236,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
             
-            azure_ad_token_provider = optional_params.get("extra_body", {}).pop(
-                "azure_ad_token_provider", None
-            )
+            azure_ad_token_provider = litellm_params.get("azure_ad_token_provider", None)
 
             headers = headers or litellm.headers
 
