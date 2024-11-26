@@ -547,6 +547,7 @@ async def team_member_add(
         parent_otel_span=None,
         proxy_logging_obj=proxy_logging_obj,
         check_cache_only=False,
+        check_db_only=True,
     )
     if existing_team_row is None:
         raise HTTPException(

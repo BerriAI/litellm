@@ -294,7 +294,12 @@ def _transform_request_body(
     optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
 
     try:
-        content = _gemini_convert_messages_with_history(messages=messages)
+        if custom_llm_provider == "gemini":
+            content = litellm.GoogleAIStudioGeminiConfig._transform_messages(
+                messages=messages
+            )
+        else:
+            content = litellm.VertexGeminiConfig._transform_messages(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
