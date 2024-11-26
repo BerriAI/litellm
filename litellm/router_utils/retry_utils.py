@@ -26,6 +26,9 @@ def run_with_retries(
     log_retry: Callable,
     model_list: Optional[List[DeploymentTypedDict]],
 ):
+    """
+    Runs the specified function with retries and fallbacks.
+    """
     async_task = async_run_with_retries(
         original_function=original_function,
         original_function_args=original_function_args,
@@ -70,7 +73,10 @@ async def async_run_with_retries(
     get_healthy_deployments: Callable,
     log_retry: Callable,
     model_list: Optional[List[DeploymentTypedDict]],
-):  # noqa: PLR0915
+):
+    """
+    Runs the specified function asynchronously with retries and fallbacks.
+    """
     parent_otel_span = _get_parent_otel_span_from_kwargs(original_function_kwargs)
 
     ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking

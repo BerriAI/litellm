@@ -672,37 +672,57 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             raise e
 
-    @wraps(original_function)
-    def wrapper(*args, **kwargs):
-        model: Optional[str] = None
+    async def _get_mock_healthy_deployments(model):
+        """
+        Returns a mock healthy LiteLLM Router deployment for consumption during retry logic.
+
+        Returns:
+            - A list of healthy deployments containing one mock deployment corresponding to
+              the model
+            - A list of deployments containing one mock deployment corresponding to the model.
+        """
+        mock_deployment = {
+            "model_name": model,
+        }
+        return [mock_deployment], [mock_deployment]
+
+    def _get_model_from_wrapper_args(
+        call_type, empty_model_call_types, args, kwargs
+    ) -> Optional[str]:
+        """
+        Fetches the name of the model from the arguments passed to the wrapper function.
+
+        Args:
+            call_type: The name of the LiteLLM call type (text completion, image generation, etc.).
+            empty_model_call_types: A list of call types that do not require a model. If the model
+                                    is not found in the arguments, the function will return None if
+                                    the call type is in this list, else it will raise an error.
+            args: The positional arguments passed to the wrapper function.
+            kwargs: The keyword arguments passed to the wrapper function.
+        """
+        model = None
         try:
-            model = args[0] if len(args) > 0 else kwargs.pop("model")
+            model = args[0] if len(args) > 0 else kwargs["model"]
         except Exception:
             model = None
-            call_type = original_function.__name__
-            if (
-                call_type != CallTypes.image_generation.value
-                and call_type != CallTypes.text_completion.value
-            ):
+            if call_type not in empty_model_call_types:
                 raise ValueError("model param not passed in.")
+        return model
 
-        async def get_healthy_deployments(*args, **kwargs):
-            """
-            Function to return a mock healthy LiteLLM Router deployment for consumption
-            during retry logic.
-
-            Returns:
-                - A list of healthy deployments containing one mock deployment corresponding to the model
-                - A list of  deployments containing one mock deployment corresponding to the model
-            """
-            mock_deployment = {
-                "model_name": model,
-            }
-            return [mock_deployment], [mock_deployment]
-
+    @wraps(original_function)
+    def wrapper(*args, **kwargs):
+        model = _get_model_from_wrapper_args(
+            call_type=original_function.__name__,
+            empty_model_call_types=[
+                CallTypes.image_generation.value,
+                CallTypes.text_completion.value,
+            ],
+            args=args,
+            kwargs=kwargs,
+        )
         return run_with_retries(
             original_function=lambda *args, **kwargs: _wrapper(
-                original_function, model, *args, **kwargs
+                original_function, *args, **kwargs
             ),
             original_function_args=args,
             original_function_kwargs=kwargs,
@@ -714,14 +734,14 @@ def client(original_function):  # noqa: PLR0915
                 model, []
             ),
             content_policy_fallbacks=[],
-            # TODO: Explain
-            get_healthy_deployments=get_healthy_deployments,
-            # TODO: Explain
+            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                model
+            ),
             log_retry=lambda kwargs, e: kwargs,
             model_list=[],
         )
 
-    def _wrapper(original_function, model, *args, **kwargs):  # noqa: PLR0915
+    def _wrapper(original_function, *args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -774,6 +794,16 @@ def client(original_function):  # noqa: PLR0915
         call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
+
+        model = _get_model_from_wrapper_args(
+            call_type=original_function.__name__,
+            empty_model_call_types=[
+                CallTypes.image_generation.value,
+                CallTypes.text_completion.value,
+            ],
+            args=args,
+            kwargs=kwargs,
+        )
 
         if logging_obj is None:
             logging_obj, kwargs = function_setup(
@@ -877,7 +907,7 @@ def client(original_function):  # noqa: PLR0915
             except Exception as e:
                 print_verbose(f"Error while checking max token limit: {str(e)}")
         # MODEL CALL
-        result = original_function(*args, **{**kwargs, **{"model": model}})
+        result = original_function(*args, **kwargs)
         end_time = datetime.datetime.now()
         if "stream" in kwargs and kwargs["stream"] is True:
             if "complete_response" in kwargs and kwargs["complete_response"] is True:
@@ -943,35 +973,22 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
-        model = ""
-        try:
-            model = args[0] if len(args) > 0 else kwargs.pop("model")
-        except Exception:
-            call_type = original_function.__name__
-            if (
-                call_type != CallTypes.aimage_generation.value  # model optional
-                and call_type != CallTypes.atext_completion.value  # can also be engine
-                and call_type != CallTypes.amoderation.value
-            ):
-                raise ValueError("model param not passed in.")
-
-        async def get_healthy_deployments(*args, **kwargs):
-            """
-            Function to return a mock healthy LiteLLM Router deployment for consumption
-            during retry logic.
-
-            Returns:
-                - A list of healthy deployments containing one mock deployment corresponding to the model
-                - A list of  deployments containing one mock deployment corresponding to the model
-            """
-            mock_deployment = {
-                "model_name": model,
-            }
-            return [mock_deployment], [mock_deployment]
-
+        model = (
+            _get_model_from_wrapper_args(
+                call_type=original_function.__name__,
+                empty_model_call_types=[
+                    CallTypes.aimage_generation.value,
+                    CallTypes.atext_completion.value,
+                    CallTypes.amoderation.value,
+                ],
+                args=args,
+                kwargs=kwargs,
+            )
+            or ""
+        )
         return await async_run_with_retries(
             original_function=lambda *args, **kwargs: _wrapper_async(
-                original_function, model, *args, **kwargs
+                original_function, *args, **kwargs
             ),
             original_function_args=args,
             original_function_kwargs=kwargs,
@@ -983,14 +1000,14 @@ def client(original_function):  # noqa: PLR0915
                 model, []
             ),
             content_policy_fallbacks=[],
-            get_healthy_deployments=get_healthy_deployments,
+            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                model
+            ),
             log_retry=lambda kwargs, e: kwargs,
             model_list=[],
         )
 
-    async def _wrapper_async(
-        original_function, model, *args, **kwargs
-    ):  # noqa: PLR0915
+    async def _wrapper_async(original_function, *args, **kwargs):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -1006,6 +1023,20 @@ def client(original_function):  # noqa: PLR0915
         call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
+
+        model = (
+            _get_model_from_wrapper_args(
+                call_type=original_function.__name__,
+                empty_model_call_types=[
+                    CallTypes.aimage_generation.value,
+                    CallTypes.atext_completion.value,
+                    CallTypes.amoderation.value,
+                ],
+                args=args,
+                kwargs=kwargs,
+            )
+            or ""
+        )
 
         if logging_obj is None:
             logging_obj, kwargs = function_setup(
@@ -1046,8 +1077,7 @@ def client(original_function):  # noqa: PLR0915
             return _caching_handler_response.final_embedding_cached_response
 
         # MODEL CALL
-        # TODO: Clean this up!
-        result = await original_function(*args, **{**kwargs, **{"model": model}})
+        result = await original_function(*args, **kwargs)
         end_time = datetime.datetime.now()
         if "stream" in kwargs and kwargs["stream"] is True:
             if "complete_response" in kwargs and kwargs["complete_response"] is True:
