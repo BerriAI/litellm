@@ -99,3 +99,28 @@ def test_caching_router():
 
 
 # test_caching_router()
+@pytest.mark.asyncio
+async def test_redis_with_ssl():
+    """
+    Test connecting to redis connection pool when ssl=None
+
+
+    Relevant issue:
+        User was seeing this error: `TypeError: AbstractConnection.__init__() got an unexpected keyword argument 'ssl'`
+    """
+    from litellm._redis import get_redis_connection_pool, get_redis_async_client
+
+    # Get the connection pool with SSL
+    pool = get_redis_connection_pool(
+        host=os.environ.get("REDIS_HOST"),
+        port=os.environ.get("REDIS_PORT"),
+        password=os.environ.get("REDIS_PASSWORD"),
+        ssl=None,
+    )
+
+    # Create Redis client with the pool
+    redis_client = get_redis_async_client(connection_pool=pool)
+
+    print("pinging redis")
+    print(await redis_client.ping())
+    print("pinged redis")
