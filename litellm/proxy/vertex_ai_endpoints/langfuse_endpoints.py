@@ -60,7 +60,7 @@ def create_request_copy(request: Request):
 
 @router.api_route(
     "/langfuse/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Langfuse Pass-through", "pass-through"],
 )
 async def langfuse_proxy_route(
