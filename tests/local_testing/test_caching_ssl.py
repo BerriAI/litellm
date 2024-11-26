@@ -112,9 +112,9 @@ async def test_redis_with_ssl():
 
     # Get the connection pool with SSL
     pool = get_redis_connection_pool(
-        host=os.environ.get("REDIS_HOST"),
-        port=os.environ.get("REDIS_PORT"),
-        password=os.environ.get("REDIS_PASSWORD"),
+        host=os.environ.get("REDIS_HOST_WITH_SSL"),
+        port=os.environ.get("REDIS_PORT_WITH_SSL"),
+        password=os.environ.get("REDIS_PASSWORD_WITH_SSL"),
         ssl=None,
     )
 
