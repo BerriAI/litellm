@@ -55,6 +55,19 @@ class CallCounterHandler(CustomLogger):
         print(f"On Failure")
 
 
+# completion with num retries + impact on exception mapping
+def test_completion_exception_mapping_with_num_retries():
+    try:
+        response = completion(
+            model="j2-ultra",
+            messages=[{"messages": "vibe", "bad": "message"}],
+            num_retries=2,
+        )
+        pytest.fail(f"Unmapped exception occurred")
+    except Exception as e:
+        pass
+
+
 @pytest.mark.parametrize("max_retries", [0, 3])
 def test_completion_max_retries(max_retries):
     call_counter_handler = CallCounterHandler()
