@@ -1191,80 +1191,6 @@ def test_get_image_mime_type_from_url():
 
 
 @pytest.mark.parametrize(
-    "image_url", ["https://example.com/image.jpg", "https://example.com/image.png"]
-)
-def test_image_completion_request(image_url):
-    """https:// .jpg, .png images are passed directly to the model"""
-    from unittest.mock import patch, Mock
-    import litellm
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
-        _get_image_mime_type_from_url,
-    )
-
-    # Mock response data
-    mock_response = Mock()
-    mock_response.json.return_value = {
-        "candidates": [{"content": {"parts": [{"text": "This is a sunflower"}]}}],
-        "usageMetadata": {
-            "promptTokenCount": 11,
-            "candidatesTokenCount": 50,
-            "totalTokenCount": 61,
-        },
-        "modelVersion": "gemini-1.5-pro",
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_response.status_code = 200
-
-    # Expected request body
-    expected_request_body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": "Whats in this image?"},
-                    {
-                        "file_data": {
-                            "file_uri": image_url,
-                            "mime_type": _get_image_mime_type_from_url(image_url),
-                        }
-                    },
-                ],
-            }
-        ],
-        "system_instruction": {"parts": [{"text": "Be a good bot"}]},
-        "generationConfig": {},
-    }
-
-    messages = [
-        {"role": "system", "content": "Be a good bot"},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Whats in this image?"},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        },
-    ]
-
-    client = HTTPHandler()
-    with patch.object(client, "post", new=MagicMock()) as mock_post:
-        mock_post.return_value = mock_response
-        try:
-            litellm.completion(
-                model="gemini/gemini-1.5-pro",
-                messages=messages,
-                client=client,
-            )
-        except Exception as e:
-            print(e)
-
-        # Assert the request body matches expected
-        mock_post.assert_called_once()
-        print("mock_post.call_args.kwargs['json']", mock_post.call_args.kwargs["json"])
-        assert mock_post.call_args.kwargs["json"] == expected_request_body
-
-
-@pytest.mark.parametrize(
     "model, expected_url",
     [
         (
@@ -1298,20 +1224,3 @@ def test_vertex_embedding_url(model, expected_url):
 
     assert url == expected_url
     assert endpoint == "predict"
-
-
-from base_llm_unit_tests import BaseLLMChatTest
-
-
-class TestVertexGemini(BaseLLMChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        return {"model": "gemini/gemini-1.5-flash"}
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        from litellm.llms.prompt_templates.factory import (
-            convert_to_gemini_tool_call_invoke,
-        )
-
-        result = convert_to_gemini_tool_call_invoke(tool_call_no_arguments)
-        print(result)

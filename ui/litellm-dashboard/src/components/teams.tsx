@@ -413,6 +413,7 @@ const Team: React.FC<TeamProps> = ({
           selectedTeam["team_id"],
           user_role
         );
+        message.success("Member added");
         console.log(`response for team create call: ${response["data"]}`);
         // Checking if the team exists in the list and updating or adding accordingly
         const foundIndex = teams.findIndex((team) => {
@@ -430,6 +431,7 @@ const Team: React.FC<TeamProps> = ({
           setSelectedTeam(response.data);
         }
         setIsAddMemberModalVisible(false);
+        
       }
     } catch (error) {
       console.error("Error creating the team:", error);
@@ -825,6 +827,9 @@ const Team: React.FC<TeamProps> = ({
               labelCol={{ span: 8 }}
               wrapperCol={{ span: 16 }}
               labelAlign="left"
+              initialValues={{
+                role: "user",
+              }}
             >
               <>
                 <Form.Item label="Email" name="user_email" className="mb-4">
@@ -842,8 +847,8 @@ const Team: React.FC<TeamProps> = ({
                 </Form.Item>
                 <Form.Item label="Member Role" name="role" className="mb-4">
                   <Select2 defaultValue="user">
-                    <Select2.Option value="user">user</Select2.Option>
                     <Select2.Option value="admin">admin</Select2.Option>
+                    <Select2.Option value="user">user</Select2.Option>
                   </Select2>
                 </Form.Item>
               </>
