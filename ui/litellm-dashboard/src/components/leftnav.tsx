@@ -7,7 +7,7 @@ const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
-  setPage: React.Dispatch<React.SetStateAction<string>>;
+  setPage: (page: string) => void;
   userRole: string;
   defaultSelectedKey: string;
 }
@@ -67,9 +67,17 @@ const Sidebar: React.FC<SidebarProps> = ({
           style={{ height: "100%", borderRight: 0 }}
         >
           {filteredMenuItems.map(item => (
-            <Menu.Item key={item.key} onClick={() => setPage(item.page)}>
-              <Text>{item.label}</Text>
-            </Menu.Item>
+            <Menu.Item 
+            key={item.key} 
+            onClick={() => {
+              const newSearchParams = new URLSearchParams(window.location.search);
+              newSearchParams.set('page', item.page);
+              window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+              setPage(item.page);
+            }}
+          >
+            <Text>{item.label}</Text>
+          </Menu.Item>
           ))}
         </Menu>
       </Sider>
