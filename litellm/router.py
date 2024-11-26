@@ -239,7 +239,6 @@ class Router:
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based
         provider_budget_config: Optional[ProviderBudgetConfigType] = None,
-        semaphore: Optional[asyncio.Semaphore] = None,
         alerting_config: Optional[AlertingConfig] = None,
         router_general_settings: Optional[
             RouterGeneralSettings
@@ -315,8 +314,6 @@ class Router:
 
         from litellm._service_logger import ServiceLogging
 
-        if semaphore:
-            self.semaphore = semaphore
         self.set_verbose = set_verbose
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
