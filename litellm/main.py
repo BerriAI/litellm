@@ -372,6 +372,8 @@ async def acompletion(
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
         custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
+        max_retries (int, optional): The number of retries to attempt (default is 0).
+        retry_policy (RetryPolicy, optional): The retry policy to use for request failures (default is None).
     Returns:
         ModelResponse: A response object containing the generated completion and associated metadata.
 
@@ -768,6 +770,7 @@ def completion(  # type: ignore # noqa: PLR0915
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
         custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
         max_retries (int, optional): The number of retries to attempt (default is 0).
+        retry_policy (RetryPolicy, optional): The retry policy to use for request failures (default is None).
     Returns:
         ModelResponse: A response object containing the generated completion and associated metadata.
 

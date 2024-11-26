@@ -726,7 +726,10 @@ def client(original_function):  # noqa: PLR0915
             ),
             original_function_args=args,
             original_function_kwargs=kwargs,
-            num_retries=kwargs.get("num_retries", 0) or litellm.num_retries or 0,
+            num_retries=kwargs.get("max_retries", 0)
+            or kwargs.get("num_retries", 0)
+            or litellm.num_retries
+            or 0,
             retry_after=0,
             retry_policy=kwargs.get("retry_policy"),
             fallbacks=kwargs.get("fallbacks", []),
@@ -992,7 +995,10 @@ def client(original_function):  # noqa: PLR0915
             ),
             original_function_args=args,
             original_function_kwargs=kwargs,
-            num_retries=kwargs.get("num_retries", 0) or litellm.num_retries or 0,
+            num_retries=kwargs.get("max_retries", 0)
+            or kwargs.get("num_retries", 0)
+            or litellm.num_retries
+            or 0,
             retry_after=0,
             retry_policy=kwargs.get("retry_policy"),
             fallbacks=kwargs.get("fallbacks", []),
