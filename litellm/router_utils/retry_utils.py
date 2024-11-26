@@ -82,16 +82,15 @@ async def run_async_with_retries(
             raise
 
         # decides how long to sleep before retry
-        sleep_time: Union[int, float] = _time_to_sleep_before_retry(
+        retry_after = _time_to_sleep_before_retry(  # type: ignore
             e=original_exception,
             remaining_retries=num_retries,
             num_retries=num_retries,
             retry_after=retry_after,
             healthy_deployments=_healthy_deployments,
         )
-        retry_after = int(sleep_time)
 
-        await asyncio.sleep(sleep_time)
+        await asyncio.sleep(retry_after)
         for current_attempt in range(num_retries):
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop

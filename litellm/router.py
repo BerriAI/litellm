@@ -2876,13 +2876,6 @@ class Router:
         model_group: Optional[str] = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
-        ## ADD MODEL GROUP SIZE TO METADATA - used for model_group_rate_limit_error tracking
-        _metadata: dict = kwargs.get("metadata") or {}
-        if "model_group" in _metadata and isinstance(_metadata["model_group"], str):
-            model_list = self.get_model_list(model_name=_metadata["model_group"])
-            if model_list is not None:
-                _metadata.update({"model_group_size": len(model_list)})
-
         retry_policy = self.retry_policy
         if (
             self.model_group_retry_policy is not None
