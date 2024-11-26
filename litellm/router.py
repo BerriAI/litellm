@@ -4516,7 +4516,10 @@ class Router:
         self, model_group: str
     ) -> Tuple[Optional[int], Optional[int]]:
         """
-        Returns remaining tpm/rpm quota for model group
+        Returns current tpm/rpm usage for model group
+
+        Parameters:
+        - model_group: str - the received model name from the user (can be a wildcard route).
 
         Returns:
         - usage: Tuple[tpm, rpm]
@@ -4527,22 +4530,30 @@ class Router:
         )  # use the same timezone regardless of system clock
         tpm_keys: List[str] = []
         rpm_keys: List[str] = []
-        for model in self.model_list:
-            if "model_name" in model and model["model_name"] == model_group:
-                tpm_keys.append(
-                    RouterCacheEnum.TPM.value.format(
-                        id=model["model_info"]["id"],
-                        model=model["model_name"],
-                        current_minute=current_minute,
-                    )
+
+        model_list = self.get_model_list(model_name=model_group)
+        if model_list is None:  # no matching deployments
+            return None, None
+
+        for model in model_list:
+            id: str = model.get("model_info", {}).get("id")  # type: ignore
+            model = model.get("litellm_params", {}).get(
+                "model"
+            )  # USE THE MODEL SENT TO litellm.completion() - consistent with how global_router cache is written.
+            tpm_keys.append(
+                RouterCacheEnum.TPM.value.format(
+                    id=id,
+                    model=model,
+                    current_minute=current_minute,
                 )
-                rpm_keys.append(
-                    RouterCacheEnum.RPM.value.format(
-                        id=model["model_info"]["id"],
-                        model=model["model_name"],
-                        current_minute=current_minute,
-                    )
+            )
+            rpm_keys.append(
+                RouterCacheEnum.RPM.value.format(
+                    id=id,
+                    model=model,
+                    current_minute=current_minute,
                 )
+            )
         combined_tpm_rpm_keys = tpm_keys + rpm_keys
 
         combined_tpm_rpm_values = await self.cache.async_batch_get_cache(
@@ -4663,6 +4674,13 @@ class Router:
                         self._get_all_deployments(
                             model_name=_router_model_name, model_alias=model_alias
                         )
+                    )
+
+            if len(returned_models) == 0:  # check if wildcard route
+                potential_wildcard_models = self.pattern_router.route(model_name)
+                if potential_wildcard_models is not None:
+                    returned_models.extend(
+                        [DeploymentTypedDict(**m) for m in potential_wildcard_models]
                     )
 
             if model_name is None:

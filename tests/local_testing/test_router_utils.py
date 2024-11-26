@@ -198,6 +198,35 @@ def test_router_get_model_info_wildcard_routes():
 
 
 @pytest.mark.asyncio
+async def test_router_get_model_group_usage_wildcard_routes():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1},
+            },
+        ]
+    )
+
+    resp = await router.acompletion(
+        model="gemini/gemini-1.5-flash",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, I'm good.",
+    )
+    print(resp)
+
+    await asyncio.sleep(1)
+
+    tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-1.5-flash")
+
+    assert tpm is not None, "tpm is None"
+    assert rpm is not None, "rpm is None"
+
+
+@pytest.mark.asyncio
 async def test_call_router_callbacks_on_success():
     router = Router(
         model_list=[
