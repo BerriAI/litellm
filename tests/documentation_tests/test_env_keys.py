@@ -53,10 +53,13 @@ try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
         content = docs_file.read()
 
+        print(f"content: {content}")
+
         # Find the section titled "general_settings - Reference"
         general_settings_section = re.search(
             r"### environment variables - Reference(.*?)###", content, re.DOTALL
         )
+        print(f"general_settings_section: {general_settings_section}")
         if general_settings_section:
             # Extract the table rows, which contain the documented keys
             table_content = general_settings_section.group(1)
