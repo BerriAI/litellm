@@ -1128,9 +1128,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
 
-            azure_ad_token_provider = optional_params.get("extra_body", {}).pop(
-                "azure_ad_token_provider", None
-            )
+            azure_ad_token_provider = litellm_params.get("azure_ad_token_provider", None)
             
             headers = headers or litellm.headers
 
@@ -4452,6 +4450,7 @@ def image_generation(  # noqa: PLR0915
         logger_fn = kwargs.get("logger_fn", None)
         mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
         proxy_server_request = kwargs.get("proxy_server_request", None)
+        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -4559,6 +4558,8 @@ def image_generation(  # noqa: PLR0915
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
                 model_response=model_response,
@@ -5052,6 +5053,7 @@ def speech(
         ) or get_secret(
             "AZURE_AD_TOKEN"
         )
+        azure_ad_token_provider = kwargs.get("azure_ad_token_provider",None)
 
         if extra_headers:
             optional_params["extra_headers"] = extra_headers
@@ -5065,6 +5067,7 @@ def speech(
             api_base=api_base,
             api_version=api_version,
             azure_ad_token=azure_ad_token,
+            azure_ad_token_provider=azure_ad_token_provider,
             organization=organization,
             max_retries=max_retries,
             timeout=timeout,
