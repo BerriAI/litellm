@@ -556,13 +556,22 @@ def test_team_key_generation_team_member_check():
         _team_key_generation_check,
     )
     from fastapi import HTTPException
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     litellm.key_generation_settings = {
         "team_key_generation": {"allowed_team_member_roles": ["admin"]}
     }
 
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="admin", user_id="test_user_id")],
+    )
+
     assert _team_key_generation_check(
+        team_table=team_table,
         user_api_key_dict=UserAPIKeyAuth(
+            user_id="test_user_id",
             user_role=LitellmUserRoles.INTERNAL_USER,
             api_key="sk-1234",
             team_member=Member(role="admin", user_id="test_user_id"),
@@ -570,8 +579,15 @@ def test_team_key_generation_team_member_check():
         data=GenerateKeyRequest(),
     )
 
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="user", user_id="test_user_id")],
+    )
+
     with pytest.raises(HTTPException):
         _team_key_generation_check(
+            team_table=team_table,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 api_key="sk-1234",
@@ -607,6 +623,7 @@ def test_key_generation_required_params_check(
         StandardKeyGenerationConfig,
         PersonalUIKeyGenerationConfig,
     )
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from fastapi import HTTPException
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -614,7 +631,13 @@ def test_key_generation_required_params_check(
         api_key="sk-1234",
         user_id="test_user_id",
         team_id="test_team_id",
-        team_member=Member(role="admin", user_id="test_user_id"),
+        team_member=None,
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="admin", user_id="test_user_id")],
     )
 
     if key_type == "team_key":
@@ -632,13 +655,13 @@ def test_key_generation_required_params_check(
 
     if expected_result:
         if key_type == "team_key":
-            assert _team_key_generation_check(user_api_key_dict, input_data)
+            assert _team_key_generation_check(team_table, user_api_key_dict, input_data)
         elif key_type == "personal_key":
             assert _personal_key_generation_check(user_api_key_dict, input_data)
     else:
         if key_type == "team_key":
             with pytest.raises(HTTPException):
-                _team_key_generation_check(user_api_key_dict, input_data)
+                _team_key_generation_check(team_table, user_api_key_dict, input_data)
         elif key_type == "personal_key":
             with pytest.raises(HTTPException):
                 _personal_key_generation_check(user_api_key_dict, input_data)

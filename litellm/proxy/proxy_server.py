@@ -5663,11 +5663,11 @@ async def anthropic_response(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    This is a BETA endpoint that calls 100+ LLMs in the anthropic format.
+    🚨 DEPRECATED ENDPOINT🚨
 
-    To do a simple pass-through for anthropic, do `{PROXY_BASE_URL}/anthropic/v1/messages`
+    Use `{PROXY_BASE_URL}/anthropic/v1/messages` instead - [Docs](https://docs.litellm.ai/docs/anthropic_completion).
 
-    Docs - https://docs.litellm.ai/docs/anthropic_completion
+    This was a BETA endpoint that calls 100+ LLMs in the anthropic format.
     """
     from litellm import adapter_completion
     from litellm.adapters.anthropic_adapter import anthropic_adapter

@@ -33,6 +33,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -681,6 +682,27 @@ def construct_tool_use_system_prompt(
     return tool_use_system_prompt
 
 
+def convert_generic_image_chunk_to_openai_image_obj(
+    image_chunk: GenericImageParsingChunk,
+) -> str:
+    """
+    Convert a generic image chunk to an OpenAI image object.
+
+    Input:
+    GenericImageParsingChunk(
+        type="base64",
+        media_type="image/jpeg",
+        data="...",
+    )
+
+    Return:
+    "data:image/jpeg;base64,{base64_image}"
+    """
+    return "data:{};{},{}".format(
+        image_chunk["media_type"], image_chunk["type"], image_chunk["data"]
+    )
+
+
 def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
     """
     Input:
@@ -706,6 +728,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsing
             data=base64_data,
         )
     except Exception as e:
+        traceback.print_exc()
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
