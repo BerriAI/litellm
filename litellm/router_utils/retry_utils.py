@@ -126,7 +126,7 @@ async def async_run_with_retries(
         ## LOGGING
         if num_retries > 0:
             original_function_kwargs = log_retry(
-                original_function_kwargs=original_function_kwargs,
+                kwargs=original_function_kwargs,
                 e=original_exception,
             )
         else:

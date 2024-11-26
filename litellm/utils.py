@@ -687,7 +687,18 @@ def client(original_function):  # noqa: PLR0915
                 raise ValueError("model param not passed in.")
 
         async def get_healthy_deployments(*args, **kwargs):
-            return [], []
+            """
+            Function to return a mock healthy LiteLLM Router deployment for consumption
+            during retry logic.
+
+            Returns:
+                - A list of healthy deployments containing one mock deployment corresponding to the model
+                - A list of  deployments containing one mock deployment corresponding to the model
+            """
+            mock_deployment = {
+                "model_name": model,
+            }
+            return [mock_deployment], [mock_deployment]
 
         return run_with_retries(
             original_function=lambda *args, **kwargs: _wrapper(
@@ -706,7 +717,7 @@ def client(original_function):  # noqa: PLR0915
             # TODO: Explain
             get_healthy_deployments=get_healthy_deployments,
             # TODO: Explain
-            log_retry=lambda kwargs, _: kwargs,
+            log_retry=lambda kwargs, e: kwargs,
             model_list=[],
         )
 
@@ -945,7 +956,18 @@ def client(original_function):  # noqa: PLR0915
                 raise ValueError("model param not passed in.")
 
         async def get_healthy_deployments(*args, **kwargs):
-            return [], []
+            """
+            Function to return a mock healthy LiteLLM Router deployment for consumption
+            during retry logic.
+
+            Returns:
+                - A list of healthy deployments containing one mock deployment corresponding to the model
+                - A list of  deployments containing one mock deployment corresponding to the model
+            """
+            mock_deployment = {
+                "model_name": model,
+            }
+            return [mock_deployment], [mock_deployment]
 
         return await async_run_with_retries(
             original_function=lambda *args, **kwargs: _wrapper_async(
@@ -961,10 +983,8 @@ def client(original_function):  # noqa: PLR0915
                 model, []
             ),
             content_policy_fallbacks=[],
-            # TODO: Explain
             get_healthy_deployments=get_healthy_deployments,
-            # TODO: Explain
-            log_retry=lambda kwargs, _: kwargs,
+            log_retry=lambda kwargs, e: kwargs,
             model_list=[],
         )
 
