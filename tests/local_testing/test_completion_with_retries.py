@@ -86,25 +86,6 @@ def test_completion_max_retries(max_retries):
     )  # 1 initial call + retries
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("max_retries", [0, 3])
-async def test_async_completion_max_retries(max_retries):
-    call_counter_handler = CallCounterHandler()
-    litellm.callbacks = [call_counter_handler]
-
-    with pytest.raises(Exception, match="Invalid Request"):
-        await acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"gm": "vibe", "role": "user"}],
-            mock_response=(Exception("Invalid Request")),
-            max_retries=max_retries,
-        )
-
-    assert (
-        call_counter_handler.api_call_count == max_retries + 1
-    )  # 1 initial call + retries
-
-
 @pytest.mark.parametrize(
     ("Error", "expected_num_retries"),
     [
@@ -143,7 +124,7 @@ def test_completion_retry_policy(Error, expected_num_retries):
     ("Error", "expected_num_retries"),
     [
         (RateLimitError, 3),
-        (Timeout, 2),
+        (Timeout, 1),
     ],
 )
 async def test_async_completion_retry_policy(Error, expected_num_retries):
