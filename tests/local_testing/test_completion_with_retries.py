@@ -86,6 +86,7 @@ def test_completion_max_retries(max_retries):
     )  # 1 initial call + retries
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("max_retries", [0, 3])
 async def test_async_completion_max_retries(max_retries):
     call_counter_handler = CallCounterHandler()
@@ -137,6 +138,7 @@ def test_completion_retry_policy(Error, expected_num_retries):
     )  # 1 initial call + retries
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("Error", "expected_num_retries"),
     [
