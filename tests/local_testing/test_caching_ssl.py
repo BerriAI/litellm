@@ -111,6 +111,7 @@ async def test_redis_with_ssl():
     from litellm._redis import get_redis_connection_pool, get_redis_async_client
 
     # Get the connection pool with SSL
+    # REDIS_HOST_WITH_SSL is just a redis cloud instance with Transport layer security (TLS) enabled
     pool = get_redis_connection_pool(
         host=os.environ.get("REDIS_HOST_WITH_SSL"),
         port=os.environ.get("REDIS_PORT_WITH_SSL"),
