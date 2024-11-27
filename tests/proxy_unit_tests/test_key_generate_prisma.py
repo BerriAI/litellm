@@ -2791,11 +2791,9 @@ async def test_update_user_role(prisma_client):
 @pytest.mark.asyncio()
 async def test_update_user_unit_test(prisma_client):
     """
-    Tests if we update user role, incorrect values are not stored in cache
-    -> create a user with role == INTERNAL_USER
-    -> access an Admin only route -> expect to fail
-    -> update user role to == PROXY_ADMIN
-    -> access an Admin only route -> expect to succeed
+    Unit test for /user/update
+
+    Ensure that params are updated for UpdateUserRequest
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
