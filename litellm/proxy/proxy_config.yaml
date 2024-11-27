@@ -2,4 +2,4 @@ include:
   - model_config.yaml
 
 litellm_settings:
-  callbacks: ["prometheus"] 
+  callbacks: ["datadog"] 

@@ -422,3 +422,47 @@ async def test_datadog_post_call_failure_hook():
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_datadog_payload_environment_variables():
+    """Test that DataDog payload correctly includes environment variables in the payload structure"""
+    try:
+        # Set test environment variables
+        test_env = {
+            "DD_ENV": "test-env",
+            "DD_SERVICE": "test-service",
+            "DD_VERSION": "1.0.0",
+            "DD_SOURCE": "test-source",
+            "DD_API_KEY": "fake-key",
+            "DD_SITE": "datadoghq.com",
+        }
+
+        with patch.dict(os.environ, test_env):
+            dd_logger = DataDogLogger()
+            standard_payload = create_standard_logging_payload()
+
+            # Create the payload
+            dd_payload = dd_logger.create_datadog_logging_payload(
+                kwargs={"standard_logging_object": standard_payload},
+                response_obj=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+            print("dd payload=", json.dumps(dd_payload, indent=2))
+
+            # Verify payload structure and environment variables
+            assert (
+                dd_payload["ddsource"] == "test-source"
+            ), "Incorrect source in payload"
+            assert (
+                dd_payload["service"] == "test-service"
+            ), "Incorrect service in payload"
+            assert (
+                dd_payload["ddtags"]
+                == "env:test-env,service:test-service,version:1.0.0"
+            ), "Incorrect tags in payload"
+
+    except Exception as e:
+        pytest.fail(f"Test failed with exception: {str(e)}")
