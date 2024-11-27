@@ -897,6 +897,7 @@ class ProxyLogging:
         Handler for Logging Authentication Errors on LiteLLM Proxy
         Why not use post_call_failure_hook?
         - `post_call_failure_hook` calls `litellm_logging_obj.async_failure_handler`. This led to the Exception being logged twice
+
         What does this handler do?
         - Logs Authentication Errors (like invalid API Key passed) to CustomLogger compatible classes
             - calls CustomLogger.async_post_call_failure_hook
