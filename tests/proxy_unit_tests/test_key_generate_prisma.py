@@ -23,7 +23,7 @@ import os
 import sys
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from fastapi import Request
@@ -1305,6 +1305,8 @@ def test_generate_and_update_key(prisma_client):
                 data=UpdateKeyRequest(
                     key=generated_key,
                     models=["ada", "babbage", "curie", "davinci"],
+                    budget_duration="1mo",
+                    max_budget=100,
                 ),
             )
 
@@ -1333,6 +1335,21 @@ def test_generate_and_update_key(prisma_client):
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
             assert result["info"]["team_id"] == _team_2
+            assert result["info"]["budget_duration"] == "1mo"
+            assert result["info"]["max_budget"] == 100
+
+            # budget_reset_at should be 30 days from now
+            assert result["info"]["budget_reset_at"] is not None
+            budget_reset_at = result["info"]["budget_reset_at"].replace(
+                tzinfo=timezone.utc
+            )
+            current_time = datetime.now(timezone.utc)
+
+            print(
+                "days between now and budget_reset_at",
+                (budget_reset_at - current_time).days,
+            )
+            assert (budget_reset_at - current_time).days >= 29  # around 1 month
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
