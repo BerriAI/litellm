@@ -29,6 +29,23 @@ def run_with_retries(
     """
     Runs the specified function with retries and fallbacks.
     """
+    try:
+        if asyncio.current_task() is not None:
+            # If run_with_retries (synchronous) is called from within an async function,
+            # which can happen if a LiteLLM wrapped function with retries calls another
+            # LiteLLM wrapped function with retries, then we should just run the original
+            # function directly. The outer function will handle the retries. Otherwise, we would
+            # erroneously return a couroutine object from run_with_retries instead of the actual
+            # response, breaking the outer function
+            return original_function(
+                *original_function_args, **original_function_kwargs
+            )
+    except RuntimeError:
+        pass
+
+    # If run_with_retries is called from a synchronous function, we need to run the async version
+    # and wait for the result. We proceed to get or create an event loop and run the async function
+    # until completion
     async_task = async_run_with_retries(
         original_function=original_function,
         original_function_args=original_function_args,
@@ -44,12 +61,12 @@ def run_with_retries(
         model_list=model_list,
     )
     try:
-        # Check if an event loop is already running
-        loop = asyncio.get_running_loop()
-        # If running in an async context, return the coroutine for awaiting
-        return async_task
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            return loop.run_until_complete(async_task)
     except RuntimeError:
-        # If no event loop is running, create a new one and run the task
+        pass
+    else:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:

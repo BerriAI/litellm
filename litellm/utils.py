@@ -686,29 +686,6 @@ def client(original_function):  # noqa: PLR0915
         }
         return [mock_deployment], [mock_deployment]
 
-    def _get_model_from_wrapper_args(
-        call_type, empty_model_call_types, args, kwargs
-    ) -> Optional[str]:
-        """
-        Fetches the name of the model from the arguments passed to the wrapper function.
-
-        Args:
-            call_type: The name of the LiteLLM call type (text completion, image generation, etc.).
-            empty_model_call_types: A list of call types that do not require a model. If the model
-                                    is not found in the arguments, the function will return None if
-                                    the call type is in this list, else it will raise an error.
-            args: The positional arguments passed to the wrapper function.
-            kwargs: The keyword arguments passed to the wrapper function.
-        """
-        model = None
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except Exception:
-            model = None
-            if call_type not in empty_model_call_types:
-                raise ValueError("model param not passed in.")
-        return model
-
     def _get_and_reset_retries_for_wrapper_call(kwargs):
         """
         Fetches the number of retries from the kwargs and resets the retries to 0 in the kwargs.
@@ -726,39 +703,20 @@ def client(original_function):  # noqa: PLR0915
         return num_retries
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):
-        model = _get_model_from_wrapper_args(
-            call_type=original_function.__name__,
-            empty_model_call_types=[
-                CallTypes.image_generation.value,
-                CallTypes.text_completion.value,
-            ],
-            args=args,
-            kwargs=kwargs,
-        )
+    def wrapper(*args, **kwargs):  # noqa: PLR0915
         num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
-        return run_with_retries(
-            original_function=lambda *args, **kwargs: _wrapper(
-                original_function, *args, **kwargs
-            ),
-            original_function_args=args,
-            original_function_kwargs=kwargs,
-            num_retries=num_retries,
-            retry_after=0,
-            retry_policy=kwargs.get("retry_policy"),
-            fallbacks=kwargs.get("fallbacks", []),
-            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
-                model, []
-            ),
-            content_policy_fallbacks=[],
-            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
-                model
-            ),
-            log_retry=lambda kwargs, e: kwargs,
-            model_list=[],
-        )
+        call_type = original_function.__name__
+        model: Optional[str] = None
+        try:
+            model = args[0] if len(args) > 0 else kwargs["model"]
+        except Exception:
+            model = None
+            if (
+                call_type != CallTypes.image_generation.value
+                and call_type != CallTypes.text_completion.value
+            ):
+                raise ValueError("model param not passed in.")
 
-    def _wrapper(original_function, *args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -782,7 +740,24 @@ def client(original_function):  # noqa: PLR0915
                         raise Exception("Max retries per request hit!")
 
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            result = run_with_retries(
+                original_function=original_function,
+                original_function_args=args,
+                original_function_kwargs=kwargs,
+                num_retries=num_retries,
+                retry_after=0,
+                retry_policy=kwargs.get("retry_policy"),
+                fallbacks=kwargs.get("fallbacks", []),
+                context_window_fallbacks=kwargs.get(
+                    "context_window_fallback_dict", {}
+                ).get(model, []),
+                content_policy_fallbacks=[],
+                get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                    model
+                ),
+                log_retry=lambda kwargs, e: kwargs,
+                model_list=[],
+            )
             if "stream" in kwargs and kwargs["stream"] is True:
                 if (
                     "complete_response" in kwargs
@@ -811,16 +786,6 @@ def client(original_function):  # noqa: PLR0915
         call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
-
-        model = _get_model_from_wrapper_args(
-            call_type=original_function.__name__,
-            empty_model_call_types=[
-                CallTypes.image_generation.value,
-                CallTypes.text_completion.value,
-            ],
-            args=args,
-            kwargs=kwargs,
-        )
 
         if logging_obj is None:
             logging_obj, kwargs = function_setup(
@@ -924,7 +889,24 @@ def client(original_function):  # noqa: PLR0915
             except Exception as e:
                 print_verbose(f"Error while checking max token limit: {str(e)}")
         # MODEL CALL
-        result = original_function(*args, **kwargs)
+        result = run_with_retries(
+            original_function=original_function,
+            original_function_args=args,
+            original_function_kwargs=kwargs,
+            num_retries=num_retries,
+            retry_after=0,
+            retry_policy=kwargs.get("retry_policy"),
+            fallbacks=kwargs.get("fallbacks", []),
+            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
+                model, []
+            ),
+            content_policy_fallbacks=[],
+            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                model
+            ),
+            log_retry=lambda kwargs, e: kwargs,
+            model_list=[],
+        )
         end_time = datetime.datetime.now()
         if "stream" in kwargs and kwargs["stream"] is True:
             if "complete_response" in kwargs and kwargs["complete_response"] is True:
@@ -989,43 +971,7 @@ def client(original_function):  # noqa: PLR0915
         return result
 
     @wraps(original_function)
-    async def wrapper_async(*args, **kwargs):
-        model = (
-            _get_model_from_wrapper_args(
-                call_type=original_function.__name__,
-                empty_model_call_types=[
-                    CallTypes.aimage_generation.value,
-                    CallTypes.atext_completion.value,
-                    CallTypes.amoderation.value,
-                ],
-                args=args,
-                kwargs=kwargs,
-            )
-            or ""
-        )
-        num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
-        return await async_run_with_retries(
-            original_function=lambda *args, **kwargs: _wrapper_async(
-                original_function, *args, **kwargs
-            ),
-            original_function_args=args,
-            original_function_kwargs=kwargs,
-            num_retries=num_retries,
-            retry_after=0,
-            retry_policy=kwargs.get("retry_policy"),
-            fallbacks=kwargs.get("fallbacks", []),
-            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
-                model, []
-            ),
-            content_policy_fallbacks=[],
-            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
-                model
-            ),
-            log_retry=lambda kwargs, e: kwargs,
-            model_list=[],
-        )
-
-    async def _wrapper_async(original_function, *args, **kwargs):  # noqa: PLR0915
+    async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -1042,19 +988,16 @@ def client(original_function):  # noqa: PLR0915
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
-        model = (
-            _get_model_from_wrapper_args(
-                call_type=original_function.__name__,
-                empty_model_call_types=[
-                    CallTypes.aimage_generation.value,
-                    CallTypes.atext_completion.value,
-                    CallTypes.amoderation.value,
-                ],
-                args=args,
-                kwargs=kwargs,
-            )
-            or ""
-        )
+        model = ""
+        try:
+            model = args[0] if len(args) > 0 else kwargs["model"]
+        except Exception:
+            if (
+                call_type != CallTypes.aimage_generation.value  # model optional
+                and call_type != CallTypes.atext_completion.value  # can also be engine
+                and call_type != CallTypes.amoderation.value
+            ):
+                raise ValueError("model param not passed in.")
 
         if logging_obj is None:
             logging_obj, kwargs = function_setup(
@@ -1095,7 +1038,27 @@ def client(original_function):  # noqa: PLR0915
             return _caching_handler_response.final_embedding_cached_response
 
         # MODEL CALL
-        result = await original_function(*args, **kwargs)
+        num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
+        result = async_run_with_retries(
+            original_function=lambda *args, **kwargs: _wrapper_async(
+                original_function, *args, **kwargs
+            ),
+            original_function_args=args,
+            original_function_kwargs=kwargs,
+            num_retries=num_retries,
+            retry_after=0,
+            retry_policy=kwargs.get("retry_policy"),
+            fallbacks=kwargs.get("fallbacks", []),
+            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
+                model, []
+            ),
+            content_policy_fallbacks=[],
+            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                model
+            ),
+            log_retry=lambda kwargs, e: kwargs,
+            model_list=[],
+        )
         end_time = datetime.datetime.now()
         if "stream" in kwargs and kwargs["stream"] is True:
             if "complete_response" in kwargs and kwargs["complete_response"] is True:
