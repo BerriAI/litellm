@@ -106,6 +106,8 @@ class ModelInfo(TypedDict, total=False):
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
     supports_audio_output: Optional[bool]
+    tpm: Optional[int]
+    rpm: Optional[int]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
