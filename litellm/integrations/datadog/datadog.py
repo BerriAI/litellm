@@ -253,59 +253,31 @@ class DataDogLogger(CustomBatchLogger):
         """
         import json
 
-        litellm_params = kwargs.get("litellm_params", {})
-        metadata = (
-            litellm_params.get("metadata", {}) or {}
-        )  # if litellm_params['metadata'] == None
-        messages = kwargs.get("messages")
-        optional_params = kwargs.get("optional_params", {})
-        call_type = kwargs.get("call_type", "litellm.completion")
-        cache_hit = kwargs.get("cache_hit", False)
-        usage = response_obj["usage"]
-        id = response_obj.get("id", str(uuid.uuid4()))
-        usage = dict(usage)
-        try:
-            response_time = (end_time - start_time).total_seconds() * 1000
-        except Exception:
-            response_time = None
-
-        try:
-            response_obj = dict(response_obj)
-        except Exception:
-            response_obj = response_obj
-
-        # Clean Metadata before logging - never log raw metadata
-        # the raw metadata can contain circular references which leads to infinite recursion
-        # we clean out all extra litellm metadata params before logging
-        clean_metadata = {}
-        if isinstance(metadata, dict):
-            for key, value in metadata.items():
-                # clean litellm metadata before logging
-                if key in [
-                    "endpoint",
-                    "caching_groups",
-                    "previous_models",
-                ]:
-                    continue
-                else:
-                    clean_metadata[key] = value
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+        if standard_logging_object is None:
+            raise ValueError("standard_logging_object not found in kwargs")
+        _start_time: float = standard_logging_object.get("startTime", 0)
+        _end_time: float = standard_logging_object.get("endTime", 0)
+        response_time_seconds: float = _end_time - _start_time
 
         # Build the initial payload
         payload = {
-            "id": id,
-            "call_type": call_type,
-            "cache_hit": cache_hit,
-            "start_time": start_time,
-            "end_time": end_time,
-            "response_time": response_time,
-            "model": kwargs.get("model", ""),
-            "user": kwargs.get("user", ""),
-            "model_parameters": optional_params,
-            "spend": kwargs.get("response_cost", 0),
-            "messages": messages,
-            "response": response_obj,
-            "usage": usage,
-            "metadata": clean_metadata,
+            "id": standard_logging_object.get("id"),
+            "call_type": standard_logging_object.get("call_type"),
+            "cache_hit": standard_logging_object.get("cache_hit"),
+            "start_time": _start_time,
+            "end_time": _end_time,
+            "response_time": response_time_seconds,
+            "model": standard_logging_object.get("model"),
+            "user": standard_logging_object.get("end_user"),
+            "model_parameters": standard_logging_object.get("model_parameters"),
+            "spend": standard_logging_object.get("response_cost"),
+            "messages": standard_logging_object.get("messages"),
+            "response": standard_logging_object.get("response"),
+            "usage": standard_logging_object.get("usage"),
+            "metadata": standard_logging_object.get("metadata"),
         }
 
         make_json_serializable(payload)
