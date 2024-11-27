@@ -18,9 +18,19 @@ response = moderation(
 ```
 
 </TabItem>
-<TabItem value="openai" label="LiteLLM Proxy Server">
+<TabItem value="proxy" label="LiteLLM Proxy Server">
 
-For `/moderations` endpoint, there is no need
+For `/moderations` endpoint, there is **no need to specify `model` in the request or on the litellm config.yaml**
+
+Start litellm proxy server 
+
+```
+litellm
+```
+
+
+<Tabs>
+<TabItem value="python" label="OpenAI Python SDK">
 
 ```python
 from openai import OpenAI
@@ -31,12 +41,13 @@ client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:4000")
 
 response = client.moderations.create(
     input="hello from litellm",
-    model="text-moderation-stable"
+    model="text-moderation-stable" # optional, defaults to `omni-moderation-latest`
 )
 
 print(response)
 ```
 </TabItem>
+
 <TabItem value="curl" label="Curl Request">
 
 ```shell
@@ -45,6 +56,9 @@ curl --location 'http://0.0.0.0:4000/moderations' \
     --header 'Authorization: Bearer sk-1234' \
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
 ```
+</TabItem>
+</Tabs>
+
 </TabItem>
 </Tabs>
 
@@ -111,3 +125,8 @@ Here's the exact json output and type you can expect from all moderation calls:
 ```
 
 
+## **Supported Providers**
+
+| Provider    |
+|-------------|
+| OpenAI      |  
