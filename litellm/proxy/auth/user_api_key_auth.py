@@ -74,7 +74,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import _to_ns
+from litellm.proxy.utils import ProxyLogging, _to_ns
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -220,6 +220,7 @@ async def user_api_key_auth(  # noqa: PLR0915
     )
 
     parent_otel_span: Optional[Span] = None
+    valid_token: Optional[UserAPIKeyAuth] = None
     start_time = datetime.now()
     try:
         route: str = get_request_route(request=request)
@@ -1197,13 +1198,16 @@ async def user_api_key_auth(  # noqa: PLR0915
             extra={"requester_ip": requester_ip},
         )
 
-        # Log this exception to OTEL
-        if open_telemetry_logger is not None:
-            await open_telemetry_logger.async_post_call_failure_hook(  # type: ignore
+        asyncio.create_task(
+            _handle_logging_authentication_error(
+                api_key=api_key,
+                parent_otel_span=parent_otel_span,
+                valid_token=valid_token,
                 original_exception=e,
                 request_data={},
-                user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
+                proxy_logging_obj=proxy_logging_obj,
             )
+        )
 
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(
@@ -1227,6 +1231,41 @@ async def user_api_key_auth(  # noqa: PLR0915
             param=getattr(e, "param", "None"),
             code=status.HTTP_401_UNAUTHORIZED,
         )
+
+
+async def _handle_logging_authentication_error(
+    api_key: str,
+    parent_otel_span: Optional[Span],
+    valid_token: Optional[UserAPIKeyAuth],
+    original_exception: Exception,
+    request_data: dict,
+    proxy_logging_obj: ProxyLogging,
+):
+    user_api_key_auth_params = {
+        "parent_otel_span": parent_otel_span,
+        "api_key": api_key,
+    }
+
+    if valid_token is not None:
+        # Add any available fields from valid_token
+        user_api_key_auth_params.update(
+            {
+                "team_id": getattr(valid_token, "team_id", None),
+                "team_alias": getattr(valid_token, "team_alias", None),
+                "user_id": getattr(valid_token, "user_id", None),
+                "user_role": getattr(valid_token, "user_role", None),
+            }
+        )
+
+    # Log this exception to OTEL, other custom loggers
+    asyncio.create_task(
+        proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=UserAPIKeyAuth(**user_api_key_auth_params),
+            original_exception=original_exception,
+            request_data={},
+        )
+    )
+    pass
 
 
 def _return_user_api_key_auth_obj(
