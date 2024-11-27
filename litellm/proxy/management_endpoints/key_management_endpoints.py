@@ -420,6 +420,11 @@ async def generate_key_fn(  # noqa: PLR0915
 
             data_json.pop("tags")
 
+        await _enforce_unique_key_alias(
+            key_alias=data_json.get("key_alias", None),
+            prisma_client=prisma_client,
+        )
+
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
         )
@@ -583,6 +588,11 @@ async def update_key_fn(
 
         non_default_values = prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
+        )
+
+        await _enforce_unique_key_alias(
+            key_alias=non_default_values.get("key_alias", None),
+            prisma_client=prisma_client,
         )
 
         response = await prisma_client.update_data(
@@ -1883,3 +1893,30 @@ async def test_key_logging(
             status="healthy",
             details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
         )
+
+
+async def _enforce_unique_key_alias(
+    key_alias: Optional[str],
+    prisma_client: Any,
+) -> None:
+    """
+    Helper to enforce unique key aliases across all keys.
+
+    Args:
+        key_alias (Optional[str]): The key alias to check
+        prisma_client (Any): Prisma client instance
+
+    Raises:
+        HTTPException: If key alias already exists
+    """
+    if key_alias is not None and prisma_client is not None:
+        existing_key = await prisma_client.db.litellm_verificationtoken.find_first(
+            where={"key_alias": key_alias}
+        )
+        if existing_key is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Key alias '{key_alias}' already exists. Unique key aliases across all keys are required."
+                },
+            )
