@@ -891,7 +891,7 @@ class ProxyLogging:
         original_exception: Exception,
         request: Request,
         parent_otel_span: Optional[Any],
-        api_key: str,
+        api_key: Optional[str],
     ):
         """
         Handler for Logging Authentication Errors on LiteLLM Proxy
@@ -905,7 +905,7 @@ class ProxyLogging:
 
         user_api_key_dict = UserAPIKeyAuth(
             parent_otel_span=parent_otel_span,
-            token=_hash_token_if_needed(token=api_key),
+            token=_hash_token_if_needed(token=api_key or ""),
         )
         try:
             request_data = await request.json()
