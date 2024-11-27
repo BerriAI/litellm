@@ -899,7 +899,7 @@ class ProxyLogging:
         - `post_call_failure_hook` calls `litellm_logging_obj.async_failure_handler`. This led to the Exception being logged twice
 
         What does this handler do?
-        - Logs Authentication Errors (like invalid API Key passed) to CustomLogger compatible classes
+        - Logs Authentication Errors (like invalid API Key passed) to CustomLogger compatible classes (OTEL, Datadog etc)
             - calls CustomLogger.async_post_call_failure_hook
         """
 
