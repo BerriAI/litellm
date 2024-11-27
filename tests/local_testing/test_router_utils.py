@@ -292,3 +292,36 @@ async def test_call_router_callbacks_on_failure():
             .kwargs["key"]
             .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
         )
+
+
+@pytest.mark.asyncio
+async def test_router_model_group_headers():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    from litellm.types.utils import OPENAI_RESPONSE_HEADERS
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1},
+            }
+        ]
+    )
+
+    for _ in range(2):
+        resp = await router.acompletion(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            mock_response="Hello, I'm good.",
+        )
+        await asyncio.sleep(1)
+
+    assert (
+        resp._hidden_params["additional_headers"]["x-litellm-model-group"]
+        == "gemini/gemini-1.5-flash"
+    )
+
+    assert "x-ratelimit-remaining-requests" in resp._hidden_params["additional_headers"]
+    assert "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]

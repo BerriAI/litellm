@@ -41,6 +41,7 @@ from typing import (
 import httpx
 import openai
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -4308,8 +4309,10 @@ class Router:
         total_tpm: Optional[int] = None
         total_rpm: Optional[int] = None
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
-
-        for model in self.model_list:
+        model_list = self.get_model_list(model_name=model_group)
+        if model_list is None:
+            return None
+        for model in model_list:
             is_match = False
             if (
                 "model_name" in model and model["model_name"] == model_group
@@ -4324,7 +4327,7 @@ class Router:
             if not is_match:
                 continue
             # model in model group found #
-            litellm_params = LiteLLM_Params(**model["litellm_params"])
+            litellm_params = LiteLLM_Params(**model["litellm_params"])  # type: ignore
             # get configurable clientside auth params
             configurable_clientside_auth_params = (
                 litellm_params.configurable_clientside_auth_params
@@ -4334,27 +4337,19 @@ class Router:
             if _deployment_tpm is None:
                 _deployment_tpm = model.get("tpm", None)
             if _deployment_tpm is None:
-                _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)
+                _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)  # type: ignore
             if _deployment_tpm is None:
-                _deployment_tpm = model.get("model_info", {}).get("tpm", None)
+                _deployment_tpm = model.get("model_info", {}).get("tpm", None)  # type: ignore
 
-            if _deployment_tpm is not None:
-                if total_tpm is None:
-                    total_tpm = 0
-                total_tpm += _deployment_tpm  # type: ignore
             # get model rpm
             _deployment_rpm: Optional[int] = None
             if _deployment_rpm is None:
-                _deployment_rpm = model.get("rpm", None)
+                _deployment_rpm = model.get("rpm", None)  # type: ignore
             if _deployment_rpm is None:
-                _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)
+                _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)  # type: ignore
             if _deployment_rpm is None:
-                _deployment_rpm = model.get("model_info", {}).get("rpm", None)
+                _deployment_rpm = model.get("model_info", {}).get("rpm", None)  # type: ignore
 
-            if _deployment_rpm is not None:
-                if total_rpm is None:
-                    total_rpm = 0
-                total_rpm += _deployment_rpm  # type: ignore
             # get model info
             try:
                 model_info = litellm.get_model_info(model=litellm_params.model)
@@ -4464,7 +4459,20 @@ class Router:
                     model_group_info.supported_openai_params = model_info[
                         "supported_openai_params"
                     ]
+                if model_info.get("tpm", None) is not None and _deployment_tpm is None:
+                    _deployment_tpm = model_info.get("tpm")
+                if model_info.get("rpm", None) is not None and _deployment_rpm is None:
+                    _deployment_rpm = model_info.get("rpm")
 
+            if _deployment_tpm is not None:
+                if total_tpm is None:
+                    total_tpm = 0
+                total_tpm += _deployment_tpm  # type: ignore
+
+            if _deployment_rpm is not None:
+                if total_rpm is None:
+                    total_rpm = 0
+                total_rpm += _deployment_rpm  # type: ignore
         if model_group_info is not None:
             ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
             if total_tpm is not None:
@@ -4561,7 +4569,6 @@ class Router:
         combined_tpm_rpm_values = await self.cache.async_batch_get_cache(
             keys=combined_tpm_rpm_keys
         )
-
         if combined_tpm_rpm_values is None:
             return None, None
 
@@ -4586,6 +4593,32 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
+    async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
+
+        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
+
+        model_group_info = self.get_model_group_info(model_group)
+
+        if model_group_info is not None and model_group_info.tpm is not None:
+            tpm_limit = model_group_info.tpm
+        else:
+            tpm_limit = None
+
+        if model_group_info is not None and model_group_info.rpm is not None:
+            rpm_limit = model_group_info.rpm
+        else:
+            rpm_limit = None
+
+        returned_dict = {}
+        if tpm_limit is not None and current_tpm is not None:
+            returned_dict["x-ratelimit-remaining-tokens"] = tpm_limit - current_tpm
+            returned_dict["x-ratelimit-limit-tokens"] = tpm_limit
+        if rpm_limit is not None and current_rpm is not None:
+            returned_dict["x-ratelimit-remaining-requests"] = rpm_limit - current_rpm
+            returned_dict["x-ratelimit-limit-requests"] = rpm_limit
+
+        return returned_dict
+
     async def set_response_headers(
         self, response: Any, model_group: Optional[str] = None
     ) -> Any:
@@ -4596,6 +4629,26 @@ class Router:
         # - if healthy_deployments > 1, return model group rate limit headers
         # - else return the model's rate limit headers
         """
+        if isinstance(response, BaseModel) and hasattr(response, "_hidden_params"):
+            response._hidden_params.setdefault("additional_headers", {})  # type: ignore
+            response._hidden_params["additional_headers"][  # type: ignore
+                "x-litellm-model-group"
+            ] = model_group
+
+            additional_headers = response._hidden_params["additional_headers"]  # type: ignore
+
+            if (
+                "x-ratelimit-remaining-tokens" not in additional_headers
+                and "x-ratelimit-remaining-requests" not in additional_headers
+                and model_group is not None
+            ):
+                remaining_usage = await self.get_remaining_model_group_usage(
+                    model_group
+                )
+
+                for header, value in remaining_usage.items():
+                    if value is not None:
+                        additional_headers[header] = value
         return response
 
     def get_model_ids(self, model_name: Optional[str] = None) -> List[str]:
