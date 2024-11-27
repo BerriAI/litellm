@@ -4335,7 +4335,7 @@ class Router:
             # get model tpm
             _deployment_tpm: Optional[int] = None
             if _deployment_tpm is None:
-                _deployment_tpm = model.get("tpm", None)
+                _deployment_tpm = model.get("tpm", None)  # type: ignore
             if _deployment_tpm is None:
                 _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)  # type: ignore
             if _deployment_tpm is None:
@@ -4356,9 +4356,9 @@ class Router:
             except Exception:
                 model_info = None
             # get llm provider
-            model, llm_provider = "", ""
+            litellm_model, llm_provider = "", ""
             try:
-                model, llm_provider, _, _ = litellm.get_llm_provider(
+                litellm_model, llm_provider, _, _ = litellm.get_llm_provider(
                     model=litellm_params.model,
                     custom_llm_provider=litellm_params.custom_llm_provider,
                 )
@@ -4369,7 +4369,7 @@ class Router:
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(
-                    model=model, custom_llm_provider=llm_provider
+                    model=litellm_model, custom_llm_provider=llm_provider
                 )
                 if supported_openai_params is None:
                     supported_openai_params = []
@@ -4735,7 +4735,7 @@ class Router:
                 potential_wildcard_models = self.pattern_router.route(model_name)
                 if potential_wildcard_models is not None:
                     returned_models.extend(
-                        [DeploymentTypedDict(**m) for m in potential_wildcard_models]
+                        [DeploymentTypedDict(**m) for m in potential_wildcard_models]  # type: ignore
                     )
 
             if model_name is None:
