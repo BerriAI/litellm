@@ -74,7 +74,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import ProxyLogging, _to_ns
+from litellm.proxy.utils import ProxyLogging, _hash_token_if_needed, _to_ns
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -1204,7 +1204,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 parent_otel_span=parent_otel_span,
                 valid_token=valid_token,
                 original_exception=e,
-                request_data={},
+                request=request,
                 proxy_logging_obj=proxy_logging_obj,
             )
         )
@@ -1238,31 +1238,25 @@ async def _handle_logging_authentication_error(
     parent_otel_span: Optional[Span],
     valid_token: Optional[UserAPIKeyAuth],
     original_exception: Exception,
-    request_data: dict,
+    request: Request,
     proxy_logging_obj: ProxyLogging,
 ):
-    user_api_key_auth_params = {
-        "parent_otel_span": parent_otel_span,
-        "api_key": api_key,
-    }
+    """
+    Handle logging of Authentication Errors on Custom Loggers - OpenTelemetry, Datadog, etc.
+    """
 
-    if valid_token is not None:
-        # Add any available fields from valid_token
-        user_api_key_auth_params.update(
-            {
-                "team_id": getattr(valid_token, "team_id", None),
-                "team_alias": getattr(valid_token, "team_alias", None),
-                "user_id": getattr(valid_token, "user_id", None),
-                "user_role": getattr(valid_token, "user_role", None),
-            }
-        )
+    request_data = await request.json()
+    if valid_token is None:
+        valid_token = UserAPIKeyAuth(parent_otel_span=parent_otel_span)
 
+    valid_token.token = _hash_token_if_needed(token=api_key)
+    valid_token.api_key = None
     # Log this exception to OTEL, other custom loggers
     asyncio.create_task(
         proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=UserAPIKeyAuth(**user_api_key_auth_params),
+            user_api_key_dict=valid_token,
             original_exception=original_exception,
-            request_data={},
+            request_data=request_data,
         )
     )
     pass
