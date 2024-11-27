@@ -34,7 +34,9 @@ for root, dirs, files in os.walk(repo_base):
 # Parse the documentation to extract documented keys
 repo_base = "./"
 print(os.listdir(repo_base))
-docs_path = "./docs/my-website/docs/proxy/configs.md"  # Path to the documentation
+docs_path = (
+    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
+)
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:

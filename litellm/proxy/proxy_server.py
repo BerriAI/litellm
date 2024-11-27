@@ -1377,6 +1377,16 @@ class ProxyConfig:
         _, file_extension = os.path.splitext(config_file_path)
         return file_extension.lower() == ".yaml" or file_extension.lower() == ".yml"
 
+    def _load_yaml_file(self, file_path: str) -> dict:
+        """
+        Load and parse a YAML file
+        """
+        try:
+            with open(file_path, "r") as file:
+                return yaml.safe_load(file) or {}
+        except Exception as e:
+            raise Exception(f"Error loading yaml file {file_path}: {str(e)}")
+
     async def _get_config_from_file(
         self, config_file_path: Optional[str] = None
     ) -> dict:
@@ -1407,6 +1417,51 @@ class ProxyConfig:
                 "litellm_settings": {},
             }
 
+        # Process includes
+        config = self._process_includes(
+            config=config, base_dir=os.path.dirname(os.path.abspath(file_path or ""))
+        )
+
+        verbose_proxy_logger.debug(f"loaded config={json.dumps(config, indent=4)}")
+        return config
+
+    def _process_includes(self, config: dict, base_dir: str) -> dict:
+        """
+        Process includes by appending their contents to the main config
+
+        Handles nested config.yamls with `include` section
+
+        Example config: This will get the contents from files in `include` and append it
+        ```yaml
+        include:
+            - model_config.yaml
+
+        litellm_settings:
+            callbacks: ["prometheus"]
+        ```
+        """
+        if "include" not in config:
+            return config
+
+        if not isinstance(config["include"], list):
+            raise ValueError("'include' must be a list of file paths")
+
+        # Load and append all included files
+        for include_file in config["include"]:
+            file_path = os.path.join(base_dir, include_file)
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Included file not found: {file_path}")
+
+            included_config = self._load_yaml_file(file_path)
+            # Simply update/extend the main config with included config
+            for key, value in included_config.items():
+                if isinstance(value, list) and key in config:
+                    config[key].extend(value)
+                else:
+                    config[key] = value
+
+        # Remove the include directive
+        del config["include"]
         return config
 
     async def save_config(self, new_config: dict):
@@ -5663,11 +5718,11 @@ async def anthropic_response(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    This is a BETA endpoint that calls 100+ LLMs in the anthropic format.
+    🚨 DEPRECATED ENDPOINT🚨
 
-    To do a simple pass-through for anthropic, do `{PROXY_BASE_URL}/anthropic/v1/messages`
+    Use `{PROXY_BASE_URL}/anthropic/v1/messages` instead - [Docs](https://docs.litellm.ai/docs/anthropic_completion).
 
-    Docs - https://docs.litellm.ai/docs/anthropic_completion
+    This was a BETA endpoint that calls 100+ LLMs in the anthropic format.
     """
     from litellm import adapter_completion
     from litellm.adapters.anthropic_adapter import anthropic_adapter

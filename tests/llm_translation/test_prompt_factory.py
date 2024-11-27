@@ -687,3 +687,16 @@ def test_just_system_message():
             llm_provider="bedrock",
         )
         assert "bedrock requires at least one non-system message" in str(e.value)
+
+
+def test_convert_generic_image_chunk_to_openai_image_obj():
+    from litellm.llms.prompt_templates.factory import (
+        convert_generic_image_chunk_to_openai_image_obj,
+        convert_to_anthropic_image_obj,
+    )
+
+    url = "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
+    image_obj = convert_to_anthropic_image_obj(url)
+    url_str = convert_generic_image_chunk_to_openai_image_obj(image_obj)
+    image_obj = convert_to_anthropic_image_obj(url_str)
+    print(image_obj)
