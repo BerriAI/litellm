@@ -85,6 +85,9 @@ LiteLLM accepts and translates the [OpenAI Moderation params](https://platform.o
 ## Output Format
 Here's the exact json output and type you can expect from all moderation calls:
 
+[**LiteLLM follows OpenAI's output format**](https://platform.openai.com/docs/api-reference/moderations/object)
+
+
 ```python
 {
   "id": "modr-AB8CjOTu2jiq12hp1AQPfeqFWaORR",
