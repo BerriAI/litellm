@@ -4629,7 +4629,11 @@ class Router:
         # - if healthy_deployments > 1, return model group rate limit headers
         # - else return the model's rate limit headers
         """
-        if isinstance(response, BaseModel) and hasattr(response, "_hidden_params"):
+        if (
+            isinstance(response, BaseModel)
+            and hasattr(response, "_hidden_params")
+            and isinstance(response._hidden_params, dict)  # type: ignore
+        ):
             response._hidden_params.setdefault("additional_headers", {})  # type: ignore
             response._hidden_params["additional_headers"][  # type: ignore
                 "x-litellm-model-group"
