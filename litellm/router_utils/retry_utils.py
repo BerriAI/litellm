@@ -66,13 +66,13 @@ def run_with_retries(
             return loop.run_until_complete(async_task)
     except RuntimeError:
         pass
-    else:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(async_task)
-        finally:
-            loop.close()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(async_task)
+    finally:
+        loop.close()
 
 
 async def async_run_with_retries(

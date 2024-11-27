@@ -1039,10 +1039,8 @@ def client(original_function):  # noqa: PLR0915
 
         # MODEL CALL
         num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
-        result = async_run_with_retries(
-            original_function=lambda *args, **kwargs: _wrapper_async(
-                original_function, *args, **kwargs
-            ),
+        result = await async_run_with_retries(
+            original_function=original_function,
             original_function_args=args,
             original_function_kwargs=kwargs,
             num_retries=num_retries,
