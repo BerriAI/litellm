@@ -258,30 +258,10 @@ class DataDogLogger(CustomBatchLogger):
         )
         if standard_logging_object is None:
             raise ValueError("standard_logging_object not found in kwargs")
-        _start_time: float = standard_logging_object.get("startTime", 0)
-        _end_time: float = standard_logging_object.get("endTime", 0)
-        response_time_seconds: float = _end_time - _start_time
 
         # Build the initial payload
-        payload = {
-            "id": standard_logging_object.get("id"),
-            "call_type": standard_logging_object.get("call_type"),
-            "cache_hit": standard_logging_object.get("cache_hit"),
-            "start_time": _start_time,
-            "end_time": _end_time,
-            "response_time": response_time_seconds,
-            "model": standard_logging_object.get("model"),
-            "user": standard_logging_object.get("end_user"),
-            "model_parameters": standard_logging_object.get("model_parameters"),
-            "spend": standard_logging_object.get("response_cost"),
-            "messages": standard_logging_object.get("messages"),
-            "response": standard_logging_object.get("response"),
-            "usage": standard_logging_object.get("usage"),
-            "metadata": standard_logging_object.get("metadata"),
-        }
-
-        make_json_serializable(payload)
-        json_payload = json.dumps(payload)
+        make_json_serializable(standard_logging_object)
+        json_payload = json.dumps(standard_logging_object)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
