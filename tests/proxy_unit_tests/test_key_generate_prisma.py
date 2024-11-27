@@ -1349,7 +1349,13 @@ def test_generate_and_update_key(prisma_client):
                 "days between now and budget_reset_at",
                 (budget_reset_at - current_time).days,
             )
-            assert (budget_reset_at - current_time).days >= 29  # around 1 month
+            # assert budget_reset_at is 30 days from now
+            assert (
+                abs(
+                    (budget_reset_at - current_time).total_seconds() - 30 * 24 * 60 * 60
+                )
+                <= 10
+            )
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -2628,6 +2634,15 @@ async def test_create_update_team(prisma_client):
     assert _updated_info["budget_duration"] == "2d"
     assert _updated_info["budget_reset_at"] is not None and isinstance(
         _updated_info["budget_reset_at"], datetime.datetime
+    )
+
+    # budget_reset_at should be 2 days from now
+    budget_reset_at = _updated_info["budget_reset_at"].replace(tzinfo=timezone.utc)
+    current_time = datetime.datetime.now(timezone.utc)
+
+    # assert budget_reset_at is 2 days from now
+    assert (
+        abs((budget_reset_at - current_time).total_seconds() - 2 * 24 * 60 * 60) <= 10
     )
 
     # now hit team_info
