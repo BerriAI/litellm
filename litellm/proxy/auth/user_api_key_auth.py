@@ -1197,13 +1197,15 @@ async def user_api_key_auth(  # noqa: PLR0915
             extra={"requester_ip": requester_ip},
         )
 
-        # Log this exception to OTEL
-        if open_telemetry_logger is not None:
-            await open_telemetry_logger.async_post_call_failure_hook(  # type: ignore
+        # Log this exception to OTEL, Datadog etc
+        asyncio.create_task(
+            proxy_logging_obj.async_log_proxy_authentication_errors(
                 original_exception=e,
-                request_data={},
-                user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
+                request=request,
+                parent_otel_span=parent_otel_span,
+                api_key=api_key,
             )
+        )
 
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(

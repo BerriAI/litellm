@@ -32,10 +32,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
 
-from .types import DD_ERRORS, DatadogPayload, DataDogStatus
 from .utils import make_json_serializable
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
@@ -363,6 +364,38 @@ class DataDogLogger(CustomBatchLogger):
         No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
         """
         return
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """
+        Handles Proxy Errors (not-related to LLM API), ex: Authentication Errors
+        """
+        import json
+
+        _exception_payload = DatadogProxyFailureHookJsonMessage(
+            exception=str(original_exception),
+            error_class=str(original_exception.__class__.__name__),
+            status_code=getattr(original_exception, "status_code", None),
+            traceback=traceback.format_exc(),
+            user_api_key_dict=user_api_key_dict.model_dump(),
+        )
+
+        json_payload = json.dumps(_exception_payload)
+        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
+        dd_payload = DatadogPayload(
+            ddsource=os.getenv("DD_SOURCE", "litellm"),
+            ddtags="",
+            hostname="",
+            message=json_payload,
+            service="litellm-server",
+            status=DataDogStatus.ERROR,
+        )
+
+        self.log_queue.append(dd_payload)
 
     def _create_v0_logging_payload(
         self,
