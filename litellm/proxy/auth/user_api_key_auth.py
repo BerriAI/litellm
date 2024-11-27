@@ -212,7 +212,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
         # return string as bytes
         return return_string.encode()
 
-    request.body = return_body
+    request.body = return_body  # type: ignore
 
     # Extract the Authorization header
     authorization = websocket.headers.get("authorization")
