@@ -264,6 +264,8 @@ class OpenTelemetry(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
     ):
+        import traceback
+
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
@@ -282,6 +284,17 @@ class OpenTelemetry(CustomLogger):
                 key="exception",
                 value=str(original_exception),
             )
+            self.safe_set_attribute(
+                span=exception_logging_span,
+                key="exception.traceback",
+                value=traceback.format_exc(),
+            )
+            for key, value in user_api_key_dict.model_dump().items():
+                self.safe_set_attribute(
+                    span=exception_logging_span,
+                    key=f"user_api_key_dict.{key}",
+                    value=value,
+                )
             exception_logging_span.set_status(Status(StatusCode.ERROR))
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
 
