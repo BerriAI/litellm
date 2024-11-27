@@ -18,8 +18,14 @@ async def _PROXY_failure_handler(
 ):
     """
     Async Failure Handler - runs when LLM Exceptions occur on LiteLLM Proxy.
-
     This function logs the errors to the Prisma DB
+
+    Can be disabled by setting the following on proxy_config.yaml:
+    ```yaml
+    general_settings:
+      disable_error_logs: True
+    ```
+
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.proxy_server import general_settings, prisma_client
