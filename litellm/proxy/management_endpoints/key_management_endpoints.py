@@ -476,6 +476,7 @@ def prepare_key_update_data(
             duration_s = duration_in_seconds(duration=budget_duration)
             key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = key_reset_at
+            non_default_values["budget_duration"] = budget_duration
 
     _metadata = existing_key_row.metadata or {}
 
