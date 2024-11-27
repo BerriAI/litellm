@@ -203,8 +203,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     request = Request(scope={"type": "http"})
     request._url = websocket.url
 
+    query_params = websocket.query_params
+
+    model = query_params.get("model")
+
     async def return_body():
-        return_string = '{{"model": "fake-openai-endpoint"}}'
+        return_string = f'{{"model": "{model}"}}'
         # return string as bytes
         return return_string.encode()
 
