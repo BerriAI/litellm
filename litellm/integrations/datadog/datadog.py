@@ -259,6 +259,10 @@ class DataDogLogger(CustomBatchLogger):
         if standard_logging_object is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
+        status = DataDogStatus.INFO
+        if standard_logging_object.get("status") == "failure":
+            status = DataDogStatus.WARN
+
         # Build the initial payload
         make_json_serializable(standard_logging_object)
         json_payload = json.dumps(standard_logging_object)
@@ -271,7 +275,7 @@ class DataDogLogger(CustomBatchLogger):
             hostname="",
             message=json_payload,
             service="litellm-server",
-            status=DataDogStatus.INFO,
+            status=status,
         )
         return dd_payload
 
