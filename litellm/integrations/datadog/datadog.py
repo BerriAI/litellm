@@ -357,18 +357,16 @@ class DataDogLogger(CustomBatchLogger):
     ):
         import json
 
-        _exception_payload = {
-            "error_str": str(original_exception),
-            "error_class": str(original_exception.__class__.__name__),
-            "status_code": getattr(original_exception, "status_code", None),
-            "traceback": traceback.format_exc(),
-            "user_api_key_dict": user_api_key_dict.model_dump(),
-        }
+        _exception_payload = DatadogProxyFailureHookJsonMessage(
+            exception=str(original_exception),
+            error_class=str(original_exception.__class__.__name__),
+            status_code=getattr(original_exception, "status_code", None),
+            traceback=traceback.format_exc(),
+            user_api_key_dict=user_api_key_dict.model_dump(),
+        )
 
         json_payload = json.dumps(_exception_payload)
-
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
-
         dd_payload = DatadogPayload(
             ddsource=os.getenv("DD_SOURCE", "litellm"),
             ddtags="",

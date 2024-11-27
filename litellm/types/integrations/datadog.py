@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 
 class DataDogStatus(str, Enum):
@@ -23,6 +23,7 @@ class DD_ERRORS(Enum):
 
 class DatadogProxyFailureHookJsonMessage(TypedDict, total=False):
     exception: str
+    error_class: str
+    status_code: Optional[int]
     traceback: str
-    request_data: dict
     user_api_key_dict: dict
