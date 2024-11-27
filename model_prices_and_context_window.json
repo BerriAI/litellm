@@ -2032,7 +2032,6 @@
         "tool_use_system_prompt_tokens": 264,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
-        "supports_pdf_input": true,
         "supports_response_schema": true
     },
     "claude-3-opus-20240229": {
@@ -2098,6 +2097,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true
     },

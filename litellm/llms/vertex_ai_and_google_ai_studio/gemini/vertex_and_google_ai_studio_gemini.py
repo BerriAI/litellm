@@ -35,7 +35,12 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.prompt_templates.factory import (
+    convert_generic_image_chunk_to_openai_image_obj,
+    convert_to_anthropic_image_obj,
+)
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -78,6 +83,8 @@ from ..common_utils import (
 )
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    _gemini_convert_messages_with_history,
+    _process_gemini_image,
     async_transform_request_body,
     set_headers,
     sync_transform_request_body,
@@ -912,6 +919,10 @@ class VertexGeminiConfig:
 
         return model_response
 
+    @staticmethod
+    def _transform_messages(messages: List[AllMessageValues]) -> List[ContentType]:
+        return _gemini_convert_messages_with_history(messages=messages)
+
 
 class GoogleAIStudioGeminiConfig(
     VertexGeminiConfig
@@ -1014,6 +1025,32 @@ class GoogleAIStudioGeminiConfig(
         return super().map_openai_params(
             model, non_default_params, optional_params, drop_params
         )
+
+    @staticmethod
+    def _transform_messages(messages: List[AllMessageValues]) -> List[ContentType]:
+        """
+        Google AI Studio Gemini does not support image urls in messages.
+        """
+        for message in messages:
+            _message_content = message.get("content")
+            if _message_content is not None and isinstance(_message_content, list):
+                _parts: List[PartType] = []
+                for element in _message_content:
+                    if element.get("type") == "image_url":
+                        img_element = element
+                        _image_url: Optional[str] = None
+                        if isinstance(img_element.get("image_url"), dict):
+                            _image_url = img_element["image_url"].get("url")  # type: ignore
+                        else:
+                            _image_url = img_element.get("image_url")  # type: ignore
+                        if _image_url and "https://" in _image_url:
+                            image_obj = convert_to_anthropic_image_obj(_image_url)
+                            img_element["image_url"] = (  # type: ignore
+                                convert_generic_image_chunk_to_openai_image_obj(
+                                    image_obj
+                                )
+                            )
+        return _gemini_convert_messages_with_history(messages=messages)
 
 
 async def make_call(

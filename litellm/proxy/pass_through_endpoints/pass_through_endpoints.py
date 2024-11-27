@@ -609,6 +609,11 @@ def _init_kwargs_for_pass_through_endpoint(
 
 
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
+    """
+    If tags are in the request headers, add them to the metadata
+
+    Used for google and vertex JS SDKs
+    """
     _tags = request.headers.get("tags")
     if _tags:
         metadata["tags"] = _tags.split(",")

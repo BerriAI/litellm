@@ -68,6 +68,7 @@ callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = 
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 argilla_batch_size: Optional[int] = None
+datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[Callable] = (
     []
