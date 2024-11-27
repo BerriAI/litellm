@@ -170,10 +170,10 @@ from litellm.proxy.guardrails.init_guardrails import (
 )
 from litellm.proxy.health_check import perform_health_check
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
-from litellm.proxy.hooks.failure_handler import _PROXY_failure_handler
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
+from litellm.proxy.hooks.proxy_failure_handler import _PROXY_failure_handler
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
