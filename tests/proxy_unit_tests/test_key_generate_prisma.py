@@ -2789,6 +2789,58 @@ async def test_update_user_role(prisma_client):
 
 
 @pytest.mark.asyncio()
+async def test_update_user_unit_test(prisma_client):
+    """
+    Tests if we update user role, incorrect values are not stored in cache
+    -> create a user with role == INTERNAL_USER
+    -> access an Admin only route -> expect to fail
+    -> update user role to == PROXY_ADMIN
+    -> access an Admin only route -> expect to succeed
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    key = await new_user(
+        data=NewUserRequest(
+            user_email="test@test.com",
+        )
+    )
+
+    print(key)
+
+    user_info = await user_update(
+        data=UpdateUserRequest(
+            user_id=key.user_id,
+            team_id="1234",
+            max_budget=100,
+            budget_duration="10d",
+            tpm_limit=100,
+            rpm_limit=100,
+            metadata={"very-new-metadata": "something"},
+        )
+    )
+
+    print("user_info", user_info)
+    assert user_info is not None
+    _user_info = user_info["data"].model_dump()
+
+    assert _user_info["user_id"] == key.user_id
+    assert _user_info["team_id"] == "1234"
+    assert _user_info["max_budget"] == 100
+    assert _user_info["budget_duration"] == "10d"
+    assert _user_info["tpm_limit"] == 100
+    assert _user_info["rpm_limit"] == 100
+    assert _user_info["metadata"] == {"very-new-metadata": "something"}
+
+    # budget reset at should be 10 days from now
+    budget_reset_at = _user_info["budget_reset_at"].replace(tzinfo=timezone.utc)
+    current_time = datetime.now(timezone.utc)
+    assert (
+        abs((budget_reset_at - current_time).total_seconds() - 10 * 24 * 60 * 60) <= 10
+    )
+
+
+@pytest.mark.asyncio()
 async def test_custom_api_key_header_name(prisma_client):
     """ """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
