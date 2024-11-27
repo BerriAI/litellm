@@ -33,6 +33,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.services import ServiceLoggerPayload
+from litellm.types.utils import StandardLoggingPayload
 
 from .types import DD_ERRORS, DatadogPayload, DataDogStatus
 from .utils import make_json_serializable
@@ -106,20 +107,20 @@ class DataDogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "Datadog: Logging - Enters logging function for model %s", kwargs
             )
-            dd_payload = self.create_datadog_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
-            self.log_queue.append(dd_payload)
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
             verbose_logger.debug(
-                f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+                "Datadog: Logging - Enters logging function for model %s", kwargs
             )
-
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
             verbose_logger.exception(
@@ -214,6 +215,22 @@ class DataDogLogger(CustomBatchLogger):
             )
             pass
         pass
+
+    async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+        dd_payload = self.create_datadog_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        self.log_queue.append(dd_payload)
+        verbose_logger.debug(
+            f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+        )
+
+        if len(self.log_queue) >= self.batch_size:
+            await self.async_send_batch()
 
     def create_datadog_logging_payload(
         self,
