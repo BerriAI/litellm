@@ -907,7 +907,11 @@ class ProxyLogging:
             parent_otel_span=parent_otel_span,
             token=_hash_token_if_needed(token=api_key),
         )
-        request_data = await request.json()
+        try:
+            request_data = await request.json()
+        except json.JSONDecodeError:
+            # For GET requests or requests without a JSON body
+            request_data = {}
         await self._run_post_call_failure_hook_custom_loggers(
             original_exception=original_exception,
             request_data=request_data,
