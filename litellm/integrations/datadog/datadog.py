@@ -32,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
 
@@ -347,6 +348,37 @@ class DataDogLogger(CustomBatchLogger):
                 f"Datadog: Logger - Exception in async_service_failure_hook: {e}"
             )
         pass
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        import json
+
+        _exception_payload = {
+            "error_str": str(original_exception),
+            "error_class": str(original_exception.__class__.__name__),
+            "status_code": getattr(original_exception, "status_code", None),
+            "traceback": traceback.format_exc(),
+            "user_api_key_dict": user_api_key_dict.model_dump(),
+        }
+
+        json_payload = json.dumps(_exception_payload)
+
+        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
+
+        dd_payload = DatadogPayload(
+            ddsource=os.getenv("DD_SOURCE", "litellm"),
+            ddtags="",
+            hostname="",
+            message=json_payload,
+            service="litellm-server",
+            status=DataDogStatus.ERROR,
+        )
+
+        self.log_queue.append(dd_payload)
 
     async def async_service_success_hook(
         self,
