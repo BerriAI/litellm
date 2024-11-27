@@ -6,6 +6,7 @@ import httpx
 import openai
 
 import litellm
+from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import DeploymentTypedDict, RetryPolicy
 
@@ -287,10 +288,9 @@ def handle_mock_testing_rate_limit_error(
         mock_testing_rate_limit_error is not None
         and mock_testing_rate_limit_error is True
     ):
-        # TODO: Figure out logging - take a logger arg?
-        # verbose_router_logger.info(
-        #     f"litellm.router.py::_mock_rate_limit_error() - Raising mock RateLimitError for model={model_group}"
-        # )
+        verbose_router_logger.info(
+            f"litellm.router.py::_mock_rate_limit_error() - Raising mock RateLimitError for model={model_group}"
+        )
         raise litellm.RateLimitError(
             model=model_group,
             llm_provider="",
