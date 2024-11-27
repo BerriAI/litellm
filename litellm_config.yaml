@@ -1,0 +1,8 @@
+general_settings:
+  store_model_in_db: True
+  custom_auth: litellm.custom_auth.user_api_key_auth
+router_settings:
+  cache_responses: False
+  redis_host: "os.environ/REDIS_HOST"
+  redis_port: "os.environ/REDIS_PORT"
+  redis_password: "os.environ/REDIS_PASSWORD"

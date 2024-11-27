@@ -1160,7 +1160,7 @@ class PrismaClient:
                         "LiteLLM_VerificationTokenView Created in DB!"
                     )
                 else:
-                    should_create_views = await should_create_missing_views(db=self.db.db)  # type: ignore
+                    should_create_views = await should_create_missing_views(db=self.db)  # type: ignore
                     if should_create_views:
                         await create_missing_views(db=self.db)  # type: ignore
                     else:

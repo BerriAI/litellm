@@ -164,6 +164,7 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
+from .redis_gpt_cache import RedisGPTCache
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -1164,7 +1165,7 @@ def client(original_function):
                                 cached_result = None
                     elif isinstance(
                         litellm.cache.cache, RedisSemanticCache
-                    ) or isinstance(litellm.cache.cache, RedisCache):
+                    ) or isinstance(litellm.cache.cache, RedisCache) or isinstance(litellm.cache.cache, RedisGPTCache):
                         preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
                         kwargs["preset_cache_key"] = (
                             preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
