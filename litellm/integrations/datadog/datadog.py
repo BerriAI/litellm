@@ -269,7 +269,7 @@ class DataDogLogger(CustomBatchLogger):
 
         status = DataDogStatus.INFO
         if standard_logging_object.get("status") == "failure":
-            status = DataDogStatus.WARN
+            status = DataDogStatus.ERROR
 
         # Build the initial payload
         make_json_serializable(standard_logging_object)
