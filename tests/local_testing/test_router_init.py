@@ -536,7 +536,7 @@ def test_init_clients_azure_command_r_plus():
 
 
 @pytest.mark.asyncio
-async def test_text_completion_with_organization():
+async def test_aaaaatext_completion_with_organization():
     try:
         print("Testing Text OpenAI with organization")
         model_list = [
