@@ -1243,6 +1243,19 @@ def test_bedrock_cross_region_inference(model):
     )
 
 
+@pytest.mark.parametrize(
+    "model, expected_base_model",
+    [
+        (
+            "apac.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        ),
+    ],
+)
+def test_bedrock_get_base_model(model, expected_base_model):
+    assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
+
+
 from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
 
 

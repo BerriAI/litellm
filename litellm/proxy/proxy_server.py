@@ -134,7 +134,10 @@ from litellm.proxy.auth.model_checks import (
     get_key_models,
     get_team_models,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
@@ -4339,7 +4342,11 @@ from litellm import _arealtime
 
 
 @app.websocket("/v1/realtime")
-async def websocket_endpoint(websocket: WebSocket, model: str):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    model: str,
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
     import websockets
 
     await websocket.accept()
