@@ -37,7 +37,6 @@ from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
 
-from .types import DD_ERRORS, DatadogPayload, DataDogStatus
 from .utils import make_json_serializable
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
