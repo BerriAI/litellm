@@ -269,6 +269,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
+        from litellm.proxy.utils import _hash_token_if_needed
+
         parent_otel_span = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
             parent_otel_span.set_status(Status(StatusCode.ERROR))
@@ -289,7 +291,11 @@ class OpenTelemetry(CustomLogger):
                 key="exception.traceback",
                 value=traceback.format_exc(),
             )
+
+            # Set User API Key Dict Attributes
             for key, value in user_api_key_dict.model_dump().items():
+                if key == "api_key" or key == "token":
+                    value = _hash_token_if_needed(value)
                 self.safe_set_attribute(
                     span=exception_logging_span,
                     key=f"user_api_key_dict.{key}",
@@ -298,7 +304,7 @@ class OpenTelemetry(CustomLogger):
             exception_logging_span.set_status(Status(StatusCode.ERROR))
             exception_logging_span.end(end_time=self._to_ns(datetime.now()))
 
-            # End Parent OTEL Sspan
+            # End Parent OTEL Span
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
