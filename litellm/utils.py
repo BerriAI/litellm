@@ -709,6 +709,22 @@ def client(original_function):  # noqa: PLR0915
                 raise ValueError("model param not passed in.")
         return model
 
+    def _get_and_reset_retries_for_wrapper_call(kwargs):
+        """
+        Fetches the number of retries from the kwargs and resets the retries to 0 in the kwargs.
+        This is used to prevent retry logic from within the original function (e.g. the LiteLLM
+        OpenAI chat completions provider) from running on top of the retry logic in the wrapper.
+        """
+        num_retries = (
+            kwargs.get("max_retries", 0)
+            or kwargs.get("num_retries", 0)
+            or litellm.num_retries
+            or 0
+        )
+        kwargs["max_retries"] = 0
+        kwargs["num_retries"] = 0
+        return num_retries
+
     @wraps(original_function)
     def wrapper(*args, **kwargs):
         model = _get_model_from_wrapper_args(
@@ -720,18 +736,14 @@ def client(original_function):  # noqa: PLR0915
             args=args,
             kwargs=kwargs,
         )
+        num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
         return run_with_retries(
             original_function=lambda *args, **kwargs: _wrapper(
                 original_function, *args, **kwargs
             ),
             original_function_args=args,
             original_function_kwargs=kwargs,
-            num_retries=(
-                kwargs.get("max_retries", 0)
-                or kwargs.get("num_retries", 0)
-                or litellm.num_retries
-                or 0
-            ),
+            num_retries=num_retries,
             retry_after=0,
             retry_policy=kwargs.get("retry_policy"),
             fallbacks=kwargs.get("fallbacks", []),
@@ -991,18 +1003,14 @@ def client(original_function):  # noqa: PLR0915
             )
             or ""
         )
+        num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
         return await async_run_with_retries(
             original_function=lambda *args, **kwargs: _wrapper_async(
                 original_function, *args, **kwargs
             ),
             original_function_args=args,
             original_function_kwargs=kwargs,
-            num_retries=(
-                kwargs.get("max_retries", 0)
-                or kwargs.get("num_retries", 0)
-                or litellm.num_retries
-                or 0
-            ),
+            num_retries=num_retries,
             retry_after=0,
             retry_policy=kwargs.get("retry_policy"),
             fallbacks=kwargs.get("fallbacks", []),
