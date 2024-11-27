@@ -62,7 +62,14 @@ class BaseLLMChatTest(ABC):
         response = litellm.completion(**base_completion_call_args, messages=messages)
         assert response is not None
 
-    def test_json_response_format(self):
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "json_object"},
+            {"type": "text"},
+        ],
+    )
+    def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
         """
@@ -83,7 +90,7 @@ class BaseLLMChatTest(ABC):
         response = litellm.completion(
             **base_completion_call_args,
             messages=messages,
-            response_format={"type": "json_object"},
+            response_format=response_format,
         )
 
         print(response)

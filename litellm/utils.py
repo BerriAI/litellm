@@ -4656,6 +4656,8 @@ def get_model_info(  # noqa: PLR0915
                 ),
                 supports_audio_input=_model_info.get("supports_audio_input", False),
                 supports_audio_output=_model_info.get("supports_audio_output", False),
+                tpm=_model_info.get("tpm", None),
+                rpm=_model_info.get("rpm", None),
             )
     except Exception as e:
         if "OllamaError" in str(e):

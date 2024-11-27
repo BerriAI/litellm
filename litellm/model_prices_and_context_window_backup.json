@@ -3383,6 +3383,8 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
+        "tpm": 4000000,
+        "rpm": 2000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-flash-001": {
@@ -3406,6 +3408,8 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
+        "tpm": 4000000,
+        "rpm": 2000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-flash": {
@@ -3428,6 +3432,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true, 
+        "tpm": 4000000,
+        "rpm": 2000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-flash-latest": {
@@ -3450,6 +3456,32 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 2000,
+        "source": "https://ai.google.dev/pricing"
+    },
+    "gemini/gemini-1.5-flash-8b": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30, 
+        "input_cost_per_token": 0,
+        "input_cost_per_token_above_128k_tokens": 0,
+        "output_cost_per_token": 0,
+        "output_cost_per_token_above_128k_tokens": 0,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 4000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-flash-8b-exp-0924": {
@@ -3472,6 +3504,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 4000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-exp-1114": {
@@ -3494,7 +3528,12 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
-        "source": "https://ai.google.dev/pricing"
+        "tpm": 4000000,
+        "rpm": 1000,
+        "source": "https://ai.google.dev/pricing",
+        "metadata": {
+            "notes": "Rate limits not documented for gemini-exp-1114. Assuming same as gemini-1.5-pro."
+        }
     },
     "gemini/gemini-1.5-flash-exp-0827": {
         "max_tokens": 8192,
@@ -3516,6 +3555,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 2000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-flash-8b-exp-0827": {
@@ -3537,6 +3578,9 @@
         "supports_system_messages": true,
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 4000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-pro": {
@@ -3550,7 +3594,10 @@
         "litellm_provider": "gemini",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+        "rpd": 30000,
+        "tpm": 120000,
+        "rpm": 360,
+        "source": "https://ai.google.dev/gemini-api/docs/models/gemini"
     },
     "gemini/gemini-1.5-pro": {
         "max_tokens": 8192,
@@ -3567,6 +3614,8 @@
         "supports_vision": true,
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
+        "tpm": 4000000,
+        "rpm": 1000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-002": {
@@ -3585,6 +3634,8 @@
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
         "supports_prompt_caching": true,
+        "tpm": 4000000,
+        "rpm": 1000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-001": {
@@ -3603,6 +3654,8 @@
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
         "supports_prompt_caching": true,
+        "tpm": 4000000,
+        "rpm": 1000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-exp-0801": {
@@ -3620,6 +3673,8 @@
         "supports_vision": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 1000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-exp-0827": {
@@ -3637,6 +3692,8 @@
         "supports_vision": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
+        "tpm": 4000000,
+        "rpm": 1000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-latest": {
@@ -3654,6 +3711,8 @@
         "supports_vision": true,
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
+        "tpm": 4000000,
+        "rpm": 1000,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-pro-vision": {
@@ -3668,6 +3727,9 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "rpd": 30000,
+        "tpm": 120000,
+        "rpm": 360,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini/gemini-gemma-2-27b-it": {
