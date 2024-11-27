@@ -492,7 +492,7 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_service():
-        return os.getenv("DD_SERVICE", "litellm")
+        return os.getenv("DD_SERVICE", "litellm-server")
 
     @staticmethod
     def _get_datadog_hostname():
