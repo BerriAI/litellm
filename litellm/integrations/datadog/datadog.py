@@ -32,12 +32,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload
 
 from .types import DD_ERRORS, DatadogPayload, DataDogStatus
 from .utils import make_json_serializable
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
+DD_SOURCE_NAME = "litellm"
 
 
 class DataDogLogger(CustomBatchLogger):
@@ -382,3 +384,56 @@ class DataDogLogger(CustomBatchLogger):
         No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
         """
         return
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
+        """
+        Async Proxy Post Call Failure Hook
+
+        Logs client side errors when using LiteLLM Proxy
+
+        Args:
+            kwargs (Dict[str, Any]): Original request kwargs
+            response_obj (Optional[Any]): Response object if any
+            start_time (datetime.datetime): Start time of request
+            end_time (datetime.datetime): End time of request
+            error (str): Error message
+        """
+        import json
+
+        try:
+            verbose_logger.debug(
+                "Datadog: Logging - Enters failure logging function for model %s",
+                request_data,
+            )
+            _json_message = {
+                "exception": str(original_exception),
+                "request_data": request_data,
+                "user_api_key_dict": user_api_key_dict.model_dump(),
+            }
+            dd_payload = DatadogPayload(
+                ddsource=DD_SOURCE_NAME,
+                ddtags="",
+                hostname="",
+                message=json.dumps(_json_message),
+                service="litellm-server",
+                status=DataDogStatus.ERROR,
+            )
+
+            self.log_queue.append(dd_payload)
+            verbose_logger.debug(
+                f"Datadog, failure event added to queue. Will flush in {self.flush_interval} seconds..."
+            )
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
