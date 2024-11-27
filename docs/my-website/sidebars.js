@@ -246,6 +246,7 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "text_completion",
         "embedding/supported_embedding",
         "image_generation",
         {
@@ -261,6 +262,7 @@ const sidebars = {
         "batches",
         "realtime",
         "fine_tuning",
+        "moderation","
         {
           type: "link",
           label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
