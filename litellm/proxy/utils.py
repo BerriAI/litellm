@@ -854,6 +854,20 @@ class ProxyLogging:
                     ),
                 ).start()
 
+        await self._run_post_call_failure_hook_custom_loggers(
+            original_exception=original_exception,
+            request_data=request_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        return
+
+    async def _run_post_call_failure_hook_custom_loggers(
+        self,
+        original_exception: Exception,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
         for callback in litellm.callbacks:
             try:
                 _callback: Optional[CustomLogger] = None
@@ -872,7 +886,34 @@ class ProxyLogging:
             except Exception as e:
                 raise e
 
-        return
+    async def async_log_proxy_authentication_errors(
+        self,
+        original_exception: Exception,
+        request: Request,
+        parent_otel_span: Optional[Any],
+        api_key: str,
+    ):
+        """
+        Handler for Logging Authentication Errors on LiteLLM Proxy
+        Why not use post_call_failure_hook?
+        - `post_call_failure_hook` calls `litellm_logging_obj.async_failure_handler`. This led to the Exception being logged twice
+
+        What does this handler do?
+        - Logs Authentication Errors (like invalid API Key passed) to CustomLogger compatible classes (OTEL, Datadog etc)
+            - calls CustomLogger.async_post_call_failure_hook
+        """
+
+        user_api_key_dict = UserAPIKeyAuth(
+            parent_otel_span=parent_otel_span,
+            token=_hash_token_if_needed(token=api_key),
+        )
+        request_data = await request.json()
+        await self._run_post_call_failure_hook_custom_loggers(
+            original_exception=original_exception,
+            request_data=request_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+        pass
 
     async def post_call_success_hook(
         self,
