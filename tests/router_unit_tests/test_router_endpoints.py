@@ -215,7 +215,7 @@ async def test_rerank_endpoint(model_list):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_text_completion_endpoint(model_list, sync_mode):
+async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
     router = Router(model_list=model_list)
 
     if sync_mode:
