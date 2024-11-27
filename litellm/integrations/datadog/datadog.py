@@ -35,7 +35,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.services import ServiceLoggerPayload
 
-from .types import DD_ERRORS, DatadogPayload, DataDogStatus
+from .types import *
 from .utils import make_json_serializable
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
@@ -410,11 +410,13 @@ class DataDogLogger(CustomBatchLogger):
                 "Datadog: Logging - Enters failure logging function for model %s",
                 request_data,
             )
-            _json_message = {
-                "exception": str(original_exception),
-                "request_data": request_data,
-                "user_api_key_dict": user_api_key_dict.model_dump(),
-            }
+            _json_message = DatadogProxyFailureHookJsonMessage(
+                exception=str(original_exception),
+                traceback=traceback.format_exc(),
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict.model_dump(),
+            )
+
             dd_payload = DatadogPayload(
                 ddsource=DD_SOURCE_NAME,
                 ddtags="",
@@ -428,10 +430,6 @@ class DataDogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"Datadog, failure event added to queue. Will flush in {self.flush_interval} seconds..."
             )
-
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
-
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
