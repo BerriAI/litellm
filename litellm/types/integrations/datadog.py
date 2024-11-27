@@ -19,3 +19,10 @@ class DatadogPayload(TypedDict, total=False):
 
 class DD_ERRORS(Enum):
     DATADOG_413_ERROR = "Datadog API Error - Payload too large (batch is above 5MB uncompressed). If you want this logged either disable request/response logging or set `DD_BATCH_SIZE=50`"
+
+
+class DatadogProxyFailureHookJsonMessage(TypedDict, total=False):
+    exception: str
+    traceback: str
+    request_data: dict
+    user_api_key_dict: dict
