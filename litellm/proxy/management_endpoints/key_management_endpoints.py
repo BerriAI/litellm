@@ -593,7 +593,7 @@ async def update_key_fn(
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
-            existing_key_id=existing_key_row.token,
+            existing_key_token=existing_key_row.token,
         )
 
         response = await prisma_client.update_data(
@@ -1899,7 +1899,7 @@ async def test_key_logging(
 async def _enforce_unique_key_alias(
     key_alias: Optional[str],
     prisma_client: Any,
-    existing_key_id: Optional[str] = None,
+    existing_key_token: Optional[str] = None,
 ) -> None:
     """
     Helper to enforce unique key aliases across all keys.
@@ -1907,16 +1907,17 @@ async def _enforce_unique_key_alias(
     Args:
         key_alias (Optional[str]): The key alias to check
         prisma_client (Any): Prisma client instance
-        existing_key_id (Optional[str]): ID of existing key being updated, to exclude from uniqueness check
+        existing_key_token (Optional[str]): ID of existing key being updated, to exclude from uniqueness check
+            (The Admin UI passes key_alias, in all Edit key requests. So we need to be sure that if we find a key with the same alias, it's not the same key we're updating)
 
     Raises:
         HTTPException: If key alias already exists on a different key
     """
     if key_alias is not None and prisma_client is not None:
         where_clause: dict[str, Any] = {"key_alias": key_alias}
-        if existing_key_id:
+        if existing_key_token:
             # Exclude the current key from the uniqueness check
-            where_clause["NOT"] = {"token": existing_key_id}
+            where_clause["NOT"] = {"token": existing_key_token}
 
         existing_key = await prisma_client.db.litellm_verificationtoken.find_first(
             where=where_clause
