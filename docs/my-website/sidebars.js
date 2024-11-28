@@ -246,6 +246,7 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "text_completion",
         "embedding/supported_embedding",
         "image_generation",
         {
