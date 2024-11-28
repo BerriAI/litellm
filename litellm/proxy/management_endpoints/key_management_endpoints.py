@@ -1912,7 +1912,7 @@ async def _enforce_unique_key_alias(
             (The Admin UI passes key_alias, in all Edit key requests. So we need to be sure that if we find a key with the same alias, it's not the same key we're updating)
 
     Raises:
-        HTTPException: If key alias already exists on a different key
+        ProxyException: If key alias already exists on a different key
     """
     if key_alias is not None and prisma_client is not None:
         where_clause: dict[str, Any] = {"key_alias": key_alias}
