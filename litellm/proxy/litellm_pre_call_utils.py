@@ -337,9 +337,11 @@ class LiteLLMProxyRequestSetup:
             final_tags.extend(request_tags)
 
         if tags_to_add and isinstance(tags_to_add, list):
-            final_tags.extend(tags_to_add)
+            for tag in tags_to_add:
+                if tag not in final_tags:
+                    final_tags.append(tag)
 
-        return list(set(final_tags))
+        return final_tags
 
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
