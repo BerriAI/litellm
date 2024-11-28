@@ -86,7 +86,6 @@ async def route_request(
         else:
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
-
     elif llm_router is not None:
         if (
             data["model"] in router_model_names
@@ -112,6 +111,9 @@ async def route_request(
                 llm_router.default_deployment is not None
                 or len(llm_router.pattern_router.patterns) > 0
             ):
+                return getattr(llm_router, f"{route_type}")(**data)
+            elif route_type == "amoderation":
+                # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
 
     elif user_model is not None:
