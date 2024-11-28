@@ -10,13 +10,17 @@ API calling is done using the OpenAI SDK with an api_base
 
 import types
 from typing import Optional, Union
+import litellm
+from litellm.secret_managers.main import get_secret, get_secret_str
+import json
+import requests
+import os
 
-
-class NvidiaNimConfig:
+class NvidiaConfig:
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-    The class `NvidiaNimConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
+    The class `NvidiaConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
     """
 
     temperature: Optional[int] = None
@@ -39,6 +43,12 @@ class NvidiaNimConfig:
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+        
+        dynamic_api_key = get_secret_str("NVIDIA_API_KEY")
+
+        if dynamic_api_key:
+            ## fetch available models
+            litellm.nvidia_models = self.available_models(dynamic_api_key)
 
     @classmethod
     def get_config(cls):
@@ -57,6 +67,25 @@ class NvidiaNimConfig:
             )
             and v is not None
         }
+    
+    def available_models(self, api_key: str) -> list:
+        '''Get Available NVIDIA models.'''
+        api_base = get_secret("NVIDIA_API_BASE") or "https://integrate.api.nvidia.com/v1" # type: ignore
+
+        headers = {
+        'Content-Type': 'application/json',
+        'Authorization': api_key
+        }
+        try:
+            response = requests.request("GET", os.path.join(api_base, "models"), headers=headers)
+            response.raise_for_status()
+
+            return [item["id"] for item in json.loads(response.text)["data"]]
+        except Exception as e:
+            raise e
+        
+
+
 
     def get_supported_openai_params(self, model: str) -> list:
         """

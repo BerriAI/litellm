@@ -12,7 +12,7 @@ import types
 from typing import Optional, Union
 
 
-class NvidiaNimEmbeddingConfig:
+class NvidiaEmbeddingConfig:
     """
     Reference: https://docs.api.nvidia.com/nim/reference/nvidia-nv-embedqa-e5-v5-infer
     """

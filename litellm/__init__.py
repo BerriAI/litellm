@@ -427,6 +427,7 @@ groq_models: List = []
 azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+nvidia_models: List = []
 
 
 def add_known_models():
@@ -531,6 +532,8 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
+        elif value.get("litellm_provider") == "nvidia":
+            nvidia_models.append(key)
 
 
 add_known_models()
@@ -557,7 +560,7 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
-    "nvidia_nim",
+    "nvidia",
     "cerebras",
     "sambanova",
     "ai21_chat",
@@ -790,6 +793,7 @@ model_list = (
     + azure_models
     + anyscale_models
     + cerebras_models
+    + nvidia_models
 )
 
 
@@ -831,7 +835,7 @@ class LlmProviders(str, Enum):
     ANYSCALE = "anyscale"
     MISTRAL = "mistral"
     GROQ = "groq"
-    NVIDIA_NIM = "nvidia_nim"
+    NVIDIA = "nvidia"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
@@ -904,6 +908,7 @@ models_by_provider: dict = {
     "azure": azure_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "nvidia": nvidia_models
 }
 
 # mapping for those models which have larger equivalents
@@ -1110,11 +1115,11 @@ from .llms.OpenAI.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+from .llms.nvidia.chat import NvidiaConfig
+from .llms.nvidia.embed import NvidiaEmbeddingConfig
 
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+nvidiaConfig = NvidiaConfig()
+nvidiaEmbeddingConfig = NvidiaEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig

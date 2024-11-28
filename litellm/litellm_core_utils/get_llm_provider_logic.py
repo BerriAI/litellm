@@ -149,8 +149,8 @@ def get_llm_provider(  # noqa: PLR0915
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret_str("GROQ_API_KEY")
                     elif endpoint == "https://integrate.api.nvidia.com/v1":
-                        custom_llm_provider = "nvidia_nim"
-                        dynamic_api_key = get_secret_str("NVIDIA_NIM_API_KEY")
+                        custom_llm_provider = "nvidia"
+                        dynamic_api_key = get_secret_str("NVIDIA_API_KEY")
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
@@ -276,6 +276,14 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "openai"
         elif model in litellm.empower_models:
             custom_llm_provider = "empower"
+        elif model in litellm.nvidia_models:
+            api_base = (
+                api_base 
+                or get_secret("NVIDIA_API_BASE") 
+                or "https://integrate.api.nvidia.com/v1"
+            ) # type: ignore
+            dynamic_api_key = api_key or get_secret_str("NVIDIA_API_KEY")
+            custom_llm_provider = "nvidia"
         elif model == "*":
             custom_llm_provider = "openai"
         if not custom_llm_provider:
@@ -377,14 +385,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
-    elif custom_llm_provider == "nvidia_nim":
+    elif custom_llm_provider == "nvidia":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = (
             api_base
-            or get_secret("NVIDIA_NIM_API_BASE")
+            or get_secret("NVIDIA_API_BASE")
             or "https://integrate.api.nvidia.com/v1"
         )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("NVIDIA_NIM_API_KEY")
+        dynamic_api_key = api_key or get_secret_str("NVIDIA_API_KEY")
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
