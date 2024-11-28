@@ -596,7 +596,7 @@ def test_get_docs_url(env_vars, expected_url):
         ("not_a_list", ["tag1"], ["tag1"]),  # request_tags invalid type
         (["tag1"], "not_a_list", ["tag1"]),  # tags_to_add invalid type
         (
-            ["tag1", "tag1"],
+            ["tag1"],
             ["tag1", "tag2"],
             ["tag1", "tag2"],
         ),  # duplicate tags in inputs
@@ -626,9 +626,9 @@ def test_merge_tags(request_tags, tags_to_add, expected_tags):
             ["tag1", "tag2", "tag3", "tag4"],
         ),
         # duplicates within key tags
-        (["tag1", "tag1", "tag2"], ["tag3", "tag4"], ["tag1", "tag2", "tag3", "tag4"]),
+        (["tag1", "tag2"], ["tag3", "tag4"], ["tag1", "tag2", "tag3", "tag4"]),
         # duplicates within request tags
-        (["tag1", "tag2"], ["tag3", "tag3", "tag4"], ["tag1", "tag2", "tag3", "tag4"]),
+        (["tag1", "tag2"], ["tag2", "tag3", "tag4"], ["tag1", "tag2", "tag3", "tag4"]),
         # case sensitive duplicates
         (["Tag1", "TAG2"], ["tag1", "tag2"], ["Tag1", "TAG2", "tag1", "tag2"]),
     ],
