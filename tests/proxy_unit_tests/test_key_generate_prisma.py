@@ -3550,3 +3550,76 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
 
 
 ################################################################################
+
+
+@pytest.mark.asyncio
+async def test_key_alias_uniqueness(prisma_client):
+    """
+    Test that:
+    1. We cannot create two keys with the same alias
+    2. We cannot update a key to use an alias that's already taken
+    3. We can update a key while keeping its existing alias
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    try:
+        # Create first key with an alias
+        unique_alias = f"test-alias-{uuid.uuid4()}"
+        key1 = await generate_key_fn(
+            data=GenerateKeyRequest(key_alias=unique_alias),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+
+        # Try to create second key with same alias - should fail
+        try:
+            key2 = await generate_key_fn(
+                data=GenerateKeyRequest(key_alias=unique_alias),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="1234",
+                ),
+            )
+            pytest.fail("Should not be able to create a second key with the same alias")
+        except Exception as e:
+            print("vars(e)=", vars(e))
+            assert "Unique key aliases across all keys are required" in str(e.message)
+
+        # Create another key with different alias
+        another_alias = f"test-alias-{uuid.uuid4()}"
+        key3 = await generate_key_fn(
+            data=GenerateKeyRequest(key_alias=another_alias),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+
+        # Try to update key3 to use key1's alias - should fail
+        try:
+            await update_key_fn(
+                data=UpdateKeyRequest(key=key3.key, key_alias=unique_alias),
+                request=Request(scope={"type": "http"}),
+            )
+            pytest.fail("Should not be able to update a key to use an existing alias")
+        except Exception as e:
+            assert "Unique key aliases across all keys are required" in str(e.message)
+
+        # Update key1 with its own existing alias - should succeed
+        updated_key = await update_key_fn(
+            data=UpdateKeyRequest(key=key1.key, key_alias=unique_alias),
+            request=Request(scope={"type": "http"}),
+        )
+        assert updated_key is not None
+
+    except Exception as e:
+        print("got exceptions, e=", e)
+        print("vars(e)=", vars(e))
+        pytest.fail(f"An unexpected error occurred: {str(e)}")

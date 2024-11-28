@@ -593,7 +593,7 @@ async def update_key_fn(
         await _enforce_unique_key_alias(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
-            existing_key_id=key,
+            existing_key_id=existing_key_row.token,
         )
 
         response = await prisma_client.update_data(
@@ -1923,7 +1923,7 @@ async def _enforce_unique_key_alias(
         )
         if existing_key is not None:
             raise ProxyException(
-                message=f"Key alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
+                message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
                 type=ProxyErrorTypes.bad_request_error,
                 param="key_alias",
                 code=status.HTTP_400_BAD_REQUEST,
