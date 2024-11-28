@@ -85,6 +85,10 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: custom_engine/* # regex pattern matching test for /models and /model/info endpoints
+    litellm_params:
+      model: openai/custom_engine
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
   
 
   # provider specific wildcard routing

@@ -48,6 +48,8 @@ async def get_models(session, key):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
 
+        return await response.json()
+
 
 @pytest.mark.asyncio
 async def test_get_models():
@@ -362,3 +364,60 @@ async def test_add_model_run_health():
 
         # cleanup
         await delete_model(session=session, model_id=model_id)
+
+
+@pytest.mark.asyncio
+async def test_wildcard_model_access():
+    """
+    Test key generation with wildcard model access pattern (custom_llm/*)
+    - Generate key with access to 'custom_llm/*'
+    - Call /models and /model/info to verify access
+    """
+    async with aiohttp.ClientSession() as session:
+        # Generate key with wildcard access
+        key_gen = await generate_key(session=session, models=["custom_engine/*"])
+        key = key_gen["key"]
+
+        # Get models list
+        print("\nTesting /models endpoint with wildcard key")
+        models_response = await get_models(session=session, key=key)
+
+        # verify /models response
+        _data = models_response["data"]
+        found_custom_engine_model = False
+        for model in _data:
+            if model["id"] == "custom_engine/*":
+                found_custom_engine_model = True
+                assert model["object"] == "model", "Incorrect object type"
+                assert model["owned_by"] == "openai", "Incorrect owner"
+                break
+        assert (
+            found_custom_engine_model is True
+        ), "custom_engine/* model not found in response"
+
+        # Get detailed model info
+        print("\nTesting /model/info endpoint with wildcard key")
+        model_info_response = await get_model_info(session=session, key=key)
+        print("Model info response:", model_info_response)
+
+        # Add assertions to verify response content
+        assert "data" in model_info_response
+        model_data = model_info_response["data"]
+        assert len(model_data) > 0
+
+        # Find and verify the custom_engine/* model
+        custom_engine_model = None
+        for model in model_data:
+            if model["model_name"] == "custom_engine/*":
+                custom_engine_model = model
+                break
+
+        assert (
+            custom_engine_model is not None
+        ), "custom_engine/* model not found in response"
+        assert (
+            custom_engine_model["litellm_params"]["api_base"]
+            == "https://exampleopenaiendpoint-production.up.railway.app/"
+        )
+        assert custom_engine_model["litellm_params"]["model"] == "openai/custom_engine"
+        assert custom_engine_model["model_info"]["litellm_provider"] == "openai"
