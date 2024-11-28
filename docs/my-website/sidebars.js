@@ -32,7 +32,7 @@ const sidebars = {
         {
           "type": "category", 
           "label": "Config.yaml",
-          "items": ["proxy/configs", "proxy/config_settings"]
+          "items": ["proxy/configs", "proxy/config_management", "proxy/config_settings"]
         },
         {
           type: "category",
@@ -246,6 +246,7 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "text_completion",
         "embedding/supported_embedding",
         "image_generation",
         {
@@ -261,6 +262,7 @@ const sidebars = {
         "batches",
         "realtime",
         "fine_tuning",
+        "moderation",
         {
           type: "link",
           label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",

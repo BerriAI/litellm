@@ -415,3 +415,18 @@ def test_allowed_route_inside_route(
         )
         == expected_result
     )
+
+
+def test_read_request_body():
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from fastapi import Request
+
+    payload = "()" * 1000000
+    request = Request(scope={"type": "http"})
+
+    async def return_body():
+        return payload
+
+    request.body = return_body
+    result = _read_request_body(request)
+    assert result is not None

@@ -420,6 +420,11 @@ async def generate_key_fn(  # noqa: PLR0915
 
             data_json.pop("tags")
 
+        await _enforce_unique_key_alias(
+            key_alias=data_json.get("key_alias", None),
+            prisma_client=prisma_client,
+        )
+
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
         )
@@ -476,6 +481,7 @@ def prepare_key_update_data(
             duration_s = duration_in_seconds(duration=budget_duration)
             key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = key_reset_at
+            non_default_values["budget_duration"] = budget_duration
 
     _metadata = existing_key_row.metadata or {}
 
@@ -583,6 +589,12 @@ async def update_key_fn(
 
         non_default_values = prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
+        )
+
+        await _enforce_unique_key_alias(
+            key_alias=non_default_values.get("key_alias", None),
+            prisma_client=prisma_client,
+            existing_key_token=existing_key_row.token,
         )
 
         response = await prisma_client.update_data(
@@ -1883,3 +1895,38 @@ async def test_key_logging(
             status="healthy",
             details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
         )
+
+
+async def _enforce_unique_key_alias(
+    key_alias: Optional[str],
+    prisma_client: Any,
+    existing_key_token: Optional[str] = None,
+) -> None:
+    """
+    Helper to enforce unique key aliases across all keys.
+
+    Args:
+        key_alias (Optional[str]): The key alias to check
+        prisma_client (Any): Prisma client instance
+        existing_key_token (Optional[str]): ID of existing key being updated, to exclude from uniqueness check
+            (The Admin UI passes key_alias, in all Edit key requests. So we need to be sure that if we find a key with the same alias, it's not the same key we're updating)
+
+    Raises:
+        ProxyException: If key alias already exists on a different key
+    """
+    if key_alias is not None and prisma_client is not None:
+        where_clause: dict[str, Any] = {"key_alias": key_alias}
+        if existing_key_token:
+            # Exclude the current key from the uniqueness check
+            where_clause["NOT"] = {"token": existing_key_token}
+
+        existing_key = await prisma_client.db.litellm_verificationtoken.find_first(
+            where=where_clause
+        )
+        if existing_key is not None:
+            raise ProxyException(
+                message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_alias",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
