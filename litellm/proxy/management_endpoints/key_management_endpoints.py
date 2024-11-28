@@ -1922,9 +1922,9 @@ async def _enforce_unique_key_alias(
             where=where_clause
         )
         if existing_key is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Key alias '{key_alias}' already exists. Unique key aliases across all keys are required."
-                },
+            raise ProxyException(
+                message=f"Key alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_alias",
+                code=status.HTTP_400_BAD_REQUEST,
             )
