@@ -1032,3 +1032,50 @@ def test_get_end_user_id_for_cost_tracking(
         get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
         == expected_end_user_id
     )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_sensitive_url_filtering(sync_mode):
+    """ensure gemini api key not leaked in logs - Relevant Issue: https://github.com/BerriAI/litellm/issues/6963"""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    import json
+    import httpx
+
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    request_data = {
+        "input": [{"content": "hey, how's it going?"}],
+        "model": "text-embedding-004",
+        "max_tokens": 200,  # invalid param
+    }
+    with pytest.raises(httpx.HTTPStatusError) as e:
+        if sync_mode:
+            client.post(
+                url=f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={gemini_api_key}",
+                data=json.dumps(request_data),
+            )
+        else:
+            await client.post(
+                url=f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key={gemini_api_key}",
+                data=json.dumps(request_data),
+            )
+    print(e.traceback)
+    print(f"exception received: {e._excinfo[1]}")
+    assert gemini_api_key not in str(e._excinfo[1])
+
+    with pytest.raises(litellm.BadRequestError) as e:
+        if sync_mode:
+            litellm.embedding(
+                model="gemini/text-embedding-004",
+                input="hey, how's it going?",
+                max_tokens=200,
+            )
+        else:
+            await litellm.embedding(
+                model="gemini/text-embedding-004",
+                input="hey, how's it going?",
+                max_tokens=200,
+            )
+
+    assert "invalid json payload" in str(e._excinfo[1]).lower()
