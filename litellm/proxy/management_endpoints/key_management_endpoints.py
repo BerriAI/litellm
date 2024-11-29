@@ -497,6 +497,12 @@ def prepare_key_update_data(
         _metadata["model_rpm_limit"].update(data.model_rpm_limit)
         non_default_values["metadata"] = _metadata
 
+    if data.tags:
+        if "tags" not in _metadata:
+            _metadata["tags"] = []
+        _metadata["tags"].extend(data.tags)
+        non_default_values["metadata"] = _metadata
+
     if data.guardrails:
         _metadata["guardrails"] = data.guardrails
         non_default_values["metadata"] = _metadata
