@@ -523,10 +523,6 @@ async def _cache_management_object(
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     await user_api_key_cache.async_set_cache(key=key, value=value)
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_set_cache(
-            key=key, value=value
-        )
 
 
 async def _cache_team_object(
@@ -878,7 +874,10 @@ async def get_org_object(
 
 
 async def can_key_call_model(
-    model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -898,14 +897,14 @@ async def can_key_call_model(
     )
     from collections import defaultdict
 
-    from litellm.proxy.proxy_server import llm_router
-
     access_groups = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
+        access_groups = llm_router.get_model_access_groups(model_name=model)
 
     models_in_current_access_groups = []
-    if len(access_groups) > 0:  # check if token contains any model access groups
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
         for idx, m in enumerate(
             valid_token.models
         ):  # loop token models, if any of them are an access group add the access group
@@ -923,10 +922,13 @@ async def can_key_call_model(
     all_model_access: bool = False
 
     if (
-        len(filtered_models) == 0
-        or "*" in filtered_models
-        or "openai/*" in filtered_models
-    ):
+        len(filtered_models) == 0 and len(valid_token.models) == 0
+    ) or "*" in filtered_models:
+        all_model_access = True
+    elif (
+        llm_router is not None
+        and llm_router.pattern_router.route(model, filtered_models) is not None
+    ):  # wildcard access
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:

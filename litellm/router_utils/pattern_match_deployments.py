@@ -79,7 +79,9 @@ class PatternMatchRouter:
 
         return new_deployments
 
-    def route(self, request: Optional[str]) -> Optional[List[Dict]]:
+    def route(
+        self, request: Optional[str], filtered_model_names: Optional[List[str]] = None
+    ) -> Optional[List[Dict]]:
         """
         Route a requested model to the corresponding llm deployments based on the regex pattern
 
@@ -89,14 +91,26 @@ class PatternMatchRouter:
 
         Args:
             request: Optional[str]
-
+            filtered_model_names: Optional[List[str]] - if provided, only return deployments that match the filtered_model_names
         Returns:
             Optional[List[Deployment]]: llm deployments
         """
         try:
             if request is None:
                 return None
+
+            regex_filtered_model_names = (
+                [self._pattern_to_regex(m) for m in filtered_model_names]
+                if filtered_model_names is not None
+                else []
+            )
+
             for pattern, llm_deployments in self.patterns.items():
+                if (
+                    filtered_model_names is not None
+                    and pattern not in regex_filtered_model_names
+                ):
+                    continue
                 pattern_match = re.match(pattern, request)
                 if pattern_match:
                     return self._return_pattern_matched_deployments(
