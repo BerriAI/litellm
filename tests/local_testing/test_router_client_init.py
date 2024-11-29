@@ -218,6 +218,9 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
 
 @pytest.mark.asyncio
 async def test_audio_speech_router():
+    """
+    Test that router uses OpenAI/Azure OpenAI Client initialized during init for litellm.aspeech
+    """
 
     from litellm import Router
 
