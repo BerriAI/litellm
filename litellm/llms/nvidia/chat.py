@@ -49,6 +49,7 @@ class NvidiaConfig:
         if dynamic_api_key:
             ## fetch available models
             litellm.nvidia_models = self.available_models(dynamic_api_key)
+            litellm.model_list += litellm.nvidia_models
 
     @classmethod
     def get_config(cls):
