@@ -33,7 +33,10 @@ import re
 
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
-    key_index = error_message.find("key=")
+    if isinstance(error_message, str):
+        key_index = error_message.find("key=")
+    else:
+        return error_message
 
     # If key is found
     if key_index != -1:
@@ -212,8 +215,8 @@ class AsyncHTTPHandler:
                 setattr(e, "message", await e.response.aread())
                 setattr(e, "text", await e.response.aread())
             else:
-                setattr(e, "message", e.response.text)
-                setattr(e, "text", e.response.text)
+                setattr(e, "message", mask_sensitive_info(e.response.text))
+                setattr(e, "text", mask_sensitive_info(e.response.text))
             e = MaskedHTTPStatusError(
                 e, message=getattr(e, "message", None), text=getattr(e, "text", None)
             )
@@ -455,12 +458,12 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            error_text = mask_sensitive_info(e.response.text)
 
             if stream is True:
                 setattr(e, "message", mask_sensitive_info(e.response.read()))
                 setattr(e, "text", mask_sensitive_info(e.response.read()))
             else:
+                error_text = mask_sensitive_info(e.response.text)
                 setattr(e, "message", error_text)
                 setattr(e, "text", error_text)
 
