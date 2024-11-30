@@ -19,7 +19,6 @@ from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 
 
-@pytest.mark.respx
 def test_completion_nvidia_nim():
     from openai import OpenAI
 

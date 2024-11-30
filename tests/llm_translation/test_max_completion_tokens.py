@@ -42,7 +42,6 @@ def return_mocked_response(model: str):
         "bedrock/mistral.mistral-large-2407-v1:0",
     ],
 )
-@pytest.mark.respx
 @pytest.mark.asyncio()
 async def test_bedrock_max_completion_tokens(model: str):
     """
@@ -87,7 +86,6 @@ async def test_bedrock_max_completion_tokens(model: str):
     "model",
     ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
 )
-@pytest.mark.respx
 @pytest.mark.asyncio()
 async def test_anthropic_api_max_completion_tokens(model: str):
     """
