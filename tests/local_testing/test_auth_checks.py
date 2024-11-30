@@ -151,3 +151,51 @@ async def test_can_key_call_model(model, expect_to_work):
             await can_key_call_model(**args)
 
         print(e)
+
+
+@pytest.mark.parametrize(
+    "model, expect_to_work",
+    [("openai/gpt-4o", False), ("openai/gpt-4o-mini", True)],
+)
+@pytest.mark.asyncio
+async def test_can_team_call_model(model, expect_to_work):
+    from litellm.proxy.auth.auth_checks import model_in_access_group
+    from fastapi import HTTPException
+
+    llm_model_list = [
+        {
+            "model_name": "openai/*",
+            "litellm_params": {
+                "model": "openai/*",
+                "api_key": "test-api-key",
+            },
+            "model_info": {
+                "id": "e6e7006f83029df40ebc02ddd068890253f4cd3092bcb203d3d8e6f6f606f30f",
+                "db_model": False,
+                "access_groups": ["public-openai-models"],
+            },
+        },
+        {
+            "model_name": "openai/gpt-4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "test-api-key",
+            },
+            "model_info": {
+                "id": "0cfcd87f2cb12a783a466888d05c6c89df66db23e01cecd75ec0b83aed73c9ad",
+                "db_model": False,
+                "access_groups": ["private-openai-models"],
+            },
+        },
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+
+    args = {
+        "model": model,
+        "team_models": ["public-openai-models"],
+        "llm_router": router,
+    }
+    if expect_to_work:
+        assert model_in_access_group(**args)
+    else:
+        assert not model_in_access_group(**args)
