@@ -472,7 +472,10 @@ def prepare_metadata_fields(
             if k == "tags" or k == "guardrails":
                 if k not in non_default_values["metadata"]:
                     non_default_values["metadata"][k] = []
-                non_default_values["metadata"][k].extend(v)
+                seen = set(non_default_values["metadata"][k])
+                non_default_values["metadata"][k].extend(
+                    x for x in v if x not in seen and not seen.add(x)
+                )  # prevent duplicates from being added + maintain initial order
 
     except Exception as e:
         verbose_proxy_logger.exception(
