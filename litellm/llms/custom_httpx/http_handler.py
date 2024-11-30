@@ -78,6 +78,7 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             response=httpx.Response(
                 status_code=original_error.response.status_code,
                 content=original_error.response.content,
+                headers=original_error.response.headers,
             ),
         )
         self.message = message
