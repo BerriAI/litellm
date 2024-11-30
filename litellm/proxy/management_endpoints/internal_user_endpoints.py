@@ -550,7 +550,17 @@ async def user_update(
                 )
                 non_default_values["budget_reset_at"] = user_reset_at
 
-        non_default_values = prepare_metadata_fields(data, non_default_values)
+        existing_user_row = await prisma_client.get_data(
+            user_id=data.user_id, table_name="user", query_type="find_unique"
+        )
+
+        existing_metadata = existing_user_row.metadata if existing_user_row else {}
+
+        non_default_values = prepare_metadata_fields(
+            data=data,
+            non_default_values=non_default_values,
+            existing_metadata=existing_metadata or {},
+        )
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)

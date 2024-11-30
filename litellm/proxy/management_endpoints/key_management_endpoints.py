@@ -452,12 +452,16 @@ async def generate_key_fn(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
-def prepare_metadata_fields(data: BaseModel, non_default_values: dict) -> dict:
+def prepare_metadata_fields(
+    data: BaseModel, non_default_values: dict, existing_metadata: dict
+) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
     non_default_values.setdefault("metadata", {})
+    non_default_values["metadata"].update(existing_metadata)
     data_json = data.model_dump(exclude_unset=True)
+
     try:
         for k, v in data_json.items():
             if k == "model_tpm_limit" or k == "model_rpm_limit":
@@ -510,8 +514,10 @@ def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
+    _metadata = existing_key_row.metadata or {}
+
     non_default_values = prepare_metadata_fields(
-        data=data, non_default_values=non_default_values
+        data=data, non_default_values=non_default_values, existing_metadata=_metadata
     )
 
     return non_default_values
