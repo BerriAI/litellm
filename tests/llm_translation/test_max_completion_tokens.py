@@ -81,7 +81,7 @@ async def test_bedrock_max_completion_tokens(model: str, respx_mock: MockRouter)
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229,"],
+    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
 )
 @pytest.mark.respx
 @pytest.mark.asyncio()

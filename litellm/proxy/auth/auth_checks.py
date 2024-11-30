@@ -904,7 +904,6 @@ async def can_key_call_model(
     if llm_router:
         access_groups = llm_router.get_model_access_groups(model_name=model)
 
-    models_in_current_access_groups = []
     if (
         len(access_groups) > 0 and llm_router is not None
     ):  # check if token contains any model access groups
@@ -917,7 +916,6 @@ async def can_key_call_model(
     # Filter out models that are access_groups
     filtered_models = [m for m in valid_token.models if m not in access_groups]
 
-    filtered_models += models_in_current_access_groups
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
     all_model_access: bool = False
