@@ -437,29 +437,6 @@ class CustomStreamWrapper:
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
-    def handle_cohere_chat_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
-        print_verbose(f"chunk: {chunk}")
-        try:
-            text = ""
-            is_finished = False
-            finish_reason = ""
-            if "text" in data_json:
-                text = data_json["text"]
-            elif "is_finished" in data_json and data_json["is_finished"] is True:
-                is_finished = data_json["is_finished"]
-                finish_reason = data_json["finish_reason"]
-            else:
-                return
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        except Exception:
-            raise ValueError(f"Unable to parse response. Original response: {chunk}")
-
     def handle_azure_chunk(self, chunk):
         is_finished = False
         finish_reason = ""
@@ -949,7 +926,12 @@ class CustomStreamWrapper:
                 "function_call" in completion_obj
                 and completion_obj["function_call"] is not None
             )
+            or (
+                "provider_specific_fields" in response_obj
+                and response_obj["provider_specific_fields"] is not None
+            )
         ):  # cannot set content of an OpenAI Object to be an empty string
+
             self.safety_checker()
             hold, model_response_str = self.check_special_tokens(
                 chunk=completion_obj["content"],
@@ -1058,6 +1040,7 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
+
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -1066,6 +1049,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
         response_obj: dict = {}
+
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -1256,14 +1240,6 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider == "cohere_chat":
-                response_obj = self.handle_cohere_chat_chunk(chunk)
-                if response_obj is None:
-                    return
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
