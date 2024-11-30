@@ -459,7 +459,10 @@ def prepare_metadata_fields(
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
     non_default_values.setdefault("metadata", {})
-    non_default_values["metadata"].update(existing_metadata)
+    if non_default_values["metadata"] is None:
+        non_default_values["metadata"] = existing_metadata
+    else:
+        non_default_values["metadata"].update(existing_metadata)
     data_json = data.model_dump(exclude_unset=True)
 
     try:
@@ -474,7 +477,7 @@ def prepare_metadata_fields(
                     non_default_values["metadata"][k] = []
                 seen = set(non_default_values["metadata"][k])
                 non_default_values["metadata"][k].extend(
-                    x for x in v if x not in seen and not seen.add(x)
+                    x for x in v if x not in seen and not seen.add(x)  # type: ignore
                 )  # prevent duplicates from being added + maintain initial order
 
     except Exception as e:
