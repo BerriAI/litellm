@@ -468,7 +468,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict) -> dict:
             if k == "tags" or k == "guardrails":
                 if k not in non_default_values["metadata"]:
                     non_default_values["metadata"][k] = []
-                    non_default_values["metadata"][k].extend(v)
+                non_default_values["metadata"][k].extend(v)
 
     except Exception as e:
         verbose_proxy_logger.exception(
