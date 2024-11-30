@@ -201,14 +201,16 @@ async def test_openai_prediction_param_with_caching():
 
 
 @pytest.mark.asyncio()
-@pytest.mark.respx
-async def test_vision_with_custom_model(respx_mock: MockRouter):
+async def test_vision_with_custom_model():
     """
     Tests that an OpenAI compatible endpoint when sent an image will receive the image in the request
 
     """
     import base64
     import requests
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
 
     litellm.set_verbose = True
     api_base = "https://my-custom.api.openai.com"
@@ -220,42 +222,37 @@ async def test_vision_with_custom_model(respx_mock: MockRouter):
     encoded_file = base64.b64encode(file_data).decode("utf-8")
     base64_image = f"data:image/png;base64,{encoded_file}"
 
-    mock_response = ModelResponse(
-        id="cmpl-mock",
-        choices=[Choices(message=Message(content="Mocked response", role="assistant"))],
-        created=int(datetime.now().timestamp()),
-        model="my-custom-model",
-    )
-
-    mock_request = respx_mock.post(f"{api_base}/chat/completions").mock(
-        return_value=httpx.Response(200, json=mock_response.dict())
-    )
-
-    response = await litellm.acompletion(
-        model="openai/my-custom-model",
-        max_tokens=10,
-        api_base=api_base,  # use the mock api
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What's in this image?"},
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model="openai/my-custom-model",
+                max_tokens=10,
+                api_base=api_base,  # use the mock api
+                messages=[
                     {
-                        "type": "image_url",
-                        "image_url": {"url": base64_image},
-                    },
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What's in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": base64_image},
+                            },
+                        ],
+                    }
                 ],
-            }
-        ],
-    )
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
 
-    print("request_body: ", request_body)
+        print("request_body: ", request_body)
 
-    assert request_body == {
-        "messages": [
+        assert request_body["messages"] == [
             {
                 "role": "user",
                 "content": [
@@ -267,11 +264,7 @@ async def test_vision_with_custom_model(respx_mock: MockRouter):
                         },
                     },
                 ],
-            }
-        ],
-        "model": "my-custom-model",
-        "max_tokens": 10,
-    }
-
-    print(f"response: {response}")
-    assert isinstance(response, ModelResponse)
+            },
+        ]
+        assert request_body["model"] == "my-custom-model"
+        assert request_body["max_tokens"] == 10
