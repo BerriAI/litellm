@@ -32,6 +32,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     duration_in_seconds,
     generate_key_helper_fn,
+    prepare_metadata_fields,
 )
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -459,7 +460,8 @@ async def user_update(
         "user_id": "test-litellm-user-4",
         "user_role": "proxy_admin_viewer"
     }'
-
+    ```
+    
     Parameters:
         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
         - user_email: Optional[str] - Specify a user email.
@@ -491,7 +493,7 @@ async def user_update(
         - duration: Optional[str] - [NOT IMPLEMENTED].
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
             
-    ```
+    
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -504,10 +506,15 @@ async def user_update(
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
+            if (
+                v is not None
+                and v
+                not in (
+                    [],
+                    {},
+                    0,
+                )
+                and k not in LiteLLM_ManagementEndpoint_MetadataFields
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
 
@@ -542,6 +549,8 @@ async def user_update(
                     seconds=duration_s
                 )
                 non_default_values["budget_reset_at"] = user_reset_at
+
+        non_default_values = prepare_metadata_fields(data, non_default_values)
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)

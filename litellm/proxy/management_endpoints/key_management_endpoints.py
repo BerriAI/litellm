@@ -452,12 +452,39 @@ async def generate_key_fn(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
+def prepare_metadata_fields(data: BaseModel, non_default_values: dict) -> dict:
+    """
+    Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
+    """
+    non_default_values.setdefault("metadata", {})
+    data_json = data.model_dump(exclude_unset=True)
+    try:
+        for k, v in data_json.items():
+            if k == "model_tpm_limit" or k == "model_rpm_limit":
+                if k not in non_default_values["metadata"]:
+                    non_default_values["metadata"][k] = {}
+                non_default_values["metadata"][k].update(v)
+
+            if k == "tags" or k == "guardrails":
+                if k not in non_default_values["metadata"]:
+                    non_default_values["metadata"][k] = []
+                    non_default_values["metadata"][k].extend(v)
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+    return non_default_values
+
+
 def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
-    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
+    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails", "tags"]
     non_default_values = {}
     for k, v in data_json.items():
         if k in _metadata_fields:
@@ -483,29 +510,9 @@ def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
-    _metadata = existing_key_row.metadata or {}
-
-    if data.model_tpm_limit:
-        if "model_tpm_limit" not in _metadata:
-            _metadata["model_tpm_limit"] = {}
-        _metadata["model_tpm_limit"].update(data.model_tpm_limit)
-        non_default_values["metadata"] = _metadata
-
-    if data.model_rpm_limit:
-        if "model_rpm_limit" not in _metadata:
-            _metadata["model_rpm_limit"] = {}
-        _metadata["model_rpm_limit"].update(data.model_rpm_limit)
-        non_default_values["metadata"] = _metadata
-
-    if data.tags:
-        if "tags" not in _metadata:
-            _metadata["tags"] = []
-        _metadata["tags"].extend(data.tags)
-        non_default_values["metadata"] = _metadata
-
-    if data.guardrails:
-        _metadata["guardrails"] = data.guardrails
-        non_default_values["metadata"] = _metadata
+    non_default_values = prepare_metadata_fields(
+        data=data, non_default_values=non_default_values
+    )
 
     return non_default_values
 
