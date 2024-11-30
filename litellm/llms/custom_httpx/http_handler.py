@@ -218,10 +218,9 @@ class AsyncHTTPHandler:
             else:
                 setattr(e, "message", mask_sensitive_info(e.response.text))
                 setattr(e, "text", mask_sensitive_info(e.response.text))
-            e = MaskedHTTPStatusError(
-                e, message=getattr(e, "message", None), text=getattr(e, "text", None)
-            )
+
             setattr(e, "status_code", e.response.status_code)
+
             raise e
         except Exception as e:
             raise e
@@ -468,9 +467,6 @@ class HTTPHandler:
                 setattr(e, "message", error_text)
                 setattr(e, "text", error_text)
 
-            e = MaskedHTTPStatusError(
-                e, message=getattr(e, "message", None), text=getattr(e, "text", None)
-            )
             setattr(e, "status_code", e.response.status_code)
 
             raise e
