@@ -18,4 +18,10 @@ model_list:
       model: azure/azure-embedding-model
       api_base: os.environ/AZURE_API_BASE
       api_key: bad-key
+  - model_name: anthropic.claude-v2
+    litellm_params:
+      model: bedrock/anthropic.claude-v2
+      aws_access_key_id: bad-key
+      aws_secret_access_key: bad-key
+      aws_region_name: us-east-1
     

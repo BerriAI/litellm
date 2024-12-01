@@ -316,3 +316,65 @@ def test_chat_completion_exception_azure_context_window(mock_acompletion, client
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
+bedrock_throttling_error_response_dict = {
+    "error": {
+        "message": "ThrottlingException - Rate exceeded",
+        "type": "throttling_error",
+        "param": None,
+        "code": 429,
+    },
+}
+bedrock_throttling_error_response = Response(
+    status_code=429,
+    content=json.dumps(bedrock_throttling_error_response_dict),
+)
+
+@mock.patch(
+    "litellm.proxy.proxy_server.llm_router.acompletion",
+    return_value=bedrock_throttling_error_response,
+)
+def test_chat_completion_exception_bedrock_throttling(mock_acompletion, client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "anthropic.claude-v2",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+        response = None
+
+        response = client.post("/chat/completions", json=test_data)
+        print("got response from server", response)
+
+        mock_acompletion.assert_called_once_with(
+            **test_data,
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
+            request_timeout=mock.ANY,
+            metadata=mock.ANY,
+            proxy_server_request=mock.ANY,
+        )
+
+        json_response = response.json()
+
+        print("keys in json response", json_response.keys())
+
+        assert json_response.keys() == {"error"}
+
+        assert json_response == bedrock_throttling_error_response_dict
+
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
+        print("exception from proxy", openai_exception)
+        assert isinstance(openai_exception, openai.RateLimitError)
+        print("passed exception is of type RateLimitError")
+
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
