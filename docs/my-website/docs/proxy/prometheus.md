@@ -192,3 +192,13 @@ Here is a screenshot of the metrics you can monitor with the LiteLLM Grafana Das
 |----------------------|--------------------------------------|
 | `litellm_llm_api_failed_requests_metric`             | **deprecated** use `litellm_proxy_failed_requests_metric` |
 | `litellm_requests_metric`             | **deprecated** use `litellm_proxy_total_requests_metric` |
+
+
+## FAQ 
+
+### What are `_created` vs. `_total` metrics?
+
+- `_created` metrics are metrics that are created when the proxy starts
+- `_total` metrics are metrics that are incremented for each request
+
+You should consume the `_total` metrics for your counting purposes

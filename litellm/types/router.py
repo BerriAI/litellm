@@ -355,7 +355,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
 class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
     litellm_params: Required[LiteLLMParamsTypedDict]
-    model_info: Optional[dict]
+    model_info: dict
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
