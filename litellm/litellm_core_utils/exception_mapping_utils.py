@@ -794,7 +794,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"ThrottlingException - Rate exceeded",
+                        message=f"BedrockException: Rate Limit Error - {error_str}",
                         model=model,
                         llm_provider="bedrock",
                         type="throttling_error",
