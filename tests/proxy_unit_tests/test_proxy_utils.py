@@ -530,7 +530,7 @@ def test_prepare_key_update_data():
 
     data = UpdateKeyRequest(key="test_key", metadata=None)
     updated_data = prepare_key_update_data(data, existing_key_row)
-    assert updated_data["metadata"] == None
+    assert updated_data["metadata"] is None
 
 
 @pytest.mark.parametrize(
