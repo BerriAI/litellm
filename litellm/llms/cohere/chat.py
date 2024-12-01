@@ -305,7 +305,7 @@ def make_sync_call(
     return completion_stream, response.headers
 
 
-def completion(
+def completion(  # noqa: PLR0915
     model: str,
     messages: list,
     api_base: str,
