@@ -1146,6 +1146,21 @@ def test_process_gemini_image():
         mime_type="image/png", file_uri="https://example.com/image.png"
     )
 
+    # Test HTTPS VIDEO URL
+    https_result = _process_gemini_image("https://cloud-samples-data/video/animals.mp4")
+    print("https_result PNG", https_result)
+    assert https_result["file_data"] == FileDataType(
+        mime_type="video/mp4", file_uri="https://cloud-samples-data/video/animals.mp4"
+    )
+
+    # Test HTTPS PDF URL
+    https_result = _process_gemini_image("https://cloud-samples-data/pdf/animals.pdf")
+    print("https_result PDF", https_result)
+    assert https_result["file_data"] == FileDataType(
+        mime_type="application/pdf",
+        file_uri="https://cloud-samples-data/pdf/animals.pdf",
+    )
+
     # Test base64 image
     base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     base64_result = _process_gemini_image(base64_image)

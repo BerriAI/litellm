@@ -4712,6 +4712,9 @@ class Router:
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
+            if model_name is not None:
+                returned_models.extend(self._get_all_deployments(model_name=model_name))
+
             if hasattr(self, "model_group_alias"):
                 for model_alias, model_value in self.model_group_alias.items():
 
@@ -4743,17 +4746,21 @@ class Router:
                 returned_models += self.model_list
 
                 return returned_models
-            returned_models.extend(self._get_all_deployments(model_name=model_name))
+
             return returned_models
         return None
 
-    def get_model_access_groups(self):
+    def get_model_access_groups(self, model_name: Optional[str] = None):
+        """
+        If model_name is provided, only return access groups for that model.
+        """
         from collections import defaultdict
 
         access_groups = defaultdict(list)
 
-        if self.model_list:
-            for m in self.model_list:
+        model_list = self.get_model_list(model_name=model_name)
+        if model_list:
+            for m in model_list:
                 for group in m.get("model_info", {}).get("access_groups", []):
                     model_name = m["model_name"]
                     access_groups[group].append(model_name)
