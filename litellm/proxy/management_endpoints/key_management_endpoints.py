@@ -394,7 +394,8 @@ async def generate_key_fn(  # noqa: PLR0915
                 }
             )
             _budget_id = getattr(_budget, "budget_id", None)
-        data_json = data.json()  # type: ignore
+        data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
+
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
@@ -464,24 +465,20 @@ def prepare_metadata_fields(
     # Handle None cases for metadata
     if non_default_values["metadata"] is None:
         non_default_values["metadata"] = existing_metadata.copy()
-    else:
-        # Create a copy to avoid modifying the original
-        non_default_values["metadata"] = non_default_values["metadata"].copy()
-        non_default_values["metadata"].update(existing_metadata)
 
     casted_metadata = cast(dict, non_default_values["metadata"])
 
-    data_json = data.model_dump(exclude_unset=True)
+    data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
     try:
         for k, v in data_json.items():
             if k == "model_tpm_limit" or k == "model_rpm_limit":
-                if k not in casted_metadata:
+                if k not in casted_metadata or casted_metadata[k] is None:
                     casted_metadata[k] = {}
                 casted_metadata[k].update(v)
 
             if k == "tags" or k == "guardrails":
-                if k not in casted_metadata:
+                if k not in casted_metadata or casted_metadata[k] is None:
                     casted_metadata[k] = []
                 seen = set(casted_metadata[k])
                 casted_metadata[k].extend(
@@ -959,11 +956,11 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate
-    duration: Optional[str],
-    models: list,
-    aliases: dict,
-    config: dict,
-    spend: float,
+    duration: Optional[str] = None,
+    models: list = [],
+    aliases: dict = {},
+    config: dict = {},
+    spend: float = 0.0,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: Optional[str] = None,
     budget_id: Optional[float] = None,  # budget id <-> LiteLLM_BudgetTable
@@ -992,8 +989,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
-    model_rpm_limit: Optional[dict] = {},
-    model_tpm_limit: Optional[dict] = {},
+    model_rpm_limit: Optional[dict] = None,
+    model_tpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
