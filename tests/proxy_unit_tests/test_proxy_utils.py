@@ -444,7 +444,7 @@ def test_foward_litellm_user_info_to_backend_llm_call():
 
 def test_update_internal_user_params():
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_internal_user_params,
+        _update_internal_new_user_params,
     )
     from litellm.proxy._types import NewUserRequest
 
@@ -456,7 +456,7 @@ def test_update_internal_user_params():
 
     data = NewUserRequest(user_role="internal_user", user_email="krrish3@berri.ai")
     data_json = data.model_dump()
-    updated_data_json = _update_internal_user_params(data_json, data)
+    updated_data_json = _update_internal_new_user_params(data_json, data)
     assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
     assert (
         updated_data_json["max_budget"]
