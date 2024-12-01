@@ -259,6 +259,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         jwt_handler,
         litellm_proxy_admin_name,
         llm_model_list,
+        llm_router,
         master_key,
         open_telemetry_logger,
         prisma_client,
@@ -542,6 +543,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     general_settings=general_settings,
                     global_proxy_spend=global_proxy_spend,
                     route=route,
+                    llm_router=llm_router,
                 )
 
                 # return UserAPIKeyAuth object
@@ -905,6 +907,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                         model=model,
                         llm_model_list=llm_model_list,
                         valid_token=valid_token,
+                        llm_router=llm_router,
                     )
 
                 if fallback_models is not None:
@@ -913,6 +916,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                             model=m,
                             llm_model_list=llm_model_list,
                             valid_token=valid_token,
+                            llm_router=llm_router,
                         )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
@@ -1173,6 +1177,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 general_settings=general_settings,
                 global_proxy_spend=global_proxy_spend,
                 route=route,
+                llm_router=llm_router,
             )
             # Token passed all checks
             if valid_token is None:

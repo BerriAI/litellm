@@ -693,3 +693,47 @@ def test_personal_key_generation_check():
             ),
             data=GenerateKeyRequest(),
         )
+
+
+def test_prepare_metadata_fields():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_metadata_fields,
+    )
+
+    new_metadata = {"test": "new"}
+    old_metadata = {"test": "test"}
+
+    args = {
+        "data": UpdateKeyRequest(
+            key_alias=None,
+            duration=None,
+            models=[],
+            spend=None,
+            max_budget=None,
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata=new_metadata,
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            allowed_cache_controls=[],
+            soft_budget=None,
+            config={},
+            permissions={},
+            model_max_budget={},
+            send_invite_email=None,
+            model_rpm_limit=None,
+            model_tpm_limit=None,
+            guardrails=None,
+            blocked=None,
+            aliases={},
+            key="sk-1qGQUJJTcljeaPfzgWRrXQ",
+            tags=None,
+        ),
+        "non_default_values": {"metadata": new_metadata},
+        "existing_metadata": {"tags": None, **old_metadata},
+    }
+
+    non_default_values = prepare_metadata_fields(**args)
+    assert non_default_values == {"metadata": new_metadata}

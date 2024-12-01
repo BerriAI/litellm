@@ -1146,7 +1146,9 @@ async def test_exception_with_headers_httpx(
 
         except litellm.RateLimitError as e:
             exception_raised = True
-            assert e.litellm_response_headers is not None
+            assert (
+                e.litellm_response_headers is not None
+            ), "litellm_response_headers is None"
             print("e.litellm_response_headers", e.litellm_response_headers)
             assert int(e.litellm_response_headers["retry-after"]) == cooldown_time
 
