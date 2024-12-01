@@ -1159,15 +1159,44 @@ def convert_to_anthropic_tool_result(
         ]
     }
     """
-    content_str: str = ""
+    anthropic_content: Union[
+        str,
+        List[Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]],
+    ] = ""
     if isinstance(message["content"], str):
-        content_str = message["content"]
+        anthropic_content = message["content"]
     elif isinstance(message["content"], List):
         content_list = message["content"]
+        anthropic_content_list: List[
+            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+        ] = []
         for content in content_list:
             if content["type"] == "text":
-                content_str += content["text"]
+                anthropic_content_list.append(
+                    AnthropicMessagesToolResultContent(
+                        type="text",
+                        text=content["text"],
+                    )
+                )
+            elif content["type"] == "image_url":
+                if isinstance(content["image_url"], str):
+                    image_chunk = convert_to_anthropic_image_obj(content["image_url"])
+                else:
+                    image_chunk = convert_to_anthropic_image_obj(
+                        content["image_url"]["url"]
+                    )
+                anthropic_content_list.append(
+                    AnthropicMessagesImageParam(
+                        type="image",
+                        source=AnthropicContentParamSource(
+                            type="base64",
+                            media_type=image_chunk["media_type"],
+                            data=image_chunk["data"],
+                        ),
+                    )
+                )
 
+        anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
     ## PROMPT CACHING CHECK ##
     cache_control = message.get("cache_control", None)
@@ -1178,14 +1207,14 @@ def convert_to_anthropic_tool_result(
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content_str
+            type="tool_result", tool_use_id=tool_call_id, content=anthropic_content
         )
 
     if message["role"] == "function":
         function_message: ChatCompletionFunctionMessage = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=tool_call_id, content=content_str
+            type="tool_result", tool_use_id=tool_call_id, content=anthropic_content
         )
 
     if anthropic_tool_result is None:

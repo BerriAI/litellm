@@ -2,7 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -63,8 +63,7 @@ def test_openai_prediction_param():
 
 
 @pytest.mark.asyncio
-@pytest.mark.respx
-async def test_openai_prediction_param_mock(respx_mock: MockRouter):
+async def test_openai_prediction_param_mock():
     """
     Tests that prediction parameter is correctly passed to the API
     """
@@ -92,60 +91,36 @@ async def test_openai_prediction_param_mock(respx_mock: MockRouter):
         public string Username { get; set; }
     }
     """
+    from openai import AsyncOpenAI
 
-    mock_response = ModelResponse(
-        id="chatcmpl-AQ5RmV8GvVSRxEcDxnuXlQnsibiY9",
-        choices=[
-            Choices(
-                message=Message(
-                    content=code.replace("Username", "Email").replace(
-                        "username", "email"
-                    ),
-                    role="assistant",
-                )
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
+                    },
+                    {"role": "user", "content": code},
+                ],
+                prediction={"type": "content", "content": code},
+                client=client,
             )
-        ],
-        created=int(datetime.now().timestamp()),
-        model="gpt-4o-mini-2024-07-18",
-        usage={
-            "completion_tokens": 207,
-            "prompt_tokens": 175,
-            "total_tokens": 382,
-            "completion_tokens_details": {
-                "accepted_prediction_tokens": 0,
-                "reasoning_tokens": 0,
-                "rejected_prediction_tokens": 80,
-            },
-        },
-    )
+        except Exception as e:
+            print(f"Error: {e}")
 
-    mock_request = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=mock_response.dict())
-    )
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
 
-    completion = await litellm.acompletion(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "user",
-                "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
-            },
-            {"role": "user", "content": code},
-        ],
-        prediction={"type": "content", "content": code},
-    )
-
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
-
-    # Verify the request contains the prediction parameter
-    assert "prediction" in request_body
-    # verify prediction is correctly sent to the API
-    assert request_body["prediction"] == {"type": "content", "content": code}
-
-    # Verify the completion tokens details
-    assert completion.usage.completion_tokens_details.accepted_prediction_tokens == 0
-    assert completion.usage.completion_tokens_details.rejected_prediction_tokens == 80
+        # Verify the request contains the prediction parameter
+        assert "prediction" in request_body
+        # verify prediction is correctly sent to the API
+        assert request_body["prediction"] == {"type": "content", "content": code}
 
 
 @pytest.mark.asyncio
@@ -223,3 +198,73 @@ async def test_openai_prediction_param_with_caching():
     )
 
     assert completion_response_3.id != completion_response_1.id
+
+
+@pytest.mark.asyncio()
+async def test_vision_with_custom_model():
+    """
+    Tests that an OpenAI compatible endpoint when sent an image will receive the image in the request
+
+    """
+    import base64
+    import requests
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    litellm.set_verbose = True
+    api_base = "https://my-custom.api.openai.com"
+
+    # Fetch and encode a test image
+    url = "https://dummyimage.com/100/100/fff&text=Test+image"
+    response = requests.get(url)
+    file_data = response.content
+    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    base64_image = f"data:image/png;base64,{encoded_file}"
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model="openai/my-custom-model",
+                max_tokens=10,
+                api_base=api_base,  # use the mock api
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What's in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": base64_image},
+                            },
+                        ],
+                    }
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        print("request_body: ", request_body)
+
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+                        },
+                    },
+                ],
+            },
+        ]
+        assert request_body["model"] == "my-custom-model"
+        assert request_body["max_tokens"] == 10

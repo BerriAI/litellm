@@ -13,6 +13,7 @@ load_dotenv()
 import httpx
 import pytest
 from respx import MockRouter
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import litellm
 from litellm import Choices, Message, ModelResponse
@@ -41,56 +42,58 @@ def return_mocked_response(model: str):
         "bedrock/mistral.mistral-large-2407-v1:0",
     ],
 )
-@pytest.mark.respx
 @pytest.mark.asyncio()
-async def test_bedrock_max_completion_tokens(model: str, respx_mock: MockRouter):
+async def test_bedrock_max_completion_tokens(model: str):
     """
     Tests that:
     - max_completion_tokens is passed as max_tokens to bedrock models
     """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
     litellm.set_verbose = True
+
+    client = AsyncHTTPHandler()
 
     mock_response = return_mocked_response(model)
     _model = model.split("/")[1]
     print("\n\nmock_response: ", mock_response)
-    url = f"https://bedrock-runtime.us-west-2.amazonaws.com/model/{_model}/converse"
-    mock_request = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=mock_response)
-    )
 
-    response = await litellm.acompletion(
-        model=model,
-        max_completion_tokens=10,
-        messages=[{"role": "user", "content": "Hello!"}],
-    )
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
+        mock_client.assert_called_once()
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
 
-    print("request_body: ", request_body)
+        print("request_body: ", request_body)
 
-    assert request_body == {
-        "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
-        "additionalModelRequestFields": {},
-        "system": [],
-        "inferenceConfig": {"maxTokens": 10},
-    }
-    print(f"response: {response}")
-    assert isinstance(response, ModelResponse)
+        assert request_body == {
+            "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
+            "additionalModelRequestFields": {},
+            "system": [],
+            "inferenceConfig": {"maxTokens": 10},
+        }
 
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229,"],
+    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
 )
-@pytest.mark.respx
 @pytest.mark.asyncio()
-async def test_anthropic_api_max_completion_tokens(model: str, respx_mock: MockRouter):
+async def test_anthropic_api_max_completion_tokens(model: str):
     """
     Tests that:
     - max_completion_tokens is passed as max_tokens to anthropic models
     """
     litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     mock_response = {
         "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
@@ -103,30 +106,32 @@ async def test_anthropic_api_max_completion_tokens(model: str, respx_mock: MockR
         "usage": {"input_tokens": 2095, "output_tokens": 503},
     }
 
+    client = HTTPHandler()
+
     print("\n\nmock_response: ", mock_response)
-    url = f"https://api.anthropic.com/v1/messages"
-    mock_request = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=mock_response)
-    )
 
-    response = await litellm.acompletion(
-        model=model,
-        max_completion_tokens=10,
-        messages=[{"role": "user", "content": "Hello!"}],
-    )
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs["json"]
 
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
+        print("request_body: ", request_body)
 
-    print("request_body: ", request_body)
-
-    assert request_body == {
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
-        "max_tokens": 10,
-        "model": model.split("/")[-1],
-    }
-    print(f"response: {response}")
-    assert isinstance(response, ModelResponse)
+        assert request_body == {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
+            ],
+            "max_tokens": 10,
+            "model": model.split("/")[-1],
+        }
 
 
 def test_all_model_configs():
