@@ -459,11 +459,9 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-    # Ensure metadata exists and is a dictionary
-    non_default_values.setdefault("metadata", {})
-
+    _non_default_metadata = non_default_values.get("metadata", None)
     # Handle None cases for metadata
-    if non_default_values["metadata"] is None:
+    if _non_default_metadata is None or not isinstance(_non_default_metadata, dict):
         non_default_values["metadata"] = existing_metadata.copy()
 
     casted_metadata = cast(dict, non_default_values["metadata"])
