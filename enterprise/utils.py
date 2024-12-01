@@ -137,9 +137,6 @@ def _forecast_daily_cost(data: list):
 
     print("last entry date", last_entry_date)
 
-    # Assuming today_date is a datetime object
-    today_date = datetime.now()
-
     # Calculate the last day of the month
     last_day_of_todays_month = datetime(
         today_date.year, today_date.month % 12 + 1, 1
