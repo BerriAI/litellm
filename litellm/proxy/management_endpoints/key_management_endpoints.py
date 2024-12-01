@@ -458,7 +458,17 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-    non_default_values["metadata"] = existing_metadata
+    # Ensure metadata exists and is a dictionary
+    non_default_values.setdefault("metadata", {})
+
+    # Handle None cases for metadata
+    if non_default_values["metadata"] is None:
+        non_default_values["metadata"] = existing_metadata.copy()
+    else:
+        # Create a copy to avoid modifying the original
+        non_default_values["metadata"] = non_default_values["metadata"].copy()
+        non_default_values["metadata"].update(existing_metadata)
+
     data_json = data.model_dump(exclude_unset=True)
 
     try:
