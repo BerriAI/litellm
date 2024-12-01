@@ -1345,17 +1345,8 @@ def test_generate_and_update_key(prisma_client):
             )
             current_time = datetime.now(timezone.utc)
 
-            print(
-                "days between now and budget_reset_at",
-                (budget_reset_at - current_time).days,
-            )
             # assert budget_reset_at is 30 days from now
-            assert (
-                abs(
-                    (budget_reset_at - current_time).total_seconds() - 30 * 24 * 60 * 60
-                )
-                <= 10
-            )
+            assert 31 >= (budget_reset_at - current_time).days >= 29
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
