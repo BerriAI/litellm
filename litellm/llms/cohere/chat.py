@@ -378,7 +378,7 @@ def completion(
         raise CohereError(message=response.text, status_code=response.status_code)
 
     if "stream" in optional_params and optional_params["stream"] is True:
-        completion_stream, headers = make_sync_call(
+        completion_stream, cohere_headers = make_sync_call(
             client=client,
             api_base=api_base,
             headers=headers,  # type: ignore
@@ -393,7 +393,7 @@ def completion(
             model=model,
             custom_llm_provider="cohere_chat",
             logging_obj=logging_obj,
-            _response_headers=headers,
+            _response_headers=dict(cohere_headers),
         )
     else:
         ## LOGGING
