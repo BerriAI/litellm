@@ -17,7 +17,7 @@ import secrets
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -469,20 +469,22 @@ def prepare_metadata_fields(
         non_default_values["metadata"] = non_default_values["metadata"].copy()
         non_default_values["metadata"].update(existing_metadata)
 
+    casted_metadata = cast(dict, non_default_values["metadata"])
+
     data_json = data.model_dump(exclude_unset=True)
 
     try:
         for k, v in data_json.items():
             if k == "model_tpm_limit" or k == "model_rpm_limit":
-                if k not in non_default_values["metadata"]:
-                    non_default_values["metadata"][k] = {}
-                non_default_values["metadata"][k].update(v)
+                if k not in casted_metadata:
+                    casted_metadata[k] = {}
+                casted_metadata[k].update(v)
 
             if k == "tags" or k == "guardrails":
-                if k not in non_default_values["metadata"]:
-                    non_default_values["metadata"][k] = []
-                seen = set(non_default_values["metadata"][k])
-                non_default_values["metadata"][k].extend(
+                if k not in casted_metadata:
+                    casted_metadata[k] = []
+                seen = set(casted_metadata[k])
+                casted_metadata[k].extend(
                     x for x in v if x not in seen and not seen.add(x)  # type: ignore
                 )  # prevent duplicates from being added + maintain initial order
 
@@ -492,6 +494,8 @@ def prepare_metadata_fields(
                 str(e)
             )
         )
+
+    non_default_values["metadata"] = casted_metadata
     return non_default_values
 
 

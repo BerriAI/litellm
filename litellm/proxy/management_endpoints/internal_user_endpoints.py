@@ -43,7 +43,7 @@ from litellm.proxy.utils import handle_exception_on_proxy
 router = APIRouter()
 
 
-def _update_internal_user_params(data_json: dict, data: NewUserRequest) -> dict:
+def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
@@ -146,7 +146,7 @@ async def new_user(
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     data_json = data.json()  # type: ignore
-    data_json = _update_internal_user_params(data_json, data)
+    data_json = _update_internal_new_user_params(data_json, data)
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
@@ -439,6 +439,52 @@ async def user_info(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
+def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> dict:
+    non_default_values = {}
+    for k, v in data_json.items():
+        if (
+            v is not None
+            and v
+            not in (
+                [],
+                {},
+                0,
+            )
+            and k not in LiteLLM_ManagementEndpoint_MetadataFields
+        ):  # models default to [], spend defaults to 0, we should not reset these values
+            non_default_values[k] = v
+
+    is_internal_user = False
+    if data.user_role == LitellmUserRoles.INTERNAL_USER:
+        is_internal_user = True
+
+    if "budget_duration" in non_default_values:
+        duration_s = duration_in_seconds(duration=non_default_values["budget_duration"])
+        user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        non_default_values["budget_reset_at"] = user_reset_at
+
+    if "max_budget" not in non_default_values:
+        if (
+            is_internal_user and litellm.max_internal_user_budget is not None
+        ):  # applies internal user limits, if user role updated
+            non_default_values["max_budget"] = litellm.max_internal_user_budget
+
+    if (
+        "budget_duration" not in non_default_values
+    ):  # applies internal user limits, if user role updated
+        if is_internal_user and litellm.internal_user_budget_duration is not None:
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
+            duration_s = duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = user_reset_at
+
+    return non_default_values
+
+
 @router.post(
     "/user/update",
     tags=["Internal User management"],
@@ -504,51 +550,9 @@ async def user_update(
             raise Exception("Not connected to DB!")
 
         # get non default values for key
-        non_default_values = {}
-        for k, v in data_json.items():
-            if (
-                v is not None
-                and v
-                not in (
-                    [],
-                    {},
-                    0,
-                )
-                and k not in LiteLLM_ManagementEndpoint_MetadataFields
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
-
-        is_internal_user = False
-        if data.user_role == LitellmUserRoles.INTERNAL_USER:
-            is_internal_user = True
-
-        if "budget_duration" in non_default_values:
-            duration_s = duration_in_seconds(
-                duration=non_default_values["budget_duration"]
-            )
-            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = user_reset_at
-
-        if "max_budget" not in non_default_values:
-            if (
-                is_internal_user and litellm.max_internal_user_budget is not None
-            ):  # applies internal user limits, if user role updated
-                non_default_values["max_budget"] = litellm.max_internal_user_budget
-
-        if (
-            "budget_duration" not in non_default_values
-        ):  # applies internal user limits, if user role updated
-            if is_internal_user and litellm.internal_user_budget_duration is not None:
-                non_default_values["budget_duration"] = (
-                    litellm.internal_user_budget_duration
-                )
-                duration_s = duration_in_seconds(
-                    duration=non_default_values["budget_duration"]
-                )
-                user_reset_at = datetime.now(timezone.utc) + timedelta(
-                    seconds=duration_s
-                )
-                non_default_values["budget_reset_at"] = user_reset_at
+        non_default_values = _update_internal_user_params(
+            data_json=data_json, data=data
+        )
 
         existing_user_row = await prisma_client.get_data(
             user_id=data.user_id, table_name="user", query_type="find_unique"
