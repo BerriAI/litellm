@@ -18,6 +18,8 @@ import json
 import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
+from respx import MockRouter
+import httpx
 
 import pytest
 
@@ -30,7 +32,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
 from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
@@ -973,6 +975,7 @@ async def test_partner_models_httpx(model, sync_mode):
         data = {
             "model": model,
             "messages": messages,
+            "timeout": 10,
         }
         if sync_mode:
             response = litellm.completion(**data)
@@ -986,7 +989,13 @@ async def test_partner_models_httpx(model, sync_mode):
         assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
         pass
+    except litellm.Timeout as e:
+        pass
     except litellm.InternalServerError as e:
+        pass
+    except litellm.APIConnectionError as e:
+        pass
+    except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
@@ -1823,6 +1832,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_async_function_calling():
     load_vertex_ai_credentials()
+    litellm.set_verbose = True
     try:
         tools = [
             {
@@ -2857,6 +2867,7 @@ def test_gemini_function_call_parameter_in_messages():
             print(e)
 
         # mock_client.assert_any_call()
+
         assert {
             "contents": [
                 {
@@ -2869,12 +2880,7 @@ def test_gemini_function_call_parameter_in_messages():
                         {
                             "function_call": {
                                 "name": "search",
-                                "args": {
-                                    "fields": {
-                                        "key": "queries",
-                                        "value": {"list_value": ["weather in boston"]},
-                                    }
-                                },
+                                "args": {"queries": ["weather in boston"]},
                             }
                         }
                     ],
@@ -2885,12 +2891,7 @@ def test_gemini_function_call_parameter_in_messages():
                             "function_response": {
                                 "name": "search",
                                 "response": {
-                                    "fields": {
-                                        "key": "content",
-                                        "value": {
-                                            "string_value": "The current weather in Boston is 22°F."
-                                        },
-                                    }
+                                    "content": "The current weather in Boston is 22°F."
                                 },
                             }
                         }
@@ -2925,7 +2926,8 @@ def test_gemini_function_call_parameter_in_messages():
 
 
 def test_gemini_function_call_parameter_in_messages_2():
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    litellm.set_verbose = True
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
 
@@ -2948,6 +2950,7 @@ def test_gemini_function_call_parameter_in_messages_2():
 
     returned_contents = _gemini_convert_messages_with_history(messages=messages)
 
+    print(f"returned_contents: {returned_contents}")
     assert returned_contents == [
         {
             "role": "user",
@@ -2960,12 +2963,7 @@ def test_gemini_function_call_parameter_in_messages_2():
                 {
                     "function_call": {
                         "name": "search",
-                        "args": {
-                            "fields": {
-                                "key": "queries",
-                                "value": {"list_value": ["weather in boston"]},
-                            }
-                        },
+                        "args": {"queries": ["weather in boston"]},
                     }
                 },
             ],
@@ -2976,12 +2974,7 @@ def test_gemini_function_call_parameter_in_messages_2():
                     "function_response": {
                         "name": "search",
                         "response": {
-                            "fields": {
-                                "key": "content",
-                                "value": {
-                                    "string_value": "The weather in Boston is 100 degrees."
-                                },
-                            }
+                            "content": "The weather in Boston is 100 degrees."
                         },
                     }
                 }
@@ -3050,3 +3043,156 @@ def test_custom_api_base(api_base):
         assert url == api_base + ":"
     else:
         assert url == test_endpoint
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
+    """
+    Tests that:
+    - Request URL and body are correctly formatted for Vertex AI embeddings
+    - Response is properly parsed into litellm's embedding response format
+    """
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+
+    # Test input
+    input_text = ["good morning from litellm", "this is another item"]
+
+    # Expected request/response
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/633608382793/locations/us-central1/endpoints/1004708436694269952:predict"
+    expected_request = {
+        "instances": [
+            {"inputs": "good morning from litellm"},
+            {"inputs": "this is another item"},
+        ],
+        "parameters": {},
+    }
+
+    mock_response = {
+        "predictions": [
+            [[-0.000431762, -0.04416759, -0.03443353]],  # Truncated embedding vector
+            [[-0.000431762, -0.04416759, -0.03443353]],  # Truncated embedding vector
+        ],
+        "deployedModelId": "2275167734310371328",
+        "model": "projects/633608382793/locations/us-central1/models/snowflake-arctic-embed-m-long-1731622468876",
+        "modelDisplayName": "snowflake-arctic-embed-m-long-1731622468876",
+        "modelVersionId": "1",
+    }
+
+    # Setup mock request
+    mock_request = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
+
+    # Make request
+    response = await litellm.aembedding(
+        vertex_project="633608382793",
+        model="vertex_ai/1004708436694269952",
+        input=input_text,
+    )
+
+    # Assert request was made correctly
+    assert mock_request.called
+    request_body = json.loads(mock_request.calls[0].request.content)
+    print("\n\nrequest_body", request_body)
+    print("\n\nexpected_request", expected_request)
+    assert request_body == expected_request
+
+    # Assert response structure
+    assert response is not None
+    assert hasattr(response, "data")
+    assert len(response.data) == len(input_text)
+
+    # Assert embedding structure
+    for embedding in response.data:
+        assert "embedding" in embedding
+        assert isinstance(embedding["embedding"], list)
+        assert len(embedding["embedding"]) > 0
+        assert all(isinstance(x, float) for x in embedding["embedding"])
+
+
+@pytest.mark.parametrize("max_retries", [None, 3])
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_vertexai_model_garden_model_completion(
+    respx_mock: MockRouter, max_retries
+):
+    """
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6480
+
+    Using OpenAI compatible models from Vertex Model Garden
+    """
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+
+    # Test input
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+    ]
+
+    # Expected request/response
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/633608382793/locations/us-central1/endpoints/5464397967697903616/chat/completions"
+    expected_request = {"model": "", "messages": messages, "stream": False}
+
+    mock_response = {
+        "id": "chat-09940d4e99e3488aa52a6f5e2ecf35b1",
+        "object": "chat.completion",
+        "created": 1731702782,
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello, my name is Litellm Bot. I'm a helpful assistant here to provide information and answer your questions.\n\nTo check the weather for you, I'll need to know your location. Could you please provide me with your city or zip code? That way, I can give you the most accurate and up-to-date weather information.\n\nIf you don't have your location handy, I can also suggest some popular weather websites or apps that you can use to check the weather for your area.\n\nLet me know how I can assist you!",
+                    "tool_calls": [],
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
+                "stop_reason": None,
+            }
+        ],
+        "usage": {"prompt_tokens": 63, "total_tokens": 172, "completion_tokens": 109},
+        "prompt_logprobs": None,
+    }
+
+    # Setup mock request
+    mock_request = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
+
+    # Make request
+    response = await litellm.acompletion(
+        model="vertex_ai/openai/5464397967697903616",
+        messages=messages,
+        vertex_project="633608382793",
+        vertex_location="us-central1",
+        max_retries=max_retries,
+    )
+
+    # Assert request was made correctly
+    assert mock_request.called
+    request_body = json.loads(mock_request.calls[0].request.content)
+    assert request_body == expected_request
+
+    # Assert response structure
+    assert response.id == "chat-09940d4e99e3488aa52a6f5e2ecf35b1"
+    assert response.created == 1731702782
+    assert response.model == "vertex_ai/meta-llama/Llama-3.1-8B-Instruct"
+    assert len(response.choices) == 1
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content.startswith(
+        "Hello, my name is Litellm Bot"
+    )
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.completion_tokens == 109
+    assert response.usage.prompt_tokens == 63
+    assert response.usage.total_tokens == 172

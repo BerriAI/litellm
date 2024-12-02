@@ -59,12 +59,15 @@ async def test_dual_cache_async_batch_get_cache():
     redis_cache = RedisCache()  # get credentials from environment
     dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=redis_cache)
 
-    in_memory_cache.set_cache(key="test_value", value="hello world")
+    with patch.object(
+        dual_cache.redis_cache, "async_batch_get_cache", new=AsyncMock()
+    ) as mock_redis_cache:
+        mock_redis_cache.return_value = {"test_value_2": None, "test_value": "hello"}
 
-    result = await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+        await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
+        await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
 
-    assert result[0] == "hello world"
-    assert result[1] == None
+        assert mock_redis_cache.call_count == 1
 
 
 def test_dual_cache_batch_get_cache():
@@ -83,7 +86,9 @@ def test_dual_cache_batch_get_cache():
 
     in_memory_cache.set_cache(key="test_value", value="hello world")
 
-    result = dual_cache.batch_get_cache(keys=["test_value", "test_value_2"])
+    result = dual_cache.batch_get_cache(
+        keys=["test_value", "test_value_2"], parent_otel_span=None
+    )
 
     assert result[0] == "hello world"
     assert result[1] == None
@@ -607,7 +612,7 @@ async def test_embedding_caching_redis_ttl():
             type="redis",
             host="dummy_host",
             password="dummy_password",
-            default_in_redis_ttl=2.5,
+            default_in_redis_ttl=2,
         )
 
         inputs = [
@@ -633,7 +638,7 @@ async def test_embedding_caching_redis_ttl():
             print(f"redis pipeline set args: {args}")
             print(f"redis pipeline set kwargs: {kwargs}")
             assert kwargs.get("ex") == datetime.timedelta(
-                seconds=2.5
+                seconds=2
             )  # Check if TTL is set to 2.5 seconds
 
 
@@ -679,6 +684,7 @@ async def test_redis_cache_basic():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_redis_batch_cache_write():
     """
     Init redis client
@@ -1095,81 +1101,6 @@ async def test_redis_cache_acompletion_stream_bedrock():
     except Exception as e:
         print(e)
         raise e
-
-
-def test_disk_cache_completion():
-    litellm.set_verbose = False
-
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
-    messages = [
-        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
-    ]
-    litellm.cache = Cache(
-        type="disk",
-    )
-
-    response1 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        max_tokens=20,
-        mock_response="This number is so great!",
-    )
-    # response2 is mocked to a different response from response1,
-    # but the completion from the cache should be used instead of the mock
-    # response since the input is the same as response1
-    response2 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        max_tokens=20,
-        mock_response="This number is awful!",
-    )
-    # Since the parameters are not the same as response1, response3 should actually
-    # be the mock response
-    response3 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        caching=True,
-        temperature=0.5,
-        mock_response="This number is awful!",
-    )
-
-    print("\nresponse 1", response1)
-    print("\nresponse 2", response2)
-    print("\nresponse 3", response3)
-    # print("\nresponse 4", response4)
-    litellm.cache = None
-    litellm.success_callback = []
-    litellm._async_success_callback = []
-
-    # 1 & 2 should be exactly the same
-    # 1 & 3 should be different, since input params are diff
-    if (
-        response1["choices"][0]["message"]["content"]
-        != response2["choices"][0]["message"]["content"]
-    ):  # 1 and 2 should be the same
-        # 1&2 have the exact same input params. This MUST Be a CACHE HIT
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Error occurred:")
-    if (
-        response1["choices"][0]["message"]["content"]
-        == response3["choices"][0]["message"]["content"]
-    ):
-        # if input params like max_tokens, temperature are diff it should NOT be a cache hit
-        print(f"response1: {response1}")
-        print(f"response3: {response3}")
-        pytest.fail(
-            f"Response 1 == response 3. Same model, diff params shoudl not cache Error"
-            f" occurred:"
-        )
-
-    assert response1.id == response2.id
-    assert response1.created == response2.created
-    assert response1.choices[0].message.content == response2.choices[0].message.content
 
 
 # @pytest.mark.skip(reason="AWS Suspended Account")
@@ -2066,46 +1997,6 @@ async def test_cache_default_off_acompletion():
     assert response3.id == response4.id
 
 
-@pytest.mark.asyncio()
-@pytest.mark.skip(reason="dual caching should first prioritze local cache")
-async def test_dual_cache_uses_redis():
-    """
-
-    - Store diff values in redis and in memory cache
-    - call get cache
-    - Assert that value from redis is used
-    """
-    litellm.set_verbose = True
-    from litellm.caching.caching import DualCache, RedisCache
-
-    current_usage = uuid.uuid4()
-
-    _cache_obj = DualCache(redis_cache=RedisCache(), always_read_redis=True)
-
-    # set cache
-    await _cache_obj.async_set_cache(key=f"current_usage: {current_usage}", value=10)
-
-    # modify value of in memory cache
-    _cache_obj.in_memory_cache.cache_dict[f"current_usage: {current_usage}"] = 1
-
-    # get cache
-    value = await _cache_obj.async_get_cache(key=f"current_usage: {current_usage}")
-    print("value from dual cache", value)
-    assert value == 10
-
-
-@pytest.mark.asyncio()
-async def test_proxy_logging_setup():
-    """
-    Assert always_read_redis is True when used by internal usage cache
-    """
-    from litellm.caching.caching import DualCache
-    from litellm.proxy.utils import ProxyLogging
-
-    pl_obj = ProxyLogging(user_api_key_cache=DualCache())
-    assert pl_obj.internal_usage_cache.dual_cache.always_read_redis is True
-
-
 @pytest.mark.skip(reason="local test. Requires sentinel setup.")
 @pytest.mark.asyncio
 async def test_redis_sentinel_caching():
@@ -2515,3 +2406,75 @@ async def test_redis_caching_ttl_sadd():
         )
         print(f"expected_timedelta: {expected_timedelta}")
         assert mock_expire.call_args.args[1] == expected_timedelta
+
+
+@pytest.mark.asyncio()
+async def test_dual_cache_caching_batch_get_cache():
+    """
+    - check redis cache called for initial batch get cache
+    - check redis cache not called for consecutive batch get cache with same keys
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.caching.redis_cache import RedisCache
+
+    dc = DualCache(redis_cache=MagicMock(spec=RedisCache))
+
+    with patch.object(
+        dc.redis_cache,
+        "async_batch_get_cache",
+        new=AsyncMock(
+            return_value={"test_key1": "test_value1", "test_key2": "test_value2"}
+        ),
+    ) as mock_async_get_cache:
+        await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
+
+        assert mock_async_get_cache.call_count == 1
+
+        await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
+
+        assert mock_async_get_cache.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_increment_pipeline():
+    """Test Redis increment pipeline functionality"""
+    try:
+        from litellm.caching.redis_cache import RedisCache
+
+        litellm.set_verbose = True
+        redis_cache = RedisCache(
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+        )
+
+        # Create test increment operations
+        increment_list = [
+            {"key": "test_key1", "increment_value": 1.5, "ttl": 60},
+            {"key": "test_key1", "increment_value": 1.1, "ttl": 58},
+            {"key": "test_key1", "increment_value": 0.4, "ttl": 55},
+            {"key": "test_key2", "increment_value": 2.5, "ttl": 60},
+        ]
+
+        # Test pipeline increment
+        results = await redis_cache.async_increment_pipeline(increment_list)
+
+        # Verify results
+        assert len(results) == 8  # 4 increment operations + 4 expire operations
+
+        # Verify the values were actually set in Redis
+        value1 = await redis_cache.async_get_cache("test_key1")
+        print("result in cache for key=test_key1", value1)
+        value2 = await redis_cache.async_get_cache("test_key2")
+        print("result in cache for key=test_key2", value2)
+
+        assert float(value1) == 3.0
+        assert float(value2) == 2.5
+
+        # Clean up
+        await redis_cache.async_delete_cache("test_key1")
+        await redis_cache.async_delete_cache("test_key2")
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise e

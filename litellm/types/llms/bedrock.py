@@ -210,13 +210,21 @@ class ServerSentEvent:
         return f"ServerSentEvent(event={self.event}, data={self.data}, id={self.id}, retry={self.retry})"
 
 
+COHERE_EMBEDDING_INPUT_TYPES = Literal[
+    "search_document", "search_query", "classification", "clustering", "image"
+]
+
+
 class CohereEmbeddingRequest(TypedDict, total=False):
-    texts: Required[List[str]]
-    input_type: Required[
-        Literal["search_document", "search_query", "classification", "clustering"]
-    ]
+    texts: List[str]
+    images: List[str]
+    input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+
+
+class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
+    model: Required[str]
 
 
 class CohereEmbeddingResponse(TypedDict):
@@ -267,3 +275,32 @@ AmazonEmbeddingRequest = Union[
     AmazonTitanV2EmbeddingRequest,
     AmazonTitanG1EmbeddingRequest,
 ]
+
+
+class AmazonStability3TextToImageRequest(TypedDict, total=False):
+    """
+    Request for Amazon Stability 3 Text to Image API
+
+    Ref here: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-diffusion-3-text-image.html
+    """
+
+    prompt: str
+    aspect_ratio: Literal[
+        "16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"
+    ]
+    mode: Literal["image-to-image", "text-to-image"]
+    output_format: Literal["JPEG", "PNG"]
+    seed: int
+    negative_prompt: str
+
+
+class AmazonStability3TextToImageResponse(TypedDict, total=False):
+    """
+    Response for Amazon Stability 3 Text to Image API
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-diffusion-3-text-image.html
+    """
+
+    images: List[str]
+    seeds: List[str]
+    finish_reasons: List[str]

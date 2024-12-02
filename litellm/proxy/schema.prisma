@@ -154,6 +154,8 @@ model LiteLLM_VerificationToken {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_id String?
+    created_at      DateTime?               @default(now()) @map("created_at")
+    updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
 }
 

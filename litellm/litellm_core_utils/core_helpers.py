@@ -3,6 +3,8 @@
 import os
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
+import httpx
+
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
@@ -80,7 +82,7 @@ def _get_parent_otel_span_from_kwargs(
 ) -> Union[Span, None]:
     try:
         if kwargs is None:
-            raise ValueError("kwargs is None")
+            return None
         litellm_params = kwargs.get("litellm_params")
         _metadata = kwargs.get("metadata") or {}
         if "litellm_parent_otel_span" in _metadata:
@@ -99,3 +101,28 @@ def _get_parent_otel_span_from_kwargs(
             "Error in _get_parent_otel_span_from_kwargs: " + str(e)
         )
         return None
+
+
+def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> dict:
+    from litellm.types.utils import OPENAI_RESPONSE_HEADERS
+
+    openai_headers = {}
+    processed_headers = {}
+    additional_headers = {}
+
+    for k, v in response_headers.items():
+        if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
+            openai_headers[k] = v
+        if k.startswith(
+            "llm_provider-"
+        ):  # return raw provider headers (incl. openai-compatible ones)
+            processed_headers[k] = v
+        else:
+            additional_headers["{}-{}".format("llm_provider", k)] = v
+
+    additional_headers = {
+        **openai_headers,
+        **processed_headers,
+        **additional_headers,
+    }
+    return additional_headers

@@ -3,7 +3,7 @@
 import os
 import traceback
 from datetime import datetime as datetimeObj
-from typing import Any, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union
 
 import dotenv
 from pydantic import BaseModel
@@ -20,6 +20,13 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingPayload,
 )
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -62,7 +69,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
 
-    async def async_pre_call_check(self, deployment: dict) -> Optional[dict]:
+    async def async_pre_call_check(
+        self, deployment: dict, parent_otel_span: Optional[Span]
+    ) -> Optional[dict]:
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:

@@ -20,59 +20,70 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
-      label: "💥 LiteLLM Proxy Server",
+      label: "LiteLLM Proxy Server",
       link: {
         type: "generated-index",
-        title: "💥 LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM Proxy Server (LLM Gateway)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
       items: [
-        "proxy/quick_start",
-        "proxy/docker_quick_start",
-        "proxy/deploy", 
+        "proxy/docker_quick_start", 
+        {
+          "type": "category", 
+          "label": "Config.yaml",
+          "items": ["proxy/configs", "proxy/config_management", "proxy/config_settings"]
+        },
+        {
+          type: "category",
+          label: "Setup & Deployment",
+          items: [
+            "proxy/deploy", 
+            "proxy/prod", 
+            "proxy/cli",
+            "proxy/model_management",
+            "proxy/health",
+            "proxy/debugging",
+            "proxy/pass_through",
+        ],
+        },
         "proxy/demo",
-        "proxy/prod",
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture"],
         }, 
         {
           type: "link",
-          label: "📖 All Endpoints (Swagger)",
+          label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
-        "proxy/user_keys",
-        "proxy/configs",
-        "proxy/response_headers", 
-        "proxy/reliability",
         {
           type: "category",
-          label: "🔑 Authentication",
-          items: ["proxy/virtual_keys", "proxy/token_auth", "proxy/service_accounts", "proxy/access_control","proxy/ip_address"],
-        },
-        {
-          type: "category",
-          label: "💸 Spend Tracking + Budgets",
-          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
-        },
-        {
-          type: "category",
-          label: "Routing",
-          items: ["proxy/load_balancing", "proxy/tag_routing", "proxy/team_based_routing", "proxy/customer_routing",],
-        },
-        {
-          type: "category",
-          label: "Use with Provider SDKs",
+          label: "Making LLM Requests",
           items: [
+            "proxy/user_keys",
+            "proxy/response_headers", 
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
             "pass_through/cohere",
-            "anthropic_completion",
+            "pass_through/anthropic_completion",
             "pass_through/bedrock",
             "pass_through/langfuse"
+          ],
+        },
+        {
+          type: "category",
+          label: "Authentication",
+          items: [
+            "proxy/virtual_keys", 
+            "proxy/token_auth", 
+            "proxy/service_accounts", 
+            "proxy/access_control",
+            "proxy/ip_address",
+            "proxy/email",
+            "proxy/multiple_admins",
           ],
         },
         {
@@ -86,12 +97,22 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "🪢 Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/bucket", "proxy/team_logging","proxy/streaming_logging", "proxy/alerting", "proxy/prometheus",],
+          label: "Spend Tracking + Budgets",
+          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+        },
+        {
+          type: "link",
+          label: "Load Balancing, Routing, Fallbacks",
+          href: "https://docs.litellm.ai/docs/routing-load-balancing",
         },
         {
           type: "category",
-          label: "🛡️ [Beta] Guardrails",
+          label: "Logging, Alerting, Metrics",
+          items: ["proxy/logging", "proxy/team_logging","proxy/alerting", "proxy/prometheus",],
+        },
+        {
+          type: "category",
+          label: "[Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start", 
             "proxy/guardrails/aporia_api", 
@@ -106,27 +127,20 @@ const sidebars = {
         },
         {
           type: "category", 
-          label: "Secret Manager - storing LLM API Keys", 
+          label: "Secret Managers", 
           items: [
             "secret", 
             "oidc"
           ]
         },
         "proxy/caching",
-        "proxy/pass_through",
-        "proxy/email",
-        "proxy/multiple_admins",
-        "proxy/model_management",
-        "proxy/health",
-        "proxy/debugging",
         "proxy/call_hooks",
-        "proxy/rules",
-        "proxy/cli", 
+        "proxy/rules", 
       ]
     },
     {
       type: "category",
-      label: "💯 Supported Models & Providers",
+      label: "Supported Models & Providers",
       link: {
         type: "generated-index",
         title: "Providers",
@@ -155,6 +169,8 @@ const sidebars = {
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 
+        "providers/xai",
+        "providers/lm_studio",
         "providers/cerebras", 
         "providers/volcano", 
         "providers/triton-inference-server",
@@ -181,7 +197,6 @@ const sidebars = {
         "providers/openrouter", 
         "providers/palm", 
         "providers/sambanova", 
-        // "providers/custom_openai_proxy",
         "providers/custom_llm_server",
         "providers/petals",
         
@@ -189,26 +204,19 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Chat Completions (litellm.completion + PROXY)",
-      link: {
-        type: "generated-index",
-        title: "Chat Completions",
-        description: "Details on the completion() function",
-        slug: "/completion",
-      },
+      label: "Guides",
       items: [
-        "completion/input",
+        "exception_mapping",
         "completion/provider_specific_params",
-        "completion/json_mode",
-        "completion/prompt_caching",
+        "guides/finetuned_models",
         "completion/audio",
         "completion/vision",
+        "completion/json_mode",
+        "completion/prompt_caching",
+        "completion/predict_outputs",
         "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",
-        "completion/output",
-        "completion/usage",
-        "exception_mapping",
         "completion/stream",
         "completion/message_trimming",
         "completion/function_call",
@@ -216,21 +224,45 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
-      ],
+        
+      ]
     },
     {
       type: "category",
-      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
+      label: "Supported Endpoints",
       items: [
+        {
+          type: "category",
+          label: "Chat",
+          link: {
+            type: "generated-index",
+            title: "Chat Completions",
+            description: "Details on the completion() function",
+            slug: "/completion",
+          },
+          items: [
+            "completion/input",
+            "completion/output",
+            "completion/usage",
+          ],
+        },
+        "text_completion",
         "embedding/supported_embedding",
         "image_generation",
-        "audio_transcription",
-        "text_to_speech",
+        {
+          type: "category",
+          label: "Audio",
+          "items": [
+            "audio_transcription",
+            "text_to_speech",
+          ]
+        },
         "rerank",
         "assistants",
         "batches",
         "realtime",
         "fine_tuning",
+        "moderation",
         {
           type: "link",
           label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
@@ -238,11 +270,20 @@ const sidebars = {
         },
       ],
     },
-    "routing",
-    "scheduler",
     {
       type: "category",
-      label: "🚅 LiteLLM Python SDK",
+      label: "Routing, Loadbalancing & Fallbacks",
+      link: {
+        type: "generated-index",
+        title: "Routing, Loadbalancing & Fallbacks",
+        description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
+        slug: "/routing-load-balancing",
+      },
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing", "wildcard_routing"],
+    },
+    {
+      type: "category",
+      label: "LiteLLM Python SDK",
       items: [
         "set_keys",
         "completion/token_usage",
@@ -263,6 +304,7 @@ const sidebars = {
       type: "category",
       label: "Load Testing",
       items: [
+        "benchmarks",
         "load_test",
         "load_test_advanced",
         "load_test_sdk",

@@ -58,6 +58,7 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
+        assert e.response is not None
         assert e.litellm_debug_info is not None
         assert isinstance(e.litellm_debug_info, str)
         assert len(e.litellm_debug_info) > 0
@@ -163,7 +164,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model == "azure/chatgpt-v-2":
             temporary_key = os.environ["AZURE_API_KEY"]
             os.environ["AZURE_API_KEY"] = "bad-key"
-        elif model == "claude-instant-1":
+        elif model == "claude-3-5-haiku-20241022":
             temporary_key = os.environ["ANTHROPIC_API_KEY"]
             os.environ["ANTHROPIC_API_KEY"] = "bad-key"
         elif model == "command-nightly":
@@ -213,7 +214,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model == "chatgpt-test":
             os.environ["AZURE_API_KEY"] = temporary_key
             azure = True
-        elif model == "claude-instant-1":
+        elif model == "claude-3-5-haiku-20241022":
             os.environ["ANTHROPIC_API_KEY"] = temporary_key
         elif model == "command-nightly":
             os.environ["COHERE_API_KEY"] = temporary_key
@@ -775,7 +776,7 @@ def test_litellm_predibase_exception():
 
 
 @pytest.mark.parametrize(
-    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks"]
+    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx"]
 )
 def test_exception_mapping(provider):
     """
@@ -1145,10 +1146,33 @@ async def test_exception_with_headers_httpx(
 
         except litellm.RateLimitError as e:
             exception_raised = True
-            assert e.litellm_response_headers is not None
+            assert (
+                e.litellm_response_headers is not None
+            ), "litellm_response_headers is None"
             print("e.litellm_response_headers", e.litellm_response_headers)
             assert int(e.litellm_response_headers["retry-after"]) == cooldown_time
 
         if exception_raised is False:
             print(resp)
         assert exception_raised
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["azure/chatgpt-v-2", "openai/gpt-3.5-turbo"])
+async def test_bad_request_error_contains_httpx_response(model):
+    """
+    Test that the BadRequestError contains the httpx response
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6732
+    """
+    try:
+        await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello world"}],
+            bad_arg="bad_arg",
+        )
+        pytest.fail("Expected to raise BadRequestError")
+    except litellm.BadRequestError as e:
+        print("e.response", e.response)
+        print("vars(e.response)", vars(e.response))
+        assert e.response is not None

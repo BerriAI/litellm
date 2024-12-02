@@ -217,4 +217,10 @@ litellm_settings:
     max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
     tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
     rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
+
+  key_generation_settings: # Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation)
+    team_key_generation:
+      allowed_team_member_roles: ["admin"]
+    personal_key_generation: # maps to 'Default Team' on UI 
+      allowed_user_roles: ["proxy_admin"]
 ```

@@ -521,6 +521,39 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   }
 };
 
+export const userDeleteCall = async (accessToken: string, userIds: string[]) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/delete` : `/user/delete`;
+    console.log("in userDeleteCall:", userIds);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_ids: userIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    //message.success("User(s) Deleted");
+    return data;
+  } catch (error) {
+    console.error("Failed to delete user(s):", error);
+    throw error;
+  }
+};
+
+
 export const teamDeleteCall = async (accessToken: String, teamID: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/delete` : `/team/delete`;
@@ -638,7 +671,8 @@ export const teamInfoCall = async (
 };
 
 export const teamListCall = async (
-  accessToken: String,
+  accessToken: String, 
+  userID: String | null = null
 ) => {
   /**
    * Get all available teams on proxy
@@ -646,6 +680,9 @@ export const teamListCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/list` : `/team/list`;
     console.log("in teamInfoCall");
+    if (userID) {
+      url += `?user_id=${userID}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {

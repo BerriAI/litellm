@@ -393,7 +393,10 @@ class DatabricksChatCompletion(BaseLLM):
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
 
-        self.async_handler = AsyncHTTPHandler(timeout=timeout)
+        self.async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.DATABRICKS,
+            params={"timeout": timeout},
+        )
 
         try:
             response = await self.async_handler.post(
@@ -470,6 +473,9 @@ class DatabricksChatCompletion(BaseLLM):
                 optional_params[k] = v
 
         stream: bool = optional_params.get("stream", None) or False
+        optional_params.pop(
+            "max_retries", None
+        )  # [TODO] add max retry support at llm api call level
         optional_params["stream"] = stream
 
         data = {
@@ -607,7 +613,10 @@ class DatabricksChatCompletion(BaseLLM):
         response = None
         try:
             if client is None or isinstance(client, AsyncHTTPHandler):
-                self.async_client = AsyncHTTPHandler(timeout=timeout)  # type: ignore
+                self.async_client = get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.DATABRICKS,
+                    params={"timeout": timeout},
+                )
             else:
                 self.async_client = client
 

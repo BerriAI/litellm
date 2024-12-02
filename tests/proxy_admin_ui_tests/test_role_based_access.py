@@ -58,8 +58,10 @@ from litellm.proxy.proxy_server import (
     image_generation,
     model_list,
     moderations,
-    new_end_user,
     user_api_key_auth,
+)
+from litellm.proxy.management_endpoints.customer_endpoints import (
+    new_end_user,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
@@ -158,7 +160,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
     response = await organization_member_add(
         data=OrganizationMemberAddRequest(
             organization_id=org_id,
-            member=Member(role=user_role, user_id=created_user_id),
+            member=OrgMember(role=user_role, user_id=created_user_id),
         ),
         http_request=None,
     )
@@ -218,7 +220,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
     response = await organization_member_add(
         data=OrganizationMemberAddRequest(
             organization_id=org_id,
-            member=Member(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
+            member=OrgMember(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
         ),
         http_request=None,
     )
@@ -290,7 +292,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     response = await organization_member_add(
         data=OrganizationMemberAddRequest(
             organization_id=org_id,
-            member=Member(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
+            member=OrgMember(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
         ),
         http_request=None,
     )
@@ -321,7 +323,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     response = await organization_member_add(
         data=OrganizationMemberAddRequest(
             organization_id=org_id,
-            member=Member(
+            member=OrgMember(
                 role=LitellmUserRoles.INTERNAL_USER, user_id=new_internal_user_for_org
             ),
         ),
@@ -373,7 +375,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     response = await organization_member_add(
         data=OrganizationMemberAddRequest(
             organization_id=org1_id,
-            member=Member(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
+            member=OrgMember(role=LitellmUserRoles.ORG_ADMIN, user_id=created_user_id),
         ),
         http_request=None,
     )
@@ -437,3 +439,94 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
             "You do not have the required role to call" in e.message
             and org2_id in e.message
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, user_role, expected_result",
+    [
+        # Proxy Admin checks
+        ("/global/spend/logs", LitellmUserRoles.PROXY_ADMIN, True),
+        ("/key/delete", LitellmUserRoles.PROXY_ADMIN, True),
+        ("/key/generate", LitellmUserRoles.PROXY_ADMIN, True),
+        ("/key/regenerate", LitellmUserRoles.PROXY_ADMIN, True),
+        # # Internal User checks - allowed routes
+        ("/global/spend/logs", LitellmUserRoles.INTERNAL_USER, True),
+        ("/key/delete", LitellmUserRoles.INTERNAL_USER, True),
+        ("/key/generate", LitellmUserRoles.INTERNAL_USER, True),
+        ("/key/82akk800000000jjsk/regenerate", LitellmUserRoles.INTERNAL_USER, True),
+        # Internal User Viewer
+        ("/key/generate", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, False),
+        (
+            "/key/82akk800000000jjsk/regenerate",
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            False,
+        ),
+        ("/key/delete", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, False),
+        ("/team/new", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, False),
+        ("/team/delete", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, False),
+        ("/team/update", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, False),
+        # Proxy Admin Viewer
+        ("/global/spend/logs", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, True),
+        ("/key/delete", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, False),
+        ("/key/generate", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, False),
+        (
+            "/key/82akk800000000jjsk/regenerate",
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            False,
+        ),
+        ("/team/new", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, False),
+        ("/team/delete", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, False),
+        ("/team/update", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, False),
+        # Internal User checks - disallowed routes
+        ("/organization/member_add", LitellmUserRoles.INTERNAL_USER, False),
+    ],
+)
+async def test_user_role_permissions(prisma_client, route, user_role, expected_result):
+    """Test user role based permissions for different routes"""
+    try:
+        # Setup
+        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        await litellm.proxy.proxy_server.prisma_client.connect()
+
+        # Admin - admin creates a new user
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        )
+
+        request = NewUserRequest(user_role=user_role)
+        new_user_response = await new_user(request, user_api_key_dict=user_api_key_dict)
+        user_id = new_user_response.user_id
+
+        # Generate key for new user with team_id="litellm-dashboard"
+        key_response = await generate_key_fn(
+            data=GenerateKeyRequest(user_id=user_id, team_id="litellm-dashboard"),
+            user_api_key_dict=user_api_key_dict,
+        )
+        generated_key = key_response.key
+        bearer_token = "Bearer " + generated_key
+
+        # Create request with route
+        request = Request(scope={"type": "http"})
+        request._url = URL(url=route)
+
+        # Test authorization
+        if expected_result is True:
+            # Should pass without error
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"Auth passed as expected for {route} with role {user_role}")
+        else:
+            # Should raise an error
+            with pytest.raises(Exception) as exc_info:
+                await user_api_key_auth(request=request, api_key=bearer_token)
+            print(f"Auth failed as expected for {route} with role {user_role}")
+            print(f"Error message: {str(exc_info.value)}")
+
+    except Exception as e:
+        if expected_result:
+            pytest.fail(f"Expected success but got exception: {str(e)}")
+        else:
+            print(f"Got expected exception: {str(e)}")

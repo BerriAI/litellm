@@ -6,8 +6,8 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
-from ..OpenAI.openai import OpenAIConfig
+from ..OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class TogetherAIConfig(OpenAIConfig):
+class TogetherAIConfig(OpenAIGPTConfig):
     pass
