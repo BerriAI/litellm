@@ -384,6 +384,7 @@ class DataDogLogger(CustomBatchLogger):
             user_api_key_dict=user_api_key_dict.model_dump(),
         )
 
+        make_json_serializable(_exception_payload)
         json_payload = json.dumps(_exception_payload)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
