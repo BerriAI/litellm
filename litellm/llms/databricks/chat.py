@@ -50,6 +50,7 @@ class DatabricksConfig:
     top_k: Optional[int] = None
     stop: Optional[Union[List[str], str]] = None
     n: Optional[int] = None
+    response_format: Optional[dict] = None
 
     def __init__(
         self,
@@ -59,6 +60,7 @@ class DatabricksConfig:
         top_k: Optional[int] = None,
         stop: Optional[Union[List[str], str]] = None,
         n: Optional[int] = None,
+        response_format: Optional[dict] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -109,6 +111,7 @@ class DatabricksConfig:
             "max_tokens",
             "max_completion_tokens",
             "n",
+            "response_format",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
