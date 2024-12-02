@@ -7,13 +7,15 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 
+from pydantic import BaseModel
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.utils import CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper, type_to_response_format_param
 
 try:
     import databricks.sdk
@@ -221,14 +223,8 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
             "DATABRICKS_API_BASE",
             "https://my.workspace.cloud.databricks.com/serving-endpoints",
         )
-        monkeypatch.delenv(
-            "DATABRICKS_API_KEY",
-        )
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
-        monkeypatch.delenv(
-            "DATABRICKS_API_BASE",
-        )
 
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(
@@ -263,6 +259,10 @@ def test_completions_with_sync_http_handler(monkeypatch):
         },
     }
 
+    class StructuredOutput(BaseModel):
+        output_str: str
+        output_bool: bool
+
     messages = [{"role": "user", "content": "How are you?"}]
 
     with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
@@ -272,6 +272,7 @@ def test_completions_with_sync_http_handler(monkeypatch):
             client=sync_handler,
             temperature=0.5,
             extraparam="testpassingextraparam",
+            response_format=StructuredOutput,
         )
         assert response.to_dict() == expected_response_json
 
@@ -286,6 +287,7 @@ def test_completions_with_sync_http_handler(monkeypatch):
                     "model": "dbrx-instruct-071224",
                     "messages": messages,
                     "temperature": 0.5,
+                    "response_format": type_to_response_format_param(StructuredOutput),
                     "extraparam": "testpassingextraparam",
                     "stream": False,
                 }
