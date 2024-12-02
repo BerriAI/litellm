@@ -12,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-
+from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
@@ -471,3 +471,210 @@ def test_anthropic_function_call_with_no_schema(model):
         {"role": "user", "content": "What is the current temperature in New York?"}
     ]
     completion(model=model, messages=messages, tools=tools, tool_choice="auto")
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-5-sonnet-20241022",
+        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
+def test_passing_tool_result_as_list(model):
+    litellm.set_verbose = True
+    messages = [
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that have the ability to interact with a computer to solve tasks.",
+                }
+            ],
+            "role": "system",
+        },
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Write a git commit message for the current staging area and commit the changes.",
+                }
+            ],
+            "role": "user",
+        },
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll help you commit the changes. Let me first check the git status to see what changes are staged.",
+                }
+            ],
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "index": 1,
+                    "function": {
+                        "arguments": '{"command": "git status", "thought": "Checking git status to see staged changes"}',
+                        "name": "execute_bash",
+                    },
+                    "id": "toolu_01V1paXrun4CVetdAGiQaZG5",
+                    "type": "function",
+                }
+            ],
+        },
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": 'OBSERVATION:\nOn branch master\r\n\r\nNo commits yet\r\n\r\nChanges to be committed:\r\n  (use "git rm --cached <file>..." to unstage)\r\n\tnew file:   hello.py\r\n\r\n\r\n[Python Interpreter: /openhands/poetry/openhands-ai-5O4_aCHf-py3.12/bin/python]\nroot@openhands-workspace:/workspace # \n[Command finished with exit code 0]',
+                }
+            ],
+            "role": "tool",
+            "tool_call_id": "toolu_01V1paXrun4CVetdAGiQaZG5",
+            "name": "execute_bash",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_bash",
+                "description": 'Execute a bash command in the terminal.\n* Long running commands: For commands that may run indefinitely, it should be run in the background and the output should be redirected to a file, e.g. command = `python3 app.py > server.log 2>&1 &`.\n* Interactive: If a bash command returns exit code `-1`, this means the process is not yet finished. The assistant must then send a second call to terminal with an empty `command` (which will retrieve any additional logs), or it can send additional text (set `command` to the text) to STDIN of the running process, or it can send command=`ctrl+c` to interrupt the process.\n* Timeout: If a command execution result says "Command timed out. Sending SIGINT to the process", the assistant should retry running the command in the background.\n',
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thought": {
+                            "type": "string",
+                            "description": "Reasoning about the action to take.",
+                        },
+                        "command": {
+                            "type": "string",
+                            "description": "The bash command to execute. Can be empty to view additional logs when previous exit code is `-1`. Can be `ctrl+c` to interrupt the currently running process.",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "finish",
+                "description": "Finish the interaction.\n* Do this if the task is complete.\n* Do this if the assistant cannot proceed further with the task.\n",
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "str_replace_editor",
+                "description": "Custom editing tool for viewing, creating and editing files\n* State is persistent across command calls and discussions with the user\n* If `path` is a file, `view` displays the result of applying `cat -n`. If `path` is a directory, `view` lists non-hidden files and directories up to 2 levels deep\n* The `create` command cannot be used if the specified `path` already exists as a file\n* If a `command` generates a long output, it will be truncated and marked with `<response clipped>`\n* The `undo_edit` command will revert the last edit made to the file at `path`\n\nNotes for using the `str_replace` command:\n* The `old_str` parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!\n* If the `old_str` parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in `old_str` to make it unique\n* The `new_str` parameter should contain the edited lines that should replace the `old_str`\n",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "description": "The commands to run. Allowed options are: `view`, `create`, `str_replace`, `insert`, `undo_edit`.",
+                            "enum": [
+                                "view",
+                                "create",
+                                "str_replace",
+                                "insert",
+                                "undo_edit",
+                            ],
+                            "type": "string",
+                        },
+                        "path": {
+                            "description": "Absolute path to file or directory, e.g. `/repo/file.py` or `/repo`.",
+                            "type": "string",
+                        },
+                        "file_text": {
+                            "description": "Required parameter of `create` command, with the content of the file to be created.",
+                            "type": "string",
+                        },
+                        "old_str": {
+                            "description": "Required parameter of `str_replace` command containing the string in `path` to replace.",
+                            "type": "string",
+                        },
+                        "new_str": {
+                            "description": "Optional parameter of `str_replace` command containing the new string (if not given, no string will be added). Required parameter of `insert` command containing the string to insert.",
+                            "type": "string",
+                        },
+                        "insert_line": {
+                            "description": "Required parameter of `insert` command. The `new_str` will be inserted AFTER the line `insert_line` of `path`.",
+                            "type": "integer",
+                        },
+                        "view_range": {
+                            "description": "Optional parameter of `view` command when `path` points to a file. If none is given, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting `[start_line, -1]` shows all lines from `start_line` to the end of the file.",
+                            "items": {"type": "integer"},
+                            "type": "array",
+                        },
+                    },
+                    "required": ["command", "path"],
+                },
+            },
+        },
+    ]
+    for _ in range(2):
+        resp = completion(model=model, messages=messages, tools=tools)
+        print(resp)
+
+    if model == "claude-3-5-sonnet-20241022":
+        assert resp.usage.prompt_tokens_details.cached_tokens > 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_watsonx_tool_choice(sync_mode):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+    import json
+    from litellm import acompletion, completion
+
+    litellm.set_verbose = True
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What is the weather in San Francisco?"}]
+
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
+
+        if sync_mode:
+            resp = completion(
+                model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        else:
+            resp = await acompletion(
+                model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+                stream=True,
+            )
+
+        print(resp)
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs)
+        json_data = json.loads(mock_completion.call_args.kwargs["data"])
+        json_data["tool_choice_options"] == "auto"

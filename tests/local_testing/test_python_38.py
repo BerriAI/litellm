@@ -72,6 +72,19 @@ def test_litellm_proxy_server_config_no_general_settings():
         # Check if the response is successful
         assert response.status_code == 200
         assert response.json() == "I'm alive!"
+
+        # Test /chat/completions
+        response = requests.post(
+            "http://localhost:4000/chat/completions",
+            headers={"Authorization": "Bearer 1234567890"},
+            json={
+                "model": "test_openai_models",
+                "messages": [{"role": "user", "content": "Hello, how are you?"}],
+            },
+        )
+
+        assert response.status_code == 200
+
     except ImportError:
         pytest.fail("Failed to import litellm.proxy_server")
     except requests.ConnectionError:

@@ -9,7 +9,7 @@ LiteLLM Supports Logging to the following Cloud Buckets
 - (Enterprise) ✨ [Google Cloud Storage Buckets](#logging-proxy-inputoutput-to-google-cloud-storage-buckets)
 - (Free OSS) [Amazon s3 Buckets](#logging-proxy-inputoutput---s3-buckets) 
 
-## Logging Proxy Input/Output to Google Cloud Storage Buckets
+## Google Cloud Storage Buckets
 
 Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?hl=en)
 
@@ -18,6 +18,14 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 ✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LLM Input/Output to cloud storage buckets |
+| Load Test Benchmarks | [Benchmarks](https://docs.litellm.ai/docs/benchmarks) |
+| Google Docs on Cloud Storage | [Google Cloud Storage](https://cloud.google.com/storage?hl=en) |
+
 
 
 ### Usage
@@ -85,7 +93,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
 
 
-## Logging Proxy Input/Output - s3 Buckets
+## s3 Buckets
 
 We will use the `--config` to set 
 

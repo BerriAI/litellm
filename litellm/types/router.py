@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
@@ -150,6 +150,8 @@ class GenericLiteLLMParams(BaseModel):
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    ## LOGGING PARAMS ##
+    litellm_trace_id: Optional[str] = None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
     ## VERTEX AI ##
@@ -186,6 +188,8 @@ class GenericLiteLLMParams(BaseModel):
             None  # timeout when making stream=True calls, if str, pass in as os.environ/
         ),
         organization: Optional[str] = None,  # for openai orgs
+        ## LOGGING PARAMS ##
+        litellm_trace_id: Optional[str] = None,
         ## UNIFIED PROJECT/REGION ##
         region_name: Optional[str] = None,
         ## VERTEX AI ##
@@ -348,9 +352,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     tags: Optional[List[str]]
 
 
-class DeploymentTypedDict(TypedDict):
-    model_name: str
-    litellm_params: LiteLLMParamsTypedDict
+class DeploymentTypedDict(TypedDict, total=False):
+    model_name: Required[str]
+    litellm_params: Required[LiteLLMParamsTypedDict]
+    model_info: dict
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
@@ -429,6 +434,9 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = (
         "Not allowed to access model due to tags configuration"
+    )
+    no_deployments_with_provider_budget_routing = (
+        "No deployments available - crossed budget for provider"
     )
 
 
@@ -624,3 +632,17 @@ class RoutingStrategy(enum.Enum):
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
+    PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
+
+
+class ProviderBudgetInfo(BaseModel):
+    time_period: str  # e.g., '1d', '30d'
+    budget_limit: float
+
+
+ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]
+
+
+class RouterCacheEnum(enum.Enum):
+    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
+    RPM = "global_router:{id}:{model}:rpm:{current_minute}"

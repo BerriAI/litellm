@@ -695,3 +695,41 @@ def test_convert_to_model_response_object_error():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+
+def test_image_generation_openai_with_pydantic_warning(caplog):
+    try:
+        import logging
+        from litellm.types.utils import ImageResponse, ImageObject
+
+        convert_response_args = {
+            "response_object": {
+                "created": 1729709945,
+                "data": [
+                    {
+                        "b64_json": None,
+                        "revised_prompt": "Generate an image of a baby sea otter. It should look incredibly cute, with big, soulful eyes and a fluffy, wet fur coat. The sea otter should be on its back, as sea otters often do, with its tiny hands holding onto a shell as if it is its precious toy. The background should be a tranquil sea under a clear sky, with soft sunlight reflecting off the waters. The color palette should be soothing with blues, browns, and white.",
+                        "url": "https://oaidalleapiprodscus.blob.core.windows.net/private/org-ikDc4ex8NB5ZzfTf8m5WYVB7/user-JpwZsbIXubBZvan3Y3GchiiB/img-LL0uoOv4CFJIvNYxoNCKB8oc.png?st=2024-10-23T17%3A59%3A05Z&se=2024-10-23T19%3A59%3A05Z&sp=r&sv=2024-08-04&sr=b&rscd=inline&rsct=image/png&skoid=d505667d-d6c1-4a0a-bac7-5c84a87759f8&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2024-10-22T19%3A26%3A22Z&ske=2024-10-23T19%3A26%3A22Z&sks=b&skv=2024-08-04&sig=Hl4wczJ3H2vZNdLRt/7JvNi6NvQGDnbNkDy15%2Bl3k5s%3D",
+                    }
+                ],
+            },
+            "model_response_object": ImageResponse(
+                created=1729709929,
+                data=[],
+            ),
+            "response_type": "image_generation",
+            "stream": False,
+            "start_time": None,
+            "end_time": None,
+            "hidden_params": None,
+            "_response_headers": None,
+            "convert_tool_call_to_json_mode": None,
+        }
+
+        resp: ImageResponse = convert_to_model_response_object(**convert_response_args)
+        assert resp is not None
+        assert resp.data is not None
+        assert len(resp.data) == 1
+        assert isinstance(resp.data[0], ImageObject)
+    except Exception as e:
+        pytest.fail(f"Test failed with exception: {e}")

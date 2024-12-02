@@ -281,7 +281,7 @@ Picks the deployment with the lowest response time.
 
 It caches, and updates the response times for deployments based on when a request was sent and received from a deployment.
 
-[**How to test**](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_lowest_latency_routing.py)
+[**How to test**](https://github.com/BerriAI/litellm/blob/main/tests/local_testing/test_lowest_latency_routing.py)
 
 ```python
 from litellm import Router 
@@ -567,7 +567,7 @@ print(response)
 
 Picks a deployment with the least number of ongoing calls, it's handling.
 
-[**How to test**](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_least_busy_routing.py)
+[**How to test**](https://github.com/BerriAI/litellm/blob/main/tests/local_testing/test_least_busy_routing.py)
 
 ```python
 from litellm import Router 
@@ -1035,7 +1035,7 @@ print(f"response: {response}")
 
 ### [Advanced]: Custom Retries, Cooldowns based on Error Type
 
-- Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+- Use `RetryPolicy` if you want to set a `num_retries` based on the Exception received
 - Use `AllowedFailsPolicy` to set a custom number of `allowed_fails`/minute before cooling down a deployment
 
 [**See All Exception Types**](https://github.com/BerriAI/litellm/blob/ccda616f2f881375d4e8586c76fe4662909a7d22/litellm/types/router.py#L436)
@@ -1890,4 +1890,23 @@ router = Router(
     set_verbose=True,
     debug_level="DEBUG"  # defaults to INFO
 )
+```
+
+## Router General Settings
+
+### Usage 
+
+```python
+router = Router(model_list=..., router_general_settings=RouterGeneralSettings(async_only_mode=True))
+```
+
+### Spec 
+```python
+class RouterGeneralSettings(BaseModel):
+    async_only_mode: bool = Field(
+        default=False
+    )  # this will only initialize async clients. Good for memory utils
+    pass_through_all_models: bool = Field(
+        default=False
+    )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding
 ```

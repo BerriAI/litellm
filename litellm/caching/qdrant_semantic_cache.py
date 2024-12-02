@@ -9,6 +9,7 @@ Has 4 methods:
 """
 
 import ast
+import asyncio
 import json
 from typing import Any
 
@@ -422,3 +423,9 @@ class QdrantSemanticCache(BaseCache):
 
     async def _collection_info(self):
         return self.collection_info
+
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        tasks = []
+        for val in cache_list:
+            tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+        await asyncio.gather(*tasks)

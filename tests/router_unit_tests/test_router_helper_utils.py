@@ -396,7 +396,8 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
     assert tpm_key is not None
 
 
-def test_deployment_callback_on_failure(model_list):
+@pytest.mark.asyncio
+async def test_deployment_callback_on_failure(model_list):
     """Test if the '_deployment_callback_on_failure' function is working correctly"""
     import time
 
@@ -417,6 +418,18 @@ def test_deployment_callback_on_failure(model_list):
     )
     assert isinstance(result, bool)
     assert result is False
+
+    model_response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+    )
+    result = await router.async_deployment_callback_on_failure(
+        kwargs=kwargs,
+        completion_response=model_response,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
 
 
 def test_log_retry(model_list):
@@ -440,23 +453,29 @@ def test_update_usage(model_list):
     )
     deployment_id = deployment["model_info"]["id"]
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
     assert request_count == 1
 
     request_count = router._update_usage(
-        deployment_id=deployment_id,
+        deployment_id=deployment_id, parent_otel_span=None
     )
 
     assert request_count == 2
 
 
 @pytest.mark.parametrize(
-    "finish_reason, expected_error", [("content_filter", True), ("stop", False)]
+    "finish_reason, expected_fallback", [("content_filter", True), ("stop", False)]
 )
-def test_should_raise_content_policy_error(model_list, finish_reason, expected_error):
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
+def test_should_raise_content_policy_error(
+    model_list, finish_reason, expected_fallback, fallback_type
+):
     """Test if the '_should_raise_content_policy_error' function is working correctly"""
-    router = Router(model_list=model_list)
+    router = Router(
+        model_list=model_list,
+        default_fallbacks=["gpt-4o"] if fallback_type == "default" else None,
+    )
 
     assert (
         router._should_raise_content_policy_error(
@@ -472,17 +491,23 @@ def test_should_raise_content_policy_error(model_list, finish_reason, expected_e
                 usage={"total_tokens": 100},
             ),
             kwargs={
-                "content_policy_fallbacks": [{"gpt-3.5-turbo": "gpt-4o"}],
+                "content_policy_fallbacks": (
+                    [{"gpt-3.5-turbo": "gpt-4o"}]
+                    if fallback_type == "model-specific"
+                    else None
+                )
             },
         )
-        is expected_error
+        is expected_fallback
     )
 
 
 def test_get_healthy_deployments(model_list):
     """Test if the '_get_healthy_deployments' function is working correctly"""
     router = Router(model_list=model_list)
-    deployments = router._get_healthy_deployments(model="gpt-3.5-turbo")
+    deployments = router._get_healthy_deployments(
+        model="gpt-3.5-turbo", parent_otel_span=None
+    )
     assert len(deployments) > 0
 
 
@@ -756,6 +781,7 @@ def test_track_deployment_metrics(model_list):
             model="gpt-3.5-turbo",
             usage={"total_tokens": 100},
         ),
+        parent_otel_span=None,
     )
 
 
@@ -914,3 +940,122 @@ def test_replace_model_in_jsonl(model_list):
     router = Router(model_list=model_list)
     deployments = router.pattern_router.get_deployments_by_pattern(model="claude-3")
     assert deployments is not None
+
+
+# def test_pattern_match_deployments(model_list):
+#     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+#     import re
+
+#     patter_router = PatternMatchRouter()
+
+#     request = "fo::hi::static::hello"
+#     model_name = "fo::*:static::*"
+
+#     model_name_regex = patter_router._pattern_to_regex(model_name)
+
+#     # Match against the request
+#     match = re.match(model_name_regex, request)
+
+#     print(f"match: {match}")
+#     print(f"match.end: {match.end()}")
+#     if match is None:
+#         raise ValueError("Match not found")
+#     updated_model = patter_router.set_deployment_model_name(
+#         matched_pattern=match, litellm_deployment_litellm_model="openai/*"
+#     )
+#     assert updated_model == "openai/fo::hi:static::hello"
+
+
+@pytest.mark.parametrize(
+    "user_request_model, model_name, litellm_model, expected_model",
+    [
+        ("llmengine/foo", "llmengine/*", "openai/foo", "openai/foo"),
+        ("llmengine/foo", "llmengine/*", "openai/*", "openai/foo"),
+        (
+            "fo::hi::static::hello",
+            "fo::*::static::*",
+            "openai/fo::*:static::*",
+            "openai/fo::hi:static::hello",
+        ),
+        (
+            "fo::hi::static::hello",
+            "fo::*::static::*",
+            "openai/gpt-3.5-turbo",
+            "openai/gpt-3.5-turbo",
+        ),
+        (
+            "bedrock/meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "bedrock/meta.llama3-70b",
+        ),
+        (
+            "meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "meta.llama3-70b",
+        ),
+    ],
+)
+def test_pattern_match_deployment_set_model_name(
+    user_request_model, model_name, litellm_model, expected_model
+):
+    from re import Match
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    pattern_router = PatternMatchRouter()
+
+    import re
+
+    # Convert model_name into a proper regex
+    model_name_regex = pattern_router._pattern_to_regex(model_name)
+
+    # Match against the request
+    match = re.match(model_name_regex, user_request_model)
+
+    if match is None:
+        raise ValueError("Match not found")
+
+    # Call the set_deployment_model_name function
+    updated_model = pattern_router.set_deployment_model_name(match, litellm_model)
+
+    print(updated_model)  # Expected output: "openai/fo::hi:static::hello"
+    assert updated_model == expected_model
+
+    updated_models = pattern_router._return_pattern_matched_deployments(
+        match,
+        deployments=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": litellm_model},
+            }
+        ],
+    )
+
+    for model in updated_models:
+        assert model["litellm_params"]["model"] == expected_model
+
+
+@pytest.mark.asyncio
+async def test_pass_through_moderation_endpoint_factory(model_list):
+    router = Router(model_list=model_list)
+    response = await router._pass_through_moderation_endpoint_factory(
+        original_function=litellm.amoderation,
+        input="this is valid good text",
+        model=None,
+    )
+    assert response is not None
+
+
+@pytest.mark.parametrize(
+    "has_default_fallbacks, expected_result",
+    [(True, True), (False, False)],
+)
+def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_result):
+    router = Router(
+        model_list=model_list,
+        default_fallbacks=(
+            ["my-default-fallback-model"] if has_default_fallbacks else None
+        ),
+    )
+    assert router._has_default_fallbacks() is expected_result

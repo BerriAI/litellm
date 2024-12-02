@@ -6,9 +6,12 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 import litellm
 from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
     AnthropicChatCompletionUsageBlock,
+    AnthropicComputerTool,
     AnthropicFinishReason,
+    AnthropicHostedTools,
     AnthropicMessagesRequest,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
@@ -215,16 +218,22 @@ class AnthropicExperimentalPassThroughConfig:
             )
 
     def translate_anthropic_tools_to_openai(
-        self, tools: List[AnthropicMessagesTool]
+        self, tools: List[AllAnthropicToolsValues]
     ) -> List[ChatCompletionToolParam]:
         new_tools: List[ChatCompletionToolParam] = []
+        mapped_tool_params = ["name", "input_schema", "description"]
         for tool in tools:
             function_chunk = ChatCompletionToolParamFunctionChunk(
                 name=tool["name"],
-                parameters=tool["input_schema"],
             )
+            if "input_schema" in tool:
+                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
             if "description" in tool:
-                function_chunk["description"] = tool["description"]
+                function_chunk["description"] = tool["description"]  # type: ignore
+
+            for k, v in tool.items():
+                if k not in mapped_tool_params:  # pass additional computer kwargs
+                    function_chunk.setdefault("parameters", {}).update({k: v})
             new_tools.append(
                 ChatCompletionToolParam(type="function", function=function_chunk)
             )

@@ -45,16 +45,23 @@ print(env_keys)
 # Parse the documentation to extract documented keys
 repo_base = "./"
 print(os.listdir(repo_base))
-docs_path = "./docs/my-website/docs/proxy/configs.md"  # Path to the documentation
+docs_path = (
+    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
+)
 documented_keys = set()
 try:
     with open(docs_path, "r", encoding="utf-8") as docs_file:
         content = docs_file.read()
 
+        print(f"content: {content}")
+
         # Find the section titled "general_settings - Reference"
         general_settings_section = re.search(
-            r"### environment variables - Reference(.*?)###", content, re.DOTALL
+            r"### environment variables - Reference(.*?)(?=\n###|\Z)",
+            content,
+            re.DOTALL | re.MULTILINE,
         )
+        print(f"general_settings_section: {general_settings_section}")
         if general_settings_section:
             # Extract the table rows, which contain the documented keys
             table_content = general_settings_section.group(1)
@@ -68,6 +75,7 @@ except Exception as e:
     )
 
 
+print(f"documented_keys: {documented_keys}")
 # Compare and find undocumented keys
 undocumented_keys = env_keys - documented_keys
 

@@ -25,6 +25,8 @@ import logging
 import pytest
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.management_endpoints.team_endpoints import list_team
+from litellm.proxy._types import *
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
@@ -53,8 +55,10 @@ from litellm.proxy.proxy_server import (
     image_generation,
     model_list,
     moderations,
-    new_end_user,
     user_api_key_auth,
+)
+from litellm.proxy.management_endpoints.customer_endpoints import (
+    new_end_user,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     global_spend,
@@ -365,12 +369,371 @@ async def test_get_users(prisma_client):
     assert "users" in result
 
     for user in result["users"]:
-        user = user.model_dump()
         assert "user_id" in user
         assert "spend" in user
         assert "user_email" in user
         assert "user_role" in user
+        assert "key_count" in user
 
     # Clean up test users
     for user in test_users:
         await prisma_client.db.litellm_usertable.delete(where={"user_id": user.user_id})
+
+
+@pytest.mark.asyncio
+async def test_get_users_key_count(prisma_client):
+    """
+    Test that verifies the key_count in get_users increases when a new key is created for a user
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Get initial user list and select the first user
+    initial_users = await get_users(role=None, page=1, page_size=20)
+    print("initial_users", initial_users)
+    assert len(initial_users["users"]) > 0, "No users found to test with"
+
+    test_user = initial_users["users"][0]
+    initial_key_count = test_user["key_count"]
+
+    # Create a new key for the selected user
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=test_user["user_id"],
+            key_alias=f"test_key_{uuid.uuid4()}",
+            models=["fake-model"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    # Get updated user list and check key count
+    updated_users = await get_users(role=None, page=1, page_size=20)
+    print("updated_users", updated_users)
+    updated_key_count = None
+    for user in updated_users["users"]:
+        if user["user_id"] == test_user["user_id"]:
+            updated_key_count = user["key_count"]
+            break
+
+    assert updated_key_count is not None, "Test user not found in updated users list"
+    assert (
+        updated_key_count == initial_key_count + 1
+    ), f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
+
+
+async def cleanup_existing_teams(prisma_client):
+    all_teams = await prisma_client.db.litellm_teamtable.find_many()
+    for team in all_teams:
+        await prisma_client.delete_data(team_id_list=[team.team_id], table_name="team")
+
+
+@pytest.mark.asyncio
+async def test_list_teams(prisma_client):
+    """
+    Tests /team/list endpoint to verify it returns both keys and members_with_roles
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Delete all existing teams first
+    await cleanup_existing_teams(prisma_client)
+
+    # Create a test team with members
+    team_id = f"test_team_{uuid.uuid4()}"
+    team_alias = f"test_team_alias_{uuid.uuid4()}"
+    test_team = await new_team(
+        data=NewTeamRequest(
+            team_id=team_id,
+            team_alias=team_alias,
+            members_with_roles=[
+                Member(role="admin", user_id="test_user_1"),
+                Member(role="user", user_id="test_user_2"),
+            ],
+            models=["gpt-4"],
+            tpm_limit=1000,
+            rpm_limit=1000,
+            budget_duration="30d",
+            max_budget=1000,
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    # Create a key for the team
+    test_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            team_id=team_id,
+            key_alias=f"test_key_{uuid.uuid4()}",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    # Get team list
+    teams = await list_team(
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+        user_id=None,
+    )
+
+    print("teams", teams)
+
+    # Find our test team in the response
+    test_team_response = None
+    for team in teams:
+        if team.team_id == team_id:
+            test_team_response = team
+            break
+
+    assert (
+        test_team_response is not None
+    ), f"Could not find test team {team_id} in response"
+
+    # Verify members_with_roles
+    assert (
+        len(test_team_response.members_with_roles) == 3
+    ), "Expected 3 members in team"  # 2 members + 1 team admin
+    member_roles = {m.role for m in test_team_response.members_with_roles}
+    assert "admin" in member_roles, "Expected admin role in members"
+    assert "user" in member_roles, "Expected user role in members"
+
+    # Verify all required fields in TeamListResponseObject
+    assert (
+        test_team_response.team_id == team_id
+    ), f"team_id should be expected value {team_id}"
+    assert (
+        test_team_response.team_alias == team_alias
+    ), f"team_alias should be expected value {team_alias}"
+    assert test_team_response.spend is not None, "spend should not be None"
+    assert (
+        test_team_response.max_budget == 1000
+    ), f"max_budget should be expected value 1000"
+    assert test_team_response.models == [
+        "gpt-4"
+    ], f"models should be expected value ['gpt-4']"
+    assert (
+        test_team_response.tpm_limit == 1000
+    ), f"tpm_limit should be expected value 1000"
+    assert (
+        test_team_response.rpm_limit == 1000
+    ), f"rpm_limit should be expected value 1000"
+    assert (
+        test_team_response.budget_reset_at is not None
+    ), "budget_reset_at should not be None since budget_duration is 30d"
+
+    # Verify keys are returned
+    assert len(test_team_response.keys) > 0, "Expected at least one key for team"
+    assert any(
+        k.team_id == team_id for k in test_team_response.keys
+    ), "Expected to find team key in response"
+
+    # Clean up
+    await prisma_client.delete_data(team_id_list=[team_id], table_name="team")
+
+
+def test_is_team_key():
+    from litellm.proxy.management_endpoints.key_management_endpoints import _is_team_key
+
+    assert _is_team_key(GenerateKeyRequest(team_id="test_team_id"))
+    assert not _is_team_key(GenerateKeyRequest(user_id="test_user_id"))
+
+
+def test_team_key_generation_team_member_check():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _team_key_generation_check,
+    )
+    from fastapi import HTTPException
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    litellm.key_generation_settings = {
+        "team_key_generation": {"allowed_team_member_roles": ["admin"]}
+    }
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="admin", user_id="test_user_id")],
+    )
+
+    assert _team_key_generation_check(
+        team_table=team_table,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="test_user_id",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-1234",
+            team_member=Member(role="admin", user_id="test_user_id"),
+        ),
+        data=GenerateKeyRequest(),
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="user", user_id="test_user_id")],
+    )
+
+    with pytest.raises(HTTPException):
+        _team_key_generation_check(
+            team_table=team_table,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-1234",
+                user_id="test_user_id",
+                team_member=Member(role="user", user_id="test_user_id"),
+            ),
+            data=GenerateKeyRequest(),
+        )
+
+
+@pytest.mark.parametrize(
+    "team_key_generation_settings, input_data, expected_result",
+    [
+        ({"required_params": ["tags"]}, GenerateKeyRequest(tags=["test_tags"]), True),
+        ({}, GenerateKeyRequest(), True),
+        (
+            {"required_params": ["models"]},
+            GenerateKeyRequest(tags=["test_tags"]),
+            False,
+        ),
+    ],
+)
+@pytest.mark.parametrize("key_type", ["team_key", "personal_key"])
+def test_key_generation_required_params_check(
+    team_key_generation_settings, input_data, expected_result, key_type
+):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _team_key_generation_check,
+        _personal_key_generation_check,
+    )
+    from litellm.types.utils import (
+        TeamUIKeyGenerationConfig,
+        StandardKeyGenerationConfig,
+        PersonalUIKeyGenerationConfig,
+    )
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from fastapi import HTTPException
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-1234",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        team_member=None,
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_id",
+        team_alias="test_team_alias",
+        members_with_roles=[Member(role="admin", user_id="test_user_id")],
+    )
+
+    if key_type == "team_key":
+        litellm.key_generation_settings = StandardKeyGenerationConfig(
+            team_key_generation=TeamUIKeyGenerationConfig(
+                **team_key_generation_settings
+            )
+        )
+    elif key_type == "personal_key":
+        litellm.key_generation_settings = StandardKeyGenerationConfig(
+            personal_key_generation=PersonalUIKeyGenerationConfig(
+                **team_key_generation_settings
+            )
+        )
+
+    if expected_result:
+        if key_type == "team_key":
+            assert _team_key_generation_check(team_table, user_api_key_dict, input_data)
+        elif key_type == "personal_key":
+            assert _personal_key_generation_check(user_api_key_dict, input_data)
+    else:
+        if key_type == "team_key":
+            with pytest.raises(HTTPException):
+                _team_key_generation_check(team_table, user_api_key_dict, input_data)
+        elif key_type == "personal_key":
+            with pytest.raises(HTTPException):
+                _personal_key_generation_check(user_api_key_dict, input_data)
+
+
+def test_personal_key_generation_check():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _personal_key_generation_check,
+    )
+    from fastapi import HTTPException
+
+    litellm.key_generation_settings = {
+        "personal_key_generation": {"allowed_user_roles": ["proxy_admin"]}
+    }
+
+    assert _personal_key_generation_check(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+        data=GenerateKeyRequest(),
+    )
+
+    with pytest.raises(HTTPException):
+        _personal_key_generation_check(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+            data=GenerateKeyRequest(),
+        )
+
+
+def test_prepare_metadata_fields():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_metadata_fields,
+    )
+
+    new_metadata = {"test": "new"}
+    old_metadata = {"test": "test"}
+
+    args = {
+        "data": UpdateKeyRequest(
+            key_alias=None,
+            duration=None,
+            models=[],
+            spend=None,
+            max_budget=None,
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata=new_metadata,
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            allowed_cache_controls=[],
+            soft_budget=None,
+            config={},
+            permissions={},
+            model_max_budget={},
+            send_invite_email=None,
+            model_rpm_limit=None,
+            model_tpm_limit=None,
+            guardrails=None,
+            blocked=None,
+            aliases={},
+            key="sk-1qGQUJJTcljeaPfzgWRrXQ",
+            tags=None,
+        ),
+        "non_default_values": {"metadata": new_metadata},
+        "existing_metadata": {"tags": None, **old_metadata},
+    }
+
+    non_default_values = prepare_metadata_fields(**args)
+    assert non_default_values == {"metadata": new_metadata}

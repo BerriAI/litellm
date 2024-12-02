@@ -58,12 +58,21 @@ def create_request_copy(request: Request):
     }
 
 
-@router.api_route("/langfuse/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/langfuse/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Langfuse Pass-through", "pass-through"],
+)
 async def langfuse_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
 ):
+    """
+    Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/langfuse)
+    """
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
     api_key = request.headers.get("Authorization") or ""
 

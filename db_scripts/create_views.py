@@ -4,7 +4,6 @@ python script to pre-create all views required by LiteLLM Proxy Server
 
 import asyncio
 import os
-from update_unassigned_teams import apply_db_fixes
 
 # Enter your DATABASE_URL here
 
@@ -205,7 +204,6 @@ async def check_view_exists():  # noqa: PLR0915
 
         print("Last30dTopEndUsersSpend Created!")  # noqa
 
-    await apply_db_fixes(db=db)
     return
 
 

@@ -76,4 +76,4 @@ class JinaAIEmbeddingConfig:
             or get_secret_str("JINA_AI_API_KEY")
             or get_secret_str("JINA_AI_TOKEN")
         )
-        return LlmProviders.OPENAI_LIKE.value, api_base, dynamic_api_key
+        return LlmProviders.JINA_AI.value, api_base, dynamic_api_key

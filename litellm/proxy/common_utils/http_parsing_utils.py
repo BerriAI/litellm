@@ -1,6 +1,6 @@
 import ast
 import json
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import Request, UploadFile, status
 
@@ -8,31 +8,43 @@ from litellm._logging import verbose_proxy_logger
 from litellm.types.router import Deployment
 
 
-async def _read_request_body(request: Optional[Request]) -> dict:
+async def _read_request_body(request: Optional[Request]) -> Dict:
     """
-    Asynchronous function to read the request body and parse it as JSON or literal data.
+    Safely read the request body and parse it as JSON.
 
     Parameters:
     - request: The request object to read the body from
 
     Returns:
-    - dict: Parsed request data as a dictionary
+    - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
     """
     try:
-        request_data: dict = {}
         if request is None:
-            return request_data
+            return {}
+
+        # Read the request body
         body = await request.body()
 
-        if body == b"" or body is None:
-            return request_data
+        # Return empty dict if body is empty or None
+        if not body:
+            return {}
+
+        # Decode the body to a string
         body_str = body.decode()
-        try:
-            request_data = ast.literal_eval(body_str)
-        except Exception:
-            request_data = json.loads(body_str)
-        return request_data
-    except Exception:
+
+        # Attempt JSON parsing (safe for untrusted input)
+        return json.loads(body_str)
+
+    except json.JSONDecodeError:
+        # Log detailed information for debugging
+        verbose_proxy_logger.exception("Invalid JSON payload received.")
+        return {}
+
+    except Exception as e:
+        # Catch unexpected errors to avoid crashes
+        verbose_proxy_logger.exception(
+            "Unexpected error reading request body - {}".format(e)
+        )
         return {}
 
 

@@ -24,6 +24,7 @@ import {
   Icon,
   BarChart,
   TextInput,
+  Textarea,
 } from "@tremor/react";
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
@@ -40,6 +41,7 @@ import {
 } from "antd";
 
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import TextArea from "antd/es/input/TextArea";
 
 const { Option } = Select;
 const isLocal = process.env.NODE_ENV === "development";
@@ -291,6 +293,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         >
                 <>
 
+                <Form.Item name="key_alias" label="Key Alias">
+                  <TextInput />
+                </Form.Item>
+
               <Form.Item label="Models" name="models" rules={[
                 {
                   validator: (rule, value) => {
@@ -433,6 +439,16 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               ]}
               >
                 <InputNumber step={1} precision={1} width={200} />
+              </Form.Item>
+              <Form.Item
+                label="Metadata"
+                name="metadata"
+                initialValue={token.metadata}
+              >
+                <TextArea
+                  value={String(token.metadata)}
+                  rows={10}
+                />
               </Form.Item>
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
@@ -802,6 +818,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           <TableRow>
             <TableHeaderCell>Key Alias</TableHeaderCell>
             <TableHeaderCell>Secret Key</TableHeaderCell>
+            <TableHeaderCell>Created</TableHeaderCell>
             <TableHeaderCell>Expires</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
@@ -844,9 +861,18 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   <Text>{item.key_name}</Text>
                 </TableCell>
                 <TableCell>
+                    {item.created_at != null ? (
+                      <div>
+                        <p style={{ fontSize: '0.70rem' }}>{new Date(item.created_at).toLocaleDateString()}</p>
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: '0.70rem' }}>Not available</p>
+                    )}
+                  </TableCell>
+                <TableCell>
                 {item.expires != null ? (
                   <div>
-                    <p style={{ fontSize: '0.70rem' }}>{new Date(item.expires).toLocaleString()}</p>
+                    <p style={{ fontSize: '0.70rem' }}>{new Date(item.expires).toLocaleDateString()}</p>
                   </div>
                 ) : (
                   <p style={{ fontSize: '0.70rem' }}>Never</p>

@@ -18,7 +18,7 @@ import time
 #         sys.stdout = new_stdout = io.StringIO()
 
 
-#         response = completion(model="claude-instant-1.2",
+#         response = completion(model="claude-3-5-haiku-20241022",
 #                               messages=[{
 #                                   "role": "user",
 #                                   "content": "Hi 👋 - i'm claude"

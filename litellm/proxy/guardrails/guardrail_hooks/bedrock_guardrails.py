@@ -214,10 +214,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.url,
             prepared_request.headers,
         )
-        _json_data = json.dumps(request_data)  # type: ignore
+
         response = await self.async_handler.post(
             url=prepared_request.url,
-            json=request_data,  # type: ignore
+            data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
         )
         verbose_proxy_logger.debug("Bedrock AI response: %s", response.text)

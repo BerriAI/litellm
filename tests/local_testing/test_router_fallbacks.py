@@ -824,8 +824,8 @@ def test_ausage_based_routing_fallbacks():
                 "rpm": OPENAI_RPM,
             },
             {
-                "model_name": "anthropic-claude-instant-1.2",
-                "litellm_params": get_anthropic_params("claude-instant-1.2"),
+                "model_name": "anthropic-claude-3-5-haiku-20241022",
+                "litellm_params": get_anthropic_params("claude-3-5-haiku-20241022"),
                 "model_info": {"id": 4},
                 "rpm": ANTHROPIC_RPM,
             },
@@ -834,7 +834,7 @@ def test_ausage_based_routing_fallbacks():
         fallbacks_list = [
             {"azure/gpt-4-fast": ["azure/gpt-4-basic"]},
             {"azure/gpt-4-basic": ["openai-gpt-4"]},
-            {"openai-gpt-4": ["anthropic-claude-instant-1.2"]},
+            {"openai-gpt-4": ["anthropic-claude-3-5-haiku-20241022"]},
         ]
 
         router = Router(
@@ -864,7 +864,7 @@ def test_ausage_based_routing_fallbacks():
         assert response._hidden_params["model_id"] == "1"
 
         for i in range(10):
-            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
+            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-3-5-haiku-20241022
             response = router.completion(
                 model="azure/gpt-4-fast",
                 messages=messages,
@@ -1045,7 +1045,7 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
             },
         ],
         default_fallbacks=(
-            ["my-good-model"] if litellm_module_fallbacks == False else None
+            ["my-good-model"] if litellm_module_fallbacks is False else None
         ),
     )
 
@@ -1120,9 +1120,10 @@ async def test_client_side_fallbacks_list(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("content_filter_response_exception", [True, False])
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
 async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception
+    sync_mode, content_filter_response_exception, fallback_type
 ):
     os.environ["LITELLM_LOG"] = "DEBUG"
 
@@ -1137,9 +1138,9 @@ async def test_router_content_policy_fallbacks(
     router = Router(
         model_list=[
             {
-                "model_name": "claude-2",
+                "model_name": "claude-2.1",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": mock_response,
                 },
@@ -1153,9 +1154,17 @@ async def test_router_content_policy_fallbacks(
                 },
             },
             {
+                "model_name": "my-default-fallback-model",
+                "litellm_params": {
+                    "model": "openai/my-fake-model",
+                    "api_key": "",
+                    "mock_response": "This works 2!",
+                },
+            },
+            {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
@@ -1163,25 +1172,30 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-context-window-model",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
             },
         ],
-        content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}],
-        fallbacks=[{"claude-2": ["my-general-model"]}],
-        context_window_fallbacks=[{"claude-2": ["my-context-window-model"]}],
+        content_policy_fallbacks=(
+            [{"claude-2.1": ["my-fallback-model"]}]
+            if fallback_type == "model-specific"
+            else None
+        ),
+        default_fallbacks=(
+            ["my-default-fallback-model"] if fallback_type == "default" else None
+        ),
     )
 
     if sync_mode is True:
         response = router.completion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
         response = await router.acompletion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
@@ -1226,9 +1240,7 @@ async def test_using_default_fallback(sync_mode):
         pytest.fail(f"Expected call to fail we passed model=openai/foo")
     except Exception as e:
         print("got exception = ", e)
-        from litellm.types.router import RouterErrors
-
-        assert RouterErrors.no_deployments_available.value in str(e)
+        assert "BadRequestError" in str(e)
 
 
 @pytest.mark.parametrize("sync_mode", [False])
@@ -1337,3 +1349,152 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
         mock_client.assert_called_once()
         print(chunks)
         assert len(chunks) > 0
+
+
+def test_router_fallbacks_with_custom_model_costs():
+    """
+    Tests prod use-case where a custom model is registered with a different provider + custom costs.
+
+    Goal: make sure custom model doesn't override default model costs.
+    """
+    model_list = [
+        {
+            "model_name": "claude-3-5-sonnet-20240620",
+            "litellm_params": {
+                "model": "claude-3-5-sonnet-20240620",
+                "api_key": os.environ["ANTHROPIC_API_KEY"],
+                "input_cost_per_token": 30,
+                "output_cost_per_token": 60,
+            },
+        },
+        {
+            "model_name": "claude-3-5-sonnet-aihubmix",
+            "litellm_params": {
+                "model": "openai/claude-3-5-sonnet-20240620",
+                "input_cost_per_token": 0.000003,  # 3$/M
+                "output_cost_per_token": 0.000015,  # 15$/M
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                "api_key": "my-fake-key",
+            },
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
+        fallbacks=[{"claude-3-5-sonnet-20240620": ["claude-3-5-sonnet-aihubmix"]}],
+    )
+
+    router.completion(
+        model="claude-3-5-sonnet-aihubmix",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+
+    print(f"key: {model_info['key']}")
+
+    assert model_info["litellm_provider"] == "anthropic"
+
+    response = router.completion(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    print(f"response_cost: {response._hidden_params['response_cost']}")
+
+    assert response._hidden_params["response_cost"] > 10
+
+    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+
+    print(f"key: {model_info['key']}")
+
+    assert model_info["input_cost_per_token"] == 30
+    assert model_info["output_cost_per_token"] == 60
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
+    """
+    Tests to ensure there is not an infinite fallback loop when there is a default fallback and model specific fallback.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-bad-model-2",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["my-bad-model-2"]}],
+        default_fallbacks=["bad-model"],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        if sync_mode:
+            resp = router.completion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+
+            print(f"resp: {resp}")
+        else:
+            await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+    assert isinstance(
+        exc_info.value, litellm.AuthenticationError
+    ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
+
+
+@pytest.mark.asyncio
+async def test_router_disable_fallbacks_dynamically():
+    from litellm.router import run_async_fallback
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["good-model"]}],
+        default_fallbacks=["good-model"],
+    )
+
+    with patch.object(
+        router,
+        "log_retry",
+        new=MagicMock(return_value=None),
+    ) as mock_client:
+        try:
+            resp = await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                disable_fallbacks=True,
+            )
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_not_called()

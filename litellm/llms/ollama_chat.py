@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 from litellm.types.utils import StreamingChoices
@@ -445,7 +446,10 @@ async def ollama_async_streaming(
     url, api_key, data, model_response, encoding, logging_obj
 ):
     try:
-        client = httpx.AsyncClient()
+        _async_http_client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.OLLAMA
+        )
+        client = _async_http_client.client
         _request = {
             "url": f"{url}",
             "json": data,

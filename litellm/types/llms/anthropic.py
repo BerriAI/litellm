@@ -9,12 +9,41 @@ from .openai import ChatCompletionCachedContent
 class AnthropicMessagesToolChoice(TypedDict, total=False):
     type: Required[Literal["auto", "any", "tool"]]
     name: str
+    disable_parallel_tool_use: bool  # default is false
+
+
+class AnthropicInputSchema(TypedDict, total=False):
+    type: Optional[str]
+    properties: Optional[dict]
+    additionalProperties: Optional[bool]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
-    input_schema: Required[dict]
+    input_schema: Optional[AnthropicInputSchema]
+    type: Literal["custom"]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+class AnthropicComputerTool(TypedDict, total=False):
+    display_width_px: Required[int]
+    display_height_px: Required[int]
+    display_number: int
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    type: Required[str]
+    name: Required[str]
+
+
+class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_editor
+    type: Required[str]
+    name: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+AllAnthropicToolsValues = Union[
+    AnthropicComputerTool, AnthropicHostedTools, AnthropicMessagesTool
+]
 
 
 class AnthropicMessagesTextParam(TypedDict, total=False):
@@ -51,7 +80,7 @@ class AnthopicMessagesAssistantMessageParam(TypedDict, total=False):
     """
 
 
-class AnthropicImageParamSource(TypedDict):
+class AnthropicContentParamSource(TypedDict):
     type: Literal["base64"]
     media_type: str
     data: str
@@ -59,7 +88,13 @@ class AnthropicImageParamSource(TypedDict):
 
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicImageParamSource]
+    source: Required[AnthropicContentParamSource]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+class AnthropicMessagesDocumentParam(TypedDict, total=False):
+    type: Required[Literal["document"]]
+    source: Required[AnthropicContentParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -78,12 +113,14 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
             Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
         ],
     ]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesUserMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
+    AnthropicMessagesDocumentParam,
 ]
 
 
@@ -116,7 +153,7 @@ class AnthropicMessageRequestBase(TypedDict, total=False):
     system: Union[str, List]
     temperature: float
     tool_choice: AnthropicMessagesToolChoice
-    tools: List[AnthropicMessagesTool]
+    tools: List[AllAnthropicToolsValues]
     top_k: int
     top_p: float
 

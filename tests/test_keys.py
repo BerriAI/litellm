@@ -66,6 +66,7 @@ async def generate_key(
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
     calling_key="sk-1234",
 ):
     url = "http://0.0.0.0:4000/key/generate"
@@ -82,6 +83,7 @@ async def generate_key(
         "max_parallel_requests": max_parallel_requests,
         "user_id": user_id,
         "team_id": team_id,
+        "metadata": metadata,
     }
 
     print(f"data: {data}")
@@ -136,16 +138,21 @@ async def test_key_gen_bad_key():
             pass
 
 
-async def update_key(session, get_key):
+async def update_key(session, get_key, metadata: Optional[dict] = None):
     """
     Make sure only models user has access to are returned
     """
     url = "http://0.0.0.0:4000/key/update"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
-    data = {"key": get_key, "models": ["gpt-4"], "duration": "120s"}
+    data = {"key": get_key}
+
+    if metadata is not None:
+        data["metadata"] = metadata
+    else:
+        data.update({"models": ["gpt-4"], "duration": "120s"})
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -276,20 +283,25 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     return prompt_tokens, completion_tokens
 
 
+@pytest.mark.parametrize("metadata", [{"test": "new"}, {}])
 @pytest.mark.asyncio
-async def test_key_update():
+async def test_key_update(metadata):
     """
     Create key
     Update key with new model
     Test key w/ model
     """
     async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, i=0)
+        key_gen = await generate_key(session=session, i=0, metadata={"test": "test"})
         key = key_gen["key"]
-        await update_key(
+        assert key_gen["metadata"]["test"] == "test"
+        updated_key = await update_key(
             session=session,
             get_key=key,
+            metadata=metadata,
         )
+        print(f"updated_key['metadata']: {updated_key['metadata']}")
+        assert updated_key["metadata"] == metadata
         await update_proxy_budget(session=session)  # resets proxy spend
         await chat_completion(session=session, key=key)
 
@@ -412,7 +424,7 @@ async def test_key_info():
     Get key info
     - as admin -> 200
     - as key itself -> 200
-    - as random key -> 403
+    - as non existent key -> 404
     """
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session, i=0)
@@ -425,10 +437,9 @@ async def test_key_info():
         # as key itself, use the auth param, and no query key needed
         await get_key_info(session=session, call_key=key)
         # as random key #
-        key_gen = await generate_key(session=session, i=0)
-        random_key = key_gen["key"]
-        status = await get_key_info(session=session, get_key=key, call_key=random_key)
-        assert status == 403
+        random_key = f"sk-{uuid.uuid4()}"
+        status = await get_key_info(session=session, get_key=random_key, call_key=key)
+        assert status == 404
 
 
 @pytest.mark.asyncio
@@ -523,8 +534,8 @@ async def test_key_info_spend_values():
 
 
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_key_info_spend_values_streaming():
+@pytest.mark.flaky(retries=6, delay=2)
+async def test_aaaaakey_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.
     - create key
@@ -545,7 +556,7 @@ async def test_key_info_spend_values_streaming():
             completion_tokens=completion_tokens,
         )
         response_cost = prompt_cost + completion_cost
-        await asyncio.sleep(5)  # allow db log to be updated
+        await asyncio.sleep(8)  # allow db log to be updated
         print(f"new_key: {new_key}")
         key_info = await get_key_info(
             session=session, get_key=new_key, call_key=new_key

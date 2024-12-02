@@ -23,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.utils import get_formatted_prompt
+from litellm.utils import get_formatted_prompt, print_verbose
 
 global_braintrust_http_handler = get_async_httpx_client(
     llm_provider=httpxSpecialProvider.LoggingCallback
@@ -229,6 +229,9 @@ class BraintrustLogger(CustomLogger):
                 request_data["metrics"] = metrics
 
             try:
+                print_verbose(
+                    f"global_braintrust_sync_http_handler.post: {global_braintrust_sync_http_handler.post}"
+                )
                 global_braintrust_sync_http_handler.post(
                     url=f"{self.api_base}/project_logs/{project_id}/insert",
                     json={"events": [request_data]},
