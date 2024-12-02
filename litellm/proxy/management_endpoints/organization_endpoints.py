@@ -5,6 +5,7 @@ Endpoints for /organization operations
 /organization/update
 /organization/delete
 /organization/info
+/organization/list
 """
 
 #### ORGANIZATION MANAGEMENT ####
@@ -55,15 +56,23 @@ async def new_organization(
 
     # Parameters
 
-    - `organization_alias`: *str* = The name of the organization.
-    - `models`: *List* = The models the organization has access to.
-    - `budget_id`: *Optional[str]* = The id for a budget (tpm/rpm/max budget) for the organization.
+    - organization_alias: *str* - The name of the organization.
+    - models: *List* - The models the organization has access to.
+    - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
-    - `max_budget`: *Optional[float]* = Max budget for org
-    - `tpm_limit`: *Optional[int]* = Max tpm limit for org
-    - `rpm_limit`: *Optional[int]* = Max rpm limit for org
-    - `model_max_budget`: *Optional[dict]* = Max budget for a specific model
-    - `budget_duration`: *Optional[str]* = Frequency of reseting org budget
+    - max_budget: *Optional[float]* - Max budget for org
+    - tpm_limit: *Optional[int]* - Max tpm limit for org
+    - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
+    - soft_budget: *Optional[float]* - [Not Implemented Yet] Get a slack alert when this soft budget is reached. Don't block requests.
+    - model_max_budget: *Optional[dict]* - Max budget for a specific model
+    - budget_duration: *Optional[str]* - Frequency of reseting org budget
+    - metadata: *Optional[dict]* - Metadata for team, store information for team. Example metadata - {"extra_info": "some info"}
+    - blocked: *bool* - Flag indicating if the org is blocked or not - will stop all calls from keys with this org_id.
+    - tags: *Optional[List[str]]* - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - organization_id: *Optional[str]* - The organization id of the team. Default is None. Create via `/organization/new`.
+    - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+
 
     Case 1: Create new org **without** a budget_id
 
@@ -185,7 +194,7 @@ async def new_organization(
 )
 async def update_organization():
     """[TODO] Not Implemented yet. Let us know if you need this - https://github.com/BerriAI/litellm/issues"""
-    pass
+    raise NotImplementedError("Not Implemented Yet")
 
 
 @router.post(
@@ -195,7 +204,46 @@ async def update_organization():
 )
 async def delete_organization():
     """[TODO] Not Implemented yet. Let us know if you need this - https://github.com/BerriAI/litellm/issues"""
-    pass
+    raise NotImplementedError("Not Implemented Yet")
+
+
+@router.get(
+    "/organization/list",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_organization(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ```
+    curl --location --request GET 'http://0.0.0.0:4000/organization/list' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if (
+        user_api_key_dict.user_role is None
+        or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": f"Only admins can list orgs. Your role is = {user_api_key_dict.user_role}"
+            },
+        )
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    response = await prisma_client.db.litellm_organizationtable.find_many()
+
+    return response
 
 
 @router.post(
@@ -304,7 +352,7 @@ async def organization_member_add(
                 },
             )
 
-        members: List[Member]
+        members: List[OrgMember]
         if isinstance(data.member, List):
             members = data.member
         else:
@@ -349,7 +397,7 @@ async def organization_member_add(
 
 
 async def add_member_to_organization(
-    member: Member,
+    member: OrgMember,
     organization_id: str,
     prisma_client: PrismaClient,
 ) -> Tuple[LiteLLM_UserTable, LiteLLM_OrganizationMembershipTable]:

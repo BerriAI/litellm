@@ -26,6 +26,13 @@ from typing import (
     overload,
 )
 
+from litellm.litellm_core_utils.duration_parser import (
+    _extract_from_regex,
+    duration_in_seconds,
+    get_last_day_of_month,
+)
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
 try:
     import backoff
 except ImportError:
@@ -55,10 +62,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
-    get_litellm_metadata_from_kwargs,
-)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -77,6 +80,7 @@ from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
 )
+from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
@@ -137,90 +141,6 @@ def safe_deep_copy(data):
     return new_data
 
 
-def log_to_opentelemetry(func):
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        start_time = datetime.now()
-
-        try:
-            result = await func(*args, **kwargs)
-            end_time = datetime.now()
-
-            # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
-            if (
-                "parent_otel_span" in kwargs
-                and kwargs["parent_otel_span"] is not None
-                and "proxy_logging_obj" in kwargs
-                and kwargs["proxy_logging_obj"] is not None
-            ):
-                proxy_logging_obj = kwargs["proxy_logging_obj"]
-                await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                    service=ServiceTypes.DB,
-                    call_type=func.__name__,
-                    parent_otel_span=kwargs["parent_otel_span"],
-                    duration=0.0,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "function_name": func.__name__,
-                        "function_kwargs": kwargs,
-                        "function_args": args,
-                    },
-                )
-            elif (
-                # in litellm custom callbacks kwargs is passed as arg[0]
-                # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
-                args is not None
-                and len(args) > 0
-                and isinstance(args[0], dict)
-            ):
-                passed_kwargs = args[0]
-                parent_otel_span = _get_parent_otel_span_from_kwargs(
-                    kwargs=passed_kwargs
-                )
-                if parent_otel_span is not None:
-                    from litellm.proxy.proxy_server import proxy_logging_obj
-
-                    metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
-                    await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                        service=ServiceTypes.BATCH_WRITE_TO_DB,
-                        call_type=func.__name__,
-                        parent_otel_span=parent_otel_span,
-                        duration=0.0,
-                        start_time=start_time,
-                        end_time=end_time,
-                        event_metadata=metadata,
-                    )
-            # end of logging to otel
-            return result
-        except Exception as e:
-            end_time = datetime.now()
-            if (
-                "parent_otel_span" in kwargs
-                and kwargs["parent_otel_span"] is not None
-                and "proxy_logging_obj" in kwargs
-                and kwargs["proxy_logging_obj"] is not None
-            ):
-                proxy_logging_obj = kwargs["proxy_logging_obj"]
-                await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
-                    error=e,
-                    service=ServiceTypes.DB,
-                    call_type=func.__name__,
-                    parent_otel_span=kwargs["parent_otel_span"],
-                    duration=0.0,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={
-                        "function_name": func.__name__,
-                        "function_kwargs": kwargs,
-                        "function_args": args,
-                    },
-                )
-            raise e
-
-    return wrapper
-
-
 class InternalUsageCache:
     def __init__(self, dual_cache: DualCache):
         self.dual_cache: DualCache = dual_cache
@@ -235,7 +155,7 @@ class InternalUsageCache:
         return await self.dual_cache.async_get_cache(
             key=key,
             local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+            parent_otel_span=litellm_parent_otel_span,
             **kwargs,
         )
 
@@ -262,11 +182,23 @@ class InternalUsageCache:
         local_only: bool = False,
         **kwargs,
     ) -> None:
-        return await self.dual_cache.async_batch_set_cache(
+        return await self.dual_cache.async_set_cache_pipeline(
             cache_list=cache_list,
             local_only=local_only,
             litellm_parent_otel_span=litellm_parent_otel_span,
             **kwargs,
+        )
+
+    async def async_batch_get_cache(
+        self,
+        keys: list,
+        parent_otel_span: Optional[Span] = None,
+        local_only: bool = False,
+    ):
+        return await self.dual_cache.async_batch_get_cache(
+            keys=keys,
+            parent_otel_span=parent_otel_span,
+            local_only=local_only,
         )
 
     async def async_increment_cache(
@@ -281,7 +213,7 @@ class InternalUsageCache:
             key=key,
             value=value,
             local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
+            parent_otel_span=litellm_parent_otel_span,
             **kwargs,
         )
 
@@ -348,6 +280,35 @@ class ProxyLogging:
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
         self.premium_user = premium_user
+        self.service_logging_obj = ServiceLogging()
+
+    def startup_event(
+        self,
+        llm_router: Optional[litellm.Router],
+        redis_usage_cache: Optional[RedisCache],
+    ):
+        """Initialize logging and alerting on proxy startup"""
+        ## UPDATE SLACK ALERTING ##
+        self.slack_alerting_instance.update_values(llm_router=llm_router)
+
+        ## UPDATE INTERNAL USAGE CACHE ##
+        self.update_values(
+            redis_cache=redis_usage_cache
+        )  # used by parallel request limiter for rate limiting keys across instances
+
+        self._init_litellm_callbacks(
+            llm_router=llm_router
+        )  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+
+        if (
+            self.slack_alerting_instance is not None
+            and "daily_reports" in self.slack_alerting_instance.alert_types
+        ):
+            asyncio.create_task(
+                self.slack_alerting_instance._run_scheduled_daily_report(
+                    llm_router=llm_router
+                )
+            )  # RUN DAILY REPORT (if scheduled)
 
     def update_values(
         self,
@@ -381,27 +342,23 @@ class ProxyLogging:
                 alert_to_webhook_url=self.alert_to_webhook_url,
             )
 
-            if (
-                self.alerting is not None
-                and "slack" in self.alerting
-                and "daily_reports" in self.alert_types
-            ):
+            if self.alerting is not None and "slack" in self.alerting:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
-                litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
+                if "daily_reports" in self.alert_types:
+                    litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
+                litellm.success_callback.append(
+                    self.slack_alerting_instance.response_taking_too_long_callback
+                )
 
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
-        self.service_logging_obj = ServiceLogging()
         litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
         litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
         litellm.callbacks.append(self.cache_control_check)  # type: ignore
         litellm.callbacks.append(self.service_logging_obj)  # type: ignore
-        litellm.success_callback.append(
-            self.slack_alerting_instance.response_taking_too_long_callback
-        )
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
@@ -421,6 +378,8 @@ class ProxyLogging:
                 litellm._async_success_callback.append(callback)  # type: ignore
             if callback not in litellm._async_failure_callback:
                 litellm._async_failure_callback.append(callback)  # type: ignore
+            if callback not in litellm.service_callback:
+                litellm.service_callback.append(callback)  # type: ignore
 
         if (
             len(litellm.input_callback) > 0
@@ -646,13 +605,18 @@ class ProxyLogging:
                 raise e
         return data
 
-    async def failed_tracking_alert(self, error_message: str):
+    async def failed_tracking_alert(
+        self,
+        error_message: str,
+        failing_model: str,
+    ):
         if self.alerting is None:
             return
 
         if self.slack_alerting_instance:
             await self.slack_alerting_instance.failed_tracking_alert(
-                error_message=error_message
+                error_message=error_message,
+                failing_model=failing_model,
             )
 
     async def budget_alerts(
@@ -890,6 +854,20 @@ class ProxyLogging:
                     ),
                 ).start()
 
+        await self._run_post_call_failure_hook_custom_loggers(
+            original_exception=original_exception,
+            request_data=request_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        return
+
+    async def _run_post_call_failure_hook_custom_loggers(
+        self,
+        original_exception: Exception,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ):
         for callback in litellm.callbacks:
             try:
                 _callback: Optional[CustomLogger] = None
@@ -908,7 +886,38 @@ class ProxyLogging:
             except Exception as e:
                 raise e
 
-        return
+    async def async_log_proxy_authentication_errors(
+        self,
+        original_exception: Exception,
+        request: Request,
+        parent_otel_span: Optional[Any],
+        api_key: Optional[str],
+    ):
+        """
+        Handler for Logging Authentication Errors on LiteLLM Proxy
+        Why not use post_call_failure_hook?
+        - `post_call_failure_hook` calls `litellm_logging_obj.async_failure_handler`. This led to the Exception being logged twice
+
+        What does this handler do?
+        - Logs Authentication Errors (like invalid API Key passed) to CustomLogger compatible classes (OTEL, Datadog etc)
+            - calls CustomLogger.async_post_call_failure_hook
+        """
+
+        user_api_key_dict = UserAPIKeyAuth(
+            parent_otel_span=parent_otel_span,
+            token=_hash_token_if_needed(token=api_key or ""),
+        )
+        try:
+            request_data = await request.json()
+        except json.JSONDecodeError:
+            # For GET requests or requests without a JSON body
+            request_data = {}
+        await self._run_post_call_failure_hook_custom_loggers(
+            original_exception=original_exception,
+            request_data=request_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+        pass
 
     async def post_call_success_hook(
         self,
@@ -1043,19 +1052,16 @@ class PrismaClient:
         proxy_logging_obj: ProxyLogging,
         http_client: Optional[Any] = None,
     ):
-        verbose_proxy_logger.debug(
-            "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
-        )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
+        verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
         except Exception:
             raise Exception("Unable to find Prisma binaries.")
-        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -1074,7 +1080,7 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
-        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
+        verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -1360,6 +1366,7 @@ class PrismaClient:
 
         return
 
+    @log_db_metrics
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
@@ -1425,7 +1432,7 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    @log_to_opentelemetry
+    @log_db_metrics
     async def get_data(  # noqa: PLR0915
         self,
         token: Optional[Union[str, list]] = None,
@@ -1466,9 +1473,7 @@ class PrismaClient:
                 # check if plain text or hash
                 if token is not None:
                     if isinstance(token, str):
-                        hashed_token = token
-                        if token.startswith("sk-"):
-                            hashed_token = self.hash_token(token=token)
+                        hashed_token = _hash_token_if_needed(token=token)
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
@@ -1535,8 +1540,7 @@ class PrismaClient:
                     if token is not None:
                         where_filter["token"] = {}
                         if isinstance(token, str):
-                            if token.startswith("sk-"):
-                                token = self.hash_token(token=token)
+                            token = _hash_token_if_needed(token=token)
                             where_filter["token"]["in"] = [token]
                         elif isinstance(token, list):
                             hashed_tokens = []
@@ -1672,9 +1676,7 @@ class PrismaClient:
                 # check if plain text or hash
                 if token is not None:
                     if isinstance(token, str):
-                        hashed_token = token
-                        if token.startswith("sk-"):
-                            hashed_token = self.hash_token(token=token)
+                        hashed_token = _hash_token_if_needed(token=token)
                         verbose_proxy_logger.debug(
                             f"PrismaClient: find_unique for token: {hashed_token}"
                         )
@@ -1954,8 +1956,7 @@ class PrismaClient:
             if token is not None:
                 print_verbose(f"token: {token}")
                 # check if plain text or hash
-                if token.startswith("sk-"):
-                    token = self.hash_token(token=token)
+                token = _hash_token_if_needed(token=token)
                 db_data["token"] = token
                 response = await self.db.litellm_verificationtoken.update(
                     where={"token": token},  # type: ignore
@@ -2307,11 +2308,7 @@ class PrismaClient:
         """
         start_time = time.time()
         try:
-            sql_query = """
-                SELECT 1
-                FROM "LiteLLM_VerificationToken"
-                LIMIT 1
-                """
+            sql_query = "SELECT 1"
 
             # Execute the raw query
             # The asterisk before `user_id_list` unpacks the list into separate arguments
@@ -2470,84 +2467,16 @@ def hash_token(token: str):
     return hashed_token
 
 
-def _extract_from_regex(duration: str) -> Tuple[int, str]:
-    match = re.match(r"(\d+)(mo|[smhd]?)", duration)
-
-    if not match:
-        raise ValueError("Invalid duration format")
-
-    value, unit = match.groups()
-    value = int(value)
-
-    return value, unit
-
-
-def get_last_day_of_month(year, month):
-    # Handle December case
-    if month == 12:
-        return 31
-    # Next month is January, so subtract a day from March 1st
-    next_month = datetime(year=year, month=month + 1, day=1)
-    last_day_of_month = (next_month - timedelta(days=1)).day
-    return last_day_of_month
-
-
-def _duration_in_seconds(duration: str) -> int:
+def _hash_token_if_needed(token: str) -> str:
     """
-    Parameters:
-    - duration:
-        - "<number>s" - seconds
-        - "<number>m" - minutes
-        - "<number>h" - hours
-        - "<number>d" - days
-        - "<number>mo" - months
+    Hash the token if it's a string and starts with "sk-"
 
-    Returns time in seconds till when budget needs to be reset
+    Else return the token as is
     """
-    value, unit = _extract_from_regex(duration=duration)
-
-    if unit == "s":
-        return value
-    elif unit == "m":
-        return value * 60
-    elif unit == "h":
-        return value * 3600
-    elif unit == "d":
-        return value * 86400
-    elif unit == "mo":
-        now = time.time()
-        current_time = datetime.fromtimestamp(now)
-
-        if current_time.month == 12:
-            target_year = current_time.year + 1
-            target_month = 1
-        else:
-            target_year = current_time.year
-            target_month = current_time.month + value
-
-        # Determine the day to set for next month
-        target_day = current_time.day
-        last_day_of_target_month = get_last_day_of_month(target_year, target_month)
-
-        if target_day > last_day_of_target_month:
-            target_day = last_day_of_target_month
-
-        next_month = datetime(
-            year=target_year,
-            month=target_month,
-            day=target_day,
-            hour=current_time.hour,
-            minute=current_time.minute,
-            second=current_time.second,
-            microsecond=current_time.microsecond,
-        )
-
-        # Calculate the duration until the first day of the next month
-        duration_until_next_month = next_month - current_time
-        return int(duration_until_next_month.total_seconds())
-
+    if token.startswith("sk-"):
+        return hash_token(token=token)
     else:
-        raise ValueError("Unsupported duration unit")
+        return token
 
 
 async def reset_budget(prisma_client: PrismaClient):
@@ -2568,7 +2497,7 @@ async def reset_budget(prisma_client: PrismaClient):
         if keys_to_reset is not None and len(keys_to_reset) > 0:
             for key in keys_to_reset:
                 key.spend = 0.0
-                duration_s = _duration_in_seconds(duration=key.budget_duration)
+                duration_s = duration_in_seconds(duration=key.budget_duration)
                 key.budget_reset_at = now + timedelta(seconds=duration_s)
 
             await prisma_client.update_data(
@@ -2584,7 +2513,7 @@ async def reset_budget(prisma_client: PrismaClient):
         if users_to_reset is not None and len(users_to_reset) > 0:
             for user in users_to_reset:
                 user.spend = 0.0
-                duration_s = _duration_in_seconds(duration=user.budget_duration)
+                duration_s = duration_in_seconds(duration=user.budget_duration)
                 user.budget_reset_at = now + timedelta(seconds=duration_s)
 
             await prisma_client.update_data(
@@ -2602,7 +2531,7 @@ async def reset_budget(prisma_client: PrismaClient):
         if teams_to_reset is not None and len(teams_to_reset) > 0:
             team_reset_requests = []
             for team in teams_to_reset:
-                duration_s = _duration_in_seconds(duration=team.budget_duration)
+                duration_s = duration_in_seconds(duration=team.budget_duration)
                 reset_team_budget_request = ResetTeamBudgetRequest(
                     team_id=team.team_id,
                     spend=0.0,
@@ -3135,3 +3064,55 @@ def get_error_message_str(e: Exception) -> str:
     else:
         error_message = str(e)
     return error_message
+
+
+def _get_redoc_url() -> str:
+    """
+    Get the redoc URL from the environment variables.
+
+    - If REDOC_URL is set, return it.
+    - Otherwise, default to "/redoc".
+    """
+    return os.getenv("REDOC_URL", "/redoc")
+
+
+def _get_docs_url() -> Optional[str]:
+    """
+    Get the docs URL from the environment variables.
+
+    - If DOCS_URL is set, return it.
+    - If NO_DOCS is True, return None.
+    - Otherwise, default to "/".
+    """
+    docs_url = os.getenv("DOCS_URL", None)
+    if docs_url:
+        return docs_url
+
+    if os.getenv("NO_DOCS", "False") == "True":
+        return None
+
+    # default to "/"
+    return "/"
+
+
+def handle_exception_on_proxy(e: Exception) -> ProxyException:
+    """
+    Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
+    """
+    from fastapi import status
+
+    if isinstance(e, HTTPException):
+        return ProxyException(
+            message=getattr(e, "detail", f"error({str(e)})"),
+            type=ProxyErrorTypes.internal_server_error,
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+        )
+    elif isinstance(e, ProxyException):
+        return e
+    return ProxyException(
+        message="Internal Server Error, " + str(e),
+        type=ProxyErrorTypes.internal_server_error,
+        param=getattr(e, "param", "None"),
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )

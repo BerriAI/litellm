@@ -1,15 +1,27 @@
 import hashlib
 import json
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import httpx
+from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache, InMemoryCache
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 from .base import BaseLLM
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+else:
+    Credentials = Any
+
+
+class Boto3CredentialsInfo(BaseModel):
+    credentials: Credentials
+    aws_region_name: str
+    aws_bedrock_runtime_endpoint: Optional[str]
 
 
 class AwsAuthError(Exception):
@@ -311,3 +323,74 @@ class BaseAWSLLM(BaseLLM):
             proxy_endpoint_url = endpoint_url
 
         return endpoint_url, proxy_endpoint_url
+
+    def _get_boto_credentials_from_optional_params(
+        self, optional_params: dict
+    ) -> Boto3CredentialsInfo:
+        """
+        Get boto3 credentials from optional params
+
+        Args:
+            optional_params (dict): Optional parameters for the model call
+
+        Returns:
+            Credentials: Boto3 credentials object
+        """
+        try:
+            import boto3
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.credentials import Credentials
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ## CREDENTIALS ##
+        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
+        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_session_token = optional_params.pop("aws_session_token", None)
+        aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_role_name = optional_params.pop("aws_role_name", None)
+        aws_session_name = optional_params.pop("aws_session_name", None)
+        aws_profile_name = optional_params.pop("aws_profile_name", None)
+        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        aws_bedrock_runtime_endpoint = optional_params.pop(
+            "aws_bedrock_runtime_endpoint", None
+        )  # https://bedrock-runtime.{region_name}.amazonaws.com
+
+        ### SET REGION NAME ###
+        if aws_region_name is None:
+            # check env #
+            litellm_aws_region_name = get_secret_str("AWS_REGION_NAME", None)
+
+            if litellm_aws_region_name is not None and isinstance(
+                litellm_aws_region_name, str
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret_str("AWS_REGION", None)
+            if standard_aws_region_name is not None and isinstance(
+                standard_aws_region_name, str
+            ):
+                aws_region_name = standard_aws_region_name
+
+            if aws_region_name is None:
+                aws_region_name = "us-west-2"
+
+        credentials: Credentials = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+        )
+
+        return Boto3CredentialsInfo(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        )

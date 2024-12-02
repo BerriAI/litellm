@@ -6,7 +6,11 @@ import httpx
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.llms.OpenAI.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
@@ -331,6 +335,13 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, cached_content
 
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages
+        )
+
+        if len(cached_messages) == 0:
+            return messages, None
+
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
@@ -347,21 +358,11 @@ class ContextCachingEndpoints(VertexBase):
             headers.update(extra_headers)
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
+            client = get_async_httpx_client(
+                params={"timeout": timeout}, llm_provider=litellm.LlmProviders.VERTEX_AI
+            )
         else:
             client = client
-
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
-
-        if len(cached_messages) == 0:
-            return messages, None
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)

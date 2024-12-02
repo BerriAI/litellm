@@ -89,11 +89,30 @@ def test_get_model_info_ollama_chat():
                 "template": "tools",
             }
         ),
-    ):
+    ) as mock_client:
         info = OllamaConfig().get_model_info("mistral")
-        print("info", info)
         assert info["supports_function_calling"] is True
 
         info = get_model_info("ollama/mistral")
-        print("info", info)
+
         assert info["supports_function_calling"] is True
+
+        mock_client.assert_called()
+
+        print(mock_client.call_args.kwargs)
+
+        assert mock_client.call_args.kwargs["json"]["name"] == "mistral"
+
+
+def test_get_model_info_gemini():
+    """
+    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_map = litellm.model_cost
+    for model, info in model_map.items():
+        if model.startswith("gemini/") and not "gemma" in model:
+            assert info.get("tpm") is not None, f"{model} does not have tpm"
+            assert info.get("rpm") is not None, f"{model} does not have rpm"

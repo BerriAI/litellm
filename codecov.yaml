@@ -19,3 +19,14 @@ component_management:
         - "*/proxy/auth/**"
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1% # at maximum allow project coverage to drop by 1%
+    patch:
+      default:
+        target: auto
+        threshold: 0% # patch coverage should be 100%

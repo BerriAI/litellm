@@ -284,9 +284,7 @@ Output from script
 
 :::info
 
-Customer This is the value of `user_id` passed when calling [`/key/generate`](https://litellm-api.up.railway.app/#/key%20management/generate_key_fn_key_generate_post)
-
-[this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+Customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
 - [LiteLLM API key](virtual_keys.md)
 
 

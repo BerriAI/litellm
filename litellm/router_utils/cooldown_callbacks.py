@@ -88,6 +88,9 @@ def _get_prometheus_logger_from_callbacks() -> Optional[PrometheusLogger]:
     """
     from litellm.integrations.prometheus import PrometheusLogger
 
+    for _callback in litellm._async_success_callback:
+        if isinstance(_callback, PrometheusLogger):
+            return _callback
     for _callback in litellm.callbacks:
         if isinstance(_callback, PrometheusLogger):
             return _callback

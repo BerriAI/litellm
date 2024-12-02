@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Fallbacks, Load Balancing, Retries
+# Proxy - Fallbacks, Retries
 
 - Quick Start [load balancing](#test---load-balancing)
 - Quick Start [client side fallbacks](#test---client-side-fallbacks)
@@ -747,5 +747,20 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
     ],
     "max_tokens": 300,
     "mock_testing_fallbacks": true
+}'
+```
+
+### Disable Fallbacks per key
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "disable_fallbacks": true
+    }
 }'
 ```

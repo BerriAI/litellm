@@ -19,7 +19,10 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from .base import BaseLLM
@@ -549,7 +552,10 @@ class PredibaseChatCompletion(BaseLLM):
         headers={},
     ) -> ModelResponse:
 
-        async_handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=timeout))
+        async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.PREDIBASE,
+            params={"timeout": timeout},
+        )
         try:
             response = await async_handler.post(
                 api_base, headers=headers, data=json.dumps(data)

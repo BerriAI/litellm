@@ -89,6 +89,9 @@ def _get_vertex_url(
     elif mode == "embedding":
         endpoint = "predict"
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        if model.isdigit():
+            # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
 
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
@@ -164,7 +167,12 @@ def _build_vertex_schema(parameters: dict):
     # 4. Suppress unnecessary title generation:
     #    * https://github.com/pydantic/pydantic/issues/1051
     #    * http://cl/586221780
-    strip_titles(parameters)
+    strip_field(parameters, field_name="title")
+
+    strip_field(
+        parameters, field_name="$schema"
+    )  # 5. Remove $schema - json schema value, not supported by OpenAPI - causes vertex errors.
+
     return parameters
 
 
@@ -234,7 +242,8 @@ def convert_to_nullable(schema):
 def add_object_type(schema):
     properties = schema.get("properties", None)
     if properties is not None:
-        schema.pop("required", None)
+        if "required" in schema and schema["required"] is None:
+            schema.pop("required", None)
         schema["type"] = "object"
         for name, value in properties.items():
             add_object_type(value)
@@ -244,14 +253,14 @@ def add_object_type(schema):
         add_object_type(items)
 
 
-def strip_titles(schema):
-    schema.pop("title", None)
+def strip_field(schema, field_name: str):
+    schema.pop(field_name, None)
 
     properties = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
-            strip_titles(value)
+            strip_field(value, field_name)
 
     items = schema.get("items", None)
     if items is not None:
-        strip_titles(items)
+        strip_field(items, field_name)

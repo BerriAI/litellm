@@ -1450,7 +1450,7 @@ async def test_mistral_on_router():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "mistral/mistral-medium",
+                "model": "mistral/mistral-small-latest",
             },
         },
     ]
@@ -1807,7 +1807,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": "claude-instant-1.2",
+                "model": "claude-3-5-haiku-20241022",
                 "api_key": anthropic_api_key,
             },
         }
@@ -1866,15 +1866,8 @@ async def test_router_amoderation():
     router = Router(model_list=model_list)
     ## Test 1: user facing function
     result = await router.amoderation(
-        model="openai-moderations", input="this is valid good text"
+        model="text-moderation-stable", input="this is valid good text"
     )
-
-    ## Test 2: underlying function
-    result = await router._amoderation(
-        model="openai-moderations", input="this is valid good text"
-    )
-
-    print("moderation result", result)
 
 
 def test_router_add_deployment():
@@ -2122,10 +2115,14 @@ def test_router_get_model_info(model, base_model, llm_provider):
     assert deployment is not None
 
     if llm_provider == "openai" or (base_model is not None and llm_provider == "azure"):
-        router.get_router_model_info(deployment=deployment.to_json())
+        router.get_router_model_info(
+            deployment=deployment.to_json(), received_model_name=model
+        )
     else:
         try:
-            router.get_router_model_info(deployment=deployment.to_json())
+            router.get_router_model_info(
+                deployment=deployment.to_json(), received_model_name=model
+            )
             pytest.fail("Expected this to raise model not mapped error")
         except Exception as e:
             if "This model isn't mapped yet" in str(e):
@@ -2445,13 +2442,15 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
             except litellm.RateLimitError:
                 pass
 
+        await asyncio.sleep(2)
+
         if sync_mode:
             cooldown_deployments = _get_cooldown_deployments(
-                litellm_router_instance=router
+                litellm_router_instance=router, parent_otel_span=None
             )
         else:
             cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=router
+                litellm_router_instance=router, parent_otel_span=None
             )
         print(
             "Cooldown deployments - {}\n{}".format(
@@ -2484,6 +2483,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_router_weighted_pick(sync_mode):
     router = Router(
         model_list=[

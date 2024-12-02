@@ -242,12 +242,12 @@ async def test_single_deployment_no_cooldowns_test_prod_mock_completion_calls():
             pass
 
     cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router
+        litellm_router_instance=router, parent_otel_span=None
     )
     assert len(cooldown_list) == 0
 
     healthy_deployments, _ = await router._async_get_healthy_deployments(
-        model="gpt-3.5-turbo"
+        model="gpt-3.5-turbo", parent_otel_span=None
     )
 
     print("healthy_deployments: ", healthy_deployments)
@@ -351,7 +351,7 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
     print("model_stats: ", model_stats)
 
     cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router
+        litellm_router_instance=router, parent_otel_span=None
     )
     assert len(cooldown_list) == 0
 
@@ -449,7 +449,7 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
     print("model_stats: ", model_stats)
 
     cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router
+        litellm_router_instance=router, parent_otel_span=None
     )
     assert len(cooldown_list) == 1
 
@@ -550,7 +550,7 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
     print("model_stats: ", model_stats)
 
     cooldown_list = await _async_get_cooldown_deployments(
-        litellm_router_instance=router
+        litellm_router_instance=router, parent_otel_span=None
     )
     assert len(cooldown_list) == 1
 

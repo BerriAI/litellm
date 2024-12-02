@@ -2,7 +2,9 @@
 from typing import Optional, List
 from litellm._logging import verbose_logger
 from litellm.proxy.proxy_server import PrismaClient, HTTPException
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 import collections
+import httpx
 from datetime import datetime
 
 
@@ -114,7 +116,6 @@ async def ui_get_spend_by_tags(
 
 
 def _forecast_daily_cost(data: list):
-    import requests  # type: ignore
     from datetime import datetime, timedelta
 
     if len(data) == 0:
@@ -136,16 +137,16 @@ def _forecast_daily_cost(data: list):
 
     print("last entry date", last_entry_date)
 
-    # Assuming today_date is a datetime object
-    today_date = datetime.now()
-
     # Calculate the last day of the month
     last_day_of_todays_month = datetime(
         today_date.year, today_date.month % 12 + 1, 1
     ) - timedelta(days=1)
 
+    print("last day of todays month", last_day_of_todays_month)
     # Calculate the remaining days in the month
     remaining_days = (last_day_of_todays_month - last_entry_date).days
+
+    print("remaining days", remaining_days)
 
     current_spend_this_month = 0
     series = {}
@@ -176,13 +177,19 @@ def _forecast_daily_cost(data: list):
         "Content-Type": "application/json",
     }
 
-    response = requests.post(
-        url="https://trend-api-production.up.railway.app/forecast",
-        json=payload,
-        headers=headers,
-    )
-    # check the status code
-    response.raise_for_status()
+    client = HTTPHandler()
+
+    try:
+        response = client.post(
+            url="https://trend-api-production.up.railway.app/forecast",
+            json=payload,
+            headers=headers,
+        )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Error getting forecast: {e.response.text}"},
+        )
 
     json_response = response.json()
     forecast_data = json_response["forecast"]
@@ -206,13 +213,3 @@ def _forecast_daily_cost(data: list):
         f"Predicted Spend for { today_month } 2024, ${total_predicted_spend}"
     )
     return {"response": response_data, "predicted_spend": predicted_spend}
-
-    # print(f"Date: {entry['date']}, Spend: {entry['spend']}, Response: {response.text}")
-
-
-# _forecast_daily_cost(
-#     [
-#         {"date": "2022-01-01", "spend": 100},
-
-#     ]
-# )

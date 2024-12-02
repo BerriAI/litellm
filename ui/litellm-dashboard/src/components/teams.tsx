@@ -80,7 +80,13 @@ const Team: React.FC<TeamProps> = ({
     if (teams === null && accessToken) {
       // Call your function here
       const fetchData = async () => {
-        const givenTeams = await teamListCall(accessToken)
+        let givenTeams;
+        if (userRole != "Admin" && userRole != "Admin Viewer") {
+          givenTeams = await teamListCall(accessToken, userID)
+        } else {
+          givenTeams = await teamListCall(accessToken)
+        }
+        
         console.log(`givenTeams: ${givenTeams}`)
 
         setTeams(givenTeams)
@@ -98,6 +104,7 @@ const Team: React.FC<TeamProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<null | any>(
     teams ? teams[0] : null
   );
+
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState([]);
@@ -327,7 +334,13 @@ const Team: React.FC<TeamProps> = ({
         }
 
         let _team_id_to_info: Record<string, any> = {};
-        const teamList = await teamListCall(accessToken)
+        let teamList;
+        if (userRole != "Admin" && userRole != "Admin Viewer") {
+          teamList = await teamListCall(accessToken, userID)
+        } else {
+          teamList = await teamListCall(accessToken)
+        }
+        
         for (let i = 0; i < teamList.length; i++) {
           let team = teamList[i];
           let _team_id = team.team_id;
@@ -376,12 +389,22 @@ const Team: React.FC<TeamProps> = ({
     }
   };
 
+  const is_team_admin = (team: any) => {
+    for (let i = 0; i < team.members_with_roles.length; i++) {
+      let member = team.members_with_roles[i];
+      if (member.user_id == userID && member.role == "admin") {
+        return true;
+      }
+    }
+    return false;
+  }
+
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null && teams != null) {
         message.info("Adding Member");
         const user_role: Member = {
-          role: "user",
+          role: formValues.role,
           user_email: formValues.user_email,
           user_id: formValues.user_id,
         };
@@ -390,6 +413,7 @@ const Team: React.FC<TeamProps> = ({
           selectedTeam["team_id"],
           user_role
         );
+        message.success("Member added");
         console.log(`response for team create call: ${response["data"]}`);
         // Checking if the team exists in the list and updating or adding accordingly
         const foundIndex = teams.findIndex((team) => {
@@ -407,6 +431,7 @@ const Team: React.FC<TeamProps> = ({
           setSelectedTeam(response.data);
         }
         setIsAddMemberModalVisible(false);
+        
       }
     } catch (error) {
       console.error("Error creating the team:", error);
@@ -551,25 +576,26 @@ const Team: React.FC<TeamProps> = ({
                             {perTeamInfo &&
                               team.team_id &&
                               perTeamInfo[team.team_id] &&
-                              perTeamInfo[team.team_id].team_info &&
-                              perTeamInfo[team.team_id].team_info
-                                .members_with_roles &&
-                              perTeamInfo[team.team_id].team_info
-                                .members_with_roles.length}{" "}
+                              perTeamInfo[team.team_id].members_with_roles &&
+                              perTeamInfo[team.team_id].members_with_roles.length}{" "}
                             Members
                           </Text>
                         </TableCell>
                         <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            size="sm"
-                            onClick={() => handleEditClick(team)}
-                          />
-                          <Icon
-                            onClick={() => handleDelete(team.team_id)}
-                            icon={TrashIcon}
-                            size="sm"
-                          />
+                          {userRole == "Admin" ? (
+                            <>
+                            <Icon
+                              icon={PencilAltIcon}
+                              size="sm"
+                              onClick={() => handleEditClick(team)}
+                            />
+                            <Icon
+                              onClick={() => handleDelete(team.team_id)}
+                              icon={TrashIcon}
+                              size="sm"
+                            />
+                            </>
+                          ) : null}
                         </TableCell>
                       </TableRow>
                     ))
@@ -626,8 +652,9 @@ const Team: React.FC<TeamProps> = ({
             )}
           </Card>
         </Col>
-        <Col numColSpan={1}>
-          <Button
+        {userRole == "Admin"? (
+          <Col numColSpan={1}>
+            <Button
             className="mx-auto"
             onClick={() => setIsTeamModalVisible(true)}
           >
@@ -710,7 +737,8 @@ const Team: React.FC<TeamProps> = ({
               </div>
             </Form>
           </Modal>
-        </Col>
+          </Col>
+        ) : null}
         <Col numColSpan={1}>
           <Title level={4}>Team Members</Title>
           <Paragraph>
@@ -777,12 +805,14 @@ const Team: React.FC<TeamProps> = ({
           )}
         </Col>
         <Col numColSpan={1}>
-          <Button
-            className="mx-auto mb-5"
-            onClick={() => setIsAddMemberModalVisible(true)}
-          >
-            + Add member
-          </Button>
+          {userRole == "Admin" || (selectedTeam && is_team_admin(selectedTeam)) ? (
+            <Button
+              className="mx-auto mb-5"
+              onClick={() => setIsAddMemberModalVisible(true)}
+            >
+              + Add member
+            </Button>
+          ) : null}
           <Modal
             title="Add member"
             visible={isAddMemberModalVisible}
@@ -797,6 +827,9 @@ const Team: React.FC<TeamProps> = ({
               labelCol={{ span: 8 }}
               wrapperCol={{ span: 16 }}
               labelAlign="left"
+              initialValues={{
+                role: "user",
+              }}
             >
               <>
                 <Form.Item label="Email" name="user_email" className="mb-4">
@@ -811,6 +844,12 @@ const Team: React.FC<TeamProps> = ({
                     name="user_id"
                     className="px-3 py-2 border rounded-md w-full"
                   />
+                </Form.Item>
+                <Form.Item label="Member Role" name="role" className="mb-4">
+                  <Select2 defaultValue="user">
+                    <Select2.Option value="admin">admin</Select2.Option>
+                    <Select2.Option value="user">user</Select2.Option>
+                  </Select2>
                 </Form.Item>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>

@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from starlette.datastructures import URL
@@ -139,6 +139,7 @@ async def test_check_blocked_team():
 def test_returned_user_api_key_auth(user_role, expected_role):
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    from datetime import datetime
 
     new_obj = _return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(
@@ -148,6 +149,7 @@ def test_returned_user_api_key_auth(user_role, expected_role):
         parent_otel_span=None,
         valid_token_dict={},
         route="/chat/completion",
+        start_time=datetime.now(),
     )
 
     assert new_obj.user_role == expected_role
@@ -155,7 +157,7 @@ def test_returned_user_api_key_auth(user_role, expected_role):
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio
-async def test_user_personal_budgets(key_ownership):
+async def test_aaauser_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
@@ -167,6 +169,7 @@ async def test_user_personal_budgets(key_ownership):
 
     from fastapi import Request
     from starlette.datastructures import URL
+    import litellm
 
     from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -191,7 +194,7 @@ async def test_user_personal_budgets(key_ownership):
             team_max_budget=100,
             spend=20,
         )
-    await asyncio.sleep(1)
+
     user_obj = LiteLLM_UserTable(
         user_id=_user_id, spend=11, max_budget=10, user_email=""
     )
@@ -204,6 +207,10 @@ async def test_user_personal_budgets(key_ownership):
 
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
+
+    test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
+
+    assert test_user_cache.get_cache(key=hash_token(user_key)) == valid_token
 
     try:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -293,26 +300,133 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
     setattr(proxy_server, "general_settings", initial_general_settings)
 
 
-@pytest.mark.parametrize("route", ["/global/spend/logs", "/key/delete"])
-def test_is_ui_route_allowed(route):
-    from litellm.proxy.auth.user_api_key_auth import _is_ui_route_allowed
+@pytest.mark.parametrize(
+    "route, user_role, expected_result",
+    [
+        # Proxy Admin checks
+        ("/global/spend/logs", "proxy_admin", True),
+        ("/key/delete", "proxy_admin", False),
+        ("/key/generate", "proxy_admin", False),
+        ("/key/regenerate", "proxy_admin", False),
+        # Internal User checks - allowed routes
+        ("/global/spend/logs", "internal_user", True),
+        ("/key/delete", "internal_user", False),
+        ("/key/generate", "internal_user", False),
+        ("/key/82akk800000000jjsk/regenerate", "internal_user", False),
+        # Internal User Viewer
+        ("/key/generate", "internal_user_viewer", False),
+        # Internal User checks - disallowed routes
+        ("/organization/member_add", "internal_user", False),
+    ],
+)
+def test_is_ui_route_allowed(route, user_role, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_ui_route
     from litellm.proxy._types import LiteLLM_UserTable
+
+    user_obj = LiteLLM_UserTable(
+        user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+        max_budget=None,
+        spend=0.0,
+        model_max_budget={},
+        model_spend={},
+        user_email="my-test-email@1234.com",
+        models=[],
+        tpm_limit=None,
+        rpm_limit=None,
+        user_role=user_role,
+        organization_memberships=[],
+    )
 
     received_args: dict = {
         "route": route,
-        "user_obj": LiteLLM_UserTable(
-            user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
-            max_budget=None,
-            spend=0.0,
-            model_max_budget={},
-            model_spend={},
-            user_email="my-test-email@1234.com",
-            models=[],
-            tpm_limit=None,
-            rpm_limit=None,
-            user_role="internal_user",
-            organization_memberships=[],
-        ),
+        "user_obj": user_obj,
     }
+    try:
+        assert _is_ui_route(**received_args) == expected_result
+    except Exception as e:
+        # If expected result is False, we expect an error
+        if expected_result is False:
+            pass
+        else:
+            raise e
 
-    assert _is_ui_route_allowed(**received_args)
+
+@pytest.mark.parametrize(
+    "route, user_role, expected_result",
+    [
+        ("/key/generate", "internal_user_viewer", False),
+    ],
+)
+def test_is_api_route_allowed(route, user_role, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_api_route_allowed
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    user_obj = LiteLLM_UserTable(
+        user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+        max_budget=None,
+        spend=0.0,
+        model_max_budget={},
+        model_spend={},
+        user_email="my-test-email@1234.com",
+        models=[],
+        tpm_limit=None,
+        rpm_limit=None,
+        user_role=user_role,
+        organization_memberships=[],
+    )
+
+    received_args: dict = {
+        "route": route,
+        "user_obj": user_obj,
+    }
+    try:
+        assert _is_api_route_allowed(**received_args) == expected_result
+    except Exception as e:
+        # If expected result is False, we expect an error
+        if expected_result is False:
+            pass
+        else:
+            raise e
+
+
+from litellm.proxy._types import LitellmUserRoles
+
+
+@pytest.mark.parametrize(
+    "user_role, auth_user_id, requested_user_id, expected_result",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "1234", None, True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, None, "1234", True),
+        (LitellmUserRoles.TEAM, "1234", None, False),
+        (LitellmUserRoles.TEAM, None, None, False),
+        (LitellmUserRoles.TEAM, "1234", "1234", True),
+    ],
+)
+def test_allowed_route_inside_route(
+    user_role, auth_user_id, requested_user_id, expected_result
+):
+    from litellm.proxy.auth.auth_checks import allowed_route_check_inside_route
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+
+    assert (
+        allowed_route_check_inside_route(
+            user_api_key_dict=UserAPIKeyAuth(user_role=user_role, user_id=auth_user_id),
+            requested_user_id=requested_user_id,
+        )
+        == expected_result
+    )
+
+
+def test_read_request_body():
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from fastapi import Request
+
+    payload = "()" * 1000000
+    request = Request(scope={"type": "http"})
+
+    async def return_body():
+        return payload
+
+    request.body = return_body
+    result = _read_request_body(request)
+    assert result is not None

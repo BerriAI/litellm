@@ -151,6 +151,7 @@ enum Providers {
   Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
+  xAI = "xAI",
 }
 
 const provider_map: Record<string, string> = {
@@ -166,6 +167,7 @@ const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  xAI: "xai",
   Deepseek: "deepseek",
   Ollama: "ollama",
 

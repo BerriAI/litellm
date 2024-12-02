@@ -268,6 +268,7 @@ class SlackAlerting(CustomBatchLogger):
                         SlackAlertingCacheKeys.failed_requests_key.value,
                     ),
                     value=1,
+                    parent_otel_span=None,  # no attached request, this is a background operation
                 )
 
                 return_val += 1
@@ -279,6 +280,7 @@ class SlackAlerting(CustomBatchLogger):
                         deployment_metrics.id, SlackAlertingCacheKeys.latency_key.value
                     ),
                     value=deployment_metrics.latency_per_output_token,
+                    parent_otel_span=None,  # no attached request, this is a background operation
                 )
 
                 return_val += 1
@@ -421,7 +423,7 @@ class SlackAlerting(CustomBatchLogger):
         latency_cache_keys = [(key, 0) for key in latency_keys]
         failed_request_cache_keys = [(key, 0) for key in failed_request_keys]
         combined_metrics_cache_keys = latency_cache_keys + failed_request_cache_keys
-        await self.internal_usage_cache.async_batch_set_cache(
+        await self.internal_usage_cache.async_set_cache_pipeline(
             cache_list=combined_metrics_cache_keys
         )
 
@@ -548,8 +550,14 @@ class SlackAlerting(CustomBatchLogger):
                     alerting_metadata=alerting_metadata,
                 )
 
-    async def failed_tracking_alert(self, error_message: str):
-        """Raise alert when tracking failed for specific model"""
+    async def failed_tracking_alert(self, error_message: str, failing_model: str):
+        """
+        Raise alert when tracking failed for specific model
+
+        Args:
+            error_message (str): Error message
+            failing_model (str): Model that failed tracking
+        """
         if self.alerting is None or self.alert_types is None:
             # do nothing if alerting is not switched on
             return
@@ -558,7 +566,7 @@ class SlackAlerting(CustomBatchLogger):
 
         _cache: DualCache = self.internal_usage_cache
         message = "Failed Tracking Cost for " + error_message
-        _cache_key = "budget_alerts:failed_tracking:{}".format(message)
+        _cache_key = "budget_alerts:failed_tracking:{}".format(failing_model)
         result = await _cache.async_get_cache(key=_cache_key)
         if result is None:
             await self.send_alert(
@@ -1518,7 +1526,8 @@ Model Info:
         report_sent_bool = False
 
         report_sent = await self.internal_usage_cache.async_get_cache(
-            key=SlackAlertingCacheKeys.report_sent_key.value
+            key=SlackAlertingCacheKeys.report_sent_key.value,
+            parent_otel_span=None,
         )  # None | float
 
         current_time = time.time()

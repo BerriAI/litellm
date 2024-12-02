@@ -40,6 +40,31 @@ interface CreateKeyProps {
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
 
+const getPredefinedTags = (data: any[] | null) => {
+  let allTags = [];
+
+  console.log("data:", JSON.stringify(data));
+
+  if (data) {
+    for (let key of data) {
+      if (key["metadata"] && key["metadata"]["tags"]) {
+        allTags.push(...key["metadata"]["tags"]);
+      }
+    }
+  }
+
+  // Deduplicate using Set
+  const uniqueTags = Array.from(new Set(allTags)).map(tag => ({
+    value: tag,
+    label: tag,
+  }));
+
+
+  console.log("uniqueTags:", uniqueTags);
+  return uniqueTags;
+}
+
+
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
@@ -55,6 +80,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [userModels, setUserModels] = useState([]);
   const [modelsToPick, setModelsToPick] = useState([]);
   const [keyOwner, setKeyOwner] = useState("you");
+  const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
+
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -353,6 +380,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"
+                  />
+                </Form.Item>
+                <Form.Item label="Tags" name="tags" className="mt-8" help={`Tags for tracking spend and/or doing tag-based routing.`}>
+                <Select
+                    mode="tags"
+                    style={{ width: '100%' }}
+                    placeholder="Enter tags"
+                    tokenSeparators={[',']}
+                    options={predefinedTags}
                   />
                 </Form.Item>
               </AccordionBody>

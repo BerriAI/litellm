@@ -12,7 +12,11 @@ from typing_extensions import overload
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import (
     CustomStreamWrapper,
@@ -961,6 +965,7 @@ class AzureChatCompletion(BaseLLM):
         api_version: str,
         api_key: str,
         data: dict,
+        headers: dict,
     ) -> httpx.Response:
         """
         Implemented for azure dall-e-2 image gen calls
@@ -976,7 +981,10 @@ class AzureChatCompletion(BaseLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            async_handler = AsyncHTTPHandler(**_params)  # type: ignore
+            async_handler = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.AZURE,
+                params=_params,
+            )
         else:
             async_handler = client  # type: ignore
 
@@ -1002,10 +1010,7 @@ class AzureChatCompletion(BaseLLM):
             response = await async_handler.post(
                 url=api_base,
                 data=json.dumps(data),
-                headers={
-                    "Content-Type": "application/json",
-                    "api-key": api_key,
-                },
+                headers=headers,
             )
             if "operation-location" in response.headers:
                 operation_location_url = response.headers["operation-location"]
@@ -1013,9 +1018,7 @@ class AzureChatCompletion(BaseLLM):
                 raise AzureOpenAIError(status_code=500, message=response.text)
             response = await async_handler.get(
                 url=operation_location_url,
-                headers={
-                    "api-key": api_key,
-                },
+                headers=headers,
             )
 
             await response.aread()
@@ -1036,9 +1039,7 @@ class AzureChatCompletion(BaseLLM):
                 await asyncio.sleep(int(response.headers.get("retry-after") or 10))
                 response = await async_handler.get(
                     url=operation_location_url,
-                    headers={
-                        "api-key": api_key,
-                    },
+                    headers=headers,
                 )
                 await response.aread()
 
@@ -1056,10 +1057,7 @@ class AzureChatCompletion(BaseLLM):
         return await async_handler.post(
             url=api_base,
             json=data,
-            headers={
-                "Content-Type": "application/json;",
-                "api-key": api_key,
-            },
+            headers=headers,
         )
 
     def make_sync_azure_httpx_request(
@@ -1070,6 +1068,7 @@ class AzureChatCompletion(BaseLLM):
         api_version: str,
         api_key: str,
         data: dict,
+        headers: dict,
     ) -> httpx.Response:
         """
         Implemented for azure dall-e-2 image gen calls
@@ -1085,7 +1084,7 @@ class AzureChatCompletion(BaseLLM):
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler = HTTPHandler(**_params)  # type: ignore
+            sync_handler = HTTPHandler(**_params, client=litellm.client_session)  # type: ignore
         else:
             sync_handler = client  # type: ignore
 
@@ -1111,10 +1110,7 @@ class AzureChatCompletion(BaseLLM):
             response = sync_handler.post(
                 url=api_base,
                 data=json.dumps(data),
-                headers={
-                    "Content-Type": "application/json",
-                    "api-key": api_key,
-                },
+                headers=headers,
             )
             if "operation-location" in response.headers:
                 operation_location_url = response.headers["operation-location"]
@@ -1122,9 +1118,7 @@ class AzureChatCompletion(BaseLLM):
                 raise AzureOpenAIError(status_code=500, message=response.text)
             response = sync_handler.get(
                 url=operation_location_url,
-                headers={
-                    "api-key": api_key,
-                },
+                headers=headers,
             )
 
             response.read()
@@ -1144,9 +1138,7 @@ class AzureChatCompletion(BaseLLM):
                 time.sleep(int(response.headers.get("retry-after") or 10))
                 response = sync_handler.get(
                     url=operation_location_url,
-                    headers={
-                        "api-key": api_key,
-                    },
+                    headers=headers,
                 )
                 response.read()
 
@@ -1164,16 +1156,12 @@ class AzureChatCompletion(BaseLLM):
         return sync_handler.post(
             url=api_base,
             json=data,
-            headers={
-                "Content-Type": "application/json;",
-                "api-key": api_key,
-            },
+            headers=headers,
         )
 
     def create_azure_base_url(
         self, azure_client_params: dict, model: Optional[str]
     ) -> str:
-
         api_base: str = azure_client_params.get(
             "azure_endpoint", ""
         )  # "https://example-endpoint.openai.azure.com"
@@ -1182,16 +1170,16 @@ class AzureChatCompletion(BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
-        new_api_base = (
-            api_base
-            + "/openai/deployments/"
-            + model
-            + "/images/generations"
-            + "?api-version="
-            + api_version
-        )
 
-        return new_api_base
+        if "/openai/deployments/" in api_base:
+            base_url_with_deployment = api_base
+        else:
+            base_url_with_deployment = api_base + "/openai/deployments/" + model
+
+        base_url_with_deployment += "/images/generations"
+        base_url_with_deployment += "?api-version=" + api_version
+
+        return base_url_with_deployment
 
     async def aimage_generation(
         self,
@@ -1201,6 +1189,7 @@ class AzureChatCompletion(BaseLLM):
         api_key: str,
         input: list,
         logging_obj: LiteLLMLoggingObj,
+        headers: dict,
         client=None,
         timeout=None,
     ) -> litellm.ImageResponse:
@@ -1224,7 +1213,7 @@ class AzureChatCompletion(BaseLLM):
                 additional_args={
                     "complete_input_dict": data,
                     "api_base": img_gen_api_base,
-                    "headers": {"api_key": api_key},
+                    "headers": headers,
                 },
             )
             httpx_response: httpx.Response = await self.make_async_azure_httpx_request(
@@ -1234,6 +1223,7 @@ class AzureChatCompletion(BaseLLM):
                 api_version=api_version,
                 api_key=api_key,
                 data=data,
+                headers=headers,
             )
             response = httpx_response.json()
 
@@ -1266,6 +1256,7 @@ class AzureChatCompletion(BaseLLM):
         timeout: float,
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
+        headers: dict,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
@@ -1316,7 +1307,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["azure_ad_token"] = azure_ad_token
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
+                return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers)  # type: ignore
 
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params, model=data.get("model", "")
@@ -1329,7 +1320,7 @@ class AzureChatCompletion(BaseLLM):
                 additional_args={
                     "complete_input_dict": data,
                     "api_base": img_gen_api_base,
-                    "headers": {"api_key": api_key},
+                    "headers": headers,
                 },
             )
             httpx_response: httpx.Response = self.make_sync_azure_httpx_request(
@@ -1339,6 +1330,7 @@ class AzureChatCompletion(BaseLLM):
                 api_version=api_version or "",
                 api_key=api_key or "",
                 data=data,
+                headers=headers,
             )
             response = httpx_response.json()
 
@@ -1536,7 +1528,8 @@ class AzureChatCompletion(BaseLLM):
         prompt: Optional[str] = None,
     ) -> dict:
         client_session = (
-            litellm.aclient_session or httpx.AsyncClient()
+            litellm.aclient_session
+            or get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE).client
         )  # handle dall-e-2 calls
 
         if "gateway.ai.cloudflare.com" in api_base:

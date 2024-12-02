@@ -30,18 +30,20 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _duration_in_seconds,
+    duration_in_seconds,
     generate_key_helper_fn,
+    prepare_metadata_fields,
 )
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
 
-def _update_internal_user_params(data_json: dict, data: NewUserRequest) -> dict:
+def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
@@ -101,11 +103,27 @@ async def new_user(
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
-    - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
     - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
     - auto_create_key: bool - Default=True. Flag used for returning a key as part of the /user/new response
+    - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
+    - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
+    - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
+    - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+    - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
+    - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
+    - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+    - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
+    - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+    - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
+    - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
+    - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
+    - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
+    - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
+    - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
 
     Returns:
     - key: (str) The generated api key for the user
@@ -128,7 +146,7 @@ async def new_user(
     from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     data_json = data.json()  # type: ignore
-    data_json = _update_internal_user_params(data_json, data)
+    data_json = _update_internal_new_user_params(data_json, data)
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
@@ -195,76 +213,6 @@ async def new_user(
         rpm_limit=response.get("rpm_limit", None),
         budget_duration=response.get("budget_duration", None),
     )
-
-
-@router.post(
-    "/user/auth",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def user_auth(request: Request):
-    """
-    Allows UI ("https://dashboard.litellm.ai/", or self-hosted - os.getenv("LITELLM_HOSTED_UI")) to request a magic link to be sent to user email, for auth to proxy.
-
-    Only allows emails from accepted email subdomains.
-
-    Rate limit: 1 request every 60s.
-
-    Only works, if you enable 'allow_user_auth' in general settings:
-    e.g.:
-    ```yaml
-    general_settings:
-        allow_user_auth: true
-    ```
-
-    Requirements:
-    SMTP server details saved in .env:
-    - os.environ["SMTP_HOST"]
-    - os.environ["SMTP_PORT"]
-    - os.environ["SMTP_USERNAME"]
-    - os.environ["SMTP_PASSWORD"]
-    - os.environ["SMTP_SENDER_EMAIL"]
-    """
-    from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy.utils import send_email
-
-    data = await request.json()  # type: ignore
-    user_email = data["user_email"]
-    page_params = data["page"]
-    if user_email is None:
-        raise HTTPException(status_code=400, detail="User email is none")
-
-    if prisma_client is None:  # if no db connected, raise an error
-        raise Exception("No connected db.")
-
-    ### Check if user email in user table
-    response = await prisma_client.get_generic_data(
-        key="user_email", value=user_email, table_name="users"
-    )
-    ### if so - generate a 24 hr key with that user id
-    if response is not None:
-        user_id = response.user_id  # type: ignore
-        response = await generate_key_helper_fn(
-            request_type="key",
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id},  # type: ignore
-        )
-    else:  ### else - create new user
-        response = await generate_key_helper_fn(
-            request_type="key",
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_email": user_email},  # type: ignore
-        )
-
-    base_url = os.getenv("LITELLM_HOSTED_UI", "https://dashboard.litellm.ai/")
-
-    params = {
-        "sender_name": "LiteLLM Proxy",
-        "receiver_email": user_email,
-        "subject": "Your Magic Link",
-        "html": f"<strong> Follow this  link, to login:\n\n{base_url}user/?token={response['token']}&user_id={response['user_id']}&page={page_params}</strong>",
-    }
-
-    await send_email(**params)
-    return "Email sent!"
 
 
 @router.get(
@@ -338,7 +286,7 @@ async def user_info(  # noqa: PLR0915
 
     Example request
     ```
-    curl -X GET 'http://localhost:8000/user/info?user_id=krrish7%40berri.ai' \
+    curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
     --header 'Authorization: Bearer sk-1234'
     ```
     """
@@ -488,21 +436,53 @@ async def user_info(  # noqa: PLR0915
                 str(e)
             )
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+        raise handle_exception_on_proxy(e)
+
+
+def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> dict:
+    non_default_values = {}
+    for k, v in data_json.items():
+        if (
+            v is not None
+            and v
+            not in (
+                [],
+                {},
+                0,
             )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+            and k not in LiteLLM_ManagementEndpoint_MetadataFields
+        ):  # models default to [], spend defaults to 0, we should not reset these values
+            non_default_values[k] = v
+
+    is_internal_user = False
+    if data.user_role == LitellmUserRoles.INTERNAL_USER:
+        is_internal_user = True
+
+    if "budget_duration" in non_default_values:
+        duration_s = duration_in_seconds(duration=non_default_values["budget_duration"])
+        user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        non_default_values["budget_reset_at"] = user_reset_at
+
+    if "max_budget" not in non_default_values:
+        if (
+            is_internal_user and litellm.max_internal_user_budget is not None
+        ):  # applies internal user limits, if user role updated
+            non_default_values["max_budget"] = litellm.max_internal_user_budget
+
+    if (
+        "budget_duration" not in non_default_values
+    ):  # applies internal user limits, if user role updated
+        if is_internal_user and litellm.internal_user_budget_duration is not None:
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
+            duration_s = duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = user_reset_at
+
+    return non_default_values
 
 
 @router.post(
@@ -526,9 +506,40 @@ async def user_update(
         "user_id": "test-litellm-user-4",
         "user_role": "proxy_admin_viewer"
     }'
-
-    See below for all params 
     ```
+    
+    Parameters:
+        - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
+        - user_email: Optional[str] - Specify a user email.
+        - password: Optional[str] - Specify a user password.
+        - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
+        - teams: Optional[list] - specify a list of team id's a user belongs to.
+        - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
+        - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
+        - max_budget: Optional[float] - Specify max budget for a given user.
+        - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
+        - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+        - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
+        - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
+        - auto_create_key: bool - Default=True. Flag used for returning a key as part of the /user/new response
+        - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
+        - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
+        - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
+        - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+        - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
+        - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
+        - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+        - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+        - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
+        - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
+        - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
+        - model_tpm_limit: Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
+        - spend: Optional[float] - Amount spent by user. Default is 0. Will be updated by proxy whenever user is used. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
+        - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
+        - duration: Optional[str] - [NOT IMPLEMENTED].
+        - key_alias: Optional[str] - [NOT IMPLEMENTED].
+            
+    
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -539,46 +550,21 @@ async def user_update(
             raise Exception("Not connected to DB!")
 
         # get non default values for key
-        non_default_values = {}
-        for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
+        non_default_values = _update_internal_user_params(
+            data_json=data_json, data=data
+        )
 
-        is_internal_user = False
-        if data.user_role == LitellmUserRoles.INTERNAL_USER:
-            is_internal_user = True
+        existing_user_row = await prisma_client.get_data(
+            user_id=data.user_id, table_name="user", query_type="find_unique"
+        )
 
-        if "budget_duration" in non_default_values:
-            duration_s = _duration_in_seconds(
-                duration=non_default_values["budget_duration"]
-            )
-            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["budget_reset_at"] = user_reset_at
+        existing_metadata = existing_user_row.metadata if existing_user_row else {}
 
-        if "max_budget" not in non_default_values:
-            if (
-                is_internal_user and litellm.max_internal_user_budget is not None
-            ):  # applies internal user limits, if user role updated
-                non_default_values["max_budget"] = litellm.max_internal_user_budget
-
-        if (
-            "budget_duration" not in non_default_values
-        ):  # applies internal user limits, if user role updated
-            if is_internal_user and litellm.internal_user_budget_duration is not None:
-                non_default_values["budget_duration"] = (
-                    litellm.internal_user_budget_duration
-                )
-                duration_s = _duration_in_seconds(
-                    duration=non_default_values["budget_duration"]
-                )
-                user_reset_at = datetime.now(timezone.utc) + timedelta(
-                    seconds=duration_s
-                )
-                non_default_values["budget_reset_at"] = user_reset_at
+        non_default_values = prepare_metadata_fields(
+            data=data,
+            non_default_values=non_default_values,
+            existing_metadata=existing_metadata or {},
+        )
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
@@ -643,113 +629,6 @@ async def user_update(
         )
 
 
-@router.post(
-    "/user/request_model",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def user_request_model(request: Request):
-    """
-    Allow a user to create a request to access a model
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    try:
-        data_json = await request.json()
-
-        # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        non_default_values = {k: v for k, v in data_json.items() if v is not None}
-        new_models = non_default_values.get("models", None)
-        user_id = non_default_values.get("user_id", None)
-        justification = non_default_values.get("justification", None)
-
-        await prisma_client.insert_data(
-            data={
-                "models": new_models,
-                "justification": justification,
-                "user_id": user_id,
-                "status": "pending",
-                "request_id": str(uuid.uuid4()),
-            },
-            table_name="user_notification",
-        )
-        return {"status": "success"}
-        # update based on remaining passed in values
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_request_model(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
-
-@router.get(
-    "/user/get_requests",
-    tags=["Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def user_get_requests():
-    """
-    Get all "Access" requests made by proxy users, access requests are requests for accessing models
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    try:
-
-        # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        # TODO: Optimize this so we don't read all the data here, eventually move to pagination
-        response = await prisma_client.get_data(
-            query_type="find_all",
-            table_name="user_notification",
-        )
-        return {"requests": response}
-        # update based on remaining passed in values
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_get_requests(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
-
 @router.get(
     "/user/get_users",
     tags=["Internal User management"],
@@ -774,6 +653,18 @@ async def get_users(
 
     Used by the UI to populate the user lists.
 
+    Parameters:
+        role: Optional[str]
+            Filter users by role. Can be one of:
+            - proxy_admin
+            - proxy_admin_viewer
+            - internal_user
+            - internal_user_viewer
+        page: int
+            The page number to return
+        page_size: int
+            The number of items per page
+
     Currently - admin-only endpoint.
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -797,11 +688,20 @@ async def get_users(
     total_count = await prisma_client.db.litellm_usertable.count(where=query)  # type: ignore
 
     # Get paginated users
-    users = await prisma_client.db.litellm_usertable.find_many(
+    _users = await prisma_client.db.litellm_usertable.find_many(
         where=query,  # type: ignore
         skip=skip,
         take=take,
     )
+    # Add key_count to each user object directly
+    users = []
+    for user in _users:
+        user = user.model_dump()
+        key_count = await prisma_client.db.litellm_verificationtoken.count(
+            where={"user_id": user["user_id"]}
+        )
+        user["key_count"] = key_count
+        users.append(user)
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
@@ -833,7 +733,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/user/delete' \
+    curl --location 'http://0.0.0.0:4000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 
@@ -848,8 +748,8 @@ async def delete_user(
     - user_ids: List[str] - The list of user id's to be deleted.
     """
     from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
         create_audit_log_for_update,
+        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
         user_api_key_cache,

@@ -88,12 +88,14 @@ async def test_run_async_fallback(original_function):
         request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
 
     result = await run_async_fallback(
-        router,
+        litellm_router=router,
         original_function=original_function,
         num_retries=1,
         fallback_model_group=fallback_model_group,
         original_model_group=original_model_group,
         original_exception=original_exception,
+        max_fallbacks=5,
+        fallback_depth=0,
         **request_kwargs
     )
 
@@ -264,13 +266,15 @@ async def test_failed_fallbacks_raise_most_recent_exception(original_function):
 
     with pytest.raises(litellm.exceptions.RateLimitError):
         await run_async_fallback(
-            router,
+            litellm_router=router,
             original_function=original_function,
             num_retries=1,
             fallback_model_group=fallback_model_group,
             original_model_group=original_model_group,
             original_exception=original_exception,
             mock_response="litellm.RateLimitError",
+            max_fallbacks=5,
+            fallback_depth=0,
             **request_kwargs
         )
 
@@ -332,12 +336,14 @@ async def test_multiple_fallbacks(original_function):
         request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
 
     result = await run_async_fallback(
-        router_2,
+        litellm_router=router_2,
         original_function=original_function,
         num_retries=1,
         fallback_model_group=fallback_model_group,
         original_model_group=original_model_group,
         original_exception=original_exception,
+        max_fallbacks=5,
+        fallback_depth=0,
         **request_kwargs
     )
 
