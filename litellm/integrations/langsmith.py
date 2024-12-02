@@ -383,6 +383,9 @@ class LangsmithLogger(CustomBatchLogger):
         elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 
         try:
+            verbose_logger.debug(
+                "Sending batch of %s runs to Langsmith", len(elements_to_log)
+            )
             response = await self.async_httpx_client.post(
                 url=url,
                 json={"post": elements_to_log},
