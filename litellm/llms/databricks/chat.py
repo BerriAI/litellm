@@ -128,6 +128,8 @@ class DatabricksConfig:
                 optional_params["top_p"] = value
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "response_format":
+                optional_params["response_format"] = value
         return optional_params
 
 
