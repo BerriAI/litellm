@@ -18,4 +18,8 @@ model_list:
       model: azure/azure-embedding-model
       api_base: os.environ/AZURE_API_BASE
       api_key: bad-key
+  - model_name: anthropic/claude-3-sonnet
+    litellm_params:
+      model: anthropic/claude-3-sonnet
+      api_key: bad-key
     
