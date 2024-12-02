@@ -48,7 +48,8 @@ class NvidiaConfig:
 
         if dynamic_api_key:
             ## fetch available models
-            litellm.nvidia_models = self.available_models(dynamic_api_key)
+            self.dynamic_api_key = dynamic_api_key
+            litellm.nvidia_models = self.available_models()
             litellm.model_list += litellm.nvidia_models
 
     @classmethod
@@ -69,13 +70,13 @@ class NvidiaConfig:
             and v is not None
         }
     
-    def available_models(self, api_key: str) -> list:
+    def available_models(self) -> list:
         '''Get Available NVIDIA models.'''
         api_base = get_secret("NVIDIA_API_BASE") or "https://integrate.api.nvidia.com/v1" # type: ignore
 
         headers = {
         'Content-Type': 'application/json',
-        'Authorization': api_key
+        'Authorization': self.dynamic_api_key
         }
         try:
             response = requests.request("GET", os.path.join(api_base, "models"), headers=headers)

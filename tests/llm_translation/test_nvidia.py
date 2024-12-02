@@ -11,11 +11,100 @@ sys.path.insert(
 
 import httpx
 import pytest
+import respx
 from respx import MockRouter
 
+import os
+from contextlib import contextmanager
+from typing import Generator
 import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
+
+@contextmanager
+def no_env_var(var: str) -> Generator[None, None, None]:
+    try:
+        if val := os.environ.get(var, None):
+            del os.environ[var]
+        yield
+    finally:
+        if val:
+            os.environ[var] = val
+        else:
+            if var in os.environ:
+                del os.environ[var]
+
+
+## mock /models endpoint
+@pytest.fixture
+def mock_models_endpoint():
+    response_data = {
+        "object": "list",
+        "data": [
+            {
+                "id": "nv-mistralai/mistral-nemo-12b-instruct",
+                "object": "model",
+                "created": 735790403,
+                "owned_by": "01-ai"
+            },
+            {
+                "id": "nvidia/vila",
+                "object": "model",
+                "created": 735790403,
+                "owned_by": "abacusai"
+            },
+    ]
+    }
+    with respx.mock(base_url="https://integrate.api.nvidia.com/v1") as mock:
+        mock.get("/models").respond(200, json=response_data)
+        yield mock
+
+
+def test_completion_missing_key():
+    with no_env_var("NVIDIA_API_KEY"):
+        with pytest.raises(litellm.exceptions.AuthenticationError):
+            completion(
+                model="nvidia/databricks/dbrx-instruct",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What's the weather like in Boston today in Fahrenheit?",
+                    }
+                ],
+                presence_penalty=0.5,
+                frequency_penalty=0.1,
+            )
+
+def test_completion_bogus_key():
+    with pytest.raises(litellm.exceptions.AuthenticationError):
+        completion(
+            api_key="bogus-key",
+            model="nvidia/databricks/dbrx-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+            presence_penalty=0.5,
+            frequency_penalty=0.1,
+        )
+
+@pytest.mark.skipif("NVIDIA_API_KEY" not in os.environ, reason="NVIDIA_API_KEY environment variable is not set.")
+def test_completion_invalid_model():
+    with pytest.raises(litellm.exceptions.BadRequestError) as err_msg:
+        completion(
+            model="invalid_model",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+            presence_penalty=0.5,
+            frequency_penalty=0.1,
+        )
+    assert "LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model=invalid_model" in str(err_msg.value)
 
 
 @pytest.mark.respx
@@ -34,6 +123,7 @@ def test_completion_nvidia(respx_mock: MockRouter):
     ).mock(return_value=httpx.Response(200, json=mock_response.dict()))
     try:
         response = completion(
+            api_key="bogus-key",
             model=model_name,
             messages=[
                 {
@@ -71,6 +161,7 @@ def test_completion_nvidia(respx_mock: MockRouter):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.respx
 def test_embedding_nvidia(respx_mock: MockRouter):
     litellm.set_verbose = True
     mock_response = EmbeddingResponse(
@@ -91,6 +182,7 @@ def test_embedding_nvidia(respx_mock: MockRouter):
         "https://integrate.api.nvidia.com/v1/embeddings"
     ).mock(return_value=httpx.Response(200, json=mock_response.dict()))
     response = litellm.embedding(
+        api_key="bogus-key",
         model="nvidia/nvidia/nv-embedqa-e5-v5",
         input="What is the meaning of life?",
         input_type="passage",
