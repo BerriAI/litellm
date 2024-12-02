@@ -4288,6 +4288,18 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
+    "openrouter/openai/gpt-4o-mini": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
     "openrouter/openai/gpt-4-vision-preview": {
         "max_tokens": 130000,
         "input_cost_per_token": 0.00001,
