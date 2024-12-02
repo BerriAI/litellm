@@ -2895,7 +2895,9 @@ class Router:
             f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
         )
         return await async_run_with_retries(
-            original_function=lambda *args, **kwargs: self.make_call(original_function, *args, **kwargs),
+            original_function=lambda *args, **kwargs: self.make_call(
+                original_function, *args, **kwargs
+            ),
             original_function_args=args,
             original_function_kwargs=kwargs,
             num_retries=num_retries,
@@ -2908,7 +2910,7 @@ class Router:
             log_retry=self.log_retry,
             model_list=self.get_model_list(),
         )
-    
+
     async def make_call(self, original_function: Any, *args, **kwargs):
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
@@ -3080,7 +3082,7 @@ class Router:
             raise original_exception
 
     ### HELPER FUNCTIONS
-    
+
     async def make_call(self, original_function: Any, *args, **kwargs):
         """
         Handler for making a call to the .completion()/.embeddings()/etc. functions.

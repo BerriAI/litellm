@@ -111,8 +111,8 @@ async def async_run_with_retries(
         # if the function call is successful, no exception will be raised and we'll break out of the loop
         result = original_function(*original_function_args, **original_function_kwargs)
         if inspect.iscoroutinefunction(result) or inspect.isawaitable(result):
-            result = await result 
-        return result 
+            result = await result
+        return result
     except Exception as e:
         current_attempt = None
         original_exception = e
@@ -165,11 +165,13 @@ async def async_run_with_retries(
         for current_attempt in range(num_retries):
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
-                result = original_function(*original_function_args, **original_function_kwargs)
+                result = original_function(
+                    *original_function_args, **original_function_kwargs
+                )
                 if inspect.iscoroutinefunction(result) or inspect.isawaitable(result):
                     # async errors are often returned as coroutines
-                    result = await result 
-                return result 
+                    result = await result
+                return result
 
             except Exception as e:
                 ## LOGGING
