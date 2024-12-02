@@ -17,7 +17,7 @@ import secrets
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -394,7 +394,8 @@ async def generate_key_fn(  # noqa: PLR0915
                 }
             )
             _budget_id = getattr(_budget, "budget_id", None)
-        data_json = data.json()  # type: ignore
+        data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
+
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
@@ -419,6 +420,11 @@ async def generate_key_fn(  # noqa: PLR0915
                 data_json["metadata"]["tags"] = data_json["tags"]
 
             data_json.pop("tags")
+
+        await _enforce_unique_key_alias(
+            key_alias=data_json.get("key_alias", None),
+            prisma_client=prisma_client,
+        )
 
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key"
@@ -447,12 +453,52 @@ async def generate_key_fn(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
+def prepare_metadata_fields(
+    data: BaseModel, non_default_values: dict, existing_metadata: dict
+) -> dict:
+    """
+    Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
+    """
+
+    if "metadata" not in non_default_values:  # allow user to set metadata to none
+        non_default_values["metadata"] = existing_metadata.copy()
+
+    casted_metadata = cast(dict, non_default_values["metadata"])
+
+    data_json = data.model_dump(exclude_unset=True, exclude_none=True)
+
+    try:
+        for k, v in data_json.items():
+            if k == "model_tpm_limit" or k == "model_rpm_limit":
+                if k not in casted_metadata or casted_metadata[k] is None:
+                    casted_metadata[k] = {}
+                casted_metadata[k].update(v)
+
+            if k == "tags" or k == "guardrails":
+                if k not in casted_metadata or casted_metadata[k] is None:
+                    casted_metadata[k] = []
+                seen = set(casted_metadata[k])
+                casted_metadata[k].extend(
+                    x for x in v if x not in seen and not seen.add(x)  # type: ignore
+                )  # prevent duplicates from being added + maintain initial order
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+
+    non_default_values["metadata"] = casted_metadata
+    return non_default_values
+
+
 def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
-    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
+    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails", "tags"]
     non_default_values = {}
     for k, v in data_json.items():
         if k in _metadata_fields:
@@ -476,24 +522,13 @@ def prepare_key_update_data(
             duration_s = duration_in_seconds(duration=budget_duration)
             key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = key_reset_at
+            non_default_values["budget_duration"] = budget_duration
 
     _metadata = existing_key_row.metadata or {}
 
-    if data.model_tpm_limit:
-        if "model_tpm_limit" not in _metadata:
-            _metadata["model_tpm_limit"] = {}
-        _metadata["model_tpm_limit"].update(data.model_tpm_limit)
-        non_default_values["metadata"] = _metadata
-
-    if data.model_rpm_limit:
-        if "model_rpm_limit" not in _metadata:
-            _metadata["model_rpm_limit"] = {}
-        _metadata["model_rpm_limit"].update(data.model_rpm_limit)
-        non_default_values["metadata"] = _metadata
-
-    if data.guardrails:
-        _metadata["guardrails"] = data.guardrails
-        non_default_values["metadata"] = _metadata
+    non_default_values = prepare_metadata_fields(
+        data=data, non_default_values=non_default_values, existing_metadata=_metadata
+    )
 
     return non_default_values
 
@@ -583,6 +618,12 @@ async def update_key_fn(
 
         non_default_values = prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
+        )
+
+        await _enforce_unique_key_alias(
+            key_alias=non_default_values.get("key_alias", None),
+            prisma_client=prisma_client,
+            existing_key_token=existing_key_row.token,
         )
 
         response = await prisma_client.update_data(
@@ -912,11 +953,11 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
     ],  # identifies if this request is from /user/new or /key/generate
-    duration: Optional[str],
-    models: list,
-    aliases: dict,
-    config: dict,
-    spend: float,
+    duration: Optional[str] = None,
+    models: list = [],
+    aliases: dict = {},
+    config: dict = {},
+    spend: float = 0.0,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: Optional[str] = None,
     budget_id: Optional[float] = None,  # budget id <-> LiteLLM_BudgetTable
@@ -945,8 +986,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
-    model_rpm_limit: Optional[dict] = {},
-    model_tpm_limit: Optional[dict] = {},
+    model_rpm_limit: Optional[dict] = None,
+    model_tpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
@@ -1883,3 +1924,38 @@ async def test_key_logging(
             status="healthy",
             details=f"No logger exceptions triggered, system is healthy. Manually check if logs were sent to {logging_callbacks} ",
         )
+
+
+async def _enforce_unique_key_alias(
+    key_alias: Optional[str],
+    prisma_client: Any,
+    existing_key_token: Optional[str] = None,
+) -> None:
+    """
+    Helper to enforce unique key aliases across all keys.
+
+    Args:
+        key_alias (Optional[str]): The key alias to check
+        prisma_client (Any): Prisma client instance
+        existing_key_token (Optional[str]): ID of existing key being updated, to exclude from uniqueness check
+            (The Admin UI passes key_alias, in all Edit key requests. So we need to be sure that if we find a key with the same alias, it's not the same key we're updating)
+
+    Raises:
+        ProxyException: If key alias already exists on a different key
+    """
+    if key_alias is not None and prisma_client is not None:
+        where_clause: dict[str, Any] = {"key_alias": key_alias}
+        if existing_key_token:
+            # Exclude the current key from the uniqueness check
+            where_clause["NOT"] = {"token": existing_key_token}
+
+        existing_key = await prisma_client.db.litellm_verificationtoken.find_first(
+            where=where_clause
+        )
+        if existing_key is not None:
+            raise ProxyException(
+                message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_alias",
+                code=status.HTTP_400_BAD_REQUEST,
+            )

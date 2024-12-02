@@ -1367,6 +1367,7 @@ async def list_team(
             """.format(
                 team.team_id, team.model_dump(), str(e)
             )
-            raise HTTPException(status_code=400, detail={"error": team_exception})
+            verbose_proxy_logger.exception(team_exception)
+            continue
 
     return returned_responses

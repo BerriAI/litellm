@@ -2183,3 +2183,11 @@ PassThroughEndpointLoggingResultValues = Union[
 class PassThroughEndpointLoggingTypedDict(TypedDict):
     result: Optional[PassThroughEndpointLoggingResultValues]
     kwargs: dict
+
+
+LiteLLM_ManagementEndpoint_MetadataFields = [
+    "model_rpm_limit",
+    "model_tpm_limit",
+    "guardrails",
+    "tags",
+]

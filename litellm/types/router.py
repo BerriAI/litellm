@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
@@ -352,9 +352,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     tags: Optional[List[str]]
 
 
-class DeploymentTypedDict(TypedDict):
-    model_name: str
-    litellm_params: LiteLLMParamsTypedDict
+class DeploymentTypedDict(TypedDict, total=False):
+    model_name: Required[str]
+    litellm_params: Required[LiteLLMParamsTypedDict]
+    model_info: dict
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
@@ -640,3 +641,8 @@ class ProviderBudgetInfo(BaseModel):
 
 
 ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]
+
+
+class RouterCacheEnum(enum.Enum):
+    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
+    RPM = "global_router:{id}:{model}:rpm:{current_minute}"

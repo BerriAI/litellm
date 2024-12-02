@@ -396,7 +396,8 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
     assert tpm_key is not None
 
 
-def test_deployment_callback_on_failure(model_list):
+@pytest.mark.asyncio
+async def test_deployment_callback_on_failure(model_list):
     """Test if the '_deployment_callback_on_failure' function is working correctly"""
     import time
 
@@ -417,6 +418,18 @@ def test_deployment_callback_on_failure(model_list):
     )
     assert isinstance(result, bool)
     assert result is False
+
+    model_response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+    )
+    result = await router.async_deployment_callback_on_failure(
+        kwargs=kwargs,
+        completion_response=model_response,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
 
 
 def test_log_retry(model_list):
@@ -1027,8 +1040,11 @@ def test_pattern_match_deployment_set_model_name(
 async def test_pass_through_moderation_endpoint_factory(model_list):
     router = Router(model_list=model_list)
     response = await router._pass_through_moderation_endpoint_factory(
-        original_function=litellm.amoderation, input="this is valid good text"
+        original_function=litellm.amoderation,
+        input="this is valid good text",
+        model=None,
     )
+    assert response is not None
 
 
 @pytest.mark.parametrize(

@@ -60,6 +60,7 @@ def common_checks(  # noqa: PLR0915
     global_proxy_spend: Optional[float],
     general_settings: dict,
     route: str,
+    llm_router: Optional[litellm.Router],
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -97,7 +98,12 @@ def common_checks(  # noqa: PLR0915
             # this means the team has access to all models on the proxy
             pass
         # check if the team model is an access_group
-        elif model_in_access_group(_model, team_object.models) is True:
+        elif (
+            model_in_access_group(
+                model=_model, team_models=team_object.models, llm_router=llm_router
+            )
+            is True
+        ):
             pass
         elif _model and "*" in _model:
             pass
@@ -373,36 +379,33 @@ async def get_end_user_object(
         return None
 
 
-def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
+def model_in_access_group(
+    model: str, team_models: Optional[List[str]], llm_router: Optional[litellm.Router]
+) -> bool:
     from collections import defaultdict
-
-    from litellm.proxy.proxy_server import llm_router
 
     if team_models is None:
         return True
     if model in team_models:
         return True
 
-    access_groups = defaultdict(list)
+    access_groups: dict[str, list[str]] = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
+        access_groups = llm_router.get_model_access_groups(model_name=model)
 
-    models_in_current_access_groups = []
     if len(access_groups) > 0:  # check if token contains any model access groups
         for idx, m in enumerate(
             team_models
         ):  # loop token models, if any of them are an access group add the access group
             if m in access_groups:
-                # if it is an access group we need to remove it from valid_token.models
-                models_in_group = access_groups[m]
-                models_in_current_access_groups.extend(models_in_group)
+                return True
 
     # Filter out models that are access_groups
     filtered_models = [m for m in team_models if m not in access_groups]
-    filtered_models += models_in_current_access_groups
 
     if model in filtered_models:
         return True
+
     return False
 
 
@@ -523,10 +526,6 @@ async def _cache_management_object(
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     await user_api_key_cache.async_set_cache(key=key, value=value)
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_set_cache(
-            key=key, value=value
-        )
 
 
 async def _cache_team_object(
@@ -878,7 +877,10 @@ async def get_org_object(
 
 
 async def can_key_call_model(
-    model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -898,35 +900,29 @@ async def can_key_call_model(
     )
     from collections import defaultdict
 
-    from litellm.proxy.proxy_server import llm_router
-
     access_groups = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
+        access_groups = llm_router.get_model_access_groups(model_name=model)
 
-    models_in_current_access_groups = []
-    if len(access_groups) > 0:  # check if token contains any model access groups
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
         for idx, m in enumerate(
             valid_token.models
         ):  # loop token models, if any of them are an access group add the access group
             if m in access_groups:
-                # if it is an access group we need to remove it from valid_token.models
-                models_in_group = access_groups[m]
-                models_in_current_access_groups.extend(models_in_group)
+                return True
 
     # Filter out models that are access_groups
     filtered_models = [m for m in valid_token.models if m not in access_groups]
 
-    filtered_models += models_in_current_access_groups
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
     all_model_access: bool = False
 
     if (
-        len(filtered_models) == 0
-        or "*" in filtered_models
-        or "openai/*" in filtered_models
-    ):
+        len(filtered_models) == 0 and len(valid_token.models) == 0
+    ) or "*" in filtered_models:
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:

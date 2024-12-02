@@ -109,10 +109,10 @@ async def async_run_with_retries(
             model_group=model_group, kwargs=original_function_kwargs
         )
         # if the function call is successful, no exception will be raised and we'll break out of the loop
-        response = await _make_call(
-            original_function, *original_function_args, **original_function_kwargs
-        )
-        return response
+        result = original_function(*original_function_args, **original_function_kwargs)
+        if inspect.iscoroutinefunction(result) or inspect.isawaitable(result):
+            result = await result 
+        return result 
     except Exception as e:
         current_attempt = None
         original_exception = e
@@ -165,16 +165,11 @@ async def async_run_with_retries(
         for current_attempt in range(num_retries):
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
-                response = await _make_call(
-                    original_function,
-                    *original_function_args,
-                    **original_function_kwargs,
-                )
-                if inspect.iscoroutinefunction(
-                    response
-                ):  # async errors are often returned as coroutines
-                    response = await response
-                return response
+                result = original_function(*original_function_args, **original_function_kwargs)
+                if inspect.iscoroutinefunction(result) or inspect.isawaitable(result):
+                    # async errors are often returned as coroutines
+                    result = await result 
+                return result 
 
             except Exception as e:
                 ## LOGGING
@@ -296,33 +291,6 @@ def handle_mock_testing_rate_limit_error(
             llm_provider="",
             message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
         )
-
-
-async def _make_call(original_function: Any, *args, **kwargs):
-    """
-    Handler for making a call to the .completion()/.embeddings()/etc. functions.
-    """
-    model_group = kwargs.get("model")
-    response = original_function(*args, **kwargs)
-    if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
-        response = await response
-    ## PROCESS RESPONSE HEADERS
-    await _set_response_headers(response=response, model_group=model_group)
-
-    return response
-
-
-async def _set_response_headers(
-    response: Any, model_group: Optional[str] = None
-) -> Any:
-    """
-    Add the most accurate rate limit headers for a given model response.
-
-    ## TODO: add model group rate limit headers
-    # - if healthy_deployments > 1, return model group rate limit headers
-    # - else return the model's rate limit headers
-    """
-    return response
 
 
 def _get_num_retries_from_retry_policy(

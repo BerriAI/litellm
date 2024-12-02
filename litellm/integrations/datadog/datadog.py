@@ -279,11 +279,11 @@ class DataDogLogger(CustomBatchLogger):
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
         dd_payload = DatadogPayload(
-            ddsource=os.getenv("DD_SOURCE", "litellm"),
-            ddtags="",
-            hostname="",
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
             message=json_payload,
-            service="litellm-server",
+            service=self._get_datadog_service(),
             status=status,
         )
         return dd_payload
@@ -387,11 +387,11 @@ class DataDogLogger(CustomBatchLogger):
         json_payload = json.dumps(_exception_payload)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
-            ddsource=os.getenv("DD_SOURCE", "litellm"),
-            ddtags="",
-            hostname="",
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
             message=json_payload,
-            service="litellm-server",
+            service=self._get_datadog_service(),
             status=DataDogStatus.ERROR,
         )
 
@@ -473,11 +473,31 @@ class DataDogLogger(CustomBatchLogger):
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
         dd_payload = DatadogPayload(
-            ddsource=os.getenv("DD_SOURCE", "litellm"),
-            ddtags="",
-            hostname="",
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
             message=json_payload,
-            service="litellm-server",
+            service=self._get_datadog_service(),
             status=DataDogStatus.INFO,
         )
         return dd_payload
+
+    @staticmethod
+    def _get_datadog_tags():
+        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')}"
+
+    @staticmethod
+    def _get_datadog_source():
+        return os.getenv("DD_SOURCE", "litellm")
+
+    @staticmethod
+    def _get_datadog_service():
+        return os.getenv("DD_SERVICE", "litellm-server")
+
+    @staticmethod
+    def _get_datadog_hostname():
+        return ""
+
+    @staticmethod
+    def _get_datadog_env():
+        return os.getenv("DD_ENV", "unknown")

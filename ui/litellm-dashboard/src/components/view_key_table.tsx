@@ -24,6 +24,7 @@ import {
   Icon,
   BarChart,
   TextInput,
+  Textarea,
 } from "@tremor/react";
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
@@ -40,6 +41,7 @@ import {
 } from "antd";
 
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import TextArea from "antd/es/input/TextArea";
 
 const { Option } = Select;
 const isLocal = process.env.NODE_ENV === "development";
@@ -437,6 +439,16 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               ]}
               >
                 <InputNumber step={1} precision={1} width={200} />
+              </Form.Item>
+              <Form.Item
+                label="Metadata"
+                name="metadata"
+                initialValue={token.metadata}
+              >
+                <TextArea
+                  value={String(token.metadata)}
+                  rows={10}
+                />
               </Form.Item>
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>

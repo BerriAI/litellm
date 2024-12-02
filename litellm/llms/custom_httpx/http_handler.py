@@ -28,6 +28,62 @@ headers = {
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+import re
+
+
+def mask_sensitive_info(error_message):
+    # Find the start of the key parameter
+    if isinstance(error_message, str):
+        key_index = error_message.find("key=")
+    else:
+        return error_message
+
+    # If key is found
+    if key_index != -1:
+        # Find the end of the key parameter (next & or end of string)
+        next_param = error_message.find("&", key_index)
+
+        if next_param == -1:
+            # If no more parameters, mask until the end of the string
+            masked_message = error_message[: key_index + 4] + "[REDACTED_API_KEY]"
+        else:
+            # Replace the key with redacted value, keeping other parameters
+            masked_message = (
+                error_message[: key_index + 4]
+                + "[REDACTED_API_KEY]"
+                + error_message[next_param:]
+            )
+
+        return masked_message
+
+    return error_message
+
+
+class MaskedHTTPStatusError(httpx.HTTPStatusError):
+    def __init__(
+        self, original_error, message: Optional[str] = None, text: Optional[str] = None
+    ):
+        # Create a new error with the masked URL
+        masked_url = mask_sensitive_info(str(original_error.request.url))
+        # Create a new error that looks like the original, but with a masked URL
+
+        super().__init__(
+            message=original_error.message,
+            request=httpx.Request(
+                method=original_error.request.method,
+                url=masked_url,
+                headers=original_error.request.headers,
+                content=original_error.request.content,
+            ),
+            response=httpx.Response(
+                status_code=original_error.response.status_code,
+                content=original_error.response.content,
+                headers=original_error.response.headers,
+            ),
+        )
+        self.message = message
+        self.text = text
+
 
 class AsyncHTTPHandler:
     def __init__(
@@ -155,13 +211,16 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
+
             if stream is True:
                 setattr(e, "message", await e.response.aread())
                 setattr(e, "text", await e.response.aread())
             else:
-                setattr(e, "message", e.response.text)
-                setattr(e, "text", e.response.text)
+                setattr(e, "message", mask_sensitive_info(e.response.text))
+                setattr(e, "text", mask_sensitive_info(e.response.text))
+
+            setattr(e, "status_code", e.response.status_code)
+
             raise e
         except Exception as e:
             raise e
@@ -399,11 +458,17 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
+
             if stream is True:
-                setattr(e, "message", e.response.read())
+                setattr(e, "message", mask_sensitive_info(e.response.read()))
+                setattr(e, "text", mask_sensitive_info(e.response.read()))
             else:
-                setattr(e, "message", e.response.text)
+                error_text = mask_sensitive_info(e.response.text)
+                setattr(e, "message", error_text)
+                setattr(e, "text", error_text)
+
+            setattr(e, "status_code", e.response.status_code)
+
             raise e
         except Exception as e:
             raise e

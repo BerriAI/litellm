@@ -246,6 +246,7 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "text_completion",
         "embedding/supported_embedding",
         "image_generation",
         {
@@ -261,6 +262,7 @@ const sidebars = {
         "batches",
         "realtime",
         "fine_tuning",
+        "moderation",
         {
           type: "link",
           label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
@@ -277,7 +279,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing", "wildcard_routing"],
     },
     {
       type: "category",

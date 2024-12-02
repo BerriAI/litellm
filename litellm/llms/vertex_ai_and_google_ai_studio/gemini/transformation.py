@@ -107,6 +107,10 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
         return "image/png"
     elif url.endswith(".webp"):
         return "image/webp"
+    elif url.endswith(".mp4"):
+        return "video/mp4"
+    elif url.endswith(".pdf"):
+        return "application/pdf"
     return None
 
 

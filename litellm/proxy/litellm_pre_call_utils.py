@@ -288,12 +288,12 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            if "tags" in data[_metadata_variable_name] and isinstance(
-                data[_metadata_variable_name]["tags"], list
-            ):
-                data[_metadata_variable_name]["tags"].extend(key_metadata["tags"])
-            else:
-                data[_metadata_variable_name]["tags"] = key_metadata["tags"]
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
+            )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
         ):
@@ -318,6 +318,30 @@ class LiteLLMProxyRequestSetup:
         ):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
         return data
+
+    @staticmethod
+    def _merge_tags(request_tags: Optional[list], tags_to_add: Optional[list]) -> list:
+        """
+        Helper function to merge two lists of tags, ensuring no duplicates.
+
+        Args:
+            request_tags (Optional[list]): List of tags from the original request
+            tags_to_add (Optional[list]): List of tags to add
+
+        Returns:
+            list: Combined list of unique tags
+        """
+        final_tags = []
+
+        if request_tags and isinstance(request_tags, list):
+            final_tags.extend(request_tags)
+
+        if tags_to_add and isinstance(tags_to_add, list):
+            for tag in tags_to_add:
+                if tag not in final_tags:
+                    final_tags.append(tag)
+
+        return final_tags
 
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
@@ -442,12 +466,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ## TEAM-LEVEL SPEND LOGS/TAGS
     team_metadata = user_api_key_dict.team_metadata or {}
     if "tags" in team_metadata and team_metadata["tags"] is not None:
-        if "tags" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["tags"], list
-        ):
-            data[_metadata_variable_name]["tags"].extend(team_metadata["tags"])
-        else:
-            data[_metadata_variable_name]["tags"] = team_metadata["tags"]
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=team_metadata["tags"],
+        )
     if "spend_logs_metadata" in team_metadata and isinstance(
         team_metadata["spend_logs_metadata"], dict
     ):

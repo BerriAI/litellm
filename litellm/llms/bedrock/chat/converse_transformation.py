@@ -458,7 +458,7 @@ class AmazonConverseConfig:
         """
         Abbreviations of regions AWS Bedrock supports for cross region inference
         """
-        return ["us", "eu"]
+        return ["us", "eu", "apac"]
 
     def _get_base_model(self, model: str) -> str:
         """

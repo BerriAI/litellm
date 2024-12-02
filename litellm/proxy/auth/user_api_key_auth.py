@@ -28,6 +28,8 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -195,6 +197,52 @@ def _is_allowed_route(
         )
 
 
+async def user_api_key_auth_websocket(websocket: WebSocket):
+    # Accept the WebSocket connection
+
+    request = Request(scope={"type": "http"})
+    request._url = websocket.url
+
+    query_params = websocket.query_params
+
+    model = query_params.get("model")
+
+    async def return_body():
+        return_string = f'{{"model": "{model}"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body  # type: ignore
+
+    # Extract the Authorization header
+    authorization = websocket.headers.get("authorization")
+
+    # If no Authorization header, try the api-key header
+    if not authorization:
+        api_key = websocket.headers.get("api-key")
+        if not api_key:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            raise HTTPException(status_code=403, detail="No API key provided")
+    else:
+        # Extract the API key from the Bearer token
+        if not authorization.startswith("Bearer "):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            raise HTTPException(
+                status_code=403, detail="Invalid Authorization header format"
+            )
+
+        api_key = authorization[len("Bearer ") :].strip()
+
+    # Call user_api_key_auth with the extracted API key
+    # Note: You'll need to modify this to work with WebSocket context if needed
+    try:
+        return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=403, detail=str(e))
+
+
 async def user_api_key_auth(  # noqa: PLR0915
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
@@ -211,6 +259,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         jwt_handler,
         litellm_proxy_admin_name,
         llm_model_list,
+        llm_router,
         master_key,
         open_telemetry_logger,
         prisma_client,
@@ -494,6 +543,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     general_settings=general_settings,
                     global_proxy_spend=global_proxy_spend,
                     route=route,
+                    llm_router=llm_router,
                 )
 
                 # return UserAPIKeyAuth object
@@ -857,6 +907,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                         model=model,
                         llm_model_list=llm_model_list,
                         valid_token=valid_token,
+                        llm_router=llm_router,
                     )
 
                 if fallback_models is not None:
@@ -865,6 +916,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                             model=m,
                             llm_model_list=llm_model_list,
                             valid_token=valid_token,
+                            llm_router=llm_router,
                         )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
@@ -1125,6 +1177,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 general_settings=general_settings,
                 global_proxy_spend=global_proxy_spend,
                 route=route,
+                llm_router=llm_router,
             )
             # Token passed all checks
             if valid_token is None:
