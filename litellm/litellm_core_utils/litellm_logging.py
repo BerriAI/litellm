@@ -2772,7 +2772,6 @@ def get_standard_logging_object_payload(
         if cache_hit is True:
 
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-
             saved_cache_cost = (
                 logging_obj._response_cost_calculator(
                     result=init_response_obj, cache_hit=False  # type: ignore
