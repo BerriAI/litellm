@@ -38,7 +38,7 @@ body:
       label: What LiteLLM version are you on ? 
       placeholder: v1.53.1
     validations:
-      required: false
+      required: true
   - type: input
     id: contact
     attributes:
