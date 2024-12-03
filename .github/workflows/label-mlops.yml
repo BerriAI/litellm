@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Check if ML Ops Team is selected
         uses: actions-ecosystem/action-add-labels@v1
-        if: contains(github.event.issue.body, "### Are you a ML Ops Team?\n\nYes")
+        if: contains(github.event.issue.body, '### Are you a ML Ops Team?') && contains(github.event.issue.body, 'Yes')
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           labels: "mlops user request"
