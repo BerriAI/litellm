@@ -711,7 +711,9 @@ async def get_users(
     # Execute the query
     results = await prisma_client.db.query_raw(sql_query)
     # Get total count from the first row (if results exist)
-    total_count = results[0].get("total_number_internal_users") if results else 0
+    total_count = 0
+    if len(results) > 0:
+        total_count = results[0].get("total_number_internal_users")
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
