@@ -1255,11 +1255,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             parent_otel_span=parent_otel_span,
             api_key=api_key,
         )
-        try:
-            request_data = await request.json()
-        except Exception:
-            # For GET requests or requests without a JSON body
-            request_data = {}
+        request_data = await _read_request_body(request=request)
         asyncio.create_task(
             proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
