@@ -160,6 +160,9 @@ def get_supported_openai_params(  # noqa: PLR0915
         ]
     elif custom_llm_provider == "huggingface":
         return litellm.HuggingfaceConfig().get_supported_openai_params()
+    elif custom_llm_provider == "jina_ai":
+        if request_type == "embeddings":
+            return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "together_ai":
         return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ai21":

@@ -25,6 +25,7 @@ class FireworksAIConfig:
     stop: Optional[Union[str, list]] = None
     response_format: Optional[dict] = None
     user: Optional[str] = None
+    logprobs: Optional[int] = None
 
     # Non OpenAI parameters - Fireworks AI only params
     prompt_truncate_length: Optional[int] = None
@@ -44,6 +45,7 @@ class FireworksAIConfig:
         stop: Optional[Union[str, list]] = None,
         response_format: Optional[dict] = None,
         user: Optional[str] = None,
+        logprobs: Optional[int] = None,
         prompt_truncate_length: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
@@ -86,6 +88,7 @@ class FireworksAIConfig:
             "stop",
             "response_format",
             "user",
+            "logprobs",
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
