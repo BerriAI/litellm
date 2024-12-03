@@ -216,6 +216,7 @@ async def test_langsmith_key_based_logging(mocker):
         mock_post.return_value.status_code = 200
         mock_post.return_value.raise_for_status = lambda: None
         litellm.set_verbose = True
+        litellm.DEFAULT_FLUSH_INTERVAL_SECONDS = 1
 
         litellm.callbacks = [LangsmithLogger()]
         response = await litellm.acompletion(
@@ -228,9 +229,9 @@ async def test_langsmith_key_based_logging(mocker):
             langsmith_project="fake_project2",
         )
         print("Waiting for logs to be flushed to Langsmith.....")
-        await asyncio.sleep(15)
+        await asyncio.sleep(3)
 
-        print("done sleeping 15 seconds...")
+        print("done sleeping 3 seconds...")
 
         # Verify the post request was made with correct parameters
         mock_post.assert_called_once()
