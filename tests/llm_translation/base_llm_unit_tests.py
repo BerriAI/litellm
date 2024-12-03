@@ -55,6 +55,7 @@ class BaseLLMChatTest(ABC):
         assert response.choices[0].message.content is not None
 
     def test_message_with_name(self):
+        litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
             {"role": "user", "content": "Hello", "name": "test_name"},
@@ -69,6 +70,7 @@ class BaseLLMChatTest(ABC):
             {"type": "text"},
         ],
     )
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
@@ -136,6 +138,7 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API

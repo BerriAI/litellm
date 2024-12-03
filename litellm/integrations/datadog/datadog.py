@@ -262,6 +262,10 @@ class DataDogLogger(CustomBatchLogger):
         """
         import json
 
+        from litellm.litellm_core_utils.litellm_logging import (
+            truncate_standard_logging_payload_content,
+        )
+
         standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
         )
@@ -273,6 +277,7 @@ class DataDogLogger(CustomBatchLogger):
             status = DataDogStatus.ERROR
 
         # Build the initial payload
+        truncate_standard_logging_payload_content(standard_logging_object)
         make_json_serializable(standard_logging_object)
         json_payload = json.dumps(standard_logging_object)
 
@@ -364,38 +369,6 @@ class DataDogLogger(CustomBatchLogger):
         No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
         """
         return
-
-    async def async_post_call_failure_hook(
-        self,
-        request_data: dict,
-        original_exception: Exception,
-        user_api_key_dict: UserAPIKeyAuth,
-    ):
-        """
-        Handles Proxy Errors (not-related to LLM API), ex: Authentication Errors
-        """
-        import json
-
-        _exception_payload = DatadogProxyFailureHookJsonMessage(
-            exception=str(original_exception),
-            error_class=str(original_exception.__class__.__name__),
-            status_code=getattr(original_exception, "status_code", None),
-            traceback=traceback.format_exc(),
-            user_api_key_dict=user_api_key_dict.model_dump(),
-        )
-
-        json_payload = json.dumps(_exception_payload)
-        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
-        dd_payload = DatadogPayload(
-            ddsource=self._get_datadog_source(),
-            ddtags=self._get_datadog_tags(),
-            hostname=self._get_datadog_hostname(),
-            message=json_payload,
-            service=self._get_datadog_service(),
-            status=DataDogStatus.ERROR,
-        )
-
-        self.log_queue.append(dd_payload)
 
     def _create_v0_logging_payload(
         self,

@@ -292,11 +292,13 @@ def test_all_model_configs():
         optional_params={},
     ) == {"max_tokens_to_sample": 10}
 
-    from litellm.llms.databricks.chat import DatabricksConfig
+    from litellm.llms.databricks.chat.handler import DatabricksConfig
 
     assert "max_completion_tokens" in DatabricksConfig().get_supported_openai_params()
 
     assert DatabricksConfig().map_openai_params(
+        model="databricks/llama-3-70b-instruct",
+        drop_params=False,
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
     ) == {"max_tokens": 10}
