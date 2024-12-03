@@ -2686,8 +2686,8 @@ def get_standard_logging_object_payload(
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,
     end_time: dt_object,
+    logging_obj: Logging,
     status: StandardLoggingPayloadStatus,
-    logging_obj: Optional[Logging] = None,
     error_str: Optional[str] = None,
     original_exception: Optional[Exception] = None,
 ) -> Optional[StandardLoggingPayload]:
@@ -2766,13 +2766,12 @@ def get_standard_logging_object_payload(
         if cache_hit is True:
 
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-            if logging_obj is not None:
-                saved_cache_cost = (
-                    logging_obj._response_cost_calculator(
-                        result=init_response_obj, cache_hit=False  # type: ignore
-                    )
-                    or 0.0
+            saved_cache_cost = (
+                logging_obj._response_cost_calculator(
+                    result=init_response_obj, cache_hit=False  # type: ignore
                 )
+                or 0.0
+            )
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
