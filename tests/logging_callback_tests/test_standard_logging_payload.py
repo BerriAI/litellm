@@ -329,6 +329,7 @@ def test_get_final_response_obj():
         litellm.turn_off_message_logging = False
 
 
+
 def test_truncate_standard_logging_payload():
     """
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
@@ -366,3 +367,15 @@ def test_truncate_standard_logging_payload():
     assert len(str(standard_logging_payload["response"])) < 10_500
     # assert len of error_str is less than 10_500
     assert len(str(standard_logging_payload["error_str"])) < 10_500
+
+def test_strip_trailing_slash():
+    common_api_base = "https://api.test.com"
+    assert (
+        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base + "/")
+        == common_api_base
+    )
+    assert (
+        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base)
+        == common_api_base
+    )
+

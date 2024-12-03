@@ -2680,6 +2680,12 @@ class StandardLoggingPayloadSetup:
                         clean_hidden_params[key] = hidden_params[key]  # type: ignore
         return clean_hidden_params
 
+    @staticmethod
+    def strip_trailing_slash(api_base: Optional[str]) -> Optional[str]:
+        if api_base:
+            return api_base.rstrip("/")
+        return api_base
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2811,7 +2817,10 @@ def get_standard_logging_object_payload(
             completion_tokens=usage.completion_tokens,
             request_tags=request_tags,
             end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", ""),
+            api_base=StandardLoggingPayloadSetup.strip_trailing_slash(
+                litellm_params.get("api_base", "")
+            )
+            or "",
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),

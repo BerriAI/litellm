@@ -251,7 +251,6 @@ class DatabricksChatCompletion(BaseLLM):
         super().__init__()
 
     # makes headers for API call
-
     def _get_databricks_credentials(
         self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
     ) -> Tuple[str, dict]:
