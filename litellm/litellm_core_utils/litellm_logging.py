@@ -2879,7 +2879,7 @@ def _truncate_field(
         - Converting to string and then truncating the logged content catches this
     2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
     """
-    field_value = standard_logging_object.get(field_name)
+    field_value = standard_logging_object.get(field_name)  # type: ignore
     if field_value:
         str_value = str(field_value)
         if len(str_value) > max_length:
