@@ -297,6 +297,8 @@ def test_all_model_configs():
     assert "max_completion_tokens" in DatabricksConfig().get_supported_openai_params()
 
     assert DatabricksConfig().map_openai_params(
+        model="databricks/llama-3-70b-instruct",
+        drop_params=False,
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
     ) == {"max_tokens": 10}
