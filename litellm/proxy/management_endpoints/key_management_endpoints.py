@@ -459,7 +459,6 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
@@ -469,18 +468,8 @@ def prepare_metadata_fields(
 
     try:
         for k, v in data_json.items():
-            if k == "model_tpm_limit" or k == "model_rpm_limit":
-                if k not in casted_metadata or casted_metadata[k] is None:
-                    casted_metadata[k] = {}
-                casted_metadata[k].update(v)
-
-            if k == "tags" or k == "guardrails":
-                if k not in casted_metadata or casted_metadata[k] is None:
-                    casted_metadata[k] = []
-                seen = set(casted_metadata[k])
-                casted_metadata[k].extend(
-                    x for x in v if x not in seen and not seen.add(x)  # type: ignore
-                )  # prevent duplicates from being added + maintain initial order
+            if k in LiteLLM_ManagementEndpoint_MetadataFields:
+                casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -498,10 +487,9 @@ def prepare_key_update_data(
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
-    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails", "tags"]
     non_default_values = {}
     for k, v in data_json.items():
-        if k in _metadata_fields:
+        if k in LiteLLM_ManagementEndpoint_MetadataFields:
             continue
         non_default_values[k] = v
 
