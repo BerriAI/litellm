@@ -28,8 +28,8 @@ body:
       label: Are you a ML Ops Team?
       description: This helps us prioritze your requests correctly 
       options:
-        - Yes
-        - No
+        - "Yes"
+        - "No"
     validations:
       required: true
   - type: input
