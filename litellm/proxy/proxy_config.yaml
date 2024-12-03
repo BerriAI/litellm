@@ -1,5 +1,14 @@
-include:
-  - model_config.yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/fake
+      api_base: https://exampleanthropicendpoint-production.up.railway.app/
+
+
 
 litellm_settings:
   callbacks: ["datadog"] 

@@ -466,3 +466,57 @@ async def test_datadog_payload_environment_variables():
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_datadog_payload_content_truncation():
+    """
+    Test that DataDog payload correctly truncates long content
+
+    DataDog has a limit of 1MB for the logged payload size.
+    """
+    dd_logger = DataDogLogger()
+
+    # Create a standard payload with very long content
+    standard_payload = create_standard_logging_payload()
+    long_content = "x" * 80_000  # Create string longer than MAX_STR_LENGTH (10_000)
+
+    # Modify payload with long content
+    standard_payload["error_str"] = long_content
+    standard_payload["messages"] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": long_content,
+                        "detail": "low",
+                    },
+                }
+            ],
+        }
+    ]
+    standard_payload["response"] = {"choices": [{"message": {"content": long_content}}]}
+
+    # Create the payload
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs={"standard_logging_object": standard_payload},
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    print("dd_payload", json.dumps(dd_payload, indent=2))
+
+    # Parse the message back to dict to verify truncation
+    message_dict = json.loads(dd_payload["message"])
+
+    # Verify truncation of fields
+    assert len(message_dict["error_str"]) < 10_001, "error_str not truncated correctly"
+    assert (
+        len(str(message_dict["messages"])) < 10_001
+    ), "messages not truncated correctly"
+    assert (
+        len(str(message_dict["response"])) < 10_001
+    ), "response not truncated correctly"
