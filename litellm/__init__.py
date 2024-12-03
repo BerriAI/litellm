@@ -362,7 +362,7 @@ model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}
 
 
-####### THREAD-SPECIFIC DATA ###################
+####### THREAD-SPECIFIC DATA ####################
 class MyLocal(threading.local):
     def __init__(self):
         self.user = "Hello World"
