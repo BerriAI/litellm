@@ -22,6 +22,16 @@ body:
       label: Relevant log output
       description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
       render: shell
+  - type: dropdown
+    id: ml-ops-team
+    attributes:
+      label: Are you a ML Ops Team?
+      description: This helps us prioritze your requests correctly 
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true
   - type: input
     id: contact
     attributes:
