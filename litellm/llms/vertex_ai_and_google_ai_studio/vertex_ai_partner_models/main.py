@@ -42,7 +42,7 @@ def create_vertex_url(
 ) -> str:
     """Return the base url for the vertex partner models"""
     if partner == VertexPartnerProvider.llama:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
+        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
     elif partner == VertexPartnerProvider.mistralai:
         if stream:
             return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
