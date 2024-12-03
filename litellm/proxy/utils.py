@@ -750,6 +750,7 @@ class ProxyLogging:
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        error_type: Optional[ProxyErrorTypes] = None,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -787,7 +788,9 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        if isinstance(original_exception, HTTPException):
+        if isinstance(original_exception, HTTPException) or (
+            error_type == ProxyErrorTypes.auth_error
+        ):
             litellm_logging_obj: Optional[Logging] = request_data.get(
                 "litellm_logging_obj", None
             )
@@ -854,20 +857,6 @@ class ProxyLogging:
                     ),
                 ).start()
 
-        await self._run_post_call_failure_hook_custom_loggers(
-            original_exception=original_exception,
-            request_data=request_data,
-            user_api_key_dict=user_api_key_dict,
-        )
-
-        return
-
-    async def _run_post_call_failure_hook_custom_loggers(
-        self,
-        original_exception: Exception,
-        request_data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-    ):
         for callback in litellm.callbacks:
             try:
                 _callback: Optional[CustomLogger] = None
@@ -885,39 +874,7 @@ class ProxyLogging:
                     )
             except Exception as e:
                 raise e
-
-    async def async_log_proxy_authentication_errors(
-        self,
-        original_exception: Exception,
-        request: Request,
-        parent_otel_span: Optional[Any],
-        api_key: Optional[str],
-    ):
-        """
-        Handler for Logging Authentication Errors on LiteLLM Proxy
-        Why not use post_call_failure_hook?
-        - `post_call_failure_hook` calls `litellm_logging_obj.async_failure_handler`. This led to the Exception being logged twice
-
-        What does this handler do?
-        - Logs Authentication Errors (like invalid API Key passed) to CustomLogger compatible classes (OTEL, Datadog etc)
-            - calls CustomLogger.async_post_call_failure_hook
-        """
-
-        user_api_key_dict = UserAPIKeyAuth(
-            parent_otel_span=parent_otel_span,
-            token=_hash_token_if_needed(token=api_key or ""),
-        )
-        try:
-            request_data = await request.json()
-        except json.JSONDecodeError:
-            # For GET requests or requests without a JSON body
-            request_data = {}
-        await self._run_post_call_failure_hook_custom_loggers(
-            original_exception=original_exception,
-            request_data=request_data,
-            user_api_key_dict=user_api_key_dict,
-        )
-        pass
+        return
 
     async def post_call_success_hook(
         self,

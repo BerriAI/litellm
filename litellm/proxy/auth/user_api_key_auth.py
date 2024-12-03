@@ -1251,12 +1251,21 @@ async def user_api_key_auth(  # noqa: PLR0915
         )
 
         # Log this exception to OTEL, Datadog etc
+        user_api_key_dict = UserAPIKeyAuth(
+            parent_otel_span=parent_otel_span,
+            api_key=api_key,
+        )
+        try:
+            request_data = await request.json()
+        except json.JSONDecodeError:
+            # For GET requests or requests without a JSON body
+            request_data = {}
         asyncio.create_task(
-            proxy_logging_obj.async_log_proxy_authentication_errors(
+            proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
                 original_exception=e,
-                request=request,
-                parent_otel_span=parent_otel_span,
-                api_key=api_key,
+                user_api_key_dict=user_api_key_dict,
+                error_type=ProxyErrorTypes.auth_error,
             )
         )
 
