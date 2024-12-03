@@ -788,9 +788,7 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        if isinstance(original_exception, HTTPException) or (
-            error_type == ProxyErrorTypes.auth_error
-        ):
+        if self._is_proxy_only_error(original_exception, error_type):
             litellm_logging_obj: Optional[Logging] = request_data.get(
                 "litellm_logging_obj", None
             )
@@ -875,6 +873,24 @@ class ProxyLogging:
             except Exception as e:
                 raise e
         return
+
+    def _is_proxy_only_error(
+        self,
+        original_exception: Exception,
+        error_type: Optional[ProxyErrorTypes] = None,
+    ) -> bool:
+        """
+        Return True if the error is a Proxy Only Error
+
+        Prevents double logging of LLM API exceptions
+
+        e.g should only return True for:
+            - Authentication Errors from user_api_key_auth
+            - HTTP HTTPException (rate limit errors)
+        """
+        return isinstance(original_exception, HTTPException) or (
+            error_type == ProxyErrorTypes.auth_error
+        )
 
     async def post_call_success_hook(
         self,
