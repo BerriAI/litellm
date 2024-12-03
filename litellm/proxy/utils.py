@@ -87,6 +87,7 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
@@ -792,76 +793,12 @@ class ProxyLogging:
         if self._is_proxy_only_error(
             original_exception=original_exception, error_type=error_type
         ):
-            litellm_logging_obj: Optional[Logging] = request_data.get(
-                "litellm_logging_obj", None
+            await self._handle_logging_proxy_only_error(
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                route=route,
+                original_exception=original_exception,
             )
-            if litellm_logging_obj is None:
-                import uuid
-
-                request_data["litellm_call_id"] = str(uuid.uuid4())
-                litellm_logging_obj, data = litellm.utils.function_setup(
-                    original_function=route or "IGNORE_THIS",
-                    rules_obj=litellm.utils.Rules(),
-                    start_time=datetime.now(),
-                    **request_data,
-                )
-
-            if litellm_logging_obj is not None:
-                ## UPDATE LOGGING INPUT
-                _optional_params = {}
-                _litellm_params = {}
-
-                litellm_param_keys = LoggedLiteLLMParams.__annotations__.keys()
-                for k, v in request_data.items():
-                    if k in litellm_param_keys:
-                        _litellm_params[k] = v
-                    elif k != "model" and k != "user":
-                        _optional_params[k] = v
-
-                litellm_logging_obj.update_environment_variables(
-                    model=request_data.get("model", ""),
-                    user=request_data.get("user", ""),
-                    optional_params=_optional_params,
-                    litellm_params=_litellm_params,
-                )
-
-                input: Union[list, str, dict] = ""
-                if "messages" in request_data and isinstance(
-                    request_data["messages"], list
-                ):
-                    input = request_data["messages"]
-                    litellm_logging_obj.model_call_details["messages"] = input
-                    litellm_logging_obj.call_type = CallTypes.acompletion.value
-                elif "prompt" in request_data and isinstance(
-                    request_data["prompt"], str
-                ):
-                    input = request_data["prompt"]
-                    litellm_logging_obj.model_call_details["prompt"] = input
-                    litellm_logging_obj.call_type = CallTypes.atext_completion.value
-                elif "input" in request_data and isinstance(
-                    request_data["input"], list
-                ):
-                    input = request_data["input"]
-                    litellm_logging_obj.model_call_details["input"] = input
-                    litellm_logging_obj.call_type = CallTypes.aembedding.value
-                litellm_logging_obj.pre_call(
-                    input=input,
-                    api_key="",
-                )
-
-                # log the custom exception
-                await litellm_logging_obj.async_failure_handler(
-                    exception=original_exception,
-                    traceback_exception=traceback.format_exc(),
-                )
-
-                threading.Thread(
-                    target=litellm_logging_obj.failure_handler,
-                    args=(
-                        original_exception,
-                        traceback.format_exc(),
-                    ),
-                ).start()
 
         for callback in litellm.callbacks:
             try:
@@ -899,6 +836,94 @@ class ProxyLogging:
         return isinstance(original_exception, HTTPException) or (
             error_type == ProxyErrorTypes.auth_error
         )
+
+    async def _handle_logging_proxy_only_error(
+        self,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        route: Optional[str] = None,
+        original_exception: Optional[Exception] = None,
+    ):
+        """
+        Handle logging for proxy only errors by calling `litellm_logging_obj.async_failure_handler`
+
+        Is triggered when self._is_proxy_only_error() returns True
+        """
+        litellm_logging_obj: Optional[Logging] = request_data.get(
+            "litellm_logging_obj", None
+        )
+        if litellm_logging_obj is None:
+            import uuid
+
+            request_data["litellm_call_id"] = str(uuid.uuid4())
+            user_api_key_logged_metadata = (
+                LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                    user_api_key_dict=user_api_key_dict
+                )
+            )
+
+            litellm_logging_obj, data = litellm.utils.function_setup(
+                original_function=route or "IGNORE_THIS",
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),
+                **request_data,
+            )
+            if "metadata" not in request_data:
+                request_data["metadata"] = {}
+            request_data["metadata"].update(user_api_key_logged_metadata)
+
+        if litellm_logging_obj is not None:
+            ## UPDATE LOGGING INPUT
+            _optional_params = {}
+            _litellm_params = {}
+
+            litellm_param_keys = LoggedLiteLLMParams.__annotations__.keys()
+            for k, v in request_data.items():
+                if k in litellm_param_keys:
+                    _litellm_params[k] = v
+                elif k != "model" and k != "user":
+                    _optional_params[k] = v
+
+            litellm_logging_obj.update_environment_variables(
+                model=request_data.get("model", ""),
+                user=request_data.get("user", ""),
+                optional_params=_optional_params,
+                litellm_params=_litellm_params,
+            )
+
+            input: Union[list, str, dict] = ""
+            if "messages" in request_data and isinstance(
+                request_data["messages"], list
+            ):
+                input = request_data["messages"]
+                litellm_logging_obj.model_call_details["messages"] = input
+                litellm_logging_obj.call_type = CallTypes.acompletion.value
+            elif "prompt" in request_data and isinstance(request_data["prompt"], str):
+                input = request_data["prompt"]
+                litellm_logging_obj.model_call_details["prompt"] = input
+                litellm_logging_obj.call_type = CallTypes.atext_completion.value
+            elif "input" in request_data and isinstance(request_data["input"], list):
+                input = request_data["input"]
+                litellm_logging_obj.model_call_details["input"] = input
+                litellm_logging_obj.call_type = CallTypes.aembedding.value
+            litellm_logging_obj.pre_call(
+                input=input,
+                api_key="",
+            )
+
+            # log the custom exception
+            await litellm_logging_obj.async_failure_handler(
+                exception=original_exception,
+                traceback_exception=traceback.format_exc(),
+            )
+
+            threading.Thread(
+                target=litellm_logging_obj.failure_handler,
+                args=(
+                    original_exception,
+                    traceback.format_exc(),
+                ),
+            ).start()
 
     async def post_call_success_hook(
         self,
