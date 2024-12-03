@@ -270,8 +270,8 @@ async def user_api_key_auth(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    route: str = get_request_route(request=request)
     try:
-        route: str = get_request_route(request=request)
         # get the request body
         request_data = await _read_request_body(request=request)
         await pre_db_read_auth_checks(
@@ -1266,6 +1266,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,
+                route=route,
             )
         )
 

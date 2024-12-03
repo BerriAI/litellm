@@ -751,6 +751,7 @@ class ProxyLogging:
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         error_type: Optional[ProxyErrorTypes] = None,
+        route: Optional[str] = None,
     ):
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
@@ -788,7 +789,9 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        if self._is_proxy_only_error(original_exception, error_type):
+        if self._is_proxy_only_error(
+            original_exception=original_exception, error_type=error_type
+        ):
             litellm_logging_obj: Optional[Logging] = request_data.get(
                 "litellm_logging_obj", None
             )
@@ -797,7 +800,7 @@ class ProxyLogging:
 
                 request_data["litellm_call_id"] = str(uuid.uuid4())
                 litellm_logging_obj, data = litellm.utils.function_setup(
-                    original_function="IGNORE_THIS",
+                    original_function=route or "IGNORE_THIS",
                     rules_obj=litellm.utils.Rules(),
                     start_time=datetime.now(),
                     **request_data,
