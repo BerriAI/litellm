@@ -2875,8 +2875,9 @@ def _truncate_field(
     This converts the field to a string and then truncates it if it exceeds the max length.
 
     Why convert to string ?
-    - User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
-    - Converting to string and then truncating the logged content catches this
+    1. User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
+        - Converting to string and then truncating the logged content catches this
+    2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
     """
     field_value = standard_logging_object.get(field_name)
     if field_value:
