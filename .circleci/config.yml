@@ -68,6 +68,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "pytest-xdist==3.6.1"
       - save_cache:
           paths:
             - ./venv
@@ -103,7 +104,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants and not langfuse and not caching and not cache"
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files

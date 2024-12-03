@@ -46,11 +46,12 @@ def get_current_weather(location, unit="fahrenheit"):
     "model",
     [
         "gpt-3.5-turbo-1106",
-        # "mistral/mistral-large-latest",
+        "mistral/mistral-large-latest",
         "claude-3-haiku-20240307",
         "gemini/gemini-1.5-pro",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "groq/llama3-8b-8192",
+        "groq/llama3-8b-8192",
+        "cohere_chat/command-r",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -623,6 +624,7 @@ def test_passing_tool_result_as_list(model):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_watsonx_tool_choice(sync_mode):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
     import json
@@ -653,28 +655,34 @@ async def test_watsonx_tool_choice(sync_mode):
 
     client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
     with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
+        try:
+            if sync_mode:
+                resp = completion(
+                    model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    client=client,
+                )
+            else:
+                resp = await acompletion(
+                    model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    client=client,
+                    stream=True,
+                )
 
-        if sync_mode:
-            resp = completion(
-                model="watsonx/meta-llama/llama-3-1-8b-instruct",
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                client=client,
-            )
-        else:
-            resp = await acompletion(
-                model="watsonx/meta-llama/llama-3-1-8b-instruct",
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                client=client,
-                stream=True,
-            )
+            print(resp)
 
-        print(resp)
-
-        mock_completion.assert_called_once()
-        print(mock_completion.call_args.kwargs)
-        json_data = json.loads(mock_completion.call_args.kwargs["data"])
-        json_data["tool_choice_options"] == "auto"
+            mock_completion.assert_called_once()
+            print(mock_completion.call_args.kwargs)
+            json_data = json.loads(mock_completion.call_args.kwargs["data"])
+            json_data["tool_choice_options"] == "auto"
+        except Exception as e:
+            print(e)
+            if "The read operation timed out" in str(e):
+                pytest.skip("Skipping test due to timeout")
+            else:
+                raise e

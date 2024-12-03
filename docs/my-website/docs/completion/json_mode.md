@@ -78,6 +78,7 @@ Works for:
 - Anthropic API Models
 - Groq Models
 - Ollama Models
+- Databricks Models
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

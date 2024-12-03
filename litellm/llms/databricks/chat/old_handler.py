@@ -13,6 +13,7 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
+from litellm import LlmProviders
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -33,141 +34,17 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     ProviderField,
 )
-from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
+from litellm.utils import (
+    CustomStreamWrapper,
+    EmbeddingResponse,
+    ModelResponse,
+    ProviderConfigManager,
+    Usage,
+)
 
-from ..base import BaseLLM
-from ..prompt_templates.factory import custom_prompt, prompt_factory
-
-
-class DatabricksConfig:
-    """
-    Reference: https://docs.databricks.com/en/machine-learning/foundation-models/api-reference.html#chat-request
-    """
-
-    max_tokens: Optional[int] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    top_k: Optional[int] = None
-    stop: Optional[Union[List[str], str]] = None
-    n: Optional[int] = None
-
-    def __init__(
-        self,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        top_k: Optional[int] = None,
-        stop: Optional[Union[List[str], str]] = None,
-        n: Optional[int] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_required_params(self) -> List[ProviderField]:
-        """For a given provider, return it's required fields with a description"""
-        return [
-            ProviderField(
-                field_name="api_key",
-                field_type="string",
-                field_description="Your Databricks API Key.",
-                field_value="dapi...",
-            ),
-            ProviderField(
-                field_name="api_base",
-                field_type="string",
-                field_description="Your Databricks API Base.",
-                field_value="https://adb-..",
-            ),
-        ]
-
-    def get_supported_openai_params(self):
-        return [
-            "stream",
-            "stop",
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "max_completion_tokens",
-            "n",
-        ]
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            if param == "n":
-                optional_params["n"] = value
-            if param == "stream" and value is True:
-                optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "stop":
-                optional_params["stop"] = value
-        return optional_params
-
-
-class DatabricksEmbeddingConfig:
-    """
-    Reference: https://learn.microsoft.com/en-us/azure/databricks/machine-learning/foundation-models/api-reference#--embedding-task
-    """
-
-    instruction: Optional[str] = (
-        None  # An optional instruction to pass to the embedding model. BGE Authors recommend 'Represent this sentence for searching relevant passages:' for retrieval queries
-    )
-
-    def __init__(self, instruction: Optional[str] = None) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(
-        self,
-    ):  # no optional openai embedding params supported
-        return []
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        return optional_params
+from ...base import BaseLLM
+from ...prompt_templates.factory import custom_prompt, prompt_factory
+from .transformation import DatabricksConfig
 
 
 async def make_call(
@@ -251,7 +128,6 @@ class DatabricksChatCompletion(BaseLLM):
         super().__init__()
 
     # makes headers for API call
-
     def _get_databricks_credentials(
         self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
     ) -> Tuple[str, dict]:
@@ -477,6 +353,12 @@ class DatabricksChatCompletion(BaseLLM):
             "max_retries", None
         )  # [TODO] add max retry support at llm api call level
         optional_params["stream"] = stream
+
+        if messages is not None and custom_llm_provider is not None:
+            provider_config = ProviderConfigManager.get_provider_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+            messages = provider_config._transform_messages(messages)
 
         data = {
             "model": model,
