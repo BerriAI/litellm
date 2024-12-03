@@ -697,7 +697,7 @@ async def team_member_delete(
 
     If user doesn't exist, an exception will be raised
     ```
-    curl -X POST 'http://0.0.0.0:8000/team/update' \
+    curl -X POST 'http://0.0.0.0:8000/team/member_delete' \
 
     -H 'Authorization: Bearer sk-1234' \
 
