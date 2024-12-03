@@ -830,15 +830,20 @@ class ProxyLogging:
                     request_data["messages"], list
                 ):
                     input = request_data["messages"]
+                    litellm_logging_obj.model_call_details["messages"] = input
+                    litellm_logging_obj.call_type = CallTypes.acompletion.value
                 elif "prompt" in request_data and isinstance(
                     request_data["prompt"], str
                 ):
                     input = request_data["prompt"]
+                    litellm_logging_obj.model_call_details["prompt"] = input
+                    litellm_logging_obj.call_type = CallTypes.atext_completion.value
                 elif "input" in request_data and isinstance(
                     request_data["input"], list
                 ):
                     input = request_data["input"]
-
+                    litellm_logging_obj.model_call_details["input"] = input
+                    litellm_logging_obj.call_type = CallTypes.aembedding.value
                 litellm_logging_obj.pre_call(
                     input=input,
                     api_key="",
