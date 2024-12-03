@@ -6195,11 +6195,21 @@ class ProviderConfigManager:
         return OpenAIGPTConfig()
 
 
-def get_end_user_id_for_cost_tracking(litellm_params: dict) -> Optional[str]:
+def get_end_user_id_for_cost_tracking(
+    litellm_params: dict,
+    service_type: Literal["litellm_logging", "prometheus"] = "litellm_logging",
+) -> Optional[str]:
     """
     Used for enforcing `disable_end_user_cost_tracking` param.
+
+    service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
     proxy_server_request = litellm_params.get("proxy_server_request") or {}
     if litellm.disable_end_user_cost_tracking:
+        return None
+    if (
+        service_type == "prometheus"
+        and litellm.disable_end_user_cost_tracking_prometheus_only
+    ):
         return None
     return proxy_server_request.get("body", {}).get("user", None)

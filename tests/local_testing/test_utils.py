@@ -1032,3 +1032,27 @@ def test_get_end_user_id_for_cost_tracking(
         get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
         == expected_end_user_id
     )
+
+
+@pytest.mark.parametrize(
+    "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
+    [
+        ({}, False, None),
+        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
+        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+    ],
+)
+def test_get_end_user_id_for_cost_tracking_prometheus_only(
+    litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id
+):
+    from litellm.utils import get_end_user_id_for_cost_tracking
+
+    litellm.disable_end_user_cost_tracking_prometheus_only = (
+        disable_end_user_cost_tracking_prometheus_only
+    )
+    assert (
+        get_end_user_id_for_cost_tracking(
+            litellm_params=litellm_params, service_type="prometheus"
+        )
+        == expected_end_user_id
+    )
