@@ -21,3 +21,12 @@ class TestJinaAI(BaseLLMRerankTest):
         return {
             "model": "jina_ai/jina-reranker-v2-base-multilingual",
         }
+
+
+def test_jina_ai_embedding():
+    litellm.embedding(
+        model="jina_ai/jina-embeddings-v3",
+        input=["a"],
+        task="separation",
+        dimensions=1024,
+    )
