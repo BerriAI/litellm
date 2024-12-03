@@ -732,6 +732,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     "too many tokens" in error_str
                     or "expected maxLength:" in error_str
                     or "Input is too long" in error_str
+                    or "prompt is too long" in error_str
                     or "prompt: length: 1.." in error_str
                     or "Too many input tokens" in error_str
                 ):
