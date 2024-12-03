@@ -138,6 +138,7 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API
