@@ -1257,7 +1257,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         )
         try:
             request_data = await request.json()
-        except json.JSONDecodeError:
+        except Exception:
             # For GET requests or requests without a JSON body
             request_data = {}
         asyncio.create_task(
