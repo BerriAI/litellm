@@ -427,7 +427,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if _metadata_variable_name not in data:
         data[_metadata_variable_name] = {}
 
-    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself
+    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
     if "metadata" in data and data["metadata"] is not None:
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
