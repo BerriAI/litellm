@@ -177,6 +177,7 @@ const sidebars = {
         "providers/ollama", 
         "providers/perplexity", 
         "providers/friendliai",
+        "providers/galadriel",
         "providers/groq", 
         "providers/github", 
         "providers/deepseek", 
