@@ -1972,15 +1972,16 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="cohere_chat",
-                    logging_obj=logging,
-                )
-                return response
+            # if "stream" in optional_params and optional_params["stream"] is True:
+            #     # don't try to access stream object,
+            #     response = CustomStreamWrapper(
+            #         model_response,
+            #         model,
+            #         custom_llm_provider="cohere_chat",
+            #         logging_obj=logging,
+            #         _response_headers=headers,
+            #     )
+            #     return response
             response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (

@@ -4,13 +4,20 @@ import time
 import traceback
 import types
 from enum import Enum
-from typing import Callable, Optional
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.cohere import ToolResultObject
+from litellm.types.utils import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    GenericStreamingChunk,
+)
 from litellm.utils import Choices, Message, ModelResponse, Usage
 
 from ..prompt_templates.factory import cohere_message_pt, cohere_messages_pt_v2
@@ -198,7 +205,107 @@ def construct_cohere_tool(tools=None):
     return cohere_tools
 
 
-def completion(
+async def make_call(
+    client: Optional[AsyncHTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
+    json_mode: bool,
+) -> Tuple[Any, httpx.Headers]:
+    if client is None:
+        client = litellm.module_level_aclient
+
+    try:
+        response = await client.post(
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
+        )
+    except httpx.HTTPStatusError as e:
+        error_headers = getattr(e, "headers", None)
+        error_response = getattr(e, "response", None)
+        if error_headers is None and error_response:
+            error_headers = getattr(error_response, "headers", None)
+        raise CohereError(
+            status_code=e.response.status_code,
+            message=await e.response.aread(),
+        )
+    except Exception as e:
+        for exception in litellm.LITELLM_EXCEPTION_TYPES:
+            if isinstance(e, exception):
+                raise e
+        raise CohereError(status_code=500, message=str(e))
+
+    completion_stream = ModelResponseIterator(
+        streaming_response=response.aiter_lines(),
+        sync_stream=False,
+        json_mode=json_mode,
+    )
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream, response.headers
+
+
+def make_sync_call(
+    client: Optional[HTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
+) -> Tuple[Any, httpx.Headers]:
+    if client is None:
+        client = litellm.module_level_client  # re-use a module level client
+
+    try:
+        response = client.post(
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
+        )
+    except httpx.HTTPStatusError as e:
+        raise CohereError(
+            status_code=e.response.status_code,
+            message=e.response.read(),
+        )
+    except Exception as e:
+        for exception in litellm.LITELLM_EXCEPTION_TYPES:
+            if isinstance(e, exception):
+                raise e
+        raise CohereError(status_code=500, message=str(e))
+
+    if response.status_code != 200:
+
+        raise CohereError(
+            status_code=response.status_code,
+            message=response.read(),
+        )
+
+    completion_stream = ModelResponseIterator(
+        streaming_response=response.iter_lines(), sync_stream=True
+    )
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response="first stream response received",
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream, response.headers
+
+
+def completion(  # noqa: PLR0915
     model: str,
     messages: list,
     api_base: str,
@@ -211,6 +318,8 @@ def completion(
     logging_obj,
     litellm_params=None,
     logger_fn=None,
+    client=None,
+    timeout=None,
 ):
     headers = validate_environment(api_key, headers=headers)
     completion_url = api_base
@@ -269,7 +378,23 @@ def completion(
         raise CohereError(message=response.text, status_code=response.status_code)
 
     if "stream" in optional_params and optional_params["stream"] is True:
-        return response.iter_lines()
+        completion_stream, cohere_headers = make_sync_call(
+            client=client,
+            api_base=api_base,
+            headers=headers,  # type: ignore
+            data=json.dumps(data),
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
+        return CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="cohere_chat",
+            logging_obj=logging_obj,
+            _response_headers=dict(cohere_headers),
+        )
     else:
         ## LOGGING
         logging_obj.post_call(
@@ -285,6 +410,10 @@ def completion(
             model_response.choices[0].message.content = completion_response["text"]  # type: ignore
         except Exception:
             raise CohereError(message=response.text, status_code=response.status_code)
+
+        ## ADD CITATIONS
+        if "citations" in completion_response:
+            setattr(model_response, "citations", completion_response["citations"])
 
         ## Tool calling response
         cohere_tools_response = completion_response.get("tool_calls", None)
@@ -325,3 +454,103 @@ def completion(
         )
         setattr(model_response, "usage", usage)
         return model_response
+
+
+class ModelResponseIterator:
+    def __init__(
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+    ):
+        self.streaming_response = streaming_response
+        self.response_iterator = self.streaming_response
+        self.content_blocks: List = []
+        self.tool_index = -1
+        self.json_mode = json_mode
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields = None
+
+            index = int(chunk.get("index", 0))
+
+            if "text" in chunk:
+                text = chunk["text"]
+            elif "is_finished" in chunk and chunk["is_finished"] is True:
+                is_finished = chunk["is_finished"]
+                finish_reason = chunk["finish_reason"]
+
+            if "citations" in chunk:
+                provider_specific_fields = {"citations": chunk["citations"]}
+
+            returned_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+                provider_specific_fields=provider_specific_fields,
+            )
+
+            return returned_chunk
+
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            chunk = self.response_iterator.__next__()
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            str_line = chunk
+            if isinstance(chunk, bytes):  # Handle binary data
+                str_line = chunk.decode("utf-8")  # Convert bytes to string
+                index = str_line.find("data:")
+                if index != -1:
+                    str_line = str_line[index:]
+            data_json = json.loads(str_line)
+            return self.chunk_parser(chunk=data_json)
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    # Async iterator
+    def __aiter__(self):
+        self.async_response_iterator = self.streaming_response.__aiter__()
+        return self
+
+    async def __anext__(self):
+        try:
+            chunk = await self.async_response_iterator.__anext__()
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            str_line = chunk
+            if isinstance(chunk, bytes):  # Handle binary data
+                str_line = chunk.decode("utf-8")  # Convert bytes to string
+                index = str_line.find("data:")
+                if index != -1:
+                    str_line = str_line[index:]
+
+            data_json = json.loads(str_line)
+            return self.chunk_parser(chunk=data_json)
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
