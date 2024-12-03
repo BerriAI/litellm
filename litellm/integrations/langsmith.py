@@ -70,6 +70,7 @@ class LangsmithLogger(CustomBatchLogger):
         self.log_queue: List[LangsmithQueueObject] = []
         asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
+
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def get_credentials_from_env(
@@ -122,7 +123,7 @@ class LangsmithLogger(CustomBatchLogger):
                 "project_name", credentials["LANGSMITH_PROJECT"]
             )
             run_name = metadata.get("run_name", self.langsmith_default_run_name)
-            run_id = metadata.get("id", None)
+            run_id = metadata.get("id", metadata.get("run_id", None))
             parent_run_id = metadata.get("parent_run_id", None)
             trace_id = metadata.get("trace_id", None)
             session_id = metadata.get("session_id", None)
@@ -173,14 +174,28 @@ class LangsmithLogger(CustomBatchLogger):
             if dotted_order:
                 data["dotted_order"] = dotted_order
 
+            run_id: Optional[str] = data.get("id")  # type: ignore
             if "id" not in data or data["id"] is None:
                 """
                 for /batch langsmith requires id, trace_id and dotted_order passed as params
                 """
                 run_id = str(uuid.uuid4())
-                data["id"] = str(run_id)
-                data["trace_id"] = str(run_id)
-                data["dotted_order"] = self.make_dot_order(run_id=run_id)
+
+                data["id"] = run_id
+
+            if (
+                "trace_id" not in data
+                or data["trace_id"] is None
+                and (run_id is not None and isinstance(run_id, str))
+            ):
+                data["trace_id"] = run_id
+
+            if (
+                "dotted_order" not in data
+                or data["dotted_order"] is None
+                and (run_id is not None and isinstance(run_id, str))
+            ):
+                data["dotted_order"] = self.make_dot_order(run_id=run_id)  # type: ignore
 
             verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
 
@@ -364,6 +379,9 @@ class LangsmithLogger(CustomBatchLogger):
         elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 
         try:
+            verbose_logger.debug(
+                "Sending batch of %s runs to Langsmith", len(elements_to_log)
+            )
             response = await self.async_httpx_client.post(
                 url=url,
                 json={"post": elements_to_log},
