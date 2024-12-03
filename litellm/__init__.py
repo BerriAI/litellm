@@ -432,6 +432,7 @@ groq_models: List = []
 azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+galadriel_models: List = []
 
 
 def add_known_models():
@@ -536,6 +537,8 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
+        elif value.get("litellm_provider") == "galadriel":
+            galadriel_models.append(key)
 
 
 add_known_models()
@@ -555,6 +558,7 @@ openai_compatible_endpoints: List = [
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "api.galadriel.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -582,6 +586,7 @@ openai_compatible_providers: List = [
     "litellm_proxy",
     "hosted_vllm",
     "lm_studio",
+    "galadriel",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -795,6 +800,7 @@ model_list = (
     + azure_models
     + anyscale_models
     + cerebras_models
+    + galadriel_models
 )
 
 
@@ -861,6 +867,7 @@ class LlmProviders(str, Enum):
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
+    GALADRIEL = "galadriel"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -909,6 +916,7 @@ models_by_provider: dict = {
     "azure": azure_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "galadriel": galadriel_models,
 }
 
 # mapping for those models which have larger equivalents
