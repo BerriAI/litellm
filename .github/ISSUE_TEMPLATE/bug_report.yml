@@ -33,6 +33,13 @@ body:
     validations:
       required: true
   - type: input
+    id: version
+    attributes:
+      label: What LiteLLM version are you on ? 
+      placeholder: v1.53.1
+    validations:
+      required: false
+  - type: input
     id: contact
     attributes:
       label: Twitter / LinkedIn details 
