@@ -319,3 +319,15 @@ def test_get_final_response_obj():
     finally:
         # Reset litellm.turn_off_message_logging to its original value
         litellm.turn_off_message_logging = False
+
+
+def test_strip_trailing_slash():
+    common_api_base = "https://api.test.com"
+    assert (
+        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base + "/")
+        == common_api_base
+    )
+    assert (
+        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base)
+        == common_api_base
+    )
