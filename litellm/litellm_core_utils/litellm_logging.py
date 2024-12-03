@@ -2858,7 +2858,12 @@ def truncate_standard_logging_payload_content(
 
 def _truncate_text(text: str, max_length: int) -> str:
     """Truncate text if it exceeds max_length"""
-    return text[:max_length] if len(text) > max_length else text
+    return (
+        text[:max_length]
+        + "...truncated by litellm, this logger does not support large content"
+        if len(text) > max_length
+        else text
+    )
 
 
 def _truncate_field(

@@ -513,10 +513,10 @@ async def test_datadog_payload_content_truncation():
     message_dict = json.loads(dd_payload["message"])
 
     # Verify truncation of fields
-    assert len(message_dict["error_str"]) < 10_001, "error_str not truncated correctly"
+    assert len(message_dict["error_str"]) < 10_100, "error_str not truncated correctly"
     assert (
-        len(str(message_dict["messages"])) < 10_001
+        len(str(message_dict["messages"])) < 10_100
     ), "messages not truncated correctly"
     assert (
-        len(str(message_dict["response"])) < 10_001
+        len(str(message_dict["response"])) < 10_100
     ), "response not truncated correctly"
