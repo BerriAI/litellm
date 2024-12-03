@@ -270,8 +270,8 @@ async def user_api_key_auth(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    route: str = get_request_route(request=request)
     try:
-        route: str = get_request_route(request=request)
         # get the request body
         request_data = await _read_request_body(request=request)
         await pre_db_read_auth_checks(
@@ -1251,12 +1251,18 @@ async def user_api_key_auth(  # noqa: PLR0915
         )
 
         # Log this exception to OTEL, Datadog etc
+        user_api_key_dict = UserAPIKeyAuth(
+            parent_otel_span=parent_otel_span,
+            api_key=api_key,
+        )
+        request_data = await _read_request_body(request=request)
         asyncio.create_task(
-            proxy_logging_obj.async_log_proxy_authentication_errors(
+            proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
                 original_exception=e,
-                request=request,
-                parent_otel_span=parent_otel_span,
-                api_key=api_key,
+                user_api_key_dict=user_api_key_dict,
+                error_type=ProxyErrorTypes.auth_error,
+                route=route,
             )
         )
 
