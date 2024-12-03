@@ -178,7 +178,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         ]
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
-            return litellm.DatabricksConfig().get_supported_openai_params()
+            return litellm.DatabricksConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
