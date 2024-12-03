@@ -69,7 +69,7 @@ async def test_transcription(
         drop_params=True,
     )
     print(f"transcript: {transcript.model_dump()}")
-    print(f"transcript: {transcript._hidden_params}")
+    print(f"transcript hidden params: {transcript._hidden_params}")
 
     assert transcript.text is not None
 
