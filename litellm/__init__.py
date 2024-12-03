@@ -1021,7 +1021,8 @@ from .llms.anthropic.experimental_pass_through.transformation import (
 )
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion import AnthropicTextConfig
-from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.databricks.chat.transformation import DatabricksConfig
+from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig

@@ -3418,7 +3418,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.DatabricksConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "nvidia_nim":
         supported_params = get_supported_openai_params(
@@ -6182,6 +6189,8 @@ class ProviderConfigManager:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            return litellm.DatabricksConfig()
 
         return OpenAIGPTConfig()
 
