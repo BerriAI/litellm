@@ -2883,7 +2883,7 @@ def _truncate_field(
     if field_value:
         str_value = str(field_value)
         if len(str_value) > max_length:
-            standard_logging_object[field_name] = _truncate_text(
+            standard_logging_object[field_name] = _truncate_text(  # type: ignore
                 text=str_value, max_length=max_length
             )
 
