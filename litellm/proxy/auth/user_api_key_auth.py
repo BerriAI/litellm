@@ -304,10 +304,17 @@ async def user_api_key_auth(  # noqa: PLR0915
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
-            api_key = get_api_key_from_custom_header(
-                request=request,
-                custom_litellm_key_header_name=custom_litellm_key_header_name,
-            )
+            if (
+                route in LiteLLMRoutes.public_routes.value
+                or route_in_additonal_public_routes(current_route=route)
+            ):
+            # check if public endpoint
+                return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+            else:
+                api_key = get_api_key_from_custom_header(
+                    request=request,
+                    custom_litellm_key_header_name=custom_litellm_key_header_name,
+                )
 
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
