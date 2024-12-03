@@ -26,7 +26,7 @@ body:
     id: ml-ops-team
     attributes:
       label: Are you a ML Ops Team?
-      description: This helps us prioritze your requests correctly 
+      description: This helps us prioritize your requests correctly 
       options:
         - "Yes"
         - "No"
