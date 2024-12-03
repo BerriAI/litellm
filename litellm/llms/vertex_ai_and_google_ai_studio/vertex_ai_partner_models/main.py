@@ -90,14 +90,13 @@ class VertexAIPartnerModels(VertexBase):
             from google.cloud import aiplatform
 
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
-            from litellm.llms.databricks.chat.handler import DatabricksChatCompletion
             from litellm.llms.OpenAI.openai import OpenAIChatCompletion
+            from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.text_completion_codestral import CodestralTextCompletion
             from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
             )
         except Exception:
-
             raise VertexAIError(
                 status_code=400,
                 message="""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`""",
@@ -120,7 +119,7 @@ class VertexAIPartnerModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions = DatabricksChatCompletion()
+            openai_like_chat_completions = OpenAILikeChatHandler()
             codestral_fim_completions = CodestralTextCompletion()
             anthropic_chat_completions = AnthropicChatCompletion()
 
@@ -133,10 +132,8 @@ class VertexAIPartnerModels(VertexBase):
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
-                optional_params["custom_endpoint"] = True
             elif "jamba" in model:
                 partner = VertexPartnerProvider.ai21
-                optional_params["custom_endpoint"] = True
             elif "claude" in model:
                 partner = VertexPartnerProvider.claude
 
@@ -233,6 +230,7 @@ class VertexAIPartnerModels(VertexBase):
                 timeout=timeout,
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
+                custom_endpoint=True,
             )
 
         except Exception as e:
