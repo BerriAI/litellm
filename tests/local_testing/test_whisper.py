@@ -58,7 +58,7 @@ from litellm import Router
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_transcription(
-    model, api_key, api_base, response_format, sync_mode, timestamp_granularities
+    model, api_key, api_base, response_format, timestamp_granularities
 ):
     transcript = await litellm.atranscription(
         model=model,
