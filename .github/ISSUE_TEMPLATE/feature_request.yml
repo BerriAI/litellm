@@ -26,10 +26,10 @@ body:
     id: ml-ops-team
     attributes:
       label: Are you a ML Ops Team?
-      description: Please indicate if you are submitting this feature request as part of an ML Ops team.
+      description: This helps us prioritze your requests correctly 
       options:
-        - label: "Yes"
-        - label: "No"
+        - Yes
+        - No
     validations:
       required: true
   - type: input
