@@ -2398,7 +2398,7 @@ def test_get_token_url():
 
 @pytest.mark.asyncio
 async def test_completion_fine_tuned_model():
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     mock_response = AsyncMock()
 
     def return_val():
