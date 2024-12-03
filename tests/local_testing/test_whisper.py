@@ -56,6 +56,7 @@ from litellm import Router
     [("json", None), ("vtt", None), ("verbose_json", ["word"])],
 )
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_transcription(
     model, api_key, api_base, response_format, sync_mode, timestamp_granularities
 ):
