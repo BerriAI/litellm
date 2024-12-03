@@ -710,6 +710,12 @@ def test_personal_key_generation_check():
             {"tags": ["old_tag"]},
             {"metadata": {"tags": ["new_tag"]}},
         ),
+        (
+            {"enforced_params": ["metadata.tags"]},
+            {},
+            {"tags": ["old_tag"]},
+            {"metadata": {"tags": ["old_tag"], "enforced_params": ["metadata.tags"]}},
+        ),
     ],
 )
 def test_prepare_metadata_fields(
