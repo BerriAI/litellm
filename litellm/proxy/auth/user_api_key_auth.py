@@ -803,7 +803,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            await _handle_failed_db_connection_for_get_key_object(
+            return await _handle_failed_db_connection_for_get_key_object(
                 e=Exception("No connected db.")
             )
 
