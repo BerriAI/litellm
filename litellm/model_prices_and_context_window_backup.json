@@ -6086,6 +6086,30 @@
         "litellm_provider": "together_ai",
         "mode": "embedding"
     },
+    "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": {
+        "input_cost_per_token": 0.00000018,
+        "output_cost_per_token": 0.00000018,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat"
+    },
+    "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": {
+        "input_cost_per_token": 0.00000088,
+        "output_cost_per_token": 0.00000088,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat"
+    },
+    "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": {
+        "input_cost_per_token": 0.0000035,
+        "output_cost_per_token": 0.0000035,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat"
+    },
     "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
         "input_cost_per_token": 0.0000006,
         "output_cost_per_token": 0.0000006,
