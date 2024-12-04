@@ -714,6 +714,12 @@ print(response)
 
 ## Set 'converse' / 'invoke' route 
 
+:::info
+
+Supported from LiteLLM Version `v1.53.5`
+
+:::
+
 LiteLLM defaults to the `invoke` route. LiteLLM uses the `converse` route for Bedrock models that support it.
 
 To explicitly set the route, do `bedrock/converse/<model>` or `bedrock/invoke/<model>`.
