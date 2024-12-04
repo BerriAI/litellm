@@ -31,6 +31,7 @@ from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
+from base_rerank_unit_tests import BaseLLMRerankTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -1991,3 +1992,13 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
         """
         pass
+
+
+class TestBedrockRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+        }
