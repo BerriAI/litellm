@@ -706,6 +706,37 @@ print(response)
 </Tabs>
 
 
+## Set 'converse' / 'invoke' route 
+
+LiteLLM defaults to the `invoke` route. LiteLLM uses the `converse` route for Bedrock models that support it.
+
+To explicitly set the route, do `bedrock/converse/<model>` or `bedrock/invoke/<model>`.
+
+
+E.g. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+completion(model="bedrock/converse/us.amazon.nova-pro-v1:0")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      model: bedrock/converse/us.amazon.nova-pro-v1:0
+```
+
+</TabItem>
+</Tabs>
+
 ## Alternate user/assistant messages
 
 Use `user_continue_message` to add a default user message, for cases (e.g. Autogen) where the client might not follow alternating user/assistant messages starting and ending with a user message. 

@@ -42,7 +42,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
     "meta.llama3-2-405b-instruct-v1:0",
-]
+] + litellm.bedrock_converse_models
 
 
 def make_sync_call(

@@ -1943,3 +1943,28 @@ def test_bedrock_context_window_error():
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response=Exception("prompt is too long"),
         )
+
+
+def test_bedrock_converse_route():
+    litellm.set_verbose = True
+    litellm.completion(
+        model="bedrock/converse/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+
+def test_bedrock_mapped_converse_models():
+    litellm.set_verbose = True
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+    litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+
+def test_bedrock_base_model_helper():
+    model = "us.amazon.nova-pro-v1:0"
+    litellm.AmazonConverseConfig()._get_base_model(model)
+    assert model == "us.amazon.nova-pro-v1:0"

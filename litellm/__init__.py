@@ -413,6 +413,7 @@ ai21_chat_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
+bedrock_converse_models: List = []
 fireworks_ai_models: List = []
 fireworks_ai_embedding_models: List = []
 deepinfra_models: List = []
@@ -493,6 +494,8 @@ def add_known_models():
             aleph_alpha_models.append(key)
         elif value.get("litellm_provider") == "bedrock":
             bedrock_models.append(key)
+        elif value.get("litellm_provider") == "bedrock_converse":
+            bedrock_converse_models.append(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.append(key)
         elif value.get("litellm_provider") == "perplexity":

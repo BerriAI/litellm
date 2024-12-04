@@ -468,6 +468,9 @@ class AmazonConverseConfig:
         AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         """
 
+        if model.startswith("converse/"):
+            model = model.split("/")[1]
+
         potential_region = model.split(".", 1)[0]
         if potential_region in self._supported_cross_region_inference_region():
             return model.split(".", 1)[1]
