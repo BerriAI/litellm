@@ -278,4 +278,5 @@ def test_openai_multilingual():
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
     )
+    print("multilingual response: ", response)
     assert response is not None
