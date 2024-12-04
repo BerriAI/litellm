@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
     _transform_request_body,
@@ -16,11 +16,14 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
     """
 
     def transform_openai_file_content_to_vertex_ai_file_content(
-        self, openai_file_content: FileTypes
+        self, openai_file_content: Optional[FileTypes] = None
     ) -> str:
         """
         Transforms OpenAI FileContentRequest to VertexAI FileContentRequest
         """
+
+        if openai_file_content is None:
+            raise ValueError("contents of file are None")
         # Read the content of the file
         file_content = self._get_content_from_openai_file(openai_file_content)
 
