@@ -667,6 +667,7 @@ class _GenerateKeyRequest(GenerateRequestBase):
 
 class GenerateKeyRequest(_GenerateKeyRequest):
     tags: Optional[List[str]] = None
+    enforced_params: Optional[List[str]] = None
 
 
 class GenerateKeyResponse(_GenerateKeyRequest):
@@ -2190,4 +2191,5 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_tpm_limit",
     "guardrails",
     "tags",
+    "enforced_params",
 ]
