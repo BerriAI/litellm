@@ -1977,7 +1977,7 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/us.amazon.nova-pro-v1:0",
+            "model": "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):

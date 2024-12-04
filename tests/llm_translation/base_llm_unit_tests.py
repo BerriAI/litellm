@@ -203,7 +203,7 @@ class BaseLLMChatTest(ABC):
         for chunk in response:
             content += chunk.choices[0].delta.content or ""
 
-        print("content=", content)
+        print(f"content={content}<END>")
 
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
