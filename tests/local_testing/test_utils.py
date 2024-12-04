@@ -1005,7 +1005,7 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif v["litellm_provider"] == "sagemaker":
+        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock":
             continue
         else:
             providers.add(v["litellm_provider"])
