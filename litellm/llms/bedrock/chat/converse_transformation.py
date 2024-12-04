@@ -134,6 +134,9 @@ class AmazonConverseConfig:
     def get_supported_image_types(self) -> List[str]:
         return ["png", "jpeg", "gif", "webp"]
 
+    def get_supported_document_types(self) -> List[str]:
+        return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+
     def map_openai_params(
         self,
         model: str,

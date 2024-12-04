@@ -54,8 +54,24 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
-    def test_pdf_handling(self, pdf_messages):
+    @pytest.mark.parametrize("image_url", ["str", "dict"])
+    def test_pdf_handling(self, pdf_messages, image_url):
         from litellm.utils import supports_pdf_input
+
+        if image_url == "str":
+            image_url = pdf_messages
+        elif image_url == "dict":
+            image_url = {"url": pdf_messages}
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": image_url,
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
 
         base_completion_call_args = self.get_base_completion_call_args()
 
@@ -64,7 +80,7 @@ class BaseLLMChatTest(ABC):
 
         response = litellm.completion(
             **base_completion_call_args,
-            messages=pdf_messages,
+            messages=image_messages,
         )
         assert response is not None
 
@@ -244,13 +260,13 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     @pytest.fixture
-    def pdf_messages(self):
+    def pdf_messages(self, image_url):
         import base64
 
         import requests
 
         # URL of the file
-        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+        url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
         response = requests.get(url)
         file_data = response.content
@@ -258,14 +274,4 @@ class BaseLLMChatTest(ABC):
         encoded_file = base64.b64encode(file_data).decode("utf-8")
         url = f"data:application/pdf;base64,{encoded_file}"
 
-        image_content = [
-            {"type": "text", "text": "What's this file about?"},
-            {
-                "type": "image_url",
-                "image_url": {"url": url},
-            },
-        ]
-
-        image_messages = [{"role": "user", "content": image_content}]
-
-        return image_messages
+        return url

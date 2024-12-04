@@ -18,17 +18,24 @@ class SystemContentBlock(TypedDict):
     text: str
 
 
-class ImageSourceBlock(TypedDict):
+class SourceBlock(TypedDict):
     bytes: Optional[str]  # base 64 encoded string
 
 
 class ImageBlock(TypedDict):
     format: Literal["png", "jpeg", "gif", "webp"]
-    source: ImageSourceBlock
+    source: SourceBlock
+
+
+class DocumentBlock(TypedDict):
+    format: Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+    source: SourceBlock
+    name: str
 
 
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
+    document: DocumentBlock
     json: dict
     text: str
 
@@ -48,6 +55,7 @@ class ToolUseBlock(TypedDict):
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
+    document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
 
