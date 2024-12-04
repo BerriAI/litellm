@@ -1,5 +1,5 @@
 import json
-from typing import Any, Coroutine, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
 
@@ -86,12 +86,42 @@ class VertexAIBatchPrediction(VertexLLM):
             )
         )
 
+        if _is_async is True:
+            return self._async_create_batch(
+                vertex_batch_request=vertex_batch_request,
+                api_base=api_base,
+                headers=headers,
+            )
+
         response = sync_handler.post(
             url=api_base,
             headers=headers,
             data=json.dumps(vertex_batch_request),
         )
 
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        _json_response = response.json()
+        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
+            response=_json_response
+        )
+        return vertex_batch_response
+
+    async def _async_create_batch(
+        self,
+        vertex_batch_request: VertexAIBatchPredictionJob,
+        api_base: str,
+        headers: Dict[str, str],
+    ) -> Batch:
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI,
+        )
+        response = await client.post(
+            url=api_base,
+            headers=headers,
+            data=json.dumps(vertex_batch_request),
+        )
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
