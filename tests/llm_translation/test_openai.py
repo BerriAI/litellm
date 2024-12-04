@@ -268,3 +268,14 @@ async def test_vision_with_custom_model():
         ]
         assert request_body["model"] == "my-custom-model"
         assert request_body["max_tokens"] == 10
+
+
+def test_openai_multilingual():
+    """
+    Tests that the OpenAI API can handle multilingual requests and invalid utf-8 sequences
+    """
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
+    )
+    assert response is not None
