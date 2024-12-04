@@ -223,8 +223,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         if stream is True and "ai21" in modelId:
             fake_stream = True
 
-        provider = model.split(".")[0]
-
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
