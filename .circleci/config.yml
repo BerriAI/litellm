@@ -1294,14 +1294,15 @@ jobs:
             cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
 
       - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
+          name: Check if litellm dir, tests dir, or pyproject.toml was modified
           command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/|tests/')" ]; then
+              echo "litellm, tests, or pyproject.toml updated"
             else
-              echo "No changes to litellm or pyproject.toml. Skipping PyPI publish."
+              echo "No changes to litellm, tests, or pyproject.toml. Skipping PyPI publish."
               circleci step halt
             fi
+
 
       - run:
           name: Checkout code
