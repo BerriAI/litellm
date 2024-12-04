@@ -37,3 +37,10 @@ import TabItem from '@theme/TabItem';
         - User Rate Limit
         - Team Limit
     - The `_PROXY_track_cost_callback` updates spend / usage in the LiteLLM database. [Here is everything tracked in the DB per request](https://github.com/BerriAI/litellm/blob/ba41a72f92a9abf1d659a87ec880e8e319f87481/schema.prisma#L172)
+
+## Frequently Asked Questions
+
+1. Is a db transaction tied to the lifecycle of request?
+    - No, a db transaction is not tied to the lifecycle of a request.
+    - The check if a virtual key is valid relies on a DB read if it's not in cache.
+    - All other DB transactions are async in background tasks
