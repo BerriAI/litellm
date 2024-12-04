@@ -15,6 +15,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
+from base_llm_unit_tests import BaseLLMChatTest
 
 
 def test_openai_prediction_param():
@@ -270,13 +271,6 @@ async def test_vision_with_custom_model():
         assert request_body["max_tokens"] == 10
 
 
-def test_openai_multilingual():
-    """
-    Tests that the OpenAI API can handle multilingual requests and invalid utf-8 sequences
-    """
-    response = litellm.completion(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
-    )
-    print("multilingual response: ", response)
-    assert response is not None
+class TestOpenAIChatCompletion(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {"model": "gpt-4o-mini"}
