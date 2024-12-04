@@ -260,7 +260,7 @@ class BaseLLMChatTest(ABC):
         assert response is not None
 
     @pytest.fixture
-    def pdf_messages(self, image_url):
+    def pdf_messages(self):
         import base64
 
         import requests
