@@ -399,7 +399,8 @@ def get_ollama_response(
 
 
 def ollama_completion_stream(url, data, logging_obj):
-    with httpx.stream(
+    httpx_client = litellm.client_session or httpx
+    with httpx_client.stream(
         url=url, json=data, method="POST", timeout=litellm.request_timeout
     ) as response:
         try:
