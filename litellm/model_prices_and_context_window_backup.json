@@ -756,7 +756,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "azure/gpt-4o-2024-11-20": {
         "max_tokens": 16384,
@@ -795,7 +796,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "azure/global-standard/gpt-4o-2024-11-20": {
         "max_tokens": 16384,
