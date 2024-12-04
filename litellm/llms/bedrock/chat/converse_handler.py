@@ -19,6 +19,9 @@ from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 BEDROCK_CONVERSE_MODELS = [
+    "amazon.nova-pro-v1:0",
+    "amazon.nova-lite-v1:0",
+    "amazon.nova-micro-v1:0",
     "anthropic.claude-3-5-haiku-20241022-v1:0",
     "anthropic.claude-3-5-sonnet-20241022-v2:0",
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
