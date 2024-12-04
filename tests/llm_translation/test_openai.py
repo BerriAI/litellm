@@ -274,3 +274,7 @@ async def test_vision_with_custom_model():
 class TestOpenAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
