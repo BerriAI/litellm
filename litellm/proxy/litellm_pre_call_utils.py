@@ -614,7 +614,7 @@ def _get_enforced_params(
 ) -> Optional[list]:
     enforced_params: Optional[list] = None
     if general_settings is not None:
-        enforced_params: Optional[list] = general_settings.get("enforced_params")
+        enforced_params = general_settings.get("enforced_params")
         if "service_account_settings" in general_settings:
             service_account_settings = general_settings["service_account_settings"]
             if "enforced_params" in service_account_settings:
