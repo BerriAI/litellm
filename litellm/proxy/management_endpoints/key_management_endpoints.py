@@ -255,6 +255,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
 
     Examples:
 
@@ -459,7 +460,6 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
@@ -469,18 +469,8 @@ def prepare_metadata_fields(
 
     try:
         for k, v in data_json.items():
-            if k == "model_tpm_limit" or k == "model_rpm_limit":
-                if k not in casted_metadata or casted_metadata[k] is None:
-                    casted_metadata[k] = {}
-                casted_metadata[k].update(v)
-
-            if k == "tags" or k == "guardrails":
-                if k not in casted_metadata or casted_metadata[k] is None:
-                    casted_metadata[k] = []
-                seen = set(casted_metadata[k])
-                casted_metadata[k].extend(
-                    x for x in v if x not in seen and not seen.add(x)  # type: ignore
-                )  # prevent duplicates from being added + maintain initial order
+            if k in LiteLLM_ManagementEndpoint_MetadataFields:
+                casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -498,10 +488,9 @@ def prepare_key_update_data(
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
-    _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails", "tags"]
     non_default_values = {}
     for k, v in data_json.items():
-        if k in _metadata_fields:
+        if k in LiteLLM_ManagementEndpoint_MetadataFields:
             continue
         non_default_values[k] = v
 
@@ -556,6 +545,7 @@ async def update_key_fn(
     - team_id: Optional[str] - Team ID associated with key
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[dict] - Model-specific budgets {"gpt-4": 0.5, "claude-v1": 1.0}

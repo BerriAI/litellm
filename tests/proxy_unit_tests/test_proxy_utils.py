@@ -679,3 +679,132 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     assert sorted(result["metadata"]["tags"]) == sorted(
         expected_tags
     ), f"Expected {expected_tags}, got {result['metadata']['tags']}"
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_api_key_dict, expected_enforced_params",
+    [
+        (
+            {"enforced_params": ["param1", "param2"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            ["param1", "param2"],
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            ["param1", "param2"],
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["param3", "param4"]},
+            ),
+            ["param1", "param2", "param3", "param4"],
+        ),
+    ],
+)
+def test_get_enforced_params(
+    general_settings, user_api_key_dict, expected_enforced_params
+):
+    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
+
+    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
+    assert enforced_params == expected_enforced_params
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_api_key_dict, request_body, expected_error",
+    [
+        (
+            {"enforced_params": ["param1", "param2"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            True,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            True,
+        ),
+        (
+            {},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["user"]},
+            ),
+            {},
+            True,
+        ),
+        (
+            {},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["user"]},
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"enforced_params": ["user"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"enforced_params": ["metadata.generation_name"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"metadata": {}},
+            True,
+        ),
+        (
+            {"enforced_params": ["metadata.generation_name"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"metadata": {"generation_name": "test_generation_name"}},
+            False,
+        ),
+    ],
+)
+def test_enforced_params_check(
+    general_settings, user_api_key_dict, request_body, expected_error
+):
+    from litellm.proxy.litellm_pre_call_utils import _enforced_params_check
+
+    if expected_error:
+        with pytest.raises(ValueError):
+            _enforced_params_check(
+                request_body=request_body,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                premium_user=True,
+            )
+    else:
+        _enforced_params_check(
+            request_body=request_body,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            premium_user=True,
+        )
