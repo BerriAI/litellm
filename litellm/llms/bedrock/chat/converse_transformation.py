@@ -134,6 +134,43 @@ class AmazonConverseConfig:
     def get_supported_image_types(self) -> List[str]:
         return ["png", "jpeg", "gif", "webp"]
 
+    def get_supported_document_types(self) -> List[str]:
+        return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+
+    def _create_json_tool_call_for_response_format(
+        self,
+        json_schema: Optional[dict] = None,
+        schema_name: str = "json_tool_call",
+    ) -> ChatCompletionToolParam:
+        """
+        Handles creating a tool call for getting responses in JSON format.
+
+        Args:
+            json_schema (Optional[dict]): The JSON schema the response should be in
+
+        Returns:
+            AnthropicMessagesTool: The tool call to send to Anthropic API to get responses in JSON format
+        """
+
+        if json_schema is None:
+            # Anthropic raises a 400 BadRequest error if properties is passed as None
+            # see usage with additionalProperties (Example 5) https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+            _input_schema = {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {},
+            }
+        else:
+            _input_schema = json_schema
+
+        _tool = ChatCompletionToolParam(
+            type="function",
+            function=ChatCompletionToolParamFunctionChunk(
+                name=schema_name, parameters=_input_schema
+            ),
+        )
+        return _tool
+
     def map_openai_params(
         self,
         model: str,
@@ -160,31 +197,20 @@ class AmazonConverseConfig:
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                if json_schema is not None:
-                    _tool_choice = self.map_tool_choice_values(
-                        model=model, tool_choice="required", drop_params=drop_params  # type: ignore
+                _tool_choice = {"name": schema_name, "type": "tool"}
+                _tool = self._create_json_tool_call_for_response_format(
+                    json_schema=json_schema,
+                    schema_name=schema_name if schema_name != "" else "json_tool_call",
+                )
+                optional_params["tools"] = [_tool]
+                optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                    tool=SpecificToolChoiceBlock(
+                        name=schema_name if schema_name != "" else "json_tool_call"
                     )
-
-                    _tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=schema_name, parameters=json_schema
-                        ),
-                    )
-
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
-                else:
-                    if litellm.drop_params is True or drop_params is True:
-                        pass
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(
-                                value
-                            ),
-                            status_code=400,
-                        )
+                )
+                optional_params["json_mode"] = True
+                if non_default_params.get("stream", False) is True:
+                    optional_params["fake_stream"] = True
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -330,7 +356,6 @@ class AmazonConverseConfig:
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-
         ## LOGGING
         if logging_obj is not None:
             logging_obj.post_call(
@@ -467,6 +492,9 @@ class AmazonConverseConfig:
         Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         """
+
+        if model.startswith("converse/"):
+            model = model.split("/")[1]
 
         potential_region = model.split(".", 1)[0]
         if potential_region in self._supported_cross_region_inference_region():

@@ -14,7 +14,7 @@ import pytest
 from starlette.datastructures import URL
 
 import litellm
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, UserAPIKeyAuth
 
 
 class Request:
@@ -387,3 +387,34 @@ def test_is_api_route_allowed(route, user_role, expected_result):
             pass
         else:
             raise e
+
+
+@pytest.mark.asyncio
+async def test_auth_not_connected_to_db():
+    """
+    ensure requests don't fail when `prisma_client` = None
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    user_key = "sk-12345678"
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    print("got valid token", valid_token)
+    assert valid_token.key_name == "failed-to-connect-to-db"
+    assert valid_token.token == "failed-to-connect-to-db"

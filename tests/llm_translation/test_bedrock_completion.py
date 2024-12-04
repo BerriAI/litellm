@@ -30,6 +30,7 @@ from litellm import (
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
+from base_llm_unit_tests import BaseLLMChatTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -1943,3 +1944,50 @@ def test_bedrock_context_window_error():
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response=Exception("prompt is too long"),
         )
+
+
+def test_bedrock_converse_route():
+    litellm.set_verbose = True
+    litellm.completion(
+        model="bedrock/converse/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+
+def test_bedrock_mapped_converse_models():
+    litellm.set_verbose = True
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+    litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+
+def test_bedrock_base_model_helper():
+    model = "us.amazon.nova-pro-v1:0"
+    litellm.AmazonConverseConfig()._get_base_model(model)
+    assert model == "us.amazon.nova-pro-v1:0"
+
+
+class TestBedrockConverseChat(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    def test_multilingual_requests(self):
+        """
+        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass

@@ -756,7 +756,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "azure/gpt-4o-2024-11-20": {
         "max_tokens": 16384,
@@ -795,7 +796,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "azure/global-standard/gpt-4o-2024-11-20": {
         "max_tokens": 16384,
@@ -4794,6 +4796,42 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true
+    },
+    "amazon.nova-micro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000035,
+        "output_cost_per_token": 0.00000014,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true
+    },
+    "amazon.nova-lite-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000006,
+        "output_cost_per_token": 0.00000024,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true
+    },
+    "amazon.nova-pro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000032,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
