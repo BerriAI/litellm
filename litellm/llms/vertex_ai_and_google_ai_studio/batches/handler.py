@@ -82,7 +82,7 @@ class VertexAIBatchPrediction(VertexLLM):
 
         vertex_batch_request: VertexAIBatchPredictionJob = (
             VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
-                request=create_batch_data, gcs_bucket_name=self.gcs_bucket_name
+                request=create_batch_data
             )
         )
 
@@ -96,7 +96,10 @@ class VertexAIBatchPrediction(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         _json_response = response.json()
-        return _json_response
+        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
+            response=_json_response
+        )
+        return vertex_batch_response
 
     def create_vertex_url(
         self,

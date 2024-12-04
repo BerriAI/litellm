@@ -462,3 +462,15 @@ class VertexAIBatchPredictionJob(TypedDict):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+
+
+class VertexBatchPredictionResponse(TypedDict, total=False):
+    name: str
+    displayName: str
+    model: str
+    inputConfig: InputConfig
+    outputConfig: OutputConfig
+    state: str
+    createTime: str
+    updateTime: str
+    modelVersionId: str
