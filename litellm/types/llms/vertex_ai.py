@@ -434,3 +434,31 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
+
+
+# Vertex AI Batch Prediction
+
+
+class GcsSource(TypedDict):
+    uris: str
+
+
+class InputConfig(TypedDict):
+    instancesFormat: str
+    gcsSource: GcsSource
+
+
+class GcsDestination(TypedDict):
+    outputUriPrefix: str
+
+
+class OutputConfig(TypedDict, total=False):
+    predictionsFormat: str
+    gcsDestination: GcsDestination
+
+
+class VertexAIBatchPredictionJob(TypedDict):
+    displayName: str
+    model: str
+    inputConfig: InputConfig
+    outputConfig: OutputConfig
