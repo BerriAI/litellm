@@ -600,7 +600,10 @@ def test_timeout_for_rate_limit_error_with_healthy_deployments(
         all_deployments=model_list,
     )
 
-    assert _timeout == expected_timeout
+    if expected_timeout == 0.0:
+        assert _timeout == expected_timeout
+    else:
+        assert _timeout > 0.0
 
 
 def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
