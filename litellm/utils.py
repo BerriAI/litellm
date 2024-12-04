@@ -3142,7 +3142,7 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         base_model = litellm.AmazonConverseConfig()._get_base_model(model)
-        if base_model in litellm.BEDROCK_CONVERSE_MODELS:
+        if base_model in litellm.bedrock_converse_models:
             _check_valid_arg(supported_params=supported_params)
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,

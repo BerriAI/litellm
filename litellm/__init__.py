@@ -386,6 +386,31 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
+BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "anthropic.claude-3-opus-20240229-v1:0",
+    "anthropic.claude-3-sonnet-20240229-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-v1",
+    "anthropic.claude-instant-v1",
+    "ai21.jamba-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "meta.llama3-8b-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
+    "meta.llama3-2-1b-instruct-v1:0",
+    "meta.llama3-2-3b-instruct-v1:0",
+    "meta.llama3-2-11b-instruct-v1:0",
+    "meta.llama3-2-90b-instruct-v1:0",
+    "meta.llama3-2-405b-instruct-v1:0",
+]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -413,7 +438,7 @@ ai21_chat_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
-bedrock_converse_models: List = []
+bedrock_converse_models: List = BEDROCK_CONVERSE_MODELS
 fireworks_ai_models: List = []
 fireworks_ai_embedding_models: List = []
 deepinfra_models: List = []
@@ -1078,9 +1103,6 @@ from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     bedrock_tool_name_mappings,
-)
-from .llms.bedrock.chat.converse_handler import (
-    BEDROCK_CONVERSE_MODELS,
 )
 from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
