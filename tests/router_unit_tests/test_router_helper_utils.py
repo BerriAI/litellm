@@ -12,6 +12,8 @@ from litellm import Router
 import pytest
 import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
+from create_mock_standard_logging_payload import create_standard_logging_payload
+from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.fixture
@@ -366,7 +368,8 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
     import time
 
     router = Router(model_list=model_list)
-
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -374,6 +377,7 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
             },
             "model_info": {"id": 100},
         },
+        "standard_logging_object": standard_logging_payload,
     }
     response = litellm.ModelResponse(
         model="gpt-3.5-turbo",
