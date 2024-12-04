@@ -679,35 +679,47 @@ async def get_users(
     skip = (page - 1) * page_size
     take = page_size
 
-    # Prepare the query
-    query = {}
+    # Prepare the query conditions
+    where_clause = ""
     if role:
-        query["user_role"] = role
+        where_clause = f"""WHERE "user_role" = '{role}'"""
 
-    # Get total count
-    total_count = await prisma_client.db.litellm_usertable.count(where=query)  # type: ignore
-
-    # Get paginated users
-    _users = await prisma_client.db.litellm_usertable.find_many(
-        where=query,  # type: ignore
-        skip=skip,
-        take=take,
+    # Single optimized SQL query that gets both users and total count
+    sql_query = f"""
+    WITH total_users AS (
+        SELECT COUNT(*) AS total_number_internal_users
+        FROM "LiteLLM_UserTable"
+    ),
+    paginated_users AS (
+        SELECT 
+            u.*,
+            (
+                SELECT COUNT(*) 
+                FROM "LiteLLM_VerificationToken" vt 
+                WHERE vt."user_id" = u."user_id"
+            ) AS key_count
+        FROM "LiteLLM_UserTable" u
+        {where_clause}
+        LIMIT {take} OFFSET {skip}
     )
-    # Add key_count to each user object directly
-    users = []
-    for user in _users:
-        user = user.model_dump()
-        key_count = await prisma_client.db.litellm_verificationtoken.count(
-            where={"user_id": user["user_id"]}
-        )
-        user["key_count"] = key_count
-        users.append(user)
+    SELECT 
+        (SELECT total_number_internal_users FROM total_users),
+        *
+    FROM paginated_users;
+    """
+
+    # Execute the query
+    results = await prisma_client.db.query_raw(sql_query)
+    # Get total count from the first row (if results exist)
+    total_count = 0
+    if len(results) > 0:
+        total_count = results[0].get("total_number_internal_users")
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
 
     return {
-        "users": users,
+        "users": results,
         "total": total_count,
         "page": page,
         "page_size": page_size,
