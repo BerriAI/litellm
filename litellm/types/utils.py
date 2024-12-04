@@ -106,6 +106,7 @@ class ModelInfo(TypedDict, total=False):
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
     supports_audio_output: Optional[bool]
+    supports_pdf_input: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
 

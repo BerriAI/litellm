@@ -54,6 +54,20 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
+    def test_pdf_handling(self, pdf_messages):
+        from litellm.utils import supports_pdf_input
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        response = litellm.completion(
+            **base_completion_call_args,
+            messages=pdf_messages,
+        )
+        assert response is not None
+
     def test_message_with_name(self):
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
