@@ -464,26 +464,26 @@ def _process_keys_for_user_info(
                 continue
 
             try:
-                key = key.model_dump()  # noqa
+                _key: dict = key.model_dump()  # noqa
             except Exception:
                 # if using pydantic v1
-                key = key.dict()
+                _key = key.dict()
             if (
-                "team_id" in key
-                and key["team_id"] is not None
-                and key["team_id"] != "litellm-dashboard"
+                "team_id" in _key
+                and _key["team_id"] is not None
+                and _key["team_id"] != "litellm-dashboard"
             ):
                 team_info = get_team_from_list(
-                    team_list=all_teams, team_id=key["team_id"]
+                    team_list=all_teams, team_id=_key["team_id"]
                 )
                 if team_info is not None:
                     team_alias = getattr(team_info, "team_alias", None)
-                    key["team_alias"] = team_alias
+                    _key["team_alias"] = team_alias
                 else:
-                    key["team_alias"] = None
+                    _key["team_alias"] = None
             else:
-                key["team_alias"] = "None"
-            returned_keys.append(key)
+                _key["team_alias"] = "None"
+            returned_keys.append(_key)
     return returned_keys
 
 
