@@ -37,8 +37,6 @@ from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
 
-from .utils import make_json_serializable
-
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
 
 
@@ -278,7 +276,6 @@ class DataDogLogger(CustomBatchLogger):
 
         # Build the initial payload
         truncate_standard_logging_payload_content(standard_logging_object)
-        make_json_serializable(standard_logging_object)
         json_payload = json.dumps(standard_logging_object)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
@@ -440,7 +437,6 @@ class DataDogLogger(CustomBatchLogger):
             "metadata": clean_metadata,
         }
 
-        make_json_serializable(payload)
         json_payload = json.dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
