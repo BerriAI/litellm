@@ -2343,9 +2343,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
 
         new_retry_after_mock_client.assert_called()
 
-        response_headers: httpx.Headers = new_retry_after_mock_client.call_args.kwargs[
-            "response_headers"
-        ]
+        response_headers: httpx.Headers = new_retry_after_mock_client.call_args[0][0]
         assert int(response_headers["retry-after"]) == cooldown_time
 
 
