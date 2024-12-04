@@ -427,14 +427,16 @@ async def _get_user_info_for_proxy_admin():
 
     _keys_in_db = results[0]["keys"]
     # cast all keys to LiteLLM_VerificationToken
-    _keys_in_db = [LiteLLM_VerificationToken(**key) for key in _keys_in_db]
+    keys_in_db = []
+    for key in _keys_in_db:
+        if key.get("models") is None:
+            key["models"] = []
+        keys_in_db.append(LiteLLM_VerificationToken(**key))
 
     # cast all teams to LiteLLM_TeamTable
     _teams_in_db = results[0]["teams"]
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
-    returned_keys = _process_keys_for_user_info(
-        keys=_keys_in_db, all_teams=_teams_in_db
-    )
+    returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
     return UserInfoResponse(
         user_id=None,
         user_info=None,
