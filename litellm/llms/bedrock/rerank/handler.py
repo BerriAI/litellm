@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.llms.bedrock import BedrockPreparedRequest
+from litellm.types.llms.bedrock import BedrockPreparedRequest, BedrockRerankRequest
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
 
@@ -29,6 +29,22 @@ else:
 
 
 class BedrockRerankHandler(BaseAWSLLM):
+    async def arerank(
+        self,
+        prepared_request: BedrockPreparedRequest,
+    ):
+        client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
+        try:
+            response = await client.post(url=prepared_request["endpoint_url"], headers=prepared_request["prepped"].headers, data=prepared_request["body"])  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise BedrockError(status_code=error_code, message=err.response.text)
+        except httpx.TimeoutException:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
+
+        return BedrockRerankConfig()._transform_response(response.json())
+
     def rerank(
         self,
         model: str,
@@ -70,6 +86,9 @@ class BedrockRerankHandler(BaseAWSLLM):
                 "headers": prepared_request["prepped"].headers,
             },
         )
+
+        if _is_async:
+            return self.arerank(prepared_request)  # type: ignore
 
         client = _get_httpx_client()
         try:

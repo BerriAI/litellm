@@ -1,3 +1,7 @@
+"""
+Tests Bedrock Completion + Rerank endpoints
+"""
+
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
 import sys

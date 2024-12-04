@@ -72,7 +72,7 @@ async def arerank(
 
 
 @client
-def rerank(
+def rerank(  # noqa: PLR0915
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
