@@ -18,6 +18,20 @@ spec:
           workingDir: "/app"
           env:
             {{- if .Values.db.useExisting }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.usernameKey }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.passwordKey }}
+            - name: DATABASE_HOST
+              value: {{ .Values.db.endpoint }}
+            - name: DATABASE_NAME
+              value: {{ .Values.db.database }}
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- else }}
