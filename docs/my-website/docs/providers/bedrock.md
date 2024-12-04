@@ -11,6 +11,12 @@ pip install boto3>=1.28.57
 
 :::info
 
+For **Amazon Nova Models**: Bump to v1.53.5+
+
+:::
+
+:::info
+
 LiteLLM uses boto3 to handle authentication. All these options are supported - https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html#credentials.
 
 :::
