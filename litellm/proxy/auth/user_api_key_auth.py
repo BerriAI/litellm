@@ -51,6 +51,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
+    _handle_failed_db_connection_for_get_key_object,
     allowed_routes_check,
     can_key_call_model,
     common_checks,
@@ -802,7 +803,9 @@ async def user_api_key_auth(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            raise Exception("No connected db.")
+            return await _handle_failed_db_connection_for_get_key_object(
+                e=Exception("No connected db.")
+            )
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
