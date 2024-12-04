@@ -206,3 +206,15 @@ def test_cancel_batch():
 
 def test_list_batch():
     pass
+
+
+def test_vertex_batch_prediction():
+    create_batch_response = litellm.create_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="gs://litellm-testing-bucket/vtx_batch.jsonl",
+        custom_llm_provider="vertex_ai",
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    print("create_batch_response=", create_batch_response)
+    pass
