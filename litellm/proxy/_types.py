@@ -1382,7 +1382,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     spend: float = 0.0
     max_budget: Optional[float] = None
     expires: Optional[str] = None
-    models: List = []
+    models: Optional[List] = []
     aliases: Dict = {}
     config: Dict = {}
     user_id: Optional[str] = None
