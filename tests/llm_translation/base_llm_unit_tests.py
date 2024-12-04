@@ -54,6 +54,36 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
+    @pytest.mark.parametrize("image_url", ["str", "dict"])
+    def test_pdf_handling(self, pdf_messages, image_url):
+        from litellm.utils import supports_pdf_input
+
+        if image_url == "str":
+            image_url = pdf_messages
+        elif image_url == "dict":
+            image_url = {"url": pdf_messages}
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": image_url,
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        response = litellm.completion(
+            **base_completion_call_args,
+            messages=image_messages,
+        )
+        assert response is not None
+
     def test_message_with_name(self):
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
@@ -187,7 +217,7 @@ class BaseLLMChatTest(ABC):
         for chunk in response:
             content += chunk.choices[0].delta.content or ""
 
-        print("content=", content)
+        print(f"content={content}<END>")
 
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
@@ -250,7 +280,7 @@ class BaseLLMChatTest(ABC):
         import requests
 
         # URL of the file
-        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+        url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
         response = requests.get(url)
         file_data = response.content
@@ -258,14 +288,4 @@ class BaseLLMChatTest(ABC):
         encoded_file = base64.b64encode(file_data).decode("utf-8")
         url = f"data:application/pdf;base64,{encoded_file}"
 
-        image_content = [
-            {"type": "text", "text": "What's this file about?"},
-            {
-                "type": "image_url",
-                "image_url": {"url": url},
-            },
-        ]
-
-        image_messages = [{"role": "user", "content": image_content}]
-
-        return image_messages
+        return url

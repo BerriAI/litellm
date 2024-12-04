@@ -177,6 +177,9 @@ def get_llm_provider(  # noqa: PLR0915
                         dynamic_api_key = get_secret_str(
                             "FRIENDLIAI_API_KEY"
                         ) or get_secret("FRIENDLI_TOKEN")
+                    elif endpoint == "api.galadriel.com/v1":
+                        custom_llm_provider = "galadriel"
+                        dynamic_api_key = get_secret_str("GALADRIEL_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -526,6 +529,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret_str("FRIENDLIAI_API_KEY")
             or get_secret_str("FRIENDLI_TOKEN")
         )
+    elif custom_llm_provider == "galadriel":
+        api_base = (
+            api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
     if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):

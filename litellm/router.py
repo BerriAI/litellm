@@ -2940,6 +2940,7 @@ class Router:
                 remaining_retries=num_retries,
                 num_retries=num_retries,
                 healthy_deployments=_healthy_deployments,
+                all_deployments=_all_deployments,
             )
 
             await asyncio.sleep(retry_after)
@@ -2972,6 +2973,7 @@ class Router:
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,
+                        all_deployments=_all_deployments,
                     )
                     await asyncio.sleep(_timeout)
 
@@ -3149,6 +3151,7 @@ class Router:
         remaining_retries: int,
         num_retries: int,
         healthy_deployments: Optional[List] = None,
+        all_deployments: Optional[List] = None,
     ) -> Union[int, float]:
         """
         Calculate back-off, then retry
@@ -3157,10 +3160,14 @@ class Router:
             1. there are healthy deployments in the same model group
             2. there are fallbacks for the completion call
         """
-        if (
+
+        ## base case - single deployment
+        if all_deployments is not None and len(all_deployments) == 1:
+            pass
+        elif (
             healthy_deployments is not None
             and isinstance(healthy_deployments, list)
-            and len(healthy_deployments) > 1
+            and len(healthy_deployments) > 0
         ):
             return 0
 
@@ -3242,6 +3249,7 @@ class Router:
                 remaining_retries=num_retries,
                 num_retries=num_retries,
                 healthy_deployments=_healthy_deployments,
+                all_deployments=_all_deployments,
             )
 
             ## LOGGING
@@ -3276,6 +3284,7 @@ class Router:
                         remaining_retries=remaining_retries,
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,
+                        all_deployments=_all_deployments,
                     )
                     time.sleep(_timeout)
 
