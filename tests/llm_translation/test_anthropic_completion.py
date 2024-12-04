@@ -706,6 +706,14 @@ class TestAnthropicCompletion(BaseLLMChatTest):
         result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
         print(result)
 
+    def test_multilingual_requests(self):
+        """
+        Anthropic API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass
+
 
 def test_convert_tool_response_to_message_with_values():
     """Test converting a tool response with 'values' key to a message"""

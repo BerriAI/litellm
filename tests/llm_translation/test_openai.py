@@ -15,6 +15,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
+from base_llm_unit_tests import BaseLLMChatTest
 
 
 def test_openai_prediction_param():
@@ -268,3 +269,12 @@ async def test_vision_with_custom_model():
         ]
         assert request_body["model"] == "my-custom-model"
         assert request_body["max_tokens"] == 10
+
+
+class TestOpenAIChatCompletion(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {"model": "gpt-4o-mini"}
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
