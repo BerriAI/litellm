@@ -152,4 +152,23 @@ class VertexAIBatchTransformation:
 
     @classmethod
     def _get_model_from_gcs_file(cls, gcs_file_uri: str) -> str:
-        return "publishers/google/models/gemini-1.5-flash-001"
+        """
+        Extracts the model from the gcs file uri
+
+        When files are uploaded using LiteLLM (/v1/files), the model is stored in the gcs file uri
+
+        Why?
+        - Because Vertex Requires the `model` param in create batch jobs request, but OpenAI does not require this
+
+
+        gcs_file_uri format: gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/e9412502-2c91-42a6-8e61-f5c294cc0fc8
+        returns: "publishers/google/models/gemini-1.5-flash-001"
+        """
+        from urllib.parse import unquote
+
+        decoded_uri = unquote(gcs_file_uri)
+
+        model_path = decoded_uri.split("publishers/")[1]
+        parts = model_path.split("/")
+        model = f"publishers/{'/'.join(parts[:3])}"
+        return model

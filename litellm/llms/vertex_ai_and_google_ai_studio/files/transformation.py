@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 
 from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
@@ -28,7 +29,7 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
 
     def transform_openai_file_content_to_vertex_ai_file_content(
         self, openai_file_content: Optional[FileTypes] = None
-    ) -> str:
+    ) -> Tuple[str, str]:
         """
         Transforms OpenAI FileContentRequest to VertexAI FileContentRequest
         """
@@ -50,7 +51,10 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
         vertex_jsonl_string = "\n".join(
             json.dumps(item) for item in vertex_jsonl_content
         )
-        return vertex_jsonl_string
+        object_name = self._get_gcs_object_name(
+            openai_jsonl_content=openai_jsonl_content
+        )
+        return vertex_jsonl_string, object_name
 
     def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
@@ -77,6 +81,21 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
             )
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
+
+    def _get_gcs_object_name(
+        self,
+        openai_jsonl_content: List[Dict[str, Any]],
+    ) -> str:
+        """
+        Gets a unique GCS object name for the VertexAI batch prediction job
+
+        named as: litellm-vertex-{model}-{uuid}
+        """
+        _model = openai_jsonl_content[0].get("body", {}).get("model", "")
+        if "publishers/google/models" not in _model:
+            _model = f"publishers/google/models/{_model}"
+        object_name = f"litellm-vertex-files/{_model}/{uuid.uuid4()}"
+        return object_name
 
     def _map_openai_to_vertex_params(
         self,

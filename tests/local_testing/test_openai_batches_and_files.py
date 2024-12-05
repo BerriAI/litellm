@@ -212,7 +212,7 @@ def test_list_batch():
 
 @pytest.mark.asyncio
 async def test_vertex_batch_prediction():
-    file_name = "openai_batch_completions.jsonl"
+    file_name = "vertex_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
     file_obj = await litellm.acreate_file(
