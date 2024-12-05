@@ -29,6 +29,6 @@ class TogetherAIRerankConfig:
 
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
-            results=_results,
+            results=_results,  # type: ignore
             meta=rerank_meta,
         )  # Return response

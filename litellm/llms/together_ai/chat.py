@@ -6,6 +6,8 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
+from typing import Optional
+
 from litellm import get_model_info, verbose_logger
 
 from ..OpenAI.chat.gpt_transformation import OpenAIGPTConfig
@@ -18,7 +20,7 @@ class TogetherAIConfig(OpenAIGPTConfig):
 
         Docs: https://docs.together.ai/docs/json-mode
         """
-        supports_function_calling = False
+        supports_function_calling: Optional[bool] = None
         try:
             model_info = get_model_info(model, custom_llm_provider="together_ai")
             supports_function_calling = model_info.get(
@@ -29,7 +31,7 @@ class TogetherAIConfig(OpenAIGPTConfig):
             pass
 
         optional_params = super().get_supported_openai_params(model)
-        if not supports_function_calling:
+        if supports_function_calling is not True:
             verbose_logger.warning(
                 "Only some together models support function calling/response_format. Docs - https://docs.together.ai/docs/function-calling"
             )
