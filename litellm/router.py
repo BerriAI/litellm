@@ -2569,6 +2569,7 @@ class Router:
                 model=kwargs["model"]
             )
             kwargs["model"] = deployment["litellm_params"]["model"]
+            kwargs["api_key"] = deployment["litellm_params"]["api_key"]
         return await original_function(**kwargs)
 
     def factory_function(
