@@ -87,7 +87,8 @@ async def test_anthropic_passthrough_handler(
     assert isinstance(result["result"], litellm.ModelResponse)
 
 
-def test_create_anthropic_response_logging_payload(mock_logging_obj):
+@pytest.mark.parametrize("metadata", [{"user": "test"}, {}])
+def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata):
     # Test the logging payload creation
     model_response = litellm.ModelResponse()
     model_response.choices = [{"message": {"content": "Test response"}}]
@@ -99,7 +100,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj):
         AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=model_response,
             model="claude-3-opus-20240229",
-            kwargs={},
+            kwargs={"metadata": metadata},
             start_time=start_time,
             end_time=end_time,
             logging_obj=mock_logging_obj,
@@ -110,3 +111,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj):
     assert "model" in result
     assert "response_cost" in result
     assert "standard_logging_object" in result
+    if metadata:
+        assert "test" == result["standard_logging_object"]["end_user"]
+    else:
+        assert "" == result["standard_logging_object"]["end_user"]

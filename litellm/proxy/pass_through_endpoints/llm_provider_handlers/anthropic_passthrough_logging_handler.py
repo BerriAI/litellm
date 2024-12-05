@@ -74,6 +74,10 @@ class AnthropicPassthroughLoggingHandler:
         }
 
     @staticmethod
+    def _get_user_from_metadata(metadata: dict) -> Optional[str]:
+        return metadata.get("user", None)
+
+    @staticmethod
     def _create_anthropic_response_logging_payload(
         litellm_model_response: Union[
             litellm.ModelResponse, litellm.TextCompletionResponse
@@ -95,6 +99,15 @@ class AnthropicPassthroughLoggingHandler:
         )
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
+        _metadata = kwargs.get("metadata") or {}
+        user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
+            metadata=_metadata
+        )
+        if user:
+            kwargs.setdefault("litellm_params", {})
+            kwargs["litellm_params"].update(
+                {"proxy_server_request": {"body": {"user": user}}}
+            )
 
         # Make standard logging object for Anthropic
         standard_logging_object = get_standard_logging_object_payload(
