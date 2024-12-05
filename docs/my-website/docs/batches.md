@@ -6,9 +6,9 @@ import TabItem from '@theme/TabItem';
 Covers Batches, Files
 
 ## **Supported Providers**:
-- Azure OpenAI
+- **[Azure OpenAI](./providers/azure#azure-batches-api)**
 - OpenAI
-- Vertex AI
+- **[Vertex AI](./providers/vertex#batch-apis)**
 
 ## Quick Start 
 
