@@ -453,3 +453,46 @@ def test_get_api_key_from_custom_header(headers, custom_header_name, expected_ap
         request=request, custom_litellm_key_header_name=custom_header_name
     )
     assert api_key == expected_api_key
+
+
+from litellm.proxy._types import LitellmUserRoles
+
+
+@pytest.mark.parametrize(
+    "user_role, auth_user_id, requested_user_id, expected_result",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "1234", None, True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, None, "1234", True),
+        (LitellmUserRoles.TEAM, "1234", None, False),
+        (LitellmUserRoles.TEAM, None, None, False),
+        (LitellmUserRoles.TEAM, "1234", "1234", True),
+    ],
+)
+def test_allowed_route_inside_route(
+    user_role, auth_user_id, requested_user_id, expected_result
+):
+    from litellm.proxy.auth.auth_checks import allowed_route_check_inside_route
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+
+    assert (
+        allowed_route_check_inside_route(
+            user_api_key_dict=UserAPIKeyAuth(user_role=user_role, user_id=auth_user_id),
+            requested_user_id=requested_user_id,
+        )
+        == expected_result
+    )
+
+
+def test_read_request_body():
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from fastapi import Request
+
+    payload = "()" * 1000000
+    request = Request(scope={"type": "http"})
+
+    async def return_body():
+        return payload
+
+    request.body = return_body
+    result = _read_request_body(request)
+    assert result is not None
