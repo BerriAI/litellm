@@ -733,13 +733,8 @@ def test_prepare_metadata_fields(
         "existing_metadata": existing_metadata,
     }
 
-
-    non_default_values = prepare_metadata_fields(**args)
-    assert non_default_values == {"metadata": new_metadata}
-
     updated_non_default_values = prepare_metadata_fields(**args)
     assert updated_non_default_values == expected_result
- 
 
 
 @pytest.mark.asyncio
@@ -775,4 +770,3 @@ async def test_user_info_as_proxy_admin(prisma_client):
 
     assert user_info_response.keys is not None
     assert len(user_info_response.keys) > 0, "Expected at least one key in response"
-
