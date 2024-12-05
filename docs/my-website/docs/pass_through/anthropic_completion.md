@@ -5,6 +5,13 @@ import TabItem from '@theme/TabItem';
 
 Pass-through endpoints for Anthropic - call provider-specific endpoint, in native format (no translation).
 
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ | supports all models on `/messages` endpoint |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ✅ | disable prometheus tracking via `litellm.disable_end_user_cost_tracking_prometheus_only`|
+| Streaming | ✅ | |
+
 Just replace `https://api.anthropic.com` with `LITELLM_PROXY_BASE_URL/anthropic`
 
 #### **Example Usage**
