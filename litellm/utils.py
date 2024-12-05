@@ -97,6 +97,7 @@ from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.router_utils.retry_utils import async_run_with_retries, run_with_retries
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -671,8 +672,51 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             raise e
 
+    async def _get_mock_healthy_deployments(model):
+        """
+        Returns a mock healthy LiteLLM Router deployment for consumption during retry logic.
+
+        Returns:
+            - A list of healthy deployments containing one mock deployment corresponding to
+              the model
+            - A list of deployments containing one mock deployment corresponding to the model.
+        """
+        mock_deployment = {
+            "model_name": model,
+        }
+        return [mock_deployment], [mock_deployment]
+
+    def _get_and_reset_retries_for_wrapper_call(kwargs):
+        """
+        Fetches the number of retries from the kwargs and resets the retries to 0 in the kwargs.
+        This is used to prevent retry logic from within the original function (e.g. the LiteLLM
+        OpenAI chat completions provider) from running on top of the retry logic in the wrapper.
+        """
+        num_retries = (
+            kwargs.get("max_retries", 0)
+            or kwargs.get("num_retries", 0)
+            or litellm.num_retries
+            or 0
+        )
+        kwargs["max_retries"] = 0
+        kwargs["num_retries"] = 0
+        return num_retries
+
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
+        num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
+        call_type = original_function.__name__
+        model: Optional[str] = None
+        try:
+            model = args[0] if len(args) > 0 else kwargs["model"]
+        except Exception:
+            model = None
+            if (
+                call_type != CallTypes.image_generation.value
+                and call_type != CallTypes.text_completion.value
+            ):
+                raise ValueError("model param not passed in.")
+
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
@@ -696,7 +740,24 @@ def client(original_function):  # noqa: PLR0915
                         raise Exception("Max retries per request hit!")
 
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            result = run_with_retries(
+                original_function=original_function,
+                original_function_args=args,
+                original_function_kwargs=kwargs,
+                num_retries=num_retries,
+                retry_after=0,
+                retry_policy=kwargs.get("retry_policy"),
+                fallbacks=kwargs.get("fallbacks", []),
+                context_window_fallbacks=kwargs.get(
+                    "context_window_fallback_dict", {}
+                ).get(model, []),
+                content_policy_fallbacks=[],
+                get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                    model
+                ),
+                log_retry=lambda kwargs, e: kwargs,
+                model_list=[],
+            )
             if "stream" in kwargs and kwargs["stream"] is True:
                 if (
                     "complete_response" in kwargs
@@ -726,238 +787,188 @@ def client(original_function):  # noqa: PLR0915
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
-        model: Optional[str] = None
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except Exception:
-            model = None
-            if (
-                call_type != CallTypes.image_generation.value
-                and call_type != CallTypes.text_completion.value
-            ):
-                raise ValueError("model param not passed in.")
-
-        try:
-            if logging_obj is None:
-                logging_obj, kwargs = function_setup(
-                    original_function.__name__, rules_obj, start_time, *args, **kwargs
-                )
-            kwargs["litellm_logging_obj"] = logging_obj
-            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
-                original_function=original_function,
-                request_kwargs=kwargs,
-                start_time=start_time,
+        if logging_obj is None:
+            logging_obj, kwargs = function_setup(
+                original_function.__name__, rules_obj, start_time, *args, **kwargs
             )
-            logging_obj._llm_caching_handler = _llm_caching_handler
+        kwargs["litellm_logging_obj"] = logging_obj
+        _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+            original_function=original_function,
+            request_kwargs=kwargs,
+            start_time=start_time,
+        )
+        logging_obj._llm_caching_handler = _llm_caching_handler
 
-            # CHECK FOR 'os.environ/' in kwargs
-            for k, v in kwargs.items():
-                if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
-                    kwargs[k] = litellm.get_secret(v)
-            # [OPTIONAL] CHECK BUDGET
-            if litellm.max_budget:
-                if litellm._current_cost > litellm.max_budget:
-                    raise BudgetExceededError(
-                        current_cost=litellm._current_cost,
-                        max_budget=litellm.max_budget,
-                    )
-
-            # [OPTIONAL] CHECK MAX RETRIES / REQUEST
-            if litellm.num_retries_per_request is not None:
-                # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = kwargs.get("metadata", {}).get(
-                    "previous_models", None
+        # CHECK FOR 'os.environ/' in kwargs
+        for k, v in kwargs.items():
+            if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
+                kwargs[k] = litellm.get_secret(v)
+        # [OPTIONAL] CHECK BUDGET
+        if litellm.max_budget:
+            if litellm._current_cost > litellm.max_budget:
+                raise BudgetExceededError(
+                    current_cost=litellm._current_cost,
+                    max_budget=litellm.max_budget,
                 )
-                if previous_models is not None:
-                    if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception("Max retries per request hit!")
 
-            # [OPTIONAL] CHECK CACHE
-            print_verbose(
-                f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
-            )
-            # if caching is false or cache["no-cache"]==True, don't run this
-            if (
+        # [OPTIONAL] CHECK MAX RETRIES / REQUEST
+        if litellm.num_retries_per_request is not None:
+            # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
+            previous_models = kwargs.get("metadata", {}).get("previous_models", None)
+            if previous_models is not None:
+                if litellm.num_retries_per_request <= len(previous_models):
+                    raise Exception("Max retries per request hit!")
+
+        # [OPTIONAL] CHECK CACHE
+        print_verbose(
+            f"SYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache')['no-cache']: {kwargs.get('cache', {}).get('no-cache', False)}"
+        )
+        # if caching is false or cache["no-cache"]==True, don't run this
+        if (
+            (
                 (
-                    (
-                        (
-                            kwargs.get("caching", None) is None
-                            and litellm.cache is not None
-                        )
-                        or kwargs.get("caching", False) is True
-                    )
-                    and kwargs.get("cache", {}).get("no-cache", False) is not True
+                    (kwargs.get("caching", None) is None and litellm.cache is not None)
+                    or kwargs.get("caching", False) is True
                 )
-                and kwargs.get("aembedding", False) is not True
-                and kwargs.get("atext_completion", False) is not True
-                and kwargs.get("acompletion", False) is not True
-                and kwargs.get("aimg_generation", False) is not True
-                and kwargs.get("atranscription", False) is not True
-                and kwargs.get("arerank", False) is not True
-                and kwargs.get("_arealtime", False) is not True
-            ):  # allow users to control returning cached responses from the completion function
-                # checking cache
-                verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
-                caching_handler_response: CachingHandlerResponse = (
-                    _llm_caching_handler._sync_get_cache(
-                        model=model or "",
-                        original_function=original_function,
-                        logging_obj=logging_obj,
-                        start_time=start_time,
-                        call_type=call_type,
-                        kwargs=kwargs,
-                        args=args,
-                    )
-                )
-
-                if caching_handler_response.cached_result is not None:
-                    return caching_handler_response.cached_result
-
-            # CHECK MAX TOKENS
-            if (
-                kwargs.get("max_tokens", None) is not None
-                and model is not None
-                and litellm.modify_params
-                is True  # user is okay with params being modified
-                and (
-                    call_type == CallTypes.acompletion.value
-                    or call_type == CallTypes.completion.value
-                )
-            ):
-                try:
-                    base_model = model
-                    if kwargs.get("hf_model_name", None) is not None:
-                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
-                    messages = None
-                    if len(args) > 1:
-                        messages = args[1]
-                    elif kwargs.get("messages", None):
-                        messages = kwargs["messages"]
-                    user_max_tokens = kwargs.get("max_tokens")
-                    modified_max_tokens = get_modified_max_tokens(
-                        model=model,
-                        base_model=base_model,
-                        messages=messages,
-                        user_max_tokens=user_max_tokens,
-                        buffer_num=None,
-                        buffer_perc=None,
-                    )
-                    kwargs["max_tokens"] = modified_max_tokens
-                except Exception as e:
-                    print_verbose(f"Error while checking max token limit: {str(e)}")
-            # MODEL CALL
-            result = original_function(*args, **kwargs)
-            end_time = datetime.datetime.now()
-            if "stream" in kwargs and kwargs["stream"] is True:
-                if (
-                    "complete_response" in kwargs
-                    and kwargs["complete_response"] is True
-                ):
-                    chunks = []
-                    for idx, chunk in enumerate(result):
-                        chunks.append(chunk)
-                    return litellm.stream_chunk_builder(
-                        chunks, messages=kwargs.get("messages", None)
-                    )
-                else:
-                    return result
-            elif "acompletion" in kwargs and kwargs["acompletion"] is True:
-                return result
-            elif "aembedding" in kwargs and kwargs["aembedding"] is True:
-                return result
-            elif "aimg_generation" in kwargs and kwargs["aimg_generation"] is True:
-                return result
-            elif "atranscription" in kwargs and kwargs["atranscription"] is True:
-                return result
-            elif "aspeech" in kwargs and kwargs["aspeech"] is True:
-                return result
-
-            ### POST-CALL RULES ###
-            post_call_processing(
-                original_response=result,
-                model=model or None,
-                optional_params=kwargs,
+                and kwargs.get("cache", {}).get("no-cache", False) is not True
             )
-
-            # [OPTIONAL] ADD TO CACHE
-            _llm_caching_handler.sync_set_cache(
-                result=result,
-                args=args,
-                kwargs=kwargs,
-            )
-
-            # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            threading.Thread(
-                target=logging_obj.success_handler, args=(result, start_time, end_time)
-            ).start()
-            # RETURN RESULT
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
+            and kwargs.get("aembedding", False) is not True
+            and kwargs.get("atext_completion", False) is not True
+            and kwargs.get("acompletion", False) is not True
+            and kwargs.get("aimg_generation", False) is not True
+            and kwargs.get("atranscription", False) is not True
+            and kwargs.get("arerank", False) is not True
+            and kwargs.get("_arealtime", False) is not True
+        ):  # allow users to control returning cached responses from the completion function
+            # checking cache
+            verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
+            caching_handler_response: CachingHandlerResponse = (
+                _llm_caching_handler._sync_get_cache(
                     model=model or "",
-                    optional_params=getattr(logging_obj, "optional_params", {}),
+                    original_function=original_function,
+                    logging_obj=logging_obj,
+                    start_time=start_time,
+                    call_type=call_type,
+                    kwargs=kwargs,
+                    args=args,
                 )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
+            )
 
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if result is not None:
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+            if caching_handler_response.cached_result is not None:
+                return caching_handler_response.cached_result
+
+        # CHECK MAX TOKENS
+        if (
+            kwargs.get("max_tokens", None) is not None
+            and model is not None
+            and litellm.modify_params is True  # user is okay with params being modified
+            and (
+                call_type == CallTypes.acompletion.value
+                or call_type == CallTypes.completion.value
+            )
+        ):
+            try:
+                base_model = model
+                if kwargs.get("hf_model_name", None) is not None:
+                    base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+                messages = None
+                if len(args) > 1:
+                    messages = args[1]
+                elif kwargs.get("messages", None):
+                    messages = kwargs["messages"]
+                user_max_tokens = kwargs.get("max_tokens")
+                modified_max_tokens = get_modified_max_tokens(
+                    model=model,
+                    base_model=base_model,
+                    messages=messages,
+                    user_max_tokens=user_max_tokens,
+                    buffer_num=None,
+                    buffer_perc=None,
+                )
+                kwargs["max_tokens"] = modified_max_tokens
+            except Exception as e:
+                print_verbose(f"Error while checking max token limit: {str(e)}")
+        # MODEL CALL
+        result = run_with_retries(
+            original_function=original_function,
+            original_function_args=args,
+            original_function_kwargs=kwargs,
+            num_retries=num_retries,
+            retry_after=0,
+            retry_policy=kwargs.get("retry_policy"),
+            fallbacks=kwargs.get("fallbacks", []),
+            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
+                model, []
+            ),
+            content_policy_fallbacks=[],
+            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                model
+            ),
+            log_retry=lambda kwargs, e: kwargs,
+            model_list=[],
+        )
+        end_time = datetime.datetime.now()
+        if "stream" in kwargs and kwargs["stream"] is True:
+            if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                chunks = []
+                for idx, chunk in enumerate(result):
+                    chunks.append(chunk)
+                return litellm.stream_chunk_builder(
+                    chunks, messages=kwargs.get("messages", None)
+                )
+            else:
+                return result
+        elif "acompletion" in kwargs and kwargs["acompletion"] is True:
             return result
-        except Exception as e:
-            call_type = original_function.__name__
-            if call_type == CallTypes.completion.value:
-                num_retries = (
-                    kwargs.get("num_retries", None) or litellm.num_retries or None
-                )
-                litellm.num_retries = (
-                    None  # set retries to None to prevent infinite loops
-                )
-                context_window_fallback_dict = kwargs.get(
-                    "context_window_fallback_dict", {}
-                )
+        elif "aembedding" in kwargs and kwargs["aembedding"] is True:
+            return result
+        elif "aimg_generation" in kwargs and kwargs["aimg_generation"] is True:
+            return result
+        elif "atranscription" in kwargs and kwargs["atranscription"] is True:
+            return result
+        elif "aspeech" in kwargs and kwargs["aspeech"] is True:
+            return result
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
-                )  # check if call from litellm.router/proxy
-                if (
-                    num_retries and not _is_litellm_router_call
-                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
-                    ):
-                        kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(*args, **kwargs)
-                elif (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
-                    and context_window_fallback_dict
-                    and model in context_window_fallback_dict
-                    and not _is_litellm_router_call
-                ):
-                    if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]  # type: ignore
-                    else:
-                        kwargs["model"] = context_window_fallback_dict[model]
-                    return original_function(*args, **kwargs)
-            traceback_exception = traceback.format_exc()
-            end_time = datetime.datetime.now()
+        ### POST-CALL RULES ###
+        post_call_processing(
+            original_response=result,
+            model=model or None,
+            optional_params=kwargs,
+        )
 
-            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            if logging_obj:
-                logging_obj.failure_handler(
-                    e, traceback_exception, start_time, end_time
-                )  # DO NOT MAKE THREADED - router retry fallback relies on this!
-            raise e
+        # [OPTIONAL] ADD TO CACHE
+        _llm_caching_handler.sync_set_cache(
+            result=result,
+            args=args,
+            kwargs=kwargs,
+        )
+
+        # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
+        verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+        threading.Thread(
+            target=logging_obj.success_handler, args=(result, start_time, end_time)
+        ).start()
+        # RETURN RESULT
+        if hasattr(result, "_hidden_params"):
+            result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
+                "id", None
+            )
+            result._hidden_params["api_base"] = get_api_base(
+                model=model or "",
+                optional_params=getattr(logging_obj, "optional_params", {}),
+            )
+            result._hidden_params["response_cost"] = (
+                logging_obj._response_cost_calculator(result=result)
+            )
+
+            result._hidden_params["additional_headers"] = process_response_headers(
+                result._hidden_params.get("additional_headers") or {}
+            )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+        if result is not None:
+            result._response_ms = (
+                end_time - start_time
+            ).total_seconds() * 1000  # return response latency in ms like openai
+        return result
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
@@ -988,191 +999,148 @@ def client(original_function):  # noqa: PLR0915
             ):
                 raise ValueError("model param not passed in.")
 
-        try:
-            if logging_obj is None:
-                logging_obj, kwargs = function_setup(
-                    original_function.__name__, rules_obj, start_time, *args, **kwargs
-                )
-            kwargs["litellm_logging_obj"] = logging_obj
-            logging_obj._llm_caching_handler = _llm_caching_handler
-            # [OPTIONAL] CHECK BUDGET
-            if litellm.max_budget:
-                if litellm._current_cost > litellm.max_budget:
-                    raise BudgetExceededError(
-                        current_cost=litellm._current_cost,
-                        max_budget=litellm.max_budget,
-                    )
-
-            # [OPTIONAL] CHECK CACHE
-            print_verbose(
-                f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
+        if logging_obj is None:
+            logging_obj, kwargs = function_setup(
+                original_function.__name__, rules_obj, start_time, *args, **kwargs
             )
-            _caching_handler_response: CachingHandlerResponse = (
-                await _llm_caching_handler._async_get_cache(
-                    model=model,
-                    original_function=original_function,
-                    logging_obj=logging_obj,
-                    start_time=start_time,
-                    call_type=call_type,
-                    kwargs=kwargs,
-                    args=args,
+        kwargs["litellm_logging_obj"] = logging_obj
+        logging_obj._llm_caching_handler = _llm_caching_handler
+        # [OPTIONAL] CHECK BUDGET
+        if litellm.max_budget:
+            if litellm._current_cost > litellm.max_budget:
+                raise BudgetExceededError(
+                    current_cost=litellm._current_cost,
+                    max_budget=litellm.max_budget,
                 )
-            )
-            if (
-                _caching_handler_response.cached_result is not None
-                and _caching_handler_response.final_embedding_cached_response is None
-            ):
-                return _caching_handler_response.cached_result
 
-            elif _caching_handler_response.embedding_all_elements_cache_hit is True:
-                return _caching_handler_response.final_embedding_cached_response
-
-            # MODEL CALL
-            result = await original_function(*args, **kwargs)
-            end_time = datetime.datetime.now()
-            if "stream" in kwargs and kwargs["stream"] is True:
-                if (
-                    "complete_response" in kwargs
-                    and kwargs["complete_response"] is True
-                ):
-                    chunks = []
-                    for idx, chunk in enumerate(result):
-                        chunks.append(chunk)
-                    return litellm.stream_chunk_builder(
-                        chunks, messages=kwargs.get("messages", None)
-                    )
-                else:
-                    return result
-            elif call_type == CallTypes.arealtime.value:
-                return result
-
-            # ADD HIDDEN PARAMS - additional call metadata
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["litellm_call_id"] = getattr(
-                    logging_obj, "litellm_call_id", None
-                )
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model,
-                    optional_params=kwargs,
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
-                or isinstance(result, TranscriptionResponse)
-            ):
-                setattr(
-                    result,
-                    "_response_ms",
-                    (end_time - start_time).total_seconds() * 1000,
-                )  # return response latency in ms like openai
-
-            ### POST-CALL RULES ###
-            post_call_processing(
-                original_response=result, model=model, optional_params=kwargs
-            )
-
-            ## Add response to cache
-            await _llm_caching_handler.async_set_cache(
-                result=result,
+        # [OPTIONAL] CHECK CACHE
+        print_verbose(
+            f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
+        )
+        _caching_handler_response: CachingHandlerResponse = (
+            await _llm_caching_handler._async_get_cache(
+                model=model,
                 original_function=original_function,
+                logging_obj=logging_obj,
+                start_time=start_time,
+                call_type=call_type,
                 kwargs=kwargs,
                 args=args,
             )
+        )
+        if (
+            _caching_handler_response.cached_result is not None
+            and _caching_handler_response.final_embedding_cached_response is None
+        ):
+            return _caching_handler_response.cached_result
 
-            # LOG SUCCESS - handle streaming success logging in the _next_ object
-            print_verbose(
-                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-            )
-            # check if user does not want this to be logged
-            asyncio.create_task(
-                logging_obj.async_success_handler(result, start_time, end_time)
-            )
-            threading.Thread(
-                target=logging_obj.success_handler,
-                args=(result, start_time, end_time),
-            ).start()
+        elif _caching_handler_response.embedding_all_elements_cache_hit is True:
+            return _caching_handler_response.final_embedding_cached_response
 
-            # REBUILD EMBEDDING CACHING
-            if (
-                isinstance(result, EmbeddingResponse)
-                and _caching_handler_response.final_embedding_cached_response
-                is not None
-            ):
-                return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
+        # MODEL CALL
+        num_retries = _get_and_reset_retries_for_wrapper_call(kwargs)
+        result = await async_run_with_retries(
+            original_function=original_function,
+            original_function_args=args,
+            original_function_kwargs=kwargs,
+            num_retries=num_retries,
+            retry_after=0,
+            retry_policy=kwargs.get("retry_policy"),
+            fallbacks=kwargs.get("fallbacks", []),
+            context_window_fallbacks=kwargs.get("context_window_fallback_dict", {}).get(
+                model, []
+            ),
+            content_policy_fallbacks=[],
+            get_healthy_deployments=lambda *args, **kwargs: _get_mock_healthy_deployments(
+                model
+            ),
+            log_retry=lambda kwargs, e: kwargs,
+            model_list=[],
+        )
+        end_time = datetime.datetime.now()
+        if "stream" in kwargs and kwargs["stream"] is True:
+            if "complete_response" in kwargs and kwargs["complete_response"] is True:
+                chunks = []
+                for idx, chunk in enumerate(result):
+                    chunks.append(chunk)
+                return litellm.stream_chunk_builder(
+                    chunks, messages=kwargs.get("messages", None)
+                )
+            else:
+                return result
+        elif call_type == CallTypes.arealtime.value:
+            return result
+
+        # ADD HIDDEN PARAMS - additional call metadata
+        if hasattr(result, "_hidden_params"):
+            result._hidden_params["litellm_call_id"] = getattr(
+                logging_obj, "litellm_call_id", None
+            )
+            result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
+                "id", None
+            )
+            result._hidden_params["api_base"] = get_api_base(
+                model=model,
+                optional_params=kwargs,
+            )
+            result._hidden_params["response_cost"] = (
+                logging_obj._response_cost_calculator(result=result)
+            )
+            result._hidden_params["additional_headers"] = process_response_headers(
+                result._hidden_params.get("additional_headers") or {}
+            )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+        if (
+            isinstance(result, ModelResponse)
+            or isinstance(result, EmbeddingResponse)
+            or isinstance(result, TranscriptionResponse)
+        ):
+            setattr(
+                result,
+                "_response_ms",
+                (end_time - start_time).total_seconds() * 1000,
+            )  # return response latency in ms like openai
+
+        ### POST-CALL RULES ###
+        post_call_processing(
+            original_response=result, model=model, optional_params=kwargs
+        )
+
+        ## Add response to cache
+        await _llm_caching_handler.async_set_cache(
+            result=result,
+            original_function=original_function,
+            kwargs=kwargs,
+            args=args,
+        )
+
+        # LOG SUCCESS - handle streaming success logging in the _next_ object
+        print_verbose(
+            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+        )
+        # check if user does not want this to be logged
+        asyncio.create_task(
+            logging_obj.async_success_handler(result, start_time, end_time)
+        )
+        threading.Thread(
+            target=logging_obj.success_handler,
+            args=(result, start_time, end_time),
+        ).start()
+
+        # REBUILD EMBEDDING CACHING
+        if (
+            isinstance(result, EmbeddingResponse)
+            and _caching_handler_response.final_embedding_cached_response is not None
+        ):
+            return (
+                _llm_caching_handler._combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
                     start_time=start_time,
                     end_time=end_time,
                 )
+            )
 
-            return result
-        except Exception as e:
-            traceback_exception = traceback.format_exc()
-            end_time = datetime.datetime.now()
-            if logging_obj:
-                try:
-                    logging_obj.failure_handler(
-                        e, traceback_exception, start_time, end_time
-                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
-                except Exception as e:
-                    raise e
-                try:
-                    await logging_obj.async_failure_handler(
-                        e, traceback_exception, start_time, end_time
-                    )
-                except Exception as e:
-                    raise e
-
-            call_type = original_function.__name__
-            if call_type == CallTypes.acompletion.value:
-                num_retries = (
-                    kwargs.get("num_retries", None) or litellm.num_retries or None
-                )
-                litellm.num_retries = (
-                    None  # set retries to None to prevent infinite loops
-                )
-                context_window_fallback_dict = kwargs.get(
-                    "context_window_fallback_dict", {}
-                )
-
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
-                )  # check if call from litellm.router/proxy
-                if (
-                    num_retries and not _is_litellm_router_call
-                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    try:
-                        kwargs["num_retries"] = num_retries
-                        kwargs["original_function"] = original_function
-                        if isinstance(
-                            e, openai.RateLimitError
-                        ):  # rate limiting specific error
-                            kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
-                            kwargs["retry_strategy"] = "constant_retry"
-                        return await litellm.acompletion_with_retries(*args, **kwargs)
-                    except Exception:
-                        pass
-                elif (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
-                    and context_window_fallback_dict
-                    and model in context_window_fallback_dict
-                ):
-                    if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]  # type: ignore
-                    else:
-                        kwargs["model"] = context_window_fallback_dict[model]
-                    return await original_function(*args, **kwargs)
-            raise e
+        return result
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
 
