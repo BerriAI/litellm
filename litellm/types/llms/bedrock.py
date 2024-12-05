@@ -15,8 +15,13 @@ from typing_extensions import (
 from .openai import ChatCompletionToolCallChunk
 
 
-class SystemContentBlock(TypedDict):
+class CachePointBlock(TypedDict, total=False):
+    type: Literal["default"]
+
+
+class SystemContentBlock(TypedDict, total=False):
     text: str
+    cachePoint: CachePointBlock
 
 
 class SourceBlock(TypedDict):
@@ -59,6 +64,7 @@ class ContentBlock(TypedDict, total=False):
     document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
+    cachePoint: CachePointBlock
 
 
 class MessageBlock(TypedDict):
