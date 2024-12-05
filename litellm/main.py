@@ -115,7 +115,8 @@ from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks.chat import DatabricksChatCompletion
+from .llms.databricks.chat.handler import DatabricksChatCompletion
+from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
@@ -230,6 +231,7 @@ watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
+databricks_embedding = DatabricksEmbeddingHandler()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -1684,7 +1686,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("CLARIFAI_API_BASE")
                 or "https://api.clarifai.com/v2"
             )
-
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             model_response = clarifai.completion(
                 model=model,
@@ -1972,15 +1973,16 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="cohere_chat",
-                    logging_obj=logging,
-                )
-                return response
+            # if "stream" in optional_params and optional_params["stream"] is True:
+            #     # don't try to access stream object,
+            #     response = CustomStreamWrapper(
+            #         model_response,
+            #         model,
+            #         custom_llm_provider="cohere_chat",
+            #         logging_obj=logging,
+            #         _response_headers=headers,
+            #     )
+            #     return response
             response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
@@ -2602,7 +2604,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             base_model = litellm.AmazonConverseConfig()._get_base_model(model)
 
-            if base_model in litellm.BEDROCK_CONVERSE_MODELS:
+            if base_model in litellm.bedrock_converse_models or model.startswith(
+                "converse/"
+            ):
+                model = model.replace("converse/", "")
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
@@ -2621,6 +2626,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_base=api_base,
                 )
             else:
+                model = model.replace("invoke/", "")
                 response = bedrock_chat_completion.completion(
                     model=model,
                     messages=messages,
@@ -3476,7 +3482,7 @@ def embedding(  # noqa: PLR0915
             )  # type: ignore
 
             ## EMBEDDING CALL
-            response = databricks_chat_completions.embedding(
+            response = databricks_embedding.embedding(
                 model=model,
                 input=input,
                 api_base=api_base,

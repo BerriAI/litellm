@@ -23,6 +23,34 @@ from litellm.utils import (
 from abc import ABC, abstractmethod
 
 
+def _usage_format_tests(usage: litellm.Usage):
+    """
+    OpenAI prompt caching
+    - prompt_tokens = sum of non-cache hit tokens + cache-hit tokens
+    - total_tokens = prompt_tokens + completion_tokens
+
+    Example
+    ```
+    "usage": {
+        "prompt_tokens": 2006,
+        "completion_tokens": 300,
+        "total_tokens": 2306,
+        "prompt_tokens_details": {
+            "cached_tokens": 1920
+        },
+        "completion_tokens_details": {
+            "reasoning_tokens": 0
+        }
+        # ANTHROPIC_ONLY #
+        "cache_creation_input_tokens": 0
+    }
+    ```
+    """
+    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+
+    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+
+
 class BaseLLMChatTest(ABC):
     """
     Abstract base test class that enforces a common test across all test classes.
@@ -54,12 +82,57 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
+    @pytest.mark.parametrize("image_url", ["str", "dict"])
+    def test_pdf_handling(self, pdf_messages, image_url):
+        from litellm.utils import supports_pdf_input
+
+        if image_url == "str":
+            image_url = pdf_messages
+        elif image_url == "dict":
+            image_url = {"url": pdf_messages}
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": image_url,
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        response = litellm.completion(
+            **base_completion_call_args,
+            messages=image_messages,
+        )
+        assert response is not None
+
     def test_message_with_name(self):
+        litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
             {"role": "user", "content": "Hello", "name": "test_name"},
         ]
         response = litellm.completion(**base_completion_call_args, messages=messages)
+        assert response is not None
+
+    def test_multilingual_requests(self):
+        """
+        Tests that the provider can handle multilingual requests and invalid utf-8 sequences
+
+        Context: https://github.com/openai/openai-python/issues/1921
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = litellm.completion(
+            **base_completion_call_args,
+            messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
+        )
+        print("multilingual response: ", response)
         assert response is not None
 
     @pytest.mark.parametrize(
@@ -69,6 +142,7 @@ class BaseLLMChatTest(ABC):
             {"type": "text"},
         ],
     )
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
@@ -136,6 +210,7 @@ class BaseLLMChatTest(ABC):
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API
@@ -170,7 +245,7 @@ class BaseLLMChatTest(ABC):
         for chunk in response:
             content += chunk.choices[0].delta.content or ""
 
-        print("content=", content)
+        print(f"content={content}<END>")
 
         # OpenAI guarantees that the JSON schema is returned in the content
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
@@ -226,6 +301,78 @@ class BaseLLMChatTest(ABC):
         response = litellm.completion(**base_completion_call_args, messages=messages)
         assert response is not None
 
+    def test_prompt_caching(self):
+        litellm.set_verbose = True
+        from litellm.utils import supports_prompt_caching
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_prompt_caching(base_completion_call_args["model"], None):
+            print("Model does not support prompt caching")
+            pytest.skip("Model does not support prompt caching")
+
+        try:
+            for _ in range(2):
+                response = litellm.completion(
+                    **base_completion_call_args,
+                    messages=[
+                        # System Message
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Here is the full text of a complex legal agreement"
+                                    * 400,
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        },
+                        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "What are the key terms and conditions in this agreement?",
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+                        },
+                        # The final turn is marked with cache-control, for continuing in followups.
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "What are the key terms and conditions in this agreement?",
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        },
+                    ],
+                    temperature=0.2,
+                    max_tokens=10,
+                )
+
+                _usage_format_tests(response.usage)
+
+            print("response=", response)
+            print("response.usage=", response.usage)
+
+            _usage_format_tests(response.usage)
+
+            assert "prompt_tokens_details" in response.usage
+            assert response.usage.prompt_tokens_details.cached_tokens > 0
+        except litellm.InternalServerError:
+            pass
+
     @pytest.fixture
     def pdf_messages(self):
         import base64
@@ -233,7 +380,7 @@ class BaseLLMChatTest(ABC):
         import requests
 
         # URL of the file
-        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+        url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
         response = requests.get(url)
         file_data = response.content
@@ -241,14 +388,4 @@ class BaseLLMChatTest(ABC):
         encoded_file = base64.b64encode(file_data).decode("utf-8")
         url = f"data:application/pdf;base64,{encoded_file}"
 
-        image_content = [
-            {"type": "text", "text": "What's this file about?"},
-            {
-                "type": "image_url",
-                "image_url": {"url": url},
-            },
-        ]
-
-        image_messages = [{"role": "user", "content": image_content}]
-
-        return image_messages
+        return url

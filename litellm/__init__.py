@@ -17,7 +17,11 @@ from litellm._logging import (
     _turn_on_json,
     log_level,
 )
-from litellm.constants import ROUTER_MAX_FALLBACKS
+from litellm.constants import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_FLUSH_INTERVAL_SECONDS,
+    ROUTER_MAX_FALLBACKS,
+)
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
     KeyManagementSystem,
@@ -32,10 +36,10 @@ from enum import Enum
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-#############################################
+############################################
 if set_verbose == True:
     _turn_on_debug()
-#############################################
+############################################
 ### Callbacks /Logging / Success / Failure Handlers ###
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
@@ -284,6 +288,7 @@ max_internal_user_budget: Optional[float] = None
 internal_user_budget_duration: Optional[str] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
+disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
@@ -358,7 +363,7 @@ model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}
 
 
-####### THREAD-SPECIFIC DATA ###################
+####### THREAD-SPECIFIC DATA ####################
 class MyLocal(threading.local):
     def __init__(self):
         self.user = "Hello World"
@@ -381,6 +386,31 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
+BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "anthropic.claude-3-opus-20240229-v1:0",
+    "anthropic.claude-3-sonnet-20240229-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-v1",
+    "anthropic.claude-instant-v1",
+    "ai21.jamba-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "meta.llama3-8b-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
+    "meta.llama3-2-1b-instruct-v1:0",
+    "meta.llama3-2-3b-instruct-v1:0",
+    "meta.llama3-2-11b-instruct-v1:0",
+    "meta.llama3-2-90b-instruct-v1:0",
+    "meta.llama3-2-405b-instruct-v1:0",
+]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -408,6 +438,7 @@ ai21_chat_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
+bedrock_converse_models: List = BEDROCK_CONVERSE_MODELS
 fireworks_ai_models: List = []
 fireworks_ai_embedding_models: List = []
 deepinfra_models: List = []
@@ -427,6 +458,7 @@ groq_models: List = []
 azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+galadriel_models: List = []
 
 
 def add_known_models():
@@ -487,6 +519,8 @@ def add_known_models():
             aleph_alpha_models.append(key)
         elif value.get("litellm_provider") == "bedrock":
             bedrock_models.append(key)
+        elif value.get("litellm_provider") == "bedrock_converse":
+            bedrock_converse_models.append(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.append(key)
         elif value.get("litellm_provider") == "perplexity":
@@ -531,6 +565,8 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
+        elif value.get("litellm_provider") == "galadriel":
+            galadriel_models.append(key)
 
 
 add_known_models()
@@ -550,6 +586,7 @@ openai_compatible_endpoints: List = [
     "inference.friendli.ai/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "api.galadriel.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -577,6 +614,7 @@ openai_compatible_providers: List = [
     "litellm_proxy",
     "hosted_vllm",
     "lm_studio",
+    "galadriel",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -790,6 +828,7 @@ model_list = (
     + azure_models
     + anyscale_models
     + cerebras_models
+    + galadriel_models
 )
 
 
@@ -856,6 +895,7 @@ class LlmProviders(str, Enum):
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
+    GALADRIEL = "galadriel"
 
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
@@ -878,7 +918,7 @@ models_by_provider: dict = {
     + vertex_vision_models
     + vertex_language_models,
     "ai21": ai21_models,
-    "bedrock": bedrock_models,
+    "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
     "deepinfra": deepinfra_models,
@@ -904,6 +944,7 @@ models_by_provider: dict = {
     "azure": azure_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "galadriel": galadriel_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1017,7 +1058,8 @@ from .llms.anthropic.experimental_pass_through.transformation import (
 )
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion import AnthropicTextConfig
-from .llms.databricks.chat import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.databricks.chat.transformation import DatabricksConfig
+from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
@@ -1061,9 +1103,6 @@ from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     bedrock_tool_name_mappings,
-)
-from .llms.bedrock.chat.converse_handler import (
-    BEDROCK_CONVERSE_MODELS,
 )
 from .llms.bedrock.common_utils import (
     AmazonTitanConfig,

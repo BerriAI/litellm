@@ -932,37 +932,6 @@ async def test_gemini_embeddings(sync_mode, input):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_databricks_embeddings(sync_mode):
-    try:
-        litellm.set_verbose = True
-        litellm.drop_params = True
-
-        if sync_mode:
-            response = litellm.embedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-        else:
-            response = await litellm.aembedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-
-        print(f"response: {response}")
-
-        openai.types.CreateEmbeddingResponse.model_validate(
-            response.model_dump(), strict=True
-        )
-        # stubbed endpoint is setup to return this
-        # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_voyage_embeddings()
 # def test_xinference_embeddings():
 #     try:

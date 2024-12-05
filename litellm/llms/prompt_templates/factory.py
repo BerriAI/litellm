@@ -2162,8 +2162,9 @@ def stringify_json_tool_call_content(messages: List) -> List:
 ###### AMAZON BEDROCK #######
 
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
+from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
-from litellm.types.llms.bedrock import ImageSourceBlock as BedrockImageSourceBlock
+from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
     ToolChoiceValuesBlock as BedrockToolChoiceValuesBlock,
@@ -2210,7 +2211,9 @@ def get_image_details(image_url) -> Tuple[str, str]:
         raise e
 
 
-def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
+def _process_bedrock_converse_image_block(
+    image_url: str,
+) -> BedrockContentBlock:
     if "base64" in image_url:
         # Case 1: Images with base64 encoding
         import base64
@@ -2228,12 +2231,17 @@ def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
         else:
             mime_type = "image/jpeg"
             image_format = "jpeg"
-        _blob = BedrockImageSourceBlock(bytes=img_without_base_64)
+        _blob = BedrockSourceBlock(bytes=img_without_base_64)
         supported_image_formats = (
             litellm.AmazonConverseConfig().get_supported_image_types()
         )
+        supported_document_types = (
+            litellm.AmazonConverseConfig().get_supported_document_types()
+        )
         if image_format in supported_image_formats:
-            return BedrockImageBlock(source=_blob, format=image_format)  # type: ignore
+            return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))  # type: ignore
+        elif image_format in supported_document_types:
+            return BedrockContentBlock(document=BedrockDocumentBlock(source=_blob, format=image_format, name="DocumentPDFmessages_{}".format(str(uuid.uuid4()))))  # type: ignore
         else:
             # Handle the case when the image format is not supported
             raise ValueError(
@@ -2244,12 +2252,17 @@ def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
     elif "https:/" in image_url:
         # Case 2: Images with direct links
         image_bytes, image_format = get_image_details(image_url)
-        _blob = BedrockImageSourceBlock(bytes=image_bytes)
+        _blob = BedrockSourceBlock(bytes=image_bytes)
         supported_image_formats = (
             litellm.AmazonConverseConfig().get_supported_image_types()
         )
+        supported_document_types = (
+            litellm.AmazonConverseConfig().get_supported_document_types()
+        )
         if image_format in supported_image_formats:
-            return BedrockImageBlock(source=_blob, format=image_format)  # type: ignore
+            return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))  # type: ignore
+        elif image_format in supported_document_types:
+            return BedrockContentBlock(document=BedrockDocumentBlock(source=_blob, format=image_format, name="DocumentPDFmessages_{}".format(str(uuid.uuid4()))))  # type: ignore
         else:
             # Handle the case when the image format is not supported
             raise ValueError(
@@ -2464,15 +2477,32 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
+                            if isinstance(element["image_url"], dict):
+                                image_url = element["image_url"]["url"]
+                            else:
+                                image_url = element["image_url"]
                             _part = _process_bedrock_converse_image_block(  # type: ignore
                                 image_url=image_url
                             )
-                            _parts.append(BedrockContentBlock(image=_part))  # type: ignore
+                            _parts.append(_part)  # type: ignore
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                element, block_type="content_block"
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             else:
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        messages[msg_i], block_type="content_block"
+                    )
+                )
                 user_content.append(_part)
+                if _cache_point_block is not None:
+                    user_content.append(_cache_point_block)
 
             msg_i += 1
         if user_content:
@@ -2539,13 +2569,14 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
+                            if isinstance(element["image_url"], dict):
+                                image_url = element["image_url"]["url"]
+                            else:
+                                image_url = element["image_url"]
                             assistants_part = _process_bedrock_converse_image_block(  # type: ignore
                                 image_url=image_url
                             )
-                            assistants_parts.append(
-                                BedrockContentBlock(image=assistants_part)  # type: ignore
-                            )
+                            assistants_parts.append(assistants_part)
                 assistant_content.extend(assistants_parts)
             elif messages[msg_i].get("content", None) is not None and isinstance(
                 messages[msg_i]["content"], str

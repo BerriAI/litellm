@@ -76,8 +76,8 @@ class VertexAIModelGardenModels(VertexBase):
             from google.cloud import aiplatform
 
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
-            from litellm.llms.databricks.chat import DatabricksChatCompletion
             from litellm.llms.OpenAI.openai import OpenAIChatCompletion
+            from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.text_completion_codestral import CodestralTextCompletion
             from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
@@ -106,7 +106,7 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions = DatabricksChatCompletion()
+            openai_like_chat_completions = OpenAILikeChatHandler()
 
             ## CONSTRUCT API BASE
             stream: bool = optional_params.get("stream", False) or False

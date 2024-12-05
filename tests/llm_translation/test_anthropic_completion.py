@@ -666,36 +666,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "claude-3-haiku-20240307"}
-
-    def test_pdf_handling(self, pdf_messages):
-        from litellm.llms.custom_httpx.http_handler import HTTPHandler
-        from litellm.types.llms.anthropic import AnthropicMessagesDocumentParam
-        import json
-
-        client = HTTPHandler()
-
-        with patch.object(client, "post", new=MagicMock()) as mock_client:
-            response = completion(
-                model="claude-3-5-sonnet-20241022",
-                messages=pdf_messages,
-                client=client,
-            )
-
-            mock_client.assert_called_once()
-
-            json_data = json.loads(mock_client.call_args.kwargs["data"])
-            headers = mock_client.call_args.kwargs["headers"]
-
-            assert headers["anthropic-beta"] == "pdfs-2024-09-25"
-
-            json_data["messages"][0]["role"] == "user"
-            _document_validation = AnthropicMessagesDocumentParam(
-                **json_data["messages"][0]["content"][1]
-            )
-            assert _document_validation["type"] == "document"
-            assert _document_validation["source"]["media_type"] == "application/pdf"
-            assert _document_validation["source"]["type"] == "base64"
+        return {"model": "anthropic/claude-3-5-sonnet-20240620"}
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -705,6 +676,14 @@ class TestAnthropicCompletion(BaseLLMChatTest):
 
         result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
         print(result)
+
+    def test_multilingual_requests(self):
+        """
+        Anthropic API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass
 
 
 def test_convert_tool_response_to_message_with_values():

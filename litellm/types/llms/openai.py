@@ -301,6 +301,18 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+BatchJobStatus = Literal[
+    "validating",
+    "failed",
+    "in_progress",
+    "finalizing",
+    "completed",
+    "expired",
+    "cancelling",
+    "cancelled",
+]
+
+
 class ChatCompletionAudioDelta(TypedDict, total=False):
     data: str
     transcript: str
