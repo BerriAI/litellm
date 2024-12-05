@@ -109,9 +109,11 @@ async def async_run_with_retries(
             model_group=model_group, kwargs=original_function_kwargs
         )
         # if the function call is successful, no exception will be raised and we'll break out of the loop
-        response = await original_function(
-            original_function_args, original_function_kwargs
+        response = original_function(
+            *original_function_args, **original_function_kwargs
         )
+        if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
+            response = await response
 
         return response
     except Exception as e:
@@ -166,7 +168,7 @@ async def async_run_with_retries(
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
                 response = await original_function(
-                    original_function_args, original_function_kwargs
+                    original_function_args, **original_function_kwargs
                 )
                 if inspect.iscoroutinefunction(
                     response
