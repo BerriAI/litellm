@@ -137,9 +137,14 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
         """
         Transforms GCS Bucket upload file response to OpenAI FileObject
         """
+        selfLink = gcs_upload_response.get("selfLink", "")
+        file_id = (
+            selfLink.split("/o/")[-1] if selfLink else ""
+        )  # Extract the part after /o/
+        bucket_name = selfLink.split("/b/")[-1].split("/")[0] if selfLink else ""
         return FileObject(
             purpose=create_file_data.get("purpose", "batch"),
-            id=gcs_upload_response.get("id", ""),
+            id=f"gs://{bucket_name}/{file_id}",
             filename=gcs_upload_response.get("name", ""),
             created_at=_convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=gcs_upload_response.get("timeCreated", "")

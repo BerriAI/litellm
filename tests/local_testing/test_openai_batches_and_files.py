@@ -226,12 +226,13 @@ async def test_vertex_batch_prediction():
     assert (
         batch_input_file_id is not None
     ), f"Failed to create file, expected a non null file_id but got {batch_input_file_id}"
-    # create_batch_response = litellm.create_batch(
-    #     completion_window="24h",
-    #     endpoint="/v1/chat/completions",
-    #     input_file_id="gs://litellm-testing-bucket/vtx_batch.jsonl",
-    #     custom_llm_provider="vertex_ai",
-    #     metadata={"key1": "value1", "key2": "value2"},
-    # )
-    # print("create_batch_response=", create_batch_response)
-    # pass
+
+    create_batch_response = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider="vertex_ai",
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    print("create_batch_response=", create_batch_response)
+    pass
