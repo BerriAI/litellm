@@ -33,7 +33,9 @@ class GCSBucketBase(CustomBatchLogger):
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
-        _path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+        _path_service_account = os.getenv("GCS_PATH_SERVICE_ACCOUNT") or os.getenv(
+            "GOOGLE_APPLICATION_CREDENTIALS"
+        )
         _bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME")
         self.path_service_account_json: Optional[str] = _path_service_account
         self.BUCKET_NAME: Optional[str] = _bucket_name
