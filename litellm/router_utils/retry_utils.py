@@ -109,10 +109,11 @@ async def async_run_with_retries(
             model_group=model_group, kwargs=original_function_kwargs
         )
         # if the function call is successful, no exception will be raised and we'll break out of the loop
-        result = original_function(*original_function_args, **original_function_kwargs)
-        if inspect.iscoroutinefunction(result) or inspect.isawaitable(result):
-            result = await result
-        return result
+        response = await original_function(
+            original_function_args, original_function_kwargs
+        )
+
+        return response
     except Exception as e:
         current_attempt = None
         original_exception = e
@@ -125,7 +126,7 @@ async def async_run_with_retries(
             parent_otel_span=parent_otel_span,
         )
 
-        # raises an exception if this error should not be retried
+        # raises an exception if this error should not be retries
         should_retry_this_error(
             error=e,
             healthy_deployments=_healthy_deployments,
@@ -138,16 +139,14 @@ async def async_run_with_retries(
         if retry_policy is not None:
             # get num_retries from retry policy
             _retry_policy_retries = _get_num_retries_from_retry_policy(
-                retry_policy=retry_policy,
-                exception=original_exception,
+                exception=original_exception, retry_policy=retry_policy
             )
             if _retry_policy_retries is not None:
                 num_retries = _retry_policy_retries
         ## LOGGING
         if num_retries > 0:
             original_function_kwargs = log_retry(
-                kwargs=original_function_kwargs,
-                e=original_exception,
+                kwargs=original_function_kwargs, e=original_exception
             )
         else:
             raise
@@ -159,25 +158,26 @@ async def async_run_with_retries(
             num_retries=num_retries,
             retry_after=retry_after,
             healthy_deployments=_healthy_deployments,
+            all_deployments=_all_deployments,
         )
 
         await asyncio.sleep(retry_after)
         for current_attempt in range(num_retries):
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
-                result = original_function(
-                    *original_function_args, **original_function_kwargs
+                response = await original_function(
+                    original_function_args, original_function_kwargs
                 )
-                if inspect.iscoroutinefunction(result) or inspect.isawaitable(result):
-                    # async errors are often returned as coroutines
-                    result = await result
-                return result
+                if inspect.iscoroutinefunction(
+                    response
+                ):  # async errors are often returned as coroutines
+                    response = await response
+                return response
 
             except Exception as e:
                 ## LOGGING
                 original_function_kwargs = log_retry(
-                    kwargs=original_function_kwargs,
-                    e=e,
+                    kwargs=original_function_kwargs, e=e
                 )
                 remaining_retries = num_retries - current_attempt
                 _model: Optional[str] = original_function_kwargs.get("model")  # type: ignore
@@ -194,6 +194,7 @@ async def async_run_with_retries(
                     num_retries=num_retries,
                     retry_after=retry_after,
                     healthy_deployments=_healthy_deployments,
+                    all_deployments=_all_deployments,
                 )
                 await asyncio.sleep(_timeout)
 
@@ -342,6 +343,7 @@ def time_to_sleep_before_retry(
     num_retries: int,
     retry_after: int,
     healthy_deployments: Optional[List] = None,
+    all_deployments: Optional[List] = None,
 ) -> Union[int, float]:
     """
     Calculate back-off, then retry
@@ -350,10 +352,14 @@ def time_to_sleep_before_retry(
         1. there are healthy deployments in the same model group
         2. there are fallbacks for the completion call
     """
-    if (
+
+    ## base case - single deployment
+    if all_deployments is not None and len(all_deployments) == 1:
+        pass
+    elif (
         healthy_deployments is not None
         and isinstance(healthy_deployments, list)
-        and len(healthy_deployments) > 1
+        and len(healthy_deployments) > 0
     ):
         return 0
 
