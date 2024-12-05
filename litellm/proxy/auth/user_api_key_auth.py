@@ -1373,7 +1373,18 @@ def _get_user_role(
 
 def get_api_key_from_custom_header(
     request: Request, custom_litellm_key_header_name: str
-):
+) -> str:
+    """
+    Get API key from custom header
+
+    Args:
+        request (Request): Request object
+        custom_litellm_key_header_name (str): Custom header name
+
+    Returns:
+        Optional[str]: API key
+    """
+    api_key: str = ""
     # use this as the virtual key passed to litellm proxy
     custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
     verbose_proxy_logger.debug(
@@ -1390,7 +1401,7 @@ def get_api_key_from_custom_header(
             )
         )
     else:
-        raise ValueError(
+        verbose_proxy_logger.exception(
             f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key
