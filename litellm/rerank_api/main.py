@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure_ai.rerank import AzureAIRerank
+from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.cohere.rerank import CohereRerank
 from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
@@ -21,6 +22,7 @@ cohere_rerank = CohereRerank()
 together_rerank = TogetherAIRerank()
 azure_ai_rerank = AzureAIRerank()
 jina_ai_rerank = JinaAIRerank()
+bedrock_rerank = BedrockRerankHandler()
 #################################################
 
 
@@ -70,7 +72,7 @@ async def arerank(
 
 
 @client
-def rerank(
+def rerank(  # noqa: PLR0915
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
@@ -267,6 +269,27 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 _is_async=_is_async,
+            )
+        elif _custom_llm_provider == "bedrock":
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret("BEDROCK_API_BASE")  # type: ignore
+            )
+
+            response = bedrock_rerank.rerank(
+                model=model,
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
+                _is_async=_is_async,
+                optional_params=optional_params.model_dump(exclude_unset=True),
+                api_base=api_base,
+                logging_obj=litellm_logging_obj,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")

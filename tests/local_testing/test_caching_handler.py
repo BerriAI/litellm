@@ -197,7 +197,7 @@ async def test_async_log_cache_hit_on_callbacks():
         ),
         (
             CallTypes.rerank.value,
-            {"id": "test", "results": [{"index": 0, "score": 0.9}]},
+            {"id": "test", "results": [{"index": 0, "relevance_score": 0.9}]},
             RerankResponse,
         ),
         (

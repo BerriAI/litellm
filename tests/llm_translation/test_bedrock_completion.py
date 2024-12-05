@@ -1,3 +1,7 @@
+"""
+Tests Bedrock Completion + Rerank endpoints
+"""
+
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
 import sys
@@ -31,6 +35,7 @@ from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
+from base_rerank_unit_tests import BaseLLMRerankTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -1971,13 +1976,67 @@ def test_bedrock_base_model_helper():
     assert model == "us.amazon.nova-pro-v1:0"
 
 
+@pytest.mark.parametrize(
+    "messages, expected_cache_control",
+    [
+        (
+            [  # test system prompt cache
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are an AI assistant tasked with analyzing legal documents.",
+                        },
+                        {
+                            "type": "text",
+                            "text": "Here is the full text of a complex legal agreement",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "what are the key terms and conditions in this agreement?",
+                },
+            ],
+            True,
+        ),
+        (
+            [  # test user prompt cache
+                {
+                    "role": "user",
+                    "content": "what are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            True,
+        ),
+    ],
+)
+def test_bedrock_prompt_caching_message(messages, expected_cache_control):
+    import litellm
+    import json
+
+    transformed_messages = litellm.AmazonConverseConfig()._transform_request(
+        model="bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+    )
+    if expected_cache_control:
+        assert "cachePoint" in json.dumps(transformed_messages)
+    else:
+        assert "cachePoint" not in json.dumps(transformed_messages)
+
+
 class TestBedrockConverseChat(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
+            "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -1991,3 +2050,19 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
         """
         pass
+
+    def test_prompt_caching(self):
+        """
+        Remove override once we have access to Bedrock prompt caching
+        """
+        pass
+
+
+class TestBedrockRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+        }

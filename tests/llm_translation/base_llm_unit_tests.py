@@ -23,6 +23,34 @@ from litellm.utils import (
 from abc import ABC, abstractmethod
 
 
+def _usage_format_tests(usage: litellm.Usage):
+    """
+    OpenAI prompt caching
+    - prompt_tokens = sum of non-cache hit tokens + cache-hit tokens
+    - total_tokens = prompt_tokens + completion_tokens
+
+    Example
+    ```
+    "usage": {
+        "prompt_tokens": 2006,
+        "completion_tokens": 300,
+        "total_tokens": 2306,
+        "prompt_tokens_details": {
+            "cached_tokens": 1920
+        },
+        "completion_tokens_details": {
+            "reasoning_tokens": 0
+        }
+        # ANTHROPIC_ONLY #
+        "cache_creation_input_tokens": 0
+    }
+    ```
+    """
+    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+
+    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+
+
 class BaseLLMChatTest(ABC):
     """
     Abstract base test class that enforces a common test across all test classes.
@@ -272,6 +300,78 @@ class BaseLLMChatTest(ABC):
 
         response = litellm.completion(**base_completion_call_args, messages=messages)
         assert response is not None
+
+    def test_prompt_caching(self):
+        litellm.set_verbose = True
+        from litellm.utils import supports_prompt_caching
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_prompt_caching(base_completion_call_args["model"], None):
+            print("Model does not support prompt caching")
+            pytest.skip("Model does not support prompt caching")
+
+        try:
+            for _ in range(2):
+                response = litellm.completion(
+                    **base_completion_call_args,
+                    messages=[
+                        # System Message
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Here is the full text of a complex legal agreement"
+                                    * 400,
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        },
+                        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "What are the key terms and conditions in this agreement?",
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+                        },
+                        # The final turn is marked with cache-control, for continuing in followups.
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "What are the key terms and conditions in this agreement?",
+                                    "cache_control": {"type": "ephemeral"},
+                                }
+                            ],
+                        },
+                    ],
+                    temperature=0.2,
+                    max_tokens=10,
+                )
+
+                _usage_format_tests(response.usage)
+
+            print("response=", response)
+            print("response.usage=", response.usage)
+
+            _usage_format_tests(response.usage)
+
+            assert "prompt_tokens_details" in response.usage
+            assert response.usage.prompt_tokens_details.cached_tokens > 0
+        except litellm.InternalServerError:
+            pass
 
     @pytest.fixture
     def pdf_messages(self):

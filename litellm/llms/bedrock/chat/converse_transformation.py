@@ -5,7 +5,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 import copy
 import time
 import types
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -255,6 +255,59 @@ class AmazonConverseConfig:
                 )
         return optional_params
 
+    @overload
+    def _get_cache_point_block(
+        self, message_block: dict, block_type: Literal["system"]
+    ) -> Optional[SystemContentBlock]:
+        pass
+
+    @overload
+    def _get_cache_point_block(
+        self, message_block: dict, block_type: Literal["content_block"]
+    ) -> Optional[ContentBlock]:
+        pass
+
+    def _get_cache_point_block(
+        self, message_block: dict, block_type: Literal["system", "content_block"]
+    ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
+        if message_block.get("cache_control", None) is None:
+            return None
+        if block_type == "system":
+            return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
+        else:
+            return ContentBlock(cachePoint=CachePointBlock(type="default"))
+
+    def _transform_system_message(
+        self, messages: List[AllMessageValues]
+    ) -> Tuple[List[AllMessageValues], List[SystemContentBlock]]:
+        system_prompt_indices = []
+        system_content_blocks: List[SystemContentBlock] = []
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                _system_content_block: Optional[SystemContentBlock] = None
+                _cache_point_block: Optional[SystemContentBlock] = None
+                if isinstance(message["content"], str) and len(message["content"]) > 0:
+                    _system_content_block = SystemContentBlock(text=message["content"])
+                    _cache_point_block = self._get_cache_point_block(
+                        cast(dict, message), block_type="system"
+                    )
+                elif isinstance(message["content"], list):
+                    for m in message["content"]:
+                        if m.get("type", "") == "text" and len(m["text"]) > 0:
+                            _system_content_block = SystemContentBlock(text=m["text"])
+                            _cache_point_block = self._get_cache_point_block(
+                                m, block_type="system"
+                            )
+                if _system_content_block is not None:
+                    system_content_blocks.append(_system_content_block)
+                if _cache_point_block is not None:
+                    system_content_blocks.append(_cache_point_block)
+                system_prompt_indices.append(idx)
+        if len(system_prompt_indices) > 0:
+            for idx in reversed(system_prompt_indices):
+                messages.pop(idx)
+        return messages, system_content_blocks
+
     def _transform_request(
         self,
         model: str,
@@ -262,24 +315,7 @@ class AmazonConverseConfig:
         optional_params: dict,
         litellm_params: dict,
     ) -> RequestObject:
-        system_prompt_indices = []
-        system_content_blocks: List[SystemContentBlock] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: Optional[SystemContentBlock] = None
-                if isinstance(message["content"], str) and len(message["content"]) > 0:
-                    _system_content_block = SystemContentBlock(text=message["content"])
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type", "") == "text" and len(m["text"]) > 0:
-                            _system_content_block = SystemContentBlock(text=m["text"])
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-
+        messages, system_content_blocks = self._transform_system_message(messages)
         inference_params = copy.deepcopy(optional_params)
         additional_request_keys = []
         additional_request_params = {}
