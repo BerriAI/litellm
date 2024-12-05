@@ -5976,6 +5976,7 @@
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "mode": "chat"
     },
     "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": {
@@ -5984,6 +5985,7 @@
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "mode": "chat"
     },
     "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": {
@@ -6000,12 +6002,14 @@
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "mode": "chat"
     },
     "together_ai/mistralai/Mistral-7B-Instruct-v0.1": {
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "mode": "chat"
     },
     "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
