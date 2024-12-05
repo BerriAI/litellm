@@ -2036,7 +2036,7 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -2056,6 +2056,25 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         Remove override once we have access to Bedrock prompt caching
         """
         pass
+
+    def test_completion_cost(self):
+        """
+        Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
+        """
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        litellm.model_cost.pop(bedrock_model, None)
+        model = f"bedrock/{bedrock_model}"
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
+        cost = completion_cost(response)
+
+        assert cost > 0
 
 
 class TestBedrockRerank(BaseLLMRerankTest):

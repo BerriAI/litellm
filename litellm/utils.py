@@ -4455,7 +4455,7 @@ def get_model_info(  # noqa: PLR0915
             return None
 
     try:
-        azure_llms = litellm.azure_llms
+        azure_llms = {**litellm.azure_llms, **litellm.azure_embedding_models}
         if model in azure_llms:
             model = azure_llms[model]
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
