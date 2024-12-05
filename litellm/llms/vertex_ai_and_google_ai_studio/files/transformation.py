@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
@@ -122,7 +122,7 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
         - Tuple formats: (filename, content, [content_type], [headers])
         - PathLike objects
         """
-        content = ""
+        content: Union[str, bytes] = b""
         # Extract file content from tuple if necessary
         if isinstance(openai_file_content, tuple):
             # Take the second element which is always the file content
