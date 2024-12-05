@@ -2030,6 +2030,27 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         assert "cachePoint" not in json.dumps(transformed_messages)
 
 
+@pytest.mark.parametrize(
+    "model, expected_supports_tool_call",
+    [
+        ("bedrock/us.amazon.nova-pro-v1:0", True),
+        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
+        ("bedrock/meta.llama3-1-8b-instruct:0", True),
+        ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/amazon.titan-embed-text-v1:0", False),
+    ],
+)
+def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
+    supported_openai_params = (
+        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    )
+    if expected_supports_tool_call:
+        assert "tools" in supported_openai_params
+    else:
+        assert "tools" not in supported_openai_params
+
+
 class TestBedrockConverseChat(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
