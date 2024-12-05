@@ -8063,7 +8063,7 @@ async def new_invitation(
     ```
     curl -X POST 'http://localhost:4000/invitation/new' \
         -H 'Content-Type: application/json' \
-        -D '{
+        -d '{
             "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
         }'
     ```
@@ -8129,7 +8129,7 @@ async def invitation_info(
     ```
     curl -X POST 'http://localhost:4000/invitation/new' \
         -H 'Content-Type: application/json' \
-        -D '{
+        -d '{
             "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
         }'
     ```
@@ -8182,7 +8182,7 @@ async def invitation_update(
     ```
     curl -X POST 'http://localhost:4000/invitation/update' \
         -H 'Content-Type: application/json' \
-        -D '{
+        -d '{
             "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
             "is_accepted": True // when invitation is accepted
         }'
@@ -8243,7 +8243,7 @@ async def invitation_delete(
     ```
     curl -X POST 'http://localhost:4000/invitation/delete' \
         -H 'Content-Type: application/json' \
-        -D '{
+        -d '{
             "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
         }'
     ```
