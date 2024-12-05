@@ -476,6 +476,13 @@ class OpenTelemetry(CustomLogger):
                     value=kwargs.get("model"),
                 )
 
+            # The LLM request type
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.LLM_REQUEST_TYPE,
+                value="chat",
+            )
+
             # The Generative AI Provider: Azure, OpenAI, etc.
             self.safe_set_attribute(
                 span=span,
