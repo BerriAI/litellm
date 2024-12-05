@@ -5225,6 +5225,7 @@ async def create_batch(
             is_router_model = is_known_model(model=router_model, llm_router=llm_router)
 
         _create_batch_data = CreateBatchRequest(**data)
+        custom_llm_provider = provider or _create_batch_data.pop("custom_llm_provider", None)  # type: ignore
 
         if (
             litellm.enable_loadbalancing_on_batch_endpoints is True
@@ -5241,10 +5242,10 @@ async def create_batch(
 
             response = await llm_router.acreate_batch(**_create_batch_data)  # type: ignore
         else:
-            if provider is None:
-                provider = "openai"
+            if custom_llm_provider is None:
+                custom_llm_provider = "openai"
             response = await litellm.acreate_batch(
-                custom_llm_provider=provider, **_create_batch_data  # type: ignore
+                custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
             )
 
         ### ALERTING ###

@@ -22,6 +22,9 @@ import litellm
 from litellm import client
 from litellm.llms.AzureOpenAI.azure import AzureBatchesAPI
 from litellm.llms.OpenAI.openai import OpenAIBatchesAPI
+from litellm.llms.vertex_ai_and_google_ai_studio.batches.handler import (
+    VertexAIBatchPrediction,
+)
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.openai import (
     Batch,
@@ -40,6 +43,7 @@ from litellm.utils import supports_httpx_timeout
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
+vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
 #################################################
 
 
@@ -47,7 +51,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -93,7 +97,7 @@ def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -195,6 +199,32 @@ def create_batch(
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                create_batch_data=_create_batch_request,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_batches_instance.create_batch(
+                _is_async=_is_async,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
