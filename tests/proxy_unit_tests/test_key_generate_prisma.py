@@ -2811,8 +2811,7 @@ async def test_custom_api_key_header_name(prisma_client):
     except Exception as e:
         print("failed with error", e)
         assert (
-            "No LiteLLM Virtual Key pass. Please set header=x-litellm-key: Bearer <api_key>"
-            in e.message
+            "Malformed API Key passed in. Ensure Key has `Bearer ` prefix" in e.message
         )
         pass
 
