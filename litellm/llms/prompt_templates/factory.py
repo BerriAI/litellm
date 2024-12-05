@@ -2485,10 +2485,24 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url=image_url
                             )
                             _parts.append(_part)  # type: ignore
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                element, block_type="content_block"
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             else:
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        messages[msg_i], block_type="content_block"
+                    )
+                )
                 user_content.append(_part)
+                if _cache_point_block is not None:
+                    user_content.append(_cache_point_block)
 
             msg_i += 1
         if user_content:
