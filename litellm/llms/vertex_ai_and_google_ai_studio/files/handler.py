@@ -91,6 +91,11 @@ class VertexAIFilesHandler(GCSBucketBase):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
     ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+        """
+        Creates a file on VertexAI GCS Bucket
+
+        Only supported for Async litellm.acreate_file
+        """
 
         if _is_async:
             return self.async_create_file(
