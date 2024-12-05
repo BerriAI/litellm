@@ -271,7 +271,7 @@ def get_team_from_list(
     # response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
-async def user_info(  # noqa: PLR0915
+async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
@@ -301,6 +301,11 @@ async def user_info(  # noqa: PLR0915
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
+        if (
+            user_id is None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        ):
+            return await _get_user_info_for_proxy_admin()
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
@@ -348,19 +353,7 @@ async def user_info(  # noqa: PLR0915
                 user_id=user_api_key_dict.user_id
             )
             # *NEW* get all teams in user 'teams' field
-            if (
-                getattr(caller_user_info, "user_role", None)
-                == LitellmUserRoles.PROXY_ADMIN
-            ):
-                from litellm.proxy.management_endpoints.team_endpoints import list_team
-
-                teams_2 = await list_team(
-                    http_request=Request(
-                        scope={"type": "http", "path": "/user/info"},
-                    ),
-                    user_api_key_dict=user_api_key_dict,
-                )
-            elif caller_user_info is not None:
+            if caller_user_info is not None:
                 teams_2 = await prisma_client.get_data(
                     team_id_list=caller_user_info.teams,
                     table_name="team",
@@ -388,39 +381,7 @@ async def user_info(  # noqa: PLR0915
             user_info = {"spend": spend}
 
         ## REMOVE HASHED TOKEN INFO before returning ##
-        returned_keys = []
-        if keys is None:
-            pass
-        else:
-            for key in keys:
-                if (
-                    key.token == litellm_master_key_hash
-                    and general_settings.get("disable_master_key_return", False)
-                    is True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
-                ):
-                    continue
-
-                try:
-                    key = key.model_dump()  # noqa
-                except Exception:
-                    # if using pydantic v1
-                    key = key.dict()
-                if (
-                    "team_id" in key
-                    and key["team_id"] is not None
-                    and key["team_id"] != "litellm-dashboard"
-                ):
-                    team_info = get_team_from_list(
-                        team_list=teams_1, team_id=key["team_id"]
-                    )
-                    if team_info is not None:
-                        team_alias = getattr(team_info, "team_alias", None)
-                        key["team_alias"] = team_alias
-                    else:
-                        key["team_alias"] = None
-                else:
-                    key["team_alias"] = "None"
-                returned_keys.append(key)
+        returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
 
         _user_info = (
             user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
@@ -437,6 +398,93 @@ async def user_info(  # noqa: PLR0915
             )
         )
         raise handle_exception_on_proxy(e)
+
+
+async def _get_user_info_for_proxy_admin():
+    """
+    Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
+
+    - get all teams in LiteLLM_TeamTable
+    - get all keys in LiteLLM_VerificationToken table
+
+    Why separate helper for proxy admin ?
+        - To get Faster UI load times, get all teams and virtual keys in 1 query
+    """
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    sql_query = """
+        SELECT 
+            (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
+            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard') as keys
+    """
+    if prisma_client is None:
+        raise Exception(
+            "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+        )
+
+    results = await prisma_client.db.query_raw(sql_query)
+
+    _keys_in_db = results[0]["keys"]
+    # cast all keys to LiteLLM_VerificationToken
+    keys_in_db = []
+    for key in _keys_in_db:
+        if key.get("models") is None:
+            key["models"] = []
+        keys_in_db.append(LiteLLM_VerificationToken(**key))
+
+    # cast all teams to LiteLLM_TeamTable
+    _teams_in_db = results[0]["teams"]
+    _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
+    returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
+    return UserInfoResponse(
+        user_id=None,
+        user_info=None,
+        keys=returned_keys,
+        teams=_teams_in_db,
+    )
+
+
+def _process_keys_for_user_info(
+    keys: Optional[List[LiteLLM_VerificationToken]],
+    all_teams: Optional[Union[List[LiteLLM_TeamTable], List[TeamListResponseObject]]],
+):
+    from litellm.proxy.proxy_server import general_settings, litellm_master_key_hash
+
+    returned_keys = []
+    if keys is None:
+        pass
+    else:
+        for key in keys:
+            if (
+                key.token == litellm_master_key_hash
+                and general_settings.get("disable_master_key_return", False)
+                is True  ## [IMPORTANT] used by hosted proxy-ui to prevent sharing master key on ui
+            ):
+                continue
+
+            try:
+                _key: dict = key.model_dump()  # noqa
+            except Exception:
+                # if using pydantic v1
+                _key = key.dict()
+            if (
+                "team_id" in _key
+                and _key["team_id"] is not None
+                and _key["team_id"] != "litellm-dashboard"
+            ):
+                team_info = get_team_from_list(
+                    team_list=all_teams, team_id=_key["team_id"]
+                )
+                if team_info is not None:
+                    team_alias = getattr(team_info, "team_alias", None)
+                    _key["team_alias"] = team_alias
+                else:
+                    _key["team_alias"] = None
+            else:
+                _key["team_alias"] = "None"
+            returned_keys.append(_key)
+    return returned_keys
 
 
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> dict:

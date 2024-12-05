@@ -735,3 +735,38 @@ def test_prepare_metadata_fields(
 
     updated_non_default_values = prepare_metadata_fields(**args)
     assert updated_non_default_values == expected_result
+
+
+@pytest.mark.asyncio
+async def test_user_info_as_proxy_admin(prisma_client):
+    """
+    Test /user/info endpoint as a proxy admin without passing a user ID.
+    Verifies that the endpoint returns all teams and keys.
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Call user_info as a proxy admin without a user_id
+    user_info_response = await user_info(
+        user_id=None,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    print("user info response: ", user_info_response.model_dump_json(indent=4))
+
+    # Verify response
+    assert user_info_response.user_id is None
+    assert user_info_response.user_info is None
+
+    # Verify that teams and keys are returned
+    assert user_info_response.teams is not None
+    assert len(user_info_response.teams) > 0, "Expected at least one team in response"
+
+    assert user_info_response.keys is not None
+    assert len(user_info_response.keys) > 0, "Expected at least one key in response"
