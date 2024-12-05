@@ -425,7 +425,7 @@ async def _get_user_info_for_proxy_admin():
 
     results = await prisma_client.db.query_raw(sql_query)
 
-    _keys_in_db = results[0]["keys"]
+    _keys_in_db: List = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db = []
     for key in _keys_in_db:
@@ -434,7 +434,7 @@ async def _get_user_info_for_proxy_admin():
         keys_in_db.append(LiteLLM_VerificationToken(**key))
 
     # cast all teams to LiteLLM_TeamTable
-    _teams_in_db = results[0]["teams"]
+    _teams_in_db: List = results[0]["teams"] or []
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
     return UserInfoResponse(
