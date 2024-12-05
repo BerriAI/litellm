@@ -2398,8 +2398,12 @@ print("response from proxy", response)
 Just add the following Vertex env vars to your environment. 
 
 ```bash
+# GCS Bucket settings, used to store batch prediction files in
 export GCS_BUCKET_NAME = "litellm-testing-bucket" # the bucket you want to store batch prediction files in
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json"
+export GCS_PATH_SERVICE_ACCOUNT="/path/to/service_account.json" # path to your service account json file
+
+# Vertex /batch endpoint settings, used for LLM API requests
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json" # path to your service account json file
 export VERTEXAI_LOCATION="us-central1" # can be any vertex location
 export VERTEXAI_PROJECT="my-test-project" 
 ```
