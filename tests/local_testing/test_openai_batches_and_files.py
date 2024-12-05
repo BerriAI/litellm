@@ -20,6 +20,7 @@ import pytest
 import litellm
 from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
+from test_gcs_bucket import load_vertex_ai_credentials
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -212,6 +213,7 @@ def test_list_batch():
 
 @pytest.mark.asyncio
 async def test_vertex_batch_prediction():
+    load_vertex_ai_credentials()
     file_name = "vertex_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
