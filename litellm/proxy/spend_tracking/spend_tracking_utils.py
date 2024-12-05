@@ -58,7 +58,7 @@ def get_logging_payload(
     usage = response_obj.get("usage", None) or {}
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
-    id = response_obj.get("id", kwargs.get("litellm_call_id"))
+    id = response_obj.get("id") or kwargs.get("litellm_call_id")
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
