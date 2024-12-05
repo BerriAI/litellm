@@ -5,11 +5,6 @@ import TabItem from '@theme/TabItem';
 
 Covers Batches, Files
 
-## **Supported Providers**:
-- **[Azure OpenAI](./providers/azure#azure-batches-api)**
-- OpenAI
-- **[Vertex AI](./providers/vertex#batch-apis)**
-
 ## Quick Start 
 
 - Create File for Batch Completion
@@ -141,5 +136,12 @@ print("list_batches_response=", list_batches_response)
 </TabItem>
 
 </Tabs>
+
+
+## **Supported Providers**:
+### [Azure OpenAI](./providers/azure#azure-batches-api)
+### [OpenAI](#quick-start)
+### [Vertex AI](./providers/vertex#batch-apis)
+
 
 ## [Swagger API Reference](https://litellm-api.up.railway.app/#/batch)
