@@ -1,13 +1,24 @@
 import json
 from typing import Any, Dict, List, Optional
 
+from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+    _convert_vertex_datetime_to_openai_datetime,
+)
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
     _transform_request_body,
 )
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.openai import FileTypes, PathLike
+from litellm.types.llms.openai import (
+    Batch,
+    CreateFileRequest,
+    FileContentRequest,
+    FileObject,
+    FileTypes,
+    HttpxBinaryResponseContent,
+    PathLike,
+)
 
 
 class VertexAIFilesTransformation(VertexGeminiConfig):
@@ -119,3 +130,21 @@ class VertexAIFilesTransformation(VertexGeminiConfig):
             content = content.decode("utf-8")
 
         return content
+
+    def transform_gcs_bucket_response_to_openai_file_object(
+        self, create_file_data: CreateFileRequest, gcs_upload_response: Dict[str, Any]
+    ) -> FileObject:
+        """
+        Transforms GCS Bucket upload file response to OpenAI FileObject
+        """
+        return FileObject(
+            purpose=create_file_data.get("purpose", "batch"),
+            id=gcs_upload_response.get("id", ""),
+            filename=gcs_upload_response.get("name", ""),
+            created_at=_convert_vertex_datetime_to_openai_datetime(
+                vertex_datetime=gcs_upload_response.get("timeCreated", "")
+            ),
+            status="uploaded",
+            bytes=gcs_upload_response.get("size", 0),
+            object="file",
+        )

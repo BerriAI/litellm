@@ -15,6 +15,9 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+    _convert_vertex_datetime_to_openai_datetime,
+)
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
@@ -64,11 +67,16 @@ class VertexAIFilesHandler(GCSBucketBase):
         logging_payload = vertex_ai_files_transformation.transform_openai_file_content_to_vertex_ai_file_content(
             openai_file_content=create_file_data.get("file")
         )
-        await self._log_json_data_on_gcs(
+        gcs_upload_response = await self._log_json_data_on_gcs(
             headers=headers,
             bucket_name=bucket_name,
             object_name=object_name,
             logging_payload=logging_payload,
+        )
+
+        return vertex_ai_files_transformation.transform_gcs_bucket_response_to_openai_file_object(
+            create_file_data=create_file_data,
+            gcs_upload_response=gcs_upload_response,
         )
 
     def create_file(
@@ -84,7 +92,7 @@ class VertexAIFilesHandler(GCSBucketBase):
     ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
 
         if _is_async:
-            return self.async_create_file(  # type: ignore
+            return self.async_create_file(
                 create_file_data=create_file_data,
                 api_base=api_base,
                 vertex_credentials=vertex_credentials,

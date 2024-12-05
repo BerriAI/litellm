@@ -1,6 +1,9 @@
 import uuid
 from typing import Any, Dict, Literal
 
+from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+    _convert_vertex_datetime_to_openai_datetime,
+)
 from litellm.types.llms.openai import Batch, BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
 
@@ -48,7 +51,7 @@ class VertexAIBatchTransformation:
         return Batch(
             id=response.get("name", ""),
             completion_window="24hrs",
-            created_at=cls._convert_vertex_datetime_to_openai_datetime(
+            created_at=_convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=response.get("createTime", "")
             ),
             endpoint="",
@@ -130,21 +133,6 @@ class VertexAIBatchTransformation:
 
         vertex_state = response.get("state", "JOB_STATE_UNSPECIFIED")
         return state_mapping[vertex_state]
-
-    @classmethod
-    def _convert_vertex_datetime_to_openai_datetime(cls, vertex_datetime: str) -> int:
-        """
-        Converts a Vertex AI datetime string to an OpenAI datetime integer
-
-        vertex_datetime: str = "2024-12-04T21:53:12.120184Z"
-        returns: int = 1722729192
-        """
-        from datetime import datetime
-
-        # Parse the ISO format string to datetime object
-        dt = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
-        # Convert to Unix timestamp (seconds since epoch)
-        return int(dt.timestamp())
 
     @classmethod
     def _get_gcs_uri_prefix_from_file(cls, input_file_id: str) -> str:

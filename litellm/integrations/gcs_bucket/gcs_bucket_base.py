@@ -334,3 +334,5 @@ class GCSBucketBase(CustomBatchLogger):
         verbose_logger.debug("GCS Bucket response %s", response)
         verbose_logger.debug("GCS Bucket status code %s", response.status_code)
         verbose_logger.debug("GCS Bucket response.text %s", response.text)
+
+        return response.json()
