@@ -536,6 +536,9 @@ async def test_get_gcs_logging_config_without_service_account():
     _old_gcs_service_acct = os.environ.get("GCS_PATH_SERVICE_ACCOUNT")
     os.environ.pop("GCS_PATH_SERVICE_ACCOUNT")
 
+    _old_google_app_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS")
+
     # Mock the load_auth function to avoid credential loading issues
     # Test 1: With standard_callback_dynamic_params (with service account)
     gcs_logger = GCSBucketLogger()
@@ -574,6 +577,9 @@ async def test_get_gcs_logging_config_without_service_account():
 
     if _old_gcs_service_acct is not None:
         os.environ["GCS_PATH_SERVICE_ACCOUNT"] = _old_gcs_service_acct
+
+    if _old_google_app_creds is not None:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _old_google_app_creds
 
 
 @pytest.mark.asyncio
