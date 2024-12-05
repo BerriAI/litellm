@@ -666,7 +666,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "claude-3-haiku-20240307"}
+        return {"model": "anthropic/claude-3-5-sonnet-20240620"}
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""

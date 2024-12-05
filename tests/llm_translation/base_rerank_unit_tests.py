@@ -79,6 +79,7 @@ class BaseLLMRerankTest(ABC):
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_rerank(self, sync_mode):
+        litellm.set_verbose = True
         rerank_call_args = self.get_base_rerank_call_args()
         custom_llm_provider = self.get_custom_llm_provider()
         if sync_mode is True:
@@ -86,7 +87,7 @@ class BaseLLMRerankTest(ABC):
                 **rerank_call_args,
                 query="hello",
                 documents=["hello", "world"],
-                top_n=3,
+                top_n=2,
             )
 
             print("re rank response: ", response)
@@ -102,7 +103,7 @@ class BaseLLMRerankTest(ABC):
                 **rerank_call_args,
                 query="hello",
                 documents=["hello", "world"],
-                top_n=3,
+                top_n=2,
             )
 
             print("async re rank response: ", response)

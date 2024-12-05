@@ -1874,22 +1874,11 @@ def supports_prompt_caching(
     Raises:
     Exception: If the given model is not found or there's an error in retrieval.
     """
-    try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if model_info.get("supports_prompt_caching", False) is True:
-            return True
-        return False
-    except Exception as e:
-        raise Exception(
-            f"Model not found or error in checking prompt caching support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
-        )
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_prompt_caching",
+    )
 
 
 def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bool:
