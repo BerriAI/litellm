@@ -12,7 +12,8 @@
         "supports_vision": true,
         "supports_audio_input": true, 
         "supports_audio_output": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "gpt-4": {
         "max_tokens": 4096, 
