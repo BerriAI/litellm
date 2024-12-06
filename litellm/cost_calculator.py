@@ -288,10 +288,7 @@ def cost_per_token(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if (
-            model_info["input_cost_per_token"] > 0
-            and model_info["output_cost_per_token"] > 0
-        ):
+        if model_info["input_cost_per_token"] > 0:
             ## COST PER TOKEN ##
             prompt_tokens_cost_usd_dollar = (
                 model_info["input_cost_per_token"] * prompt_tokens
