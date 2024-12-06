@@ -5988,6 +5988,39 @@ async def new_budget(
 
 
 @router.post(
+    "/budget/update",
+    tags=["budget management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_budget(
+    budget_obj: BudgetNew,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Create a new budget object. Can apply this to teams, orgs, end-users, keys.
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    if budget_obj.budget_id is None:
+        raise HTTPException(status_code=400, detail={"error": "budget_id is required"})
+
+    response = await prisma_client.db.litellm_budgettable.update(
+        where={"budget_id": budget_obj.budget_id},
+        data={
+            **budget_obj.model_dump(exclude_none=True),  # type: ignore
+            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        },  # type: ignore
+    )
+
+    return response
+
+
+@router.post(
     "/budget/info",
     tags=["budget management"],
     dependencies=[Depends(user_api_key_auth)],
