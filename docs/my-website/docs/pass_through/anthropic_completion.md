@@ -324,7 +324,7 @@ curl --request POST \
 ```
 
 
-### Send `litellm_metadata` (tags)
+### Send `litellm_metadata` (tags, end-user cost tracking)
 
 <Tabs>
 <TabItem value="curl" label="curl">
@@ -342,7 +342,8 @@ curl --request POST \
         {"role": "user", "content": "Hello, world"}
     ],
     "litellm_metadata": {
-        "tags": ["test-tag-1", "test-tag-2"]
+        "tags": ["test-tag-1", "test-tag-2"], 
+        "user": "test-user" # track end-user/customer cost
     }
   }'
 ```
@@ -366,9 +367,15 @@ response = client.messages.create(
     ],
     extra_body={
         "litellm_metadata": {
-            "tags": ["test-tag-1", "test-tag-2"]
+            "tags": ["test-tag-1", "test-tag-2"], 
+            "user": "test-user" # track end-user/customer cost
         }
+    }, 
+    ## OR## 
+    metadata={ # anthropic native param - https://docs.anthropic.com/en/api/messages
+        "user_id": "test-user" # track end-user/customer cost
     }
+
 )
 
 print(response)
