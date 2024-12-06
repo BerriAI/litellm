@@ -1331,9 +1331,9 @@ class Logging:
                         and self.model_call_details.get("litellm_params", {}).get(
                             "atranscription", False
                         )
+                        is not True
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
-                        is not True
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
