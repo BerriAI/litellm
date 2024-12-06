@@ -21,7 +21,7 @@ import asyncio
 import datetime
 import json
 import logging
-
+from typing import Optional
 import pytest
 
 import litellm
@@ -29,7 +29,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payloa
 from litellm.proxy.utils import SpendLogsMetadata, SpendLogsPayload  # noqa: E402
 
 
-def test_spend_logs_payload():
+@pytest.mark.parametrize(
+    "model_id",
+    ["chatcmpl-9XZmkzS1uPhRCoVdGQvBqqIbSgECt", "", None],
+)
+def test_spend_logs_payload(model_id: Optional[str]):
     """
     Ensure only expected values are logged in spend logs payload.
     """
@@ -167,7 +171,7 @@ def test_spend_logs_payload():
             "response_cost": 2.4999999999999998e-05,
         },
         "response_obj": litellm.ModelResponse(
-            id="chatcmpl-9XZmkzS1uPhRCoVdGQvBqqIbSgECt",
+            id=model_id,
             choices=[
                 litellm.Choices(
                     finish_reason="length",
@@ -192,6 +196,7 @@ def test_spend_logs_payload():
 
     payload: SpendLogsPayload = get_logging_payload(**input_args)
 
+    assert len(payload["request_id"]) > 0
     # Define the expected metadata keys
     expected_metadata_keys = SpendLogsMetadata.__annotations__.keys()
 

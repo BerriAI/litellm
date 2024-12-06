@@ -15,6 +15,7 @@ from litellm.llms.anthropic.chat.handler import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -74,6 +75,20 @@ class AnthropicPassthroughLoggingHandler:
         }
 
     @staticmethod
+    def _get_user_from_metadata(
+        passthrough_logging_payload: PassthroughStandardLoggingPayload,
+    ) -> Optional[str]:
+        request_body = passthrough_logging_payload.get("request_body")
+        if request_body:
+            end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
+            if end_user_id:
+                return end_user_id
+            return request_body.get("metadata", {}).get(
+                "user_id", None
+            )  # support anthropic param - https://docs.anthropic.com/en/api/messages
+        return None
+
+    @staticmethod
     def _create_anthropic_response_logging_payload(
         litellm_model_response: Union[
             litellm.ModelResponse, litellm.TextCompletionResponse
@@ -89,34 +104,53 @@ class AnthropicPassthroughLoggingHandler:
 
         handles streaming and non-streaming responses
         """
-        response_cost = litellm.completion_cost(
-            completion_response=litellm_model_response,
-            model=model,
-        )
-        kwargs["response_cost"] = response_cost
-        kwargs["model"] = model
+        try:
+            response_cost = litellm.completion_cost(
+                completion_response=litellm_model_response,
+                model=model,
+            )
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = model
+            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
+                kwargs.get("passthrough_logging_payload")
+            )
+            if passthrough_logging_payload:
+                user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
+                    passthrough_logging_payload=passthrough_logging_payload,
+                )
+                if user:
+                    kwargs.setdefault("litellm_params", {})
+                    kwargs["litellm_params"].update(
+                        {"proxy_server_request": {"body": {"user": user}}}
+                    )
 
-        # Make standard logging object for Anthropic
-        standard_logging_object = get_standard_logging_object_payload(
-            kwargs=kwargs,
-            init_response_obj=litellm_model_response,
-            start_time=start_time,
-            end_time=end_time,
-            logging_obj=logging_obj,
-            status="success",
-        )
+            # Make standard logging object for Anthropic
+            standard_logging_object = get_standard_logging_object_payload(
+                kwargs=kwargs,
+                init_response_obj=litellm_model_response,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                status="success",
+            )
 
-        # pretty print standard logging object
-        verbose_proxy_logger.debug(
-            "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
-        )
-        kwargs["standard_logging_object"] = standard_logging_object
+            # pretty print standard logging object
+            verbose_proxy_logger.debug(
+                "standard_logging_object= %s",
+                json.dumps(standard_logging_object, indent=4),
+            )
+            kwargs["standard_logging_object"] = standard_logging_object
 
-        # set litellm_call_id to logging response object
-        litellm_model_response.id = logging_obj.litellm_call_id
-        litellm_model_response.model = model
-        logging_obj.model_call_details["model"] = model
-        return kwargs
+            # set litellm_call_id to logging response object
+            litellm_model_response.id = logging_obj.litellm_call_id
+            litellm_model_response.model = model
+            logging_obj.model_call_details["model"] = model
+            return kwargs
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error creating Anthropic response logging payload: %s", e
+            )
+            return kwargs
 
     @staticmethod
     def _handle_logging_anthropic_collected_chunks(

@@ -262,7 +262,7 @@ _litellm_completion_params = [
     "proxy_server_request",
     "preset_cache_key",
 ]
-_current_cost = 0  # private variable, used if max budget is set
+_current_cost = 0.0  # private variable, used if max budget is set
 error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
