@@ -12,9 +12,14 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from starlette.datastructures import URL
-
+from litellm._logging import verbose_proxy_logger
+import logging
 import litellm
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import (
+    user_api_key_auth,
+    UserAPIKeyAuth,
+    get_api_key_from_custom_header,
+)
 
 
 class Request:
@@ -418,3 +423,76 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
+
+
+@pytest.mark.parametrize(
+    "headers, custom_header_name, expected_api_key",
+    [
+        # Test with valid Bearer token
+        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
+        # Test with raw token (no Bearer prefix)
+        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
+        # Test with empty header value
+        ({"x-custom-api-key": ""}, "x-custom-api-key", ""),
+        # Test with missing header
+        ({}, "X-Custom-API-Key", ""),
+        # Test with different header casing
+        ({"X-CUSTOM-API-KEY": "Bearer sk-12345678"}, "X-Custom-API-Key", "sk-12345678"),
+    ],
+)
+def test_get_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+
+    # Mock the Request object
+    request = MagicMock(spec=Request)
+    request.headers = headers
+
+    # Call the function and verify it doesn't raise an exception
+
+    api_key = get_api_key_from_custom_header(
+        request=request, custom_litellm_key_header_name=custom_header_name
+    )
+    assert api_key == expected_api_key
+
+
+from litellm.proxy._types import LitellmUserRoles
+
+
+@pytest.mark.parametrize(
+    "user_role, auth_user_id, requested_user_id, expected_result",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "1234", None, True),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, None, "1234", True),
+        (LitellmUserRoles.TEAM, "1234", None, False),
+        (LitellmUserRoles.TEAM, None, None, False),
+        (LitellmUserRoles.TEAM, "1234", "1234", True),
+    ],
+)
+def test_allowed_route_inside_route(
+    user_role, auth_user_id, requested_user_id, expected_result
+):
+    from litellm.proxy.auth.auth_checks import allowed_route_check_inside_route
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+
+    assert (
+        allowed_route_check_inside_route(
+            user_api_key_dict=UserAPIKeyAuth(user_role=user_role, user_id=auth_user_id),
+            requested_user_id=requested_user_id,
+        )
+        == expected_result
+    )
+
+
+def test_read_request_body():
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from fastapi import Request
+
+    payload = "()" * 1000000
+    request = Request(scope={"type": "http"})
+
+    async def return_body():
+        return payload
+
+    request.body = return_body
+    result = _read_request_body(request)
+    assert result is not None
