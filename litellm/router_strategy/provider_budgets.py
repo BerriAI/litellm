@@ -19,7 +19,7 @@ anthropic:
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
 import litellm
@@ -450,3 +450,49 @@ class ProviderBudgetLimiting(CustomLogger):
                 spend=spend,
                 budget_limit=budget_limit,
             )
+
+    async def _get_current_provider_spend(self, provider: str) -> Optional[float]:
+        """
+        GET the current spend for a provider from cache
+
+        used for GET /provider/budgets endpoint in spend_management_endpoints.py
+
+        Args:
+            provider (str): The provider to get spend for (e.g., "openai", "anthropic")
+
+        Returns:
+            Optional[float]: The current spend for the provider, or None if not found
+        """
+        budget_config = self._get_budget_config_for_provider(provider)
+        if budget_config is None:
+            return None
+
+        spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
+
+        if self.router_cache.redis_cache:
+            # use Redis as source of truth since that has spend across all instances
+            current_spend = await self.router_cache.redis_cache.async_get_cache(
+                spend_key
+            )
+        else:
+            # use in-memory cache if Redis is not initialized
+            current_spend = await self.router_cache.async_get_cache(spend_key)
+        return float(current_spend) if current_spend is not None else 0.0
+
+    async def _get_current_provider_budget_reset_at(
+        self, provider: str
+    ) -> Optional[str]:
+        budget_config = self._get_budget_config_for_provider(provider)
+        if budget_config is None:
+            return None
+
+        spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
+        if self.router_cache.redis_cache:
+            ttl_seconds = await self.router_cache.redis_cache.async_get_ttl(spend_key)
+        else:
+            ttl_seconds = await self.router_cache.async_get_ttl(spend_key)
+
+        if ttl_seconds is None:
+            return None
+
+        return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
