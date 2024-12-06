@@ -343,7 +343,7 @@ def test_assemble_complete_response_from_streaming_chunks_4(is_async):
     chunk = litellm.ModelResponse(**chunk, stream=True)
 
     # remove attribute id from chunk
-    del chunk.id
+    del chunk.object
 
     complete_streaming_response = _assemble_complete_response_from_streaming_chunks(
         result=chunk,
