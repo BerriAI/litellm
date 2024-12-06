@@ -833,9 +833,11 @@ class Logging:
                                     "metadata"
                                 ] = {}
 
-                            self.model_call_details["litellm_params"]["metadata"][
+                            self.model_call_details["litellm_params"]["metadata"][  # type: ignore
                                 "hidden_params"
-                            ] = getattr(result, "_hidden_params", {})
+                            ] = getattr(
+                                result, "_hidden_params", {}
+                            )
                     ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details["standard_logging_object"] = (
