@@ -178,9 +178,6 @@ class DataDogLogger(CustomBatchLogger):
         - instantly logs it on DD API
         """
         try:
-            verbose_logger.debug(
-                "Datadog: Logging - Enters logging function for model %s", kwargs
-            )
             if litellm.datadog_use_v1 is True:
                 dd_payload = self._create_v0_logging_payload(
                     kwargs=kwargs,
@@ -224,6 +221,7 @@ class DataDogLogger(CustomBatchLogger):
         pass
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+
         dd_payload = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,

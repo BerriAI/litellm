@@ -2030,13 +2030,34 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         assert "cachePoint" not in json.dumps(transformed_messages)
 
 
+@pytest.mark.parametrize(
+    "model, expected_supports_tool_call",
+    [
+        ("bedrock/us.amazon.nova-pro-v1:0", True),
+        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
+        ("bedrock/meta.llama3-1-8b-instruct:0", True),
+        ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/amazon.titan-embed-text-v1:0", False),
+    ],
+)
+def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
+    supported_openai_params = (
+        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    )
+    if expected_supports_tool_call:
+        assert "tools" in supported_openai_params
+    else:
+        assert "tools" not in supported_openai_params
+
+
 class TestBedrockConverseChat(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -2056,6 +2077,25 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         Remove override once we have access to Bedrock prompt caching
         """
         pass
+
+    def test_completion_cost(self):
+        """
+        Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
+        """
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        litellm.model_cost.pop(bedrock_model, None)
+        model = f"bedrock/{bedrock_model}"
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
+        cost = completion_cost(response)
+
+        assert cost > 0
 
 
 class TestBedrockRerank(BaseLLMRerankTest):

@@ -65,12 +65,6 @@ const sidebars = {
           items: [
             "proxy/user_keys",
             "proxy/response_headers", 
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/langfuse"
           ],
         },
         {
@@ -259,17 +253,24 @@ const sidebars = {
             "text_to_speech",
           ]
         },
+        {
+          type: "category",
+          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
+          items: [
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse",
+          ],
+        },
         "rerank",
         "assistants",
         "batches",
         "realtime",
         "fine_tuning",
         "moderation",
-        {
-          type: "link",
-          label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
-          href: "/docs/pass_through/vertex_ai",
-        },
       ],
     },
     {

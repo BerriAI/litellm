@@ -91,6 +91,7 @@ class AmazonConverseConfig:
             or base_model.startswith("cohere")
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
+            or base_model.startswith("amazon.nova")
         ):
             supported_params.append("tools")
 
@@ -528,6 +529,8 @@ class AmazonConverseConfig:
         Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         """
+        if model.startswith("bedrock/"):
+            model = model.split("/")[1]
 
         if model.startswith("converse/"):
             model = model.split("/")[1]

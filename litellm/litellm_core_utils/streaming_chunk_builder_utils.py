@@ -47,9 +47,20 @@ class ChunkProcessor:
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
 
+    @staticmethod
+    def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:
+        """
+        Chunks:
+        [{"id": ""}, {"id": "1"}, {"id": "1"}]
+        """
+        for chunk in chunks:
+            if chunk.get("id"):
+                return chunk["id"]
+        return ""
+
     def build_base_response(self, chunks: List[Dict[str, Any]]) -> ModelResponse:
         chunk = self.first_chunk
-        id = chunk["id"]
+        id = ChunkProcessor._get_chunk_id(chunks)
         object = chunk["object"]
         created = chunk["created"]
         model = chunk["model"]
