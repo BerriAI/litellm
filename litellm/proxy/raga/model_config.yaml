@@ -30,5 +30,5 @@ model_list:
       model: cohere/*
       api_key: os.environ/COHERE_API_KEY
 
-
-
+litellm_settings:
+  enable_json_schema_validation: True
