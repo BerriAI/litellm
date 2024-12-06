@@ -125,6 +125,7 @@ def test_get_model_info_bedrock_region():
         "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         "custom_llm_provider": "bedrock",
     }
+    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
