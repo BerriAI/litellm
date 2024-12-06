@@ -6,6 +6,13 @@ import TabItem from '@theme/TabItem';
 
 Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
 
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ | supports all models on `/generateContent` endpoint |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
+| Streaming | ✅ | |
+
 Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex_ai`
 
 

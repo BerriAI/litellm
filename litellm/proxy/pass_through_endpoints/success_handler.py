@@ -96,12 +96,11 @@ class PassThroughEndpointLogging:
             )
         thread_pool_executor.submit(
             logging_obj.success_handler,
-            args=(
-                standard_logging_response_object,
-                start_time,
-                end_time,
-                cache_hit,
-            ),
+            standard_logging_response_object,  # Positional argument 1
+            start_time,  # Positional argument 2
+            end_time,  # Positional argument 3
+            cache_hit,  # Positional argument 4
+            **kwargs,  # Unpacked keyword arguments
         )
 
         await logging_obj.async_success_handler(

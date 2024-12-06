@@ -389,3 +389,18 @@ class BaseLLMChatTest(ABC):
         url = f"data:application/pdf;base64,{encoded_file}"
 
         return url
+
+    def test_completion_cost(self):
+        from litellm import completion_cost
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            **self.get_base_completion_call_args(),
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
+        cost = completion_cost(response)
+
+        assert cost > 0
