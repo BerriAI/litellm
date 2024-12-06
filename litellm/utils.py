@@ -6104,7 +6104,7 @@ def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
         ChatCompletionToolParam(
             type="function",
             function=ChatCompletionToolParamFunctionChunk(
-                name="dummy-tool",
+                name="dummy_tool",
                 description="This is a dummy tool call",  # provided to satisfy bedrock constraint.
                 parameters={
                     "type": "object",

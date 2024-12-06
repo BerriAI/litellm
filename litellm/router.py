@@ -1690,11 +1690,15 @@ class Router:
                 and potential_model_client is not None
                 and dynamic_api_key != potential_model_client.api_key
             ):
-                pass
+                model_client = None
             else:
-                pass
+                model_client = potential_model_client
 
-            response = await litellm.aspeech(**data, **kwargs)
+            response = await litellm.aspeech(
+                **data,
+                client=model_client,
+                **kwargs,
+            )
 
             return response
         except Exception as e:
