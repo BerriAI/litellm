@@ -46,14 +46,19 @@ $ debugpy -m litellm --detailed_debug
 
 ### VSCode debugger
 
-If you want to attach a debugger using VSCode:
+If you want to attach a debugger using VSCode, there are two options, you can either attach to a running process or start the process from VSCode.:
 
+
+#### Remote attachment
 ```bash
 $ debugpy --listen 0.0.0.0:5678 -m litellm --detailed_debug
 ```
 
 The configure a remote attach on a `launch.json` file in VSCode:
 ```json
+{
+    "version": "0.2.0",
+    "configurations": [
 {
     "name": "Python: Remote Attach",
     "type": "python",
@@ -62,8 +67,35 @@ The configure a remote attach on a `launch.json` file in VSCode:
     "host": "localhost",
     "justMyCode": false
 },
+    ]
 
+}
 ```
+
+
+#### Start from VSCode
+
+Create a `launch.json` file in your `.vscode` folder with the following content:
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Module",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "litellm",
+            "args": [
+                "--detailed_debug"
+            ],
+        }
+    ]
+}
+```
+
+Then you can start the debugger from the interface.
+
 ### Debug Logs 
 
 Run the proxy with `--detailed_debug` to view detailed debug logs
