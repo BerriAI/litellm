@@ -546,7 +546,11 @@ async def test_get_current_provider_budget_reset_at():
 
     # Test provider with budget config but no TTL
     reset_at = await provider_budget._get_current_provider_budget_reset_at("openai")
-    assert reset_at is None
+    assert reset_at is not None
+    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
+    expected_time = datetime.now(timezone.utc) + timedelta(seconds=(24 * 60 * 60))
+    time_difference = abs((reset_time - expected_time).total_seconds())
+    assert time_difference < 5
 
     # Test provider with budget config and TTL
     reset_at = await provider_budget._get_current_provider_budget_reset_at("vertex_ai")
