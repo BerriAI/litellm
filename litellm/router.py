@@ -1695,11 +1695,12 @@ class Router:
                 model_client = potential_model_client
 
             response = await litellm.aspeech(
-                **data,
-                client=model_client,
-                **kwargs,
+                **{
+                    **data,
+                    "client": model_client,
+                    **kwargs,
+                }
             )
-
             return response
         except Exception as e:
             asyncio.create_task(
