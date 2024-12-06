@@ -12,3 +12,4 @@ model_list:
 
 litellm_settings:
   callbacks: ["datadog"] 
+  turn_off_message_logging: True
