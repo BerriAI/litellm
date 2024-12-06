@@ -317,6 +317,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/agentops_integration",
         "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
