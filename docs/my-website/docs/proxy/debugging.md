@@ -35,6 +35,35 @@ $ litellm --detailed_debug
 os.environ["LITELLM_LOG"] = "DEBUG"
 ```
 
+## Runtime Debugger
+
+To attach a debugger at runtime for the proxy app, you can use the following:
+
+```bash
+
+$ debugpy -m litellm --detailed_debug
+```
+
+### VSCode debugger
+
+If you want to attach a debugger using VSCode:
+
+```bash
+$ debugpy --listen 0.0.0.0:5678 -m litellm --detailed_debug
+```
+
+The configure a remote attach on a `launch.json` file in VSCode:
+```json
+{
+    "name": "Python: Remote Attach",
+    "type": "python",
+    "request": "attach",
+    "port": 5678,
+    "host": "localhost",
+    "justMyCode": false
+},
+
+```
 ### Debug Logs 
 
 Run the proxy with `--detailed_debug` to view detailed debug logs
