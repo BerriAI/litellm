@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -93,6 +94,17 @@ def redact_message_input_output_from_logging(
 
     if request_headers and request_headers.get(
         "litellm-disable-message-redaction", False
+    ):
+        return result
+
+    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+        model_call_details.get("standard_callback_dynamic_params", None)
+    )
+
+    # user has OPTED OUT of message redaction
+    if (
+        standard_callback_dynamic_params
+        and standard_callback_dynamic_params.get("turn_off_message_logging") is False
     ):
         return result
 
