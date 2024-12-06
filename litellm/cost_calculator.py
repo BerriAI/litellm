@@ -287,14 +287,28 @@ def cost_per_token(  # noqa: PLR0915
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
+
         if (
-            model_info.get("input_cost_per_token", None) is not None
-            and model_info.get("output_cost_per_token", None) is not None
+            model_info["input_cost_per_token"] > 0
+            and model_info["output_cost_per_token"] > 0
         ):
             ## COST PER TOKEN ##
             prompt_tokens_cost_usd_dollar = (
                 model_info["input_cost_per_token"] * prompt_tokens
             )
+        elif (
+            model_info.get("input_cost_per_second", None) is not None
+            and response_time_ms is not None
+        ):
+            print_verbose(
+                f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; response time: {response_time_ms}"
+            )
+            ## COST PER SECOND ##
+            prompt_tokens_cost_usd_dollar = (
+                model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
+            )
+
+        if model_info["output_cost_per_token"] > 0:
             completion_tokens_cost_usd_dollar = (
                 model_info["output_cost_per_token"] * completion_tokens
             )
@@ -306,10 +320,10 @@ def cost_per_token(  # noqa: PLR0915
                 f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; response time: {response_time_ms}"
             )
             ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = 0
             completion_tokens_cost_usd_dollar = (
                 model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
             )
+
         print_verbose(
             f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
         )

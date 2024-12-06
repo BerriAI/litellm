@@ -4458,6 +4458,8 @@ def get_model_info(  # noqa: PLR0915
         azure_llms = {**litellm.azure_llms, **litellm.azure_embedding_models}
         if model in azure_llms:
             model = azure_llms[model]
+        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai_beta":
+            custom_llm_provider = "vertex_ai"
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
             if "meta/" + model in litellm.vertex_llama3_models:
                 model = "meta/" + model
