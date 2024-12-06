@@ -68,6 +68,12 @@ class ProviderBudgetLimiting(CustomLogger):
                     budget_limit=config.get("budget_limit"),
                     time_period=config.get("time_period"),
                 )
+            asyncio.create_task(
+                self._init_provider_budget_in_cache(
+                    provider=provider,
+                    budget_config=provider_budget_config[provider],
+                )
+            )
 
         self.provider_budget_config: ProviderBudgetConfigType = provider_budget_config
         verbose_router_logger.debug(
@@ -496,3 +502,28 @@ class ProviderBudgetLimiting(CustomLogger):
             return None
 
         return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+
+    async def _init_provider_budget_in_cache(
+        self, provider: str, budget_config: ProviderBudgetInfo
+    ):
+        """
+        Initialize provider budget in cache by storing the following keys if they don't exist:
+        - provider_spend:{provider}:{budget_config.time_period} - stores the current spend
+        - provider_budget_start_time:{provider} - stores the start time of the budget window
+
+        """
+        spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
+        start_time_key = f"provider_budget_start_time:{provider}"
+        ttl_seconds = duration_in_seconds(budget_config.time_period)
+        budget_start = await self.router_cache.async_get_cache(start_time_key)
+        if budget_start is None:
+            budget_start = datetime.now(timezone.utc).timestamp()
+            await self.router_cache.async_set_cache(
+                key=start_time_key, value=budget_start, ttl=ttl_seconds
+            )
+
+        _spend_key = await self.router_cache.async_get_cache(spend_key)
+        if _spend_key is None:
+            await self.router_cache.async_set_cache(
+                key=spend_key, value=0.0, ttl=ttl_seconds
+            )
