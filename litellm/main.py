@@ -3274,6 +3274,7 @@ def embedding(  # noqa: PLR0915
     client = kwargs.pop("client", None)
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
+    max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     cooldown_time = kwargs.get("cooldown_time", None)
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
@@ -3422,6 +3423,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                max_retries=max_retries,
             )
         elif (
             model in litellm.open_ai_embedding_models
@@ -3466,6 +3468,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                max_retries=max_retries,
             )
         elif custom_llm_provider == "databricks":
             api_base = (
