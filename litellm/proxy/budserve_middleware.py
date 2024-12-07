@@ -30,7 +30,12 @@ class BudServeMiddleware(BaseHTTPMiddleware):
         url = f"{budserve_app_baseurl}/credentials/router-config"
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(url, params={"api_key": api_key, "endpoint_name": endpoint_name})
+                response = await client.get(
+                    url, 
+                    params={"api_key": api_key, "endpoint_name": endpoint_name}, 
+                    follow_redirects=True
+                )
+                print(response)
                 response_data = response.json()
                 if response_data.get("success", False):
                     return response_data.get("result", None)
