@@ -19,12 +19,13 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 import litellm
 from litellm import Router, mock_completion
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.presidio_pii_masking import _OPTIONAL_PresidioPIIMasking
+from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+    _OPTIONAL_PresidioPIIMasking,
+)
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -63,6 +64,7 @@ async def test_output_parsing():
     - have presidio pii masking - output parse message
     - assert that no masked tokens are in the input message
     """
+    litellm.set_verbose = True
     litellm.output_parse_pii = True
     pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
@@ -206,6 +208,8 @@ async def test_presidio_pii_masking_input_b():
 
 @pytest.mark.asyncio
 async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
+    from litellm.types.guardrails import GuardrailEventHooks
+
     pii_masking = _OPTIONAL_PresidioPIIMasking(
         logging_only=True,
         mock_testing=True,
@@ -223,22 +227,29 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
         }
     ]
 
-    new_data = await pii_masking.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=local_cache,
-        data={"messages": test_messages},
-        call_type="completion",
+    assert (
+        pii_masking.should_run_guardrail(
+            data={"messages": test_messages},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is False
     )
 
-    assert "Jane Doe" in new_data["messages"][0]["content"]
 
-
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
 @pytest.mark.asyncio
-async def test_presidio_pii_masking_logging_output_only_logged_response():
+async def test_presidio_pii_masking_logging_output_only_logged_response(sync_mode):
+    import litellm
+
+    litellm.set_verbose = True
     pii_masking = _OPTIONAL_PresidioPIIMasking(
         logging_only=True,
         mock_testing=True,
         mock_redacted_text=input_b_anonymizer_results,
+        guardrail_name="presidio",
     )
 
     test_messages = [
@@ -247,15 +258,26 @@ async def test_presidio_pii_masking_logging_output_only_logged_response():
             "content": "My name is Jane Doe, who are you? Say my name in your response",
         }
     ]
-    with patch.object(
-        pii_masking, "async_log_success_event", new=AsyncMock()
-    ) as mock_call:
-        litellm.callbacks = [pii_masking]
-        response = await litellm.acompletion(
-            model="gpt-3.5-turbo", messages=test_messages, mock_response="Hi Peter!"
-        )
 
-        await asyncio.sleep(3)
+    if sync_mode:
+        target_function = "log_success_event"
+        mock_call = MagicMock()
+    else:
+        target_function = "async_log_success_event"
+        mock_call = AsyncMock()
+
+    with patch.object(pii_masking, target_function, new=mock_call) as mock_call:
+        litellm.callbacks = [pii_masking]
+        if sync_mode:
+            response = litellm.completion(
+                model="gpt-3.5-turbo", messages=test_messages, mock_response="Hi Peter!"
+            )
+            time.sleep(3)
+        else:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo", messages=test_messages, mock_response="Hi Peter!"
+            )
+            await asyncio.sleep(3)
 
         assert response.choices[0].message.content == "Hi Peter!"  # type: ignore
 
@@ -275,8 +297,13 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
 
     import litellm
     from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
-    from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
+    from litellm.types.guardrails import (
+        GuardrailItem,
+        GuardrailItemSpec,
+        GuardrailEventHooks,
+    )
 
+    litellm.set_verbose = True
     os.environ["PRESIDIO_ANALYZER_API_BASE"] = "http://localhost:5002"
     os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = "http://localhost:5001"
 
@@ -303,10 +330,15 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
 
     pii_masking_obj: Optional[_OPTIONAL_PresidioPIIMasking] = None
     for callback in litellm.callbacks:
+        print(f"CALLBACK: {callback}")
         if isinstance(callback, _OPTIONAL_PresidioPIIMasking):
             pii_masking_obj = callback
 
     assert pii_masking_obj is not None
 
     assert hasattr(pii_masking_obj, "logging_only")
-    assert pii_masking_obj.logging_only is True
+    assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
+
+    assert pii_masking_obj.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.logging_only
+    )

@@ -965,10 +965,10 @@ class Logging:
                 ),
                 result=result,
             )
-
             ## LOGGING HOOK ##
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
+
                     self.model_call_details, result = callback.logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
