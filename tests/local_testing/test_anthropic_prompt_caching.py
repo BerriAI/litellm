@@ -161,6 +161,49 @@ async def test_litellm_anthropic_prompt_caching_tools():
         )
 
 
+@pytest.fixture
+def anthropic_messages():
+    return [
+        # System Message
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
@@ -227,8 +270,6 @@ async def test_anthropic_api_prompt_caching_basic():
 
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_with_content_str():
-    from litellm.llms.prompt_templates.factory import anthropic_messages_pt
-
     system_message = [
         {
             "role": "system",
@@ -546,3 +587,60 @@ async def test_litellm_anthropic_prompt_caching_system():
         mock_post.assert_called_once_with(
             expected_url, json=expected_json, headers=expected_headers, timeout=600.0
         )
+
+
+def test_is_prompt_caching_enabled(anthropic_messages):
+    assert litellm.utils.is_prompt_caching_valid_prompt(
+        messages=anthropic_messages,
+        tools=None,
+        custom_llm_provider="anthropic",
+        model="anthropic/claude-3-5-sonnet-20240620",
+    )
+
+
+# def test_router_with_prompt_caching(anthropic_messages):
+#     """
+#     if prompt caching supported model called with prompt caching valid prompt,
+#     then 2nd call should go to the same model.
+#     """
+#     from litellm.router import Router
+
+#     router = Router(
+#         model_list=[
+#             {
+#                 "model_name": "claude-model",
+#                 "litellm_params": {
+#                     "model": "anthropic/claude-3-5-sonnet-20240620",
+#                     "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+#                 },
+#             },
+#             {
+#                 "model_name": "claude-model",
+#                 "litellm_params": {
+#                     "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+#                 },
+#             },
+#         ]
+#     )
+
+#     for _ in range(200):
+#         response = router.completion(
+#             messages=anthropic_messages,
+#             model="claude-model",
+#             mock_response="The sky is blue.",
+#         )
+#         print("response=", response)
+
+#         initial_model_id = response._hidden_params["model_id"]
+
+#         new_messages = anthropic_messages + [
+#             {"role": "user", "content": "What is the weather in SF?"}
+#         ]
+#         response = router.completion(
+#             messages=new_messages,
+#             model="claude-model",
+#             mock_response="The sky is blue.",
+#         )
+#         print("response=", response)
+
+#         assert response._hidden_params["model_id"] == initial_model_id

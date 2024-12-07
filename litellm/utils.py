@@ -6224,3 +6224,22 @@ def get_end_user_id_for_cost_tracking(
     ):
         return None
     return proxy_server_request.get("body", {}).get("user", None)
+
+
+def is_prompt_caching_valid_prompt(
+    messages: Optional[List[AllMessageValues]],
+    tools: Optional[List[ChatCompletionToolParam]],
+    model: str,
+    custom_llm_provider: Optional[str],
+) -> bool:
+    """
+    Returns true if the prompt is valid for prompt caching.
+
+    OpenAI + Anthropic providers have a minimum token count of 1024 for prompt caching.
+    """
+    if messages is None and tools is None:
+        return False
+    if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
+        model = custom_llm_provider + "/" + model
+    token_count = token_counter(messages=messages, tools=tools, model=model)
+    return token_count >= 1024
