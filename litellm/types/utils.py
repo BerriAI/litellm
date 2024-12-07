@@ -1607,6 +1607,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
 
+    # Logging settings
+    turn_off_message_logging: Optional[bool]  # when true will not log messages
+
 
 class KeyGenerationConfig(TypedDict, total=False):
     required_params: List[
