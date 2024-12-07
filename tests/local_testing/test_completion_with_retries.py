@@ -61,3 +61,30 @@ def test_completion_with_0_num_retries():
     except Exception as e:
         print("exception", e)
         pass
+
+
+def test_completion_with_retry_policy():
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from litellm.types.router import RetryPolicy
+
+    retry_policy = RetryPolicy(
+        ContentPolicyViolationErrorRetries=30,  # run 3 retries for ContentPolicyViolationErrors
+        AuthenticationErrorRetries=0,  # run 0 retries for AuthenticationErrorRetries
+    )
+
+    with patch.object(
+        litellm, "completion_with_retries"
+    ) as mock_completion_with_retries:
+        try:
+            completion(
+                model="azure/gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                retry_policy=retry_policy,
+                mock_response="Exception: content_filter_policy",
+            )
+        except Exception as e:
+            print(e)
+
+        mock_completion_with_retries.assert_called_once()
+        assert mock_completion_with_retries.call_args.kwargs["num_retries"] == 30
+        assert retry_policy.ContentPolicyViolationErrorRetries == 30
