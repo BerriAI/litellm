@@ -32,6 +32,7 @@ from litellm.types.utils import StandardKeyGenerationConfig
 import httpx
 import dotenv
 from enum import Enum
+from litellm._version import __version__
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
@@ -282,7 +283,7 @@ upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = 
 key_generation_settings: Optional[StandardKeyGenerationConfig] = None
 default_internal_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
-max_user_budget: Optional[float] = None
+max_user_budget: float = 0.0  # set the max budget across all providers
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 internal_user_budget_duration: Optional[str] = None
