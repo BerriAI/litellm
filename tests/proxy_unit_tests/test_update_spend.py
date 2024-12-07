@@ -234,3 +234,56 @@ async def test_update_spend_logs_multiple_batches_success():
 
     # Verify all logs were processed
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_multiple_batches_with_failure():
+    """
+    Test processing of multiple batches where one batch fails.
+    Creates 400 logs (4 batches) with one batch failing but eventually succeeding after retry.
+    """
+    # Setup
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    # Create 400 test spend logs (4x BATCH_SIZE)
+    prisma_client.spend_log_transactions = [
+        {"id": str(i), "spend": 10} for i in range(400)
+    ]
+
+    # Mock to fail on second batch first attempt, then succeed
+    call_count = 0
+
+    async def create_many_side_effect(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        # Fail on the second batch's first attempt
+        if call_count == 2:
+            raise httpx.ConnectError("Failed to connect")
+        return None
+
+    create_many_mock = AsyncMock(side_effect=create_many_side_effect)
+    prisma_client.db.litellm_spendlogs.create_many = create_many_mock
+
+    # Execute
+    await update_spend(prisma_client, None, proxy_logging_obj)
+
+    # Verify
+    assert create_many_mock.call_count == 6  # 4 batches + 2 retries for failed batch
+
+    # Verify all batches were processed
+    all_processed_logs = []
+    for call in create_many_mock.call_args_list:
+        all_processed_logs.extend(call[1]["data"])
+
+    # Verify all IDs were processed
+    processed_ids = {item["id"] for item in all_processed_logs}
+
+    # these should have ids 0-399
+    print("all processed ids", sorted(processed_ids, key=int))
+    expected_ids = {str(i) for i in range(400)}
+    assert processed_ids == expected_ids
+
+    # Verify all logs were cleared from transactions
+    assert len(prisma_client.spend_log_transactions) == 0
