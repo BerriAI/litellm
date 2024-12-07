@@ -32,10 +32,11 @@ class BudServeMiddleware(BaseHTTPMiddleware):
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     url, 
-                    params={"api_key": api_key, "endpoint_name": endpoint_name}, 
+                    params={"api_key": api_key, "endpoint_name": endpoint_name},
+                    headers={"Content-Type": "application/json"},
                     follow_redirects=True
                 )
-                print(response)
+                verbose_proxy_logger.debug(f"Response: {response}")
                 response_data = response.json()
                 if response_data.get("success", False):
                     return response_data.get("result", None)
