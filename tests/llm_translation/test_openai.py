@@ -284,6 +284,7 @@ def test_completion_bad_org():
     import litellm
 
     litellm.set_verbose = True
+    _old_org = os.environ.get("OPENAI_ORGANIZATION", None)
     os.environ["OPENAI_ORGANIZATION"] = "bad-org"
     messages = [{"role": "user", "content": "hi"}]
 
@@ -294,3 +295,8 @@ def test_completion_bad_org():
 
     print(exc_info.value)
     assert "No such organization: bad-org" in str(exc_info.value)
+
+    if _old_org is not None:
+        os.environ["OPENAI_ORGANIZATION"] = _old_org
+    else:
+        del os.environ["OPENAI_ORGANIZATION"]
