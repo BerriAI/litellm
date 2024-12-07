@@ -1590,6 +1590,18 @@ OPENAI_RESPONSE_HEADERS = [
 ]
 
 
+class DynamicSettings(TypedDict, total=False):
+    turn_off_message_logging: Optional[bool]  # when true will not log messages
+
+
+class DynamicCallbackSettings(TypedDict, total=False):
+    datadog: Optional[DynamicSettings]
+    otel: Optional[DynamicSettings]
+    langfuse: Optional[DynamicSettings]
+    langsmith: Optional[DynamicSettings]
+    gcs_bucket: Optional[DynamicSettings]
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: Optional[str]
@@ -1606,8 +1618,16 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
 
-    # Logging settings
-    turn_off_message_logging: Optional[bool]  # when true will not log messages
+    # Logging settings, stores dynamic settings for each callback
+    dynamic_callback_settings: Optional[DynamicCallbackSettings]
+
+
+class PreRedactionFields(TypedDict, total=False):
+    messages: Optional[list]
+    prompt: Optional[str]
+    input: Optional[str]
+    response: Optional[Any]
+    standard_logging_object: Optional[StandardLoggingPayload]
 
 
 class KeyGenerationConfig(TypedDict, total=False):
