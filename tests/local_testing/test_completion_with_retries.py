@@ -61,3 +61,68 @@ def test_completion_with_0_num_retries():
     except Exception as e:
         print("exception", e)
         pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_with_retry_policy(sync_mode):
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from litellm.types.router import RetryPolicy
+
+    retry_number = 1
+    retry_policy = RetryPolicy(
+        ContentPolicyViolationErrorRetries=retry_number,  # run 3 retries for ContentPolicyViolationErrors
+        AuthenticationErrorRetries=0,  # run 0 retries for AuthenticationErrorRetries
+    )
+
+    target_function = "completion_with_retries"
+
+    with patch.object(litellm, target_function) as mock_completion_with_retries:
+        data = {
+            "model": "azure/gpt-3.5-turbo",
+            "messages": [{"gm": "vibe", "role": "user"}],
+            "retry_policy": retry_policy,
+            "mock_response": "Exception: content_filter_policy",
+        }
+        try:
+            if sync_mode:
+                completion(**data)
+            else:
+                await completion(**data)
+        except Exception as e:
+            print(e)
+
+        mock_completion_with_retries.assert_called_once()
+        assert (
+            mock_completion_with_retries.call_args.kwargs["num_retries"] == retry_number
+        )
+        assert retry_policy.ContentPolicyViolationErrorRetries == retry_number
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_completion_with_retry_policy_no_error(sync_mode):
+    """
+    Test that the completion function does not throw an error when the retry policy is set
+    """
+    from unittest.mock import patch, MagicMock, AsyncMock
+    from litellm.types.router import RetryPolicy
+
+    retry_number = 1
+    retry_policy = RetryPolicy(
+        ContentPolicyViolationErrorRetries=retry_number,  # run 3 retries for ContentPolicyViolationErrors
+        AuthenticationErrorRetries=0,  # run 0 retries for AuthenticationErrorRetries
+    )
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"gm": "vibe", "role": "user"}],
+        "retry_policy": retry_policy,
+    }
+    try:
+        if sync_mode:
+            completion(**data)
+        else:
+            await completion(**data)
+    except Exception as e:
+        print(e)

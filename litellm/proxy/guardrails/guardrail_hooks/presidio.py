@@ -24,6 +24,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -54,8 +55,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_anonymizer_api_base: Optional[str] = None,
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
+        logging_only: Optional[bool] = None,
         **kwargs,
     ):
+        if logging_only is True:
+            self.logging_only = True
+            kwargs["event_hook"] = GuardrailEventHooks.logging_only
+        super().__init__(**kwargs)
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
@@ -83,8 +89,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_analyzer_api_base=presidio_analyzer_api_base,
             presidio_anonymizer_api_base=presidio_anonymizer_api_base,
         )
-
-        super().__init__(**kwargs)
 
     def validate_environment(
         self,
@@ -245,9 +249,43 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 verbose_proxy_logger.info(
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
+                data["messages"] = messages
             return data
         except Exception as e:
             raise e
+
+    def logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_in_new_loop():
+            """Run the coroutine in a new event loop within this thread."""
+            new_loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(new_loop)
+                return new_loop.run_until_complete(
+                    self.async_logging_hook(
+                        kwargs=kwargs, result=result, call_type=call_type
+                    )
+                )
+            finally:
+                new_loop.close()
+                asyncio.set_event_loop(None)
+
+        try:
+            # First, try to get the current event loop
+            _ = asyncio.get_running_loop()
+            # If we're already in an event loop, run in a separate thread
+            # to avoid nested event loop issues
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result()
+
+        except RuntimeError:
+            # No running event loop, we can safely run in this thread
+            return run_in_new_loop()
 
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str
@@ -304,7 +342,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         verbose_proxy_logger.debug(
             f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
         )
-        if self.output_parse_pii is False:
+
+        if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
         if isinstance(response, ModelResponse) and not isinstance(
