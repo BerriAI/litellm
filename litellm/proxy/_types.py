@@ -8,6 +8,7 @@ from dataclasses import fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
@@ -1937,6 +1938,9 @@ class ProxyErrorTypes(str, enum.Enum):
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
+
+
+DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
 
 
 class SSOUserDefinedValues(TypedDict):
