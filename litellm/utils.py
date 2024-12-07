@@ -6227,10 +6227,10 @@ def get_end_user_id_for_cost_tracking(
 
 
 def is_prompt_caching_valid_prompt(
-    messages: Optional[List[AllMessageValues]],
-    tools: Optional[List[ChatCompletionToolParam]],
     model: str,
-    custom_llm_provider: Optional[str],
+    messages: Optional[List[AllMessageValues]],
+    tools: Optional[List[ChatCompletionToolParam]] = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> bool:
     """
     Returns true if the prompt is valid for prompt caching.

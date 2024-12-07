@@ -649,49 +649,72 @@ async def test_router_prompt_caching_model_stored(
         assert cached_model_id is None
 
 
-# def test_router_with_prompt_caching(anthropic_messages):
-#     """
-#     if prompt caching supported model called with prompt caching valid prompt,
-#     then 2nd call should go to the same model.
-#     """
-#     from litellm.router import Router
+@pytest.mark.asyncio()
+async def test_router_with_prompt_caching(anthropic_messages):
+    """
+    if prompt caching supported model called with prompt caching valid prompt,
+    then 2nd call should go to the same model.
+    """
+    from litellm.router import Router
+    import asyncio
+    from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 
-#     router = Router(
-#         model_list=[
-#             {
-#                 "model_name": "claude-model",
-#                 "litellm_params": {
-#                     "model": "anthropic/claude-3-5-sonnet-20240620",
-#                     "api_key": os.environ.get("ANTHROPIC_API_KEY"),
-#                 },
-#             },
-#             {
-#                 "model_name": "claude-model",
-#                 "litellm_params": {
-#                     "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-#                 },
-#             },
-#         ]
-#     )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-model",
+                "litellm_params": {
+                    "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                },
+            },
+        ]
+    )
 
-#     for _ in range(200):
-#         response = router.completion(
-#             messages=anthropic_messages,
-#             model="claude-model",
-#             mock_response="The sky is blue.",
-#         )
-#         print("response=", response)
+    response = await router.acompletion(
+        messages=anthropic_messages,
+        model="claude-model",
+        mock_response="The sky is blue.",
+    )
+    print("response=", response)
 
-#         initial_model_id = response._hidden_params["model_id"]
+    initial_model_id = response._hidden_params["model_id"]
 
-#         new_messages = anthropic_messages + [
-#             {"role": "user", "content": "What is the weather in SF?"}
-#         ]
-#         response = router.completion(
-#             messages=new_messages,
-#             model="claude-model",
-#             mock_response="The sky is blue.",
-#         )
-#         print("response=", response)
+    await asyncio.sleep(1)
+    cache = PromptCachingCache(
+        cache=router.cache,
+    )
 
-#         assert response._hidden_params["model_id"] == initial_model_id
+    cached_model_id = cache.get_model_id(messages=anthropic_messages, tools=None)
+
+    prompt_caching_cache_key = PromptCachingCache.get_prompt_caching_cache_key(
+        messages=anthropic_messages, tools=None
+    )
+    print(f"prompt_caching_cache_key: {prompt_caching_cache_key}")
+    assert cached_model_id["model_id"] == initial_model_id
+
+    new_messages = anthropic_messages + [
+        {"role": "user", "content": "What is the weather in SF?"}
+    ]
+
+    pc_deployment = await cache.async_get_prompt_caching_deployment(
+        router=router,
+        messages=new_messages,
+        tools=None,
+    )
+    assert pc_deployment is not None
+
+    response = await router.acompletion(
+        messages=new_messages,
+        model="claude-model",
+        mock_response="The sky is blue.",
+    )
+    print("response=", response)
+
+    assert response._hidden_params["model_id"] == initial_model_id

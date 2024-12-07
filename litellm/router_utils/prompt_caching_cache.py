@@ -7,6 +7,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict
 
+import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import Cache, DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -15,9 +16,13 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.router import Router
+
+    litellm_router = Router
     Span = _Span
 else:
     Span = Any
+    litellm_router = Any
 
 
 class PromptCachingCacheValue(TypedDict):
@@ -107,6 +112,56 @@ class PromptCachingCache:
         )
         return None
 
+    async def async_get_model_id(
+        self,
+        messages: Optional[List[AllMessageValues]],
+        tools: Optional[List[ChatCompletionToolParam]],
+    ) -> Optional[PromptCachingCacheValue]:
+        """
+        if messages is not none
+        - check full messages
+        - check messages[:-1]
+        - check messages[:-2]
+        - check messages[:-3]
+
+        use self.cache.async_batch_get_cache(keys=potential_cache_keys])
+        """
+        if messages is None and tools is None:
+            return None
+
+        # Generate potential cache keys by slicing messages
+
+        potential_cache_keys = []
+
+        if messages is not None:
+            full_cache_key = PromptCachingCache.get_prompt_caching_cache_key(
+                messages, tools
+            )
+            potential_cache_keys.append(full_cache_key)
+
+            # Check progressively shorter message slices
+            for i in range(1, min(4, len(messages))):
+                partial_messages = messages[:-i]
+                partial_cache_key = PromptCachingCache.get_prompt_caching_cache_key(
+                    partial_messages, tools
+                )
+                potential_cache_keys.append(partial_cache_key)
+
+        # Perform batch cache lookup
+        cache_results = await self.cache.async_batch_get_cache(
+            keys=potential_cache_keys
+        )
+
+        if cache_results is None:
+            return None
+
+        # Return the first non-None cache result
+        for result in cache_results:
+            if result is not None:
+                return result
+
+        return None
+
     def get_model_id(
         self,
         messages: Optional[List[AllMessageValues]],
@@ -117,3 +172,22 @@ class PromptCachingCache:
 
         cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         return self.cache.get_cache(cache_key)
+
+    async def async_get_prompt_caching_deployment(
+        self,
+        router: litellm_router,
+        messages: Optional[List[AllMessageValues]],
+        tools: Optional[List[ChatCompletionToolParam]],
+    ) -> Optional[dict]:
+        model_id_dict = await self.async_get_model_id(
+            messages=messages,
+            tools=tools,
+        )
+
+        if model_id_dict is not None:
+            healthy_deployment_pydantic_obj = router.get_deployment(
+                model_id=model_id_dict["model_id"]
+            )
+            if healthy_deployment_pydantic_obj is not None:
+                return healthy_deployment_pydantic_obj.model_dump(exclude_none=True)
+        return None

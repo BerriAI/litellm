@@ -36,6 +36,7 @@ from typing import (
     Tuple,
     TypedDict,
     Union,
+    cast,
 )
 
 import httpx
@@ -96,6 +97,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
 )
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
+    AllMessageValues,
     Assistant,
     AssistantToolParam,
     AsyncCursorPage,
@@ -5330,13 +5332,6 @@ class Router:
                 cooldown_deployments=cooldown_deployments,
             )
 
-            # filter pre-call checks
-            _allowed_model_region = (
-                request_kwargs.get("allowed_model_region")
-                if request_kwargs is not None
-                else None
-            )
-
             if self.enable_pre_call_checks and messages is not None:
                 healthy_deployments = self._pre_call_checks(
                     model=model,
@@ -5344,6 +5339,24 @@ class Router:
                     messages=messages,
                     request_kwargs=request_kwargs,
                 )
+
+            if messages is not None and is_prompt_caching_valid_prompt(
+                messages=cast(List[AllMessageValues], messages),
+                model=model,
+                custom_llm_provider=None,
+            ):
+                prompt_cache = PromptCachingCache(
+                    cache=self.cache,
+                )
+                healthy_deployment = (
+                    await prompt_cache.async_get_prompt_caching_deployment(
+                        router=self,
+                        messages=cast(List[AllMessageValues], messages),
+                        tools=None,
+                    )
+                )
+                if healthy_deployment is not None:
+                    return healthy_deployment
 
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(  # type: ignore
