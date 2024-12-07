@@ -1029,13 +1029,14 @@ def test_get_public_key_from_jwk_url():
 
 
 @pytest.mark.asyncio
-async def test_end_user_jwt_auth():
+async def test_end_user_jwt_auth(monkeypatch):
     import litellm
     from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.proxy_server import user_api_key_auth
 
+    monkeypatch.delenv("JWT_AUDIENCE", None)
     jwt_handler = JWTHandler()
 
     litellm_jwtauth = LiteLLM_JWTAuth(
