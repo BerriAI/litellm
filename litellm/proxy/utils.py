@@ -31,7 +31,11 @@ from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_last_day_of_month,
 )
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import (
+    DB_CONNECTION_ERROR_TYPES,
+    ProxyErrorTypes,
+    ProxyException,
+)
 
 try:
     import backoff
@@ -2591,7 +2595,7 @@ async def update_spend(  # noqa: PLR0915
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
@@ -2652,7 +2656,7 @@ async def update_spend(  # noqa: PLR0915
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
@@ -2703,7 +2707,7 @@ async def update_spend(  # noqa: PLR0915
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
@@ -2759,7 +2763,7 @@ async def update_spend(  # noqa: PLR0915
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
@@ -2809,7 +2813,7 @@ async def update_spend(  # noqa: PLR0915
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
@@ -2855,7 +2859,7 @@ async def update_spend(  # noqa: PLR0915
                     {}
                 )  # Clear the remaining transactions after processing all batches in the loop.
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     raise  # Re-raise the last exception
                 # Optionally, sleep for a bit before retrying
@@ -2943,7 +2947,7 @@ async def update_spend(  # noqa: PLR0915
                         f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
                     )
                 break
-            except httpx.ReadTimeout:
+            except DB_CONNECTION_ERROR_TYPES:
                 if i is None:
                     i = 0
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
