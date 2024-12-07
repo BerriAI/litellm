@@ -2193,3 +2193,25 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "tags",
     "enforced_params",
 ]
+
+
+class ProviderBudgetResponseObject(LiteLLMBase):
+    """
+    Configuration for a single provider's budget settings
+    """
+
+    budget_limit: float  # Budget limit in USD for the time period
+    time_period: str  # Time period for budget (e.g., '1d', '30d', '1mo')
+    spend: float = 0.0  # Current spend for this provider
+    budget_reset_at: Optional[str] = None  # When the current budget period resets
+
+
+class ProviderBudgetResponse(LiteLLMBase):
+    """
+    Complete provider budget configuration and status.
+    Maps provider names to their budget configs.
+    """
+
+    providers: Dict[str, ProviderBudgetResponseObject] = (
+        {}
+    )  # Dictionary mapping provider names to their budget configurations
