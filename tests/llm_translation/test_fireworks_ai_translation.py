@@ -38,6 +38,9 @@ def test_map_response_format():
     Test that the response format is translated correctly.
 
     h/t to https://github.com/DaveDeCaprio (@DaveDeCaprio) for the test case
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/6797
+    Fireworks AI Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting#step-1-import-libraries
     """
     response_format = {
         "type": "json_schema",
