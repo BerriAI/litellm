@@ -375,7 +375,11 @@ class Logging:
             for param in _supported_callback_params:
                 if param in kwargs:
                     _param_value = kwargs.pop(param)
-                    if _param_value is not None and "os.environ/" in _param_value:
+                    if (
+                        _param_value is not None
+                        and isinstance(_param_value, str)
+                        and "os.environ/" in _param_value
+                    ):
                         _param_value = get_secret_str(secret_name=_param_value)
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
         return standard_callback_dynamic_params
@@ -966,10 +970,10 @@ class Logging:
                 ),
                 result=result,
             )
-
             ## LOGGING HOOK ##
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
+
                     self.model_call_details, result = callback.logging_hook(
                         kwargs=self.model_call_details,
                         result=result,

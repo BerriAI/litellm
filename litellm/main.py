@@ -1527,12 +1527,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            openai.organization = (
+            organization = (
                 organization
                 or litellm.organization
                 or get_secret("OPENAI_ORGANIZATION")
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
+            openai.organization = organization
             # set API KEY
             api_key = (
                 api_key

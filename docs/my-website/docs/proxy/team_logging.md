@@ -386,3 +386,79 @@ A key is **unhealthy** when the logging callbacks are not setup correctly.
 
 </TabItem>
 </Tabs>
+
+### Disable/Enable Message redaction
+
+Use this to enable prompt logging for specific keys when you have globally disabled it
+
+Example config.yaml with globally disabled prompt logging (message redaction)
+```yaml
+model_list:
+ - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+litellm_settings:
+  callbacks: ["datadog"]
+  turn_off_message_logging: True # 👈 Globally logging prompt / response is disabled
+```
+
+**Enable prompt logging for key**
+
+Set `turn_off_message_logging` to `false` for the key you want to enable prompt logging for. This will override the global `turn_off_message_logging` setting.
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "logging": [{
+            "callback_name": "datadog",
+            "callback_vars": {
+                "turn_off_message_logging": false # 👈 Enable prompt logging
+            }
+        }]
+    }
+}'
+```
+
+Response from `/key/generate`
+
+```json
+{
+    "key_alias": null,
+    "key": "sk-9v6I-jf9-eYtg_PwM8OKgQ",
+    "metadata": {
+        "logging": [
+            {
+                "callback_name": "datadog",
+                "callback_vars": {
+                    "turn_off_message_logging": false
+                }
+            }
+        ]
+    },
+    "token_id": "a53a33db8c3cf832ceb28565dbb034f19f0acd69ee7f03b7bf6752f9f804081e"
+}
+```
+
+Use key for `/chat/completions` request
+
+This key will log the prompt to the callback specified in the request
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-9v6I-jf9-eYtg_PwM8OKgQ" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "hi my name is ishaan what key alias is this"}
+    ]
+  }'
+```
+
+
+
+
+

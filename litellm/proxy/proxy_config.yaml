@@ -12,3 +12,30 @@ model_list:
 
 litellm_settings:
   callbacks: ["datadog"] 
+
+  turn_off_message_logging: True
+
+
+router_settings:
+  provider_budget_config: 
+    openai: 
+      budget_limit: 0.000000000001 # float of $ value budget for time period
+      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
+    azure:
+      budget_limit: 100
+      time_period: 1d
+    anthropic:
+      budget_limit: 100
+      time_period: 10d
+    vertex_ai:
+      budget_limit: 100
+      time_period: 12d
+    gemini:
+      budget_limit: 100
+      time_period: 12d
+  
+  # OPTIONAL: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+

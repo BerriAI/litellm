@@ -1012,7 +1012,9 @@ class BlockKeyRequest(LiteLLMBase):
 
 class AddTeamCallback(LiteLLMBase):
     callback_name: str
-    callback_type: Literal["success", "failure", "success_and_failure"]
+    callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
+        "success_and_failure"
+    )
     callback_vars: Dict[str, str]
 
     @model_validator(mode="before")
@@ -1020,11 +1022,13 @@ class AddTeamCallback(LiteLLMBase):
     def validate_callback_vars(cls, values):
         callback_vars = values.get("callback_vars", {})
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
-        for key in callback_vars:
+        for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(
                     f"Invalid callback variable: {key}. Must be one of {valid_keys}"
                 )
+            if not isinstance(value, str):
+                callback_vars[key] = str(value)
         return values
 
 
@@ -2193,3 +2197,25 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "tags",
     "enforced_params",
 ]
+
+
+class ProviderBudgetResponseObject(LiteLLMBase):
+    """
+    Configuration for a single provider's budget settings
+    """
+
+    budget_limit: float  # Budget limit in USD for the time period
+    time_period: str  # Time period for budget (e.g., '1d', '30d', '1mo')
+    spend: float = 0.0  # Current spend for this provider
+    budget_reset_at: Optional[str] = None  # When the current budget period resets
+
+
+class ProviderBudgetResponse(LiteLLMBase):
+    """
+    Complete provider budget configuration and status.
+    Maps provider names to their budget configs.
+    """
+
+    providers: Dict[str, ProviderBudgetResponseObject] = (
+        {}
+    )  # Dictionary mapping provider names to their budget configurations
