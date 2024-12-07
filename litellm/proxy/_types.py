@@ -1814,6 +1814,7 @@ class SpendLogsPayload(TypedDict):
     team_id: Optional[str]
     end_user: Optional[str]
     requester_ip_address: Optional[str]
+    custom_llm_provider: Optional[str]
 
 
 class SpanAttributes(str, enum.Enum):
