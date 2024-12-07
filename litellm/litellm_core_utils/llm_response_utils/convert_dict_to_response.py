@@ -360,9 +360,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 else:
                     message_str = str(response_object["error"]["message"])
                 error_args["message"] = message_str
-        raised_exception = Exception()
+        raised_exception = Exception(error_args["message"])
         setattr(raised_exception, "status_code", error_args["status_code"])
-        setattr(raised_exception, "message", error_args["message"])
         raise raised_exception
 
     try:
