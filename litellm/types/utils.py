@@ -144,6 +144,7 @@ class CallTypes(Enum):
     rerank = "rerank"
     arerank = "arerank"
     arealtime = "_arealtime"
+    pass_through = "pass_through_endpoint"
 
 
 CallTypesLiteral = Literal[

@@ -56,7 +56,7 @@ async def block_user(data: BlockUsers):
         ```
         curl -X POST "http://0.0.0.0:8000/user/block"
         -H "Authorization: Bearer sk-1234"
-        -D '{
+        -d '{
         "user_ids": [<user_id>, ...]
         }'
         ```
@@ -106,7 +106,7 @@ async def unblock_user(data: BlockUsers):
     ```
     curl -X POST "http://0.0.0.0:8000/user/unblock"
     -H "Authorization: Bearer sk-1234"
-    -D '{
+    -d '{
     "user_ids": [<user_id>, ...]
     }'
     ```

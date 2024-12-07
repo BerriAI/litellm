@@ -19,7 +19,7 @@ anthropic:
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
 
 import litellm
@@ -68,6 +68,12 @@ class ProviderBudgetLimiting(CustomLogger):
                     budget_limit=config.get("budget_limit"),
                     time_period=config.get("time_period"),
                 )
+            asyncio.create_task(
+                self._init_provider_budget_in_cache(
+                    provider=provider,
+                    budget_config=provider_budget_config[provider],
+                )
+            )
 
         self.provider_budget_config: ProviderBudgetConfigType = provider_budget_config
         verbose_router_logger.debug(
@@ -449,4 +455,75 @@ class ProviderBudgetLimiting(CustomLogger):
                 provider=provider,
                 spend=spend,
                 budget_limit=budget_limit,
+            )
+
+    async def _get_current_provider_spend(self, provider: str) -> Optional[float]:
+        """
+        GET the current spend for a provider from cache
+
+        used for GET /provider/budgets endpoint in spend_management_endpoints.py
+
+        Args:
+            provider (str): The provider to get spend for (e.g., "openai", "anthropic")
+
+        Returns:
+            Optional[float]: The current spend for the provider, or None if not found
+        """
+        budget_config = self._get_budget_config_for_provider(provider)
+        if budget_config is None:
+            return None
+
+        spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
+
+        if self.router_cache.redis_cache:
+            # use Redis as source of truth since that has spend across all instances
+            current_spend = await self.router_cache.redis_cache.async_get_cache(
+                spend_key
+            )
+        else:
+            # use in-memory cache if Redis is not initialized
+            current_spend = await self.router_cache.async_get_cache(spend_key)
+        return float(current_spend) if current_spend is not None else 0.0
+
+    async def _get_current_provider_budget_reset_at(
+        self, provider: str
+    ) -> Optional[str]:
+        budget_config = self._get_budget_config_for_provider(provider)
+        if budget_config is None:
+            return None
+
+        spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
+        if self.router_cache.redis_cache:
+            ttl_seconds = await self.router_cache.redis_cache.async_get_ttl(spend_key)
+        else:
+            ttl_seconds = await self.router_cache.async_get_ttl(spend_key)
+
+        if ttl_seconds is None:
+            return None
+
+        return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+
+    async def _init_provider_budget_in_cache(
+        self, provider: str, budget_config: ProviderBudgetInfo
+    ):
+        """
+        Initialize provider budget in cache by storing the following keys if they don't exist:
+        - provider_spend:{provider}:{budget_config.time_period} - stores the current spend
+        - provider_budget_start_time:{provider} - stores the start time of the budget window
+
+        """
+        spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
+        start_time_key = f"provider_budget_start_time:{provider}"
+        ttl_seconds = duration_in_seconds(budget_config.time_period)
+        budget_start = await self.router_cache.async_get_cache(start_time_key)
+        if budget_start is None:
+            budget_start = datetime.now(timezone.utc).timestamp()
+            await self.router_cache.async_set_cache(
+                key=start_time_key, value=budget_start, ttl=ttl_seconds
+            )
+
+        _spend_key = await self.router_cache.async_get_cache(spend_key)
+        if _spend_key is None:
+            await self.router_cache.async_set_cache(
+                key=spend_key, value=0.0, ttl=ttl_seconds
             )
