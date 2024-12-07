@@ -22,6 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
+    DB_CONNECTION_ERROR_TYPES,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -753,7 +754,7 @@ async def get_key_object(
         )
 
         return _response
-    except httpx.ConnectError as e:
+    except DB_CONNECTION_ERROR_TYPES as e:
         return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception:
         raise Exception(
