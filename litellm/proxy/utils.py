@@ -2341,16 +2341,30 @@ class PrismaClient:
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
-    module_name = value
-    instance_name = None
+    """Get an instance from a module, with security restrictions on what can be imported"""
+    # Whitelist of allowed module paths/prefixes
+    ALLOWED_IMPORT_PATHS = {
+        "litellm",
+        "logging",
+        "custom_logger",  # Add your known safe modules here
+    }
+    
     try:
         print_verbose(f"value: {value}")
         # Split the path by dots to separate module from instance
         parts = value.split(".")
+        if len(parts) < 2:
+            raise ImportError("Invalid import path - must be in format 'module.instance'")
 
         # The module path is all but the last part, and the instance_name is the last part
         module_name = ".".join(parts[:-1])
         instance_name = parts[-1]
+
+        # Security check - verify module is in whitelist
+        if not any(module_name.startswith(safe_path) for safe_path in ALLOWED_IMPORT_PATHS):
+            raise ImportError(
+                f"Security Error: Cannot import from '{module_name}'. Must be from allowed paths: {ALLOWED_IMPORT_PATHS}"
+            )
 
         # If config_file_path is provided, use it to determine the module spec and load the module
         if config_file_path is not None:
@@ -2358,20 +2372,25 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             module_file_path = os.path.join(directory, *module_name.split("."))
             module_file_path += ".py"
 
-            spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
+            # Additional path security check
+            if not any(safe_path in module_file_path for safe_path in ALLOWED_IMPORT_PATHS):
+                raise ImportError(
+                    f"Security Error: Cannot import from '{module_file_path}'. Must be from allowed paths: {ALLOWED_IMPORT_PATHS}"
+                )
+
+            spec = importlib.util.spec_from_file_location(module_name, module_file_path)
             if spec is None:
                 raise ImportError(
                     f"Could not find a module specification for {module_file_path}"
                 )
-            module = importlib.util.module_from_spec(spec)  # type: ignore
-            spec.loader.exec_module(module)  # type: ignore
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
         else:
-            # Dynamically import the module
+            # Dynamically import the module, but only from whitelist
             module = importlib.import_module(module_name)
 
         # Get the instance from the module
         instance = getattr(module, instance_name)
-
         return instance
     except ImportError as e:
         # Re-raise the exception with a user-friendly message
