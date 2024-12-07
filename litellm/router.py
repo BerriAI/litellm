@@ -153,6 +153,7 @@ from litellm.utils import (
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
+from .router_utils.prompt_caching_cache import PromptCachingCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -3379,6 +3380,19 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=id,
                 )
+
+                ## PROMPT CACHING
+                prompt_cache = PromptCachingCache(
+                    cache=self.cache,
+                )
+                if standard_logging_object["messages"] is not None and isinstance(
+                    standard_logging_object["messages"], list
+                ):
+                    await prompt_cache.async_add_model_id(
+                        messages=standard_logging_object["messages"],  # type: ignore
+                        tools=None,
+                        model_id=id,
+                    )
 
                 return tpm_key
 
