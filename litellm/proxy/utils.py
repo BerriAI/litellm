@@ -568,6 +568,8 @@ class ProxyLogging:
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
         ],
     ):
         """
@@ -1044,7 +1046,7 @@ def on_backoff(details):
 
 
 class PrismaClient:
-    user_list_transactons: dict = {}
+    user_list_transactions: dict = {}
     end_user_list_transactons: dict = {}
     key_list_transactons: dict = {}
     team_list_transactons: dict = {}
