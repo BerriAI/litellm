@@ -1763,9 +1763,14 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    if custom_llm_provider == "predibase":  # predibase supports this globally
-        return True
+    # providers that globally support response schema
+    PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA = [
+        litellm.LlmProviders.PREDIBASE,
+        litellm.LlmProviders.FIREWORKS_AI,
+    ]
 
+    if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
+        return True
     try:
         ## GET MODEL INFO
         model_info = litellm.get_model_info(
