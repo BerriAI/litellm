@@ -1012,7 +1012,9 @@ class BlockKeyRequest(LiteLLMBase):
 
 class AddTeamCallback(LiteLLMBase):
     callback_name: str
-    callback_type: Literal["success", "failure", "success_and_failure"]
+    callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
+        "success_and_failure"
+    )
     callback_vars: Dict[str, str]
 
     @model_validator(mode="before")
@@ -1020,11 +1022,13 @@ class AddTeamCallback(LiteLLMBase):
     def validate_callback_vars(cls, values):
         callback_vars = values.get("callback_vars", {})
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
-        for key in callback_vars:
+        for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(
                     f"Invalid callback variable: {key}. Must be one of {valid_keys}"
                 )
+            if not isinstance(value, str):
+                callback_vars[key] = str(value)
         return values
 
 
