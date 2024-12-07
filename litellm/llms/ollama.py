@@ -295,6 +295,7 @@ def get_ollama_response(
             optional_params[k] = v
 
     stream = optional_params.pop("stream", False)
+    keep_alive = optional_params.pop("keep_alive", None)
     format = optional_params.pop("format", None)
     images = optional_params.pop("images", None)
     data = {
@@ -307,6 +308,8 @@ def get_ollama_response(
         data["format"] = format
     if images is not None:
         data["images"] = [_convert_image(image) for image in images]
+    if keep_alive is not None:
+        data["keep_alive"] = keep_alive
 
     ## LOGGING
     logging_obj.pre_call(
