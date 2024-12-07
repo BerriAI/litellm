@@ -454,8 +454,11 @@ class ProxyLogging:
             "image_generation",
             "moderation",
             "audio_transcription",
-            "pass_through_endpoint",
             "rerank",
+            "pass_through_endpoint",
+            "pass_through_endpoint",
+            "rerank", 
+            "pass_through_endpoint",
         ],
     ) -> None:
         pass
@@ -632,6 +635,7 @@ class ProxyLogging:
             "team_budget",
             "proxy_budget",
             "projected_limit_exceeded",
+            "soft_budget_exceeded",
         ],
         user_info: CallInfo,
     ):
@@ -1460,6 +1464,7 @@ class PrismaClient:
                 "team",
                 "user_notification",
                 "combined_view",
+                "organization",
             ]
         ] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
