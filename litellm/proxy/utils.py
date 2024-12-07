@@ -2893,7 +2893,7 @@ async def update_spend(  # noqa: PLR0915
     MAX_LOGS_PER_INTERVAL = 1000  # Maximum number of logs to flush in a single interval
 
     if len(prisma_client.spend_log_transactions) > 0:
-        for _ in range(n_retry_times + 1):
+        for i in range(n_retry_times + 1):
             start_time = time.time()
             try:
                 base_url = os.getenv("SPEND_LOGS_URL", None)
@@ -2917,9 +2917,9 @@ async def update_spend(  # noqa: PLR0915
                     logs_to_process = prisma_client.spend_log_transactions[
                         :MAX_LOGS_PER_INTERVAL
                     ]
-                    for i in range(0, len(logs_to_process), BATCH_SIZE):
+                    for j in range(0, len(logs_to_process), BATCH_SIZE):
                         # Create sublist for current batch, ensuring it doesn't exceed the BATCH_SIZE
-                        batch = logs_to_process[i : i + BATCH_SIZE]
+                        batch = logs_to_process[j : j + BATCH_SIZE]
 
                         # Convert datetime strings to Date objects
                         batch_with_dates = [
