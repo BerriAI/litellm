@@ -36,6 +36,7 @@ class JWTHandler:
         self,
     ) -> None:
         self.http_handler = HTTPHandler()
+        self.leeway = 0
 
     def update_environment(
         self,
