@@ -423,3 +423,12 @@ class DualCache(BaseCache):
             self.in_memory_cache.delete_cache(key)
         if self.redis_cache is not None:
             await self.redis_cache.async_delete_cache(key)
+
+    async def async_get_ttl(self, key: str) -> Optional[int]:
+        """
+        Get the remaining TTL of a key in in-memory cache or redis
+        """
+        ttl = await self.in_memory_cache.async_get_ttl(key)
+        if ttl is None and self.redis_cache is not None:
+            ttl = await self.redis_cache.async_get_ttl(key)
+        return ttl
