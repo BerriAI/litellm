@@ -737,7 +737,9 @@ class Router:
                 model_client = potential_model_client
 
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
-            self.routing_strategy_pre_call_checks(deployment=deployment)
+            ## only run if model group given, not model id
+            if model not in self.get_model_ids():
+                self.routing_strategy_pre_call_checks(deployment=deployment)
 
             response = litellm.completion(
                 **{
@@ -2787,8 +2789,10 @@ class Router:
                         *args,
                         **input_kwargs,
                     )
+
                     return response
             except Exception as new_exception:
+                traceback.print_exc()
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 verbose_router_logger.error(
                     "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
@@ -5190,7 +5194,6 @@ class Router:
         - List, if multiple models chosen
         - Dict, if specific model chosen
         """
-
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
             return model, self._get_deployment_by_litellm_model(model=model)
