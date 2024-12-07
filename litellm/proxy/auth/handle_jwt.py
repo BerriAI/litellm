@@ -36,16 +36,19 @@ class JWTHandler:
         self,
     ) -> None:
         self.http_handler = HTTPHandler()
+        self.leeway = 0
 
     def update_environment(
         self,
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         litellm_jwtauth: LiteLLM_JWTAuth,
+        leeway: int = 0,
     ) -> None:
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
+        self.leeway = leeway
 
     def is_jwt(self, token: str):
         parts = token.split(".")
@@ -271,6 +274,7 @@ class JWTHandler:
                     algorithms=algorithms,
                     options=decode_options,
                     audience=audience,
+                    leeway=self.leeway,  # allow testing of expired tokens
                 )
                 return payload
 

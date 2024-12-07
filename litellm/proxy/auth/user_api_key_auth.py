@@ -562,6 +562,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     user_id=user_id,
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
+                    end_user_id=end_user_id,
                 )
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##

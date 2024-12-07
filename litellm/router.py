@@ -83,6 +83,9 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
     run_sync_fallback,
 )
+from litellm.router_utils.get_retry_from_policy import (
+    get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
+)
 from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
@@ -5609,53 +5612,12 @@ class Router:
     def get_num_retries_from_retry_policy(
         self, exception: Exception, model_group: Optional[str] = None
     ):
-        """
-        BadRequestErrorRetries: Optional[int] = None
-        AuthenticationErrorRetries: Optional[int] = None
-        TimeoutErrorRetries: Optional[int] = None
-        RateLimitErrorRetries: Optional[int] = None
-        ContentPolicyViolationErrorRetries: Optional[int] = None
-        """
-        # if we can find the exception then in the retry policy -> return the number of retries
-        retry_policy: Optional[RetryPolicy] = self.retry_policy
-
-        if (
-            self.model_group_retry_policy is not None
-            and model_group is not None
-            and model_group in self.model_group_retry_policy
-        ):
-            retry_policy = self.model_group_retry_policy.get(model_group, None)  # type: ignore
-
-        if retry_policy is None:
-            return None
-        if isinstance(retry_policy, dict):
-            retry_policy = RetryPolicy(**retry_policy)
-
-        if (
-            isinstance(exception, litellm.BadRequestError)
-            and retry_policy.BadRequestErrorRetries is not None
-        ):
-            return retry_policy.BadRequestErrorRetries
-        if (
-            isinstance(exception, litellm.AuthenticationError)
-            and retry_policy.AuthenticationErrorRetries is not None
-        ):
-            return retry_policy.AuthenticationErrorRetries
-        if (
-            isinstance(exception, litellm.Timeout)
-            and retry_policy.TimeoutErrorRetries is not None
-        ):
-            return retry_policy.TimeoutErrorRetries
-        if (
-            isinstance(exception, litellm.RateLimitError)
-            and retry_policy.RateLimitErrorRetries is not None
-        ):
-            return retry_policy.RateLimitErrorRetries
-        if (
-            isinstance(exception, litellm.ContentPolicyViolationError)
-            and retry_policy.ContentPolicyViolationErrorRetries is not None
-        ):
-            return retry_policy.ContentPolicyViolationErrorRetries
+        return _get_num_retries_from_retry_policy(
+            exception=exception,
+            model_group=model_group,
+            model_group_retry_policy=self.model_group_retry_policy,
+            retry_policy=self.retry_policy,
+        )
 
     def get_allowed_fails_from_policy(self, exception: Exception):
         """

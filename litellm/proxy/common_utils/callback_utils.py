@@ -48,7 +48,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 imported_list.append(open_telemetry_logger)
                 setattr(proxy_server, "open_telemetry_logger", open_telemetry_logger)
             elif isinstance(callback, str) and callback == "presidio":
-                from litellm.proxy.hooks.presidio_pii_masking import (
+                from litellm.proxy.guardrails.guardrail_hooks.presidio import (
                     _OPTIONAL_PresidioPIIMasking,
                 )
 
