@@ -278,3 +278,25 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
+
+
+def test_completion_bad_org():
+    import litellm
+
+    litellm.set_verbose = True
+    _old_org = os.environ.get("OPENAI_ORGANIZATION", None)
+    os.environ["OPENAI_ORGANIZATION"] = "bad-org"
+    messages = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(Exception) as exc_info:
+        comp = litellm.completion(
+            model="gpt-4o-mini", messages=messages, organization="bad-org"
+        )
+
+    print(exc_info.value)
+    assert "No such organization: bad-org" in str(exc_info.value)
+
+    if _old_org is not None:
+        os.environ["OPENAI_ORGANIZATION"] = _old_org
+    else:
+        del os.environ["OPENAI_ORGANIZATION"]
