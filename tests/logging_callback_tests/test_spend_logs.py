@@ -45,6 +45,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 {"role": "system", "content": "you are a helpful assistant.\n"},
                 {"role": "user", "content": "bom dia"},
             ],
+            "custom_llm_provider": "azure",
             "optional_params": {
                 "stream": False,
                 "max_tokens": 10,
@@ -210,6 +211,8 @@ def test_spend_logs_payload(model_id: Optional[str]):
     assert (
         payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
     )
+
+    assert payload["custom_llm_provider"] == "azure"
 
 
 def test_spend_logs_payload_whisper():
