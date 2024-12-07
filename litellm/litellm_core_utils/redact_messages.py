@@ -98,10 +98,6 @@ def redact_message_input_output_from_logging(
     ):
         return result
 
-    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-        model_call_details.get("standard_callback_dynamic_params", None)
-    )
-
     # user has OPTED OUT of message redaction
     if _get_turn_off_message_logging_from_dynamic_params(model_call_details) is False:
         return result
