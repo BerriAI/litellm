@@ -149,6 +149,7 @@ from litellm.utils import (
     get_llm_provider,
     get_secret,
     get_utc_datetime,
+    is_prompt_caching_valid_prompt,
     is_region_allowed,
 )
 
@@ -3385,14 +3386,24 @@ class Router:
                 prompt_cache = PromptCachingCache(
                     cache=self.cache,
                 )
-                if standard_logging_object["messages"] is not None and isinstance(
-                    standard_logging_object["messages"], list
+                if (
+                    standard_logging_object["messages"] is not None
+                    and isinstance(standard_logging_object["messages"], list)
+                    and deployment_name is not None
+                    and isinstance(deployment_name, str)
                 ):
-                    await prompt_cache.async_add_model_id(
+                    valid_prompt = is_prompt_caching_valid_prompt(
                         messages=standard_logging_object["messages"],  # type: ignore
                         tools=None,
-                        model_id=id,
+                        model=deployment_name,
+                        custom_llm_provider=None,
                     )
+                    if valid_prompt:
+                        await prompt_cache.async_add_model_id(
+                            model_id=id,
+                            messages=standard_logging_object["messages"],  # type: ignore
+                            tools=None,
+                        )
 
                 return tpm_key
 

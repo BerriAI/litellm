@@ -598,8 +598,14 @@ def test_is_prompt_caching_enabled(anthropic_messages):
     )
 
 
+@pytest.mark.parametrize(
+    "messages, expected_model_id",
+    [("anthropic_messages", True), ("normal_messages", False)],
+)
 @pytest.mark.asyncio()
-async def test_router_prompt_caching_model_stored(anthropic_messages):
+async def test_router_prompt_caching_model_stored(
+    messages, expected_model_id, anthropic_messages
+):
     """
     If a model is called with prompt caching supported, then the model id should be stored in the router cache.
     """
@@ -620,9 +626,14 @@ async def test_router_prompt_caching_model_stored(anthropic_messages):
         ]
     )
 
+    if messages == "anthropic_messages":
+        _messages = anthropic_messages
+    else:
+        _messages = [{"role": "user", "content": "Hello"}]
+
     await router.acompletion(
         model="claude-model",
-        messages=anthropic_messages,
+        messages=_messages,
         mock_response="The sky is blue.",
     )
     await asyncio.sleep(1)
@@ -630,9 +641,12 @@ async def test_router_prompt_caching_model_stored(anthropic_messages):
         cache=router.cache,
     )
 
-    existing_model_id = cache.get_model_id(messages=anthropic_messages, tools=None)
+    cached_model_id = cache.get_model_id(messages=_messages, tools=None)
 
-    assert existing_model_id["model_id"] == "1234"
+    if expected_model_id:
+        assert cached_model_id["model_id"] == "1234"
+    else:
+        assert cached_model_id is None
 
 
 # def test_router_with_prompt_caching(anthropic_messages):
