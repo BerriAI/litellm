@@ -33,6 +33,39 @@ def test_map_openai_params_tool_choice():
     assert result == {"tool_choice": None}
 
 
+def test_map_response_format():
+    """
+    Test that the response format is translated correctly.
+
+    h/t to https://github.com/DaveDeCaprio (@DaveDeCaprio) for the test case
+    """
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": {
+                "properties": {"result": {"type": "boolean"}},
+                "required": ["result"],
+                "type": "object",
+            },
+            "name": "BooleanResponse",
+            "strict": True,
+        },
+    }
+    result = fireworks.map_openai_params(
+        {"response_format": response_format}, {}, "some_model"
+    )
+    assert result == {
+        "response_format": {
+            "type": "json_object",
+            "schema": {
+                "properties": {"result": {"type": "boolean"}},
+                "required": ["result"],
+                "type": "object",
+            },
+        }
+    }
+
+
 class TestFireworksAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
