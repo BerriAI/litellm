@@ -2370,7 +2370,16 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             module = importlib.util.module_from_spec(spec)  # type: ignore
             spec.loader.exec_module(module)  # type: ignore
         else:
-            # Dynamically import the module
+            # Only allow importing from a whitelist of safe modules
+            allowed_modules = {
+                "litellm.proxy.hooks",  # Allow importing custom hooks
+                "litellm.proxy.enterprise.enterprise_hooks",  # Allow enterprise hooks
+                "litellm.integrations" # Allow litellm integrations
+            }
+            
+            if not any(module_name.startswith(allowed) for allowed in allowed_modules):
+                raise ImportError(f"Import not allowed for security reasons. Module must be from: {allowed_modules}")
+                
             module = importlib.import_module(module_name)
 
         # Get the instance from the module
