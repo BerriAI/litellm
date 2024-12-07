@@ -88,6 +88,7 @@ from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
+from ..integrations.keywordsai import KeywordsAILogger
 from .exception_mapping_utils import _get_response_headers
 from .logging_utils import _assemble_complete_response_from_streaming_chunks
 
@@ -118,6 +119,7 @@ weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
 openMeterLogger = None
+keywordsaiLogger = None
 lagoLogger = None
 dataDogLogger = None
 prometheusLogger = None
@@ -1116,6 +1118,29 @@ class Logging:
                             print_verbose=print_verbose,
                             kwargs=kwargs,
                         )
+                    if callback == "keywordsai" and keywordsaiLogger is not None:
+                        print_verbose("reaches keywordsai for logging!")
+                        model = self.model
+                        messages = self.model_call_details["input"]
+                        kwargs = self.model_call_details
+
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                continue
+                            else:
+                                print_verbose("reaches keywordsai for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
+                        keywordsaiLogger.log_success(
+                            model=model,
+                            messages=messages,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                            kwargs=kwargs,
+                        )
                     if callback == "langfuse":
                         global langFuseLogger
                         print_verbose("reaches langfuse for success logging!")
@@ -2043,7 +2068,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, keywordsaiLogger
 
     try:
         for callback in callback_list:
@@ -2129,6 +2154,8 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
             elif callback == "greenscale":
                 greenscaleLogger = GreenscaleLogger()
                 print_verbose("Initialized Greenscale Logger")
+            elif callback == "keywordsai":
+                keywordsaiLogger = KeywordsAILogger()
             elif callable(callback):
                 customLogger = CustomLogger()
     except Exception as e:
@@ -2451,6 +2478,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):
+                return callback
+    elif logging_integration == "keywordsai":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, KeywordsAILogger):
                 return callback
 
     return None
