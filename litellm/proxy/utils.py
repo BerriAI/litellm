@@ -451,14 +451,11 @@ class ProxyLogging:
             "completion",
             "text_completion",
             "embeddings",
-            "image_generation",
+            "image_generation", 
             "moderation",
             "audio_transcription",
             "rerank",
-            "pass_through_endpoint",
-            "pass_through_endpoint",
-            "rerank", 
-            "pass_through_endpoint",
+            "pass_through_endpoint"
         ],
     ) -> None:
         pass
@@ -571,10 +568,12 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
-            "embeddings",
+            "embeddings", 
             "image_generation",
             "moderation",
             "audio_transcription",
+            "rerank",
+            "pass_through_endpoint"
         ],
     ):
         """
