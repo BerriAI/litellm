@@ -508,6 +508,7 @@ class ProxyLogging:
 
         try:
             for callback in litellm.callbacks:
+
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -515,7 +516,6 @@ class ProxyLogging:
                     )
                 else:
                     _callback = callback  # type: ignore
-
                 if _callback is not None and isinstance(_callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
 
