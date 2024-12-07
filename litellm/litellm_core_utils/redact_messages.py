@@ -90,6 +90,8 @@ def redact_message_input_output_from_logging(
     if (
         litellm.turn_off_message_logging is not True
         and request_headers.get("litellm-enable-message-redaction", False) is not True
+        and _get_turn_off_message_logging_from_dynamic_params(model_call_details)
+        is not True
     ):
         return result
 

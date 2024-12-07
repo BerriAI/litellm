@@ -87,15 +87,34 @@ async def test_global_redaction_with_dynamic_params(turn_off_message_logging):
         assert standard_logging_payload["messages"][0]["content"] == "hi"
 
 
-# @pytest.mark.parametrize("turn_off_message_logging", [True, False])
-# @pytest.mark.asyncio
-# async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging):
-#     litellm.turn_off_message_logging = False
-#     test_custom_logger = TestCustomLogger()
-#     litellm.callbacks = [test_custom_logger]
-#     response = await litellm.acompletion(
-#         model="gpt-3.5-turbo",
-#         messages=[{"role": "user", "content": "hi"}],
-#         turn_off_message_logging=turn_off_message_logging,
-#         mock_response="hello",
-#     )
+@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+@pytest.mark.asyncio
+async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging):
+    litellm.turn_off_message_logging = False
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        turn_off_message_logging=turn_off_message_logging,
+        mock_response="hello",
+    )
+
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    print(
+        "logged standard logging payload",
+        json.dumps(standard_logging_payload, indent=2),
+    )
+    if turn_off_message_logging is True:
+        assert standard_logging_payload["response"] == "redacted-by-litellm"
+        assert (
+            standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+        )
+    else:
+        assert (
+            standard_logging_payload["response"]["choices"][0]["message"]["content"]
+            == "hello"
+        )
+        assert standard_logging_payload["messages"][0]["content"] == "hi"
