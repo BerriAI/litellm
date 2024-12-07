@@ -2356,7 +2356,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         return langfuse_logger  # type: ignore
 
 
-def get_custom_logger_compatible_class(
+def get_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     if logging_integration == "lago":
