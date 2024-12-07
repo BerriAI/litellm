@@ -297,6 +297,83 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
 
 @pytest.mark.parametrize(
+    "callback_vars",
+    [
+        {
+            "turn_off_message_logging": True,
+        },
+        {
+            "turn_off_message_logging": False,
+        },
+    ],
+)
+def test_dynamic_turn_off_message_logging(callback_vars):
+    user_api_key_dict = UserAPIKeyAuth(
+        token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
+        key_name="sk-...63Fg",
+        key_alias=None,
+        spend=0.000111,
+        max_budget=None,
+        expires=None,
+        models=[],
+        aliases={},
+        config={},
+        user_id=None,
+        team_id="ishaan-special-team_e02dd54f-f790-4755-9f93-73734f415898",
+        max_parallel_requests=None,
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "datadog",
+                    "callback_vars": callback_vars,
+                }
+            ]
+        },
+        tpm_limit=None,
+        rpm_limit=None,
+        budget_duration=None,
+        budget_reset_at=None,
+        allowed_cache_controls=[],
+        permissions={},
+        model_spend={},
+        model_max_budget={},
+        soft_budget_cooldown=False,
+        litellm_budget_table=None,
+        org_id=None,
+        team_spend=0.000132,
+        team_alias=None,
+        team_tpm_limit=None,
+        team_rpm_limit=None,
+        team_max_budget=None,
+        team_models=[],
+        team_blocked=False,
+        soft_budget=None,
+        team_model_aliases=None,
+        team_member_spend=None,
+        team_member=None,
+        team_metadata={},
+        end_user_id=None,
+        end_user_tpm_limit=None,
+        end_user_rpm_limit=None,
+        end_user_max_budget=None,
+        last_refreshed_at=1726101560.967527,
+        api_key="7c305cc48fe72272700dc0d67dc691c2d1f2807490ef5eb2ee1d3a3ca86e12b1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_model_region=None,
+        parent_otel_span=None,
+        rpm_limit_per_model=None,
+        tpm_limit_per_model=None,
+    )
+    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+
+    assert callbacks is not None
+    assert (
+        callbacks.callback_vars["turn_off_message_logging"]
+        == callback_vars["turn_off_message_logging"]
+    )
+
+
+@pytest.mark.parametrize(
     "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
 )
 def test_is_request_body_safe_global_enabled(
