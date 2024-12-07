@@ -30,6 +30,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.litellm_core_utils.redact_messages import (
+    _run_redaction_for_callback,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
@@ -39,9 +40,11 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
     CallTypes,
+    DynamicCallbackSettings,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    PreRedactionFields,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -281,6 +284,7 @@ class Logging:
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
         }
+        self.pre_redaction_fields = PreRedactionFields()
 
     def process_dynamic_callbacks(self):
         """
@@ -381,6 +385,13 @@ class Logging:
                     ):
                         _param_value = get_secret_str(secret_name=_param_value)
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
+                    if param == "dynamic_callback_settings" and isinstance(
+                        _param_value, dict
+                    ):
+                        standard_callback_dynamic_params[param] = (
+                            DynamicCallbackSettings(**_param_value)
+                        )
+
         return standard_callback_dynamic_params
 
     def update_environment_variables(
@@ -656,6 +667,7 @@ class Logging:
                     else {}
                 ),
                 result=original_response,
+                litellm_logging_obj=self,
             )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
@@ -951,6 +963,7 @@ class Logging:
                     else {}
                 ),
                 result=result,
+                litellm_logging_obj=self,
             )
 
             ## LOGGING HOOK ##
@@ -964,6 +977,7 @@ class Logging:
 
             for callback in callbacks:
                 try:
+                    self._init_model_call_details_before_running_callbacks()
                     litellm_params = self.model_call_details.get("litellm_params", {})
                     if litellm_params.get("no-log", False) is True:
                         # proxy cost tracking cal backs should run
@@ -1474,6 +1488,7 @@ class Logging:
                 self.model_call_details if hasattr(self, "model_call_details") else {}
             ),
             result=result,
+            litellm_logging_obj=self,
         )
 
         ## LOGGING HOOK ##
@@ -1509,6 +1524,9 @@ class Logging:
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
+
+            self._init_model_call_details_before_running_callbacks()
+
             if litellm_params.get("no-log", False) is True:
                 # proxy cost tracking cal backs should run
                 if not (
@@ -1517,6 +1535,13 @@ class Logging:
                 ):
                     print_verbose("no-log request, skipping logging")
                     continue
+
+            _run_redaction_for_callback(
+                callback=callback,
+                model_call_details=self.model_call_details,
+                result=result,
+                litellm_logging_obj=self,
+            )
             try:
                 if kwargs.get("no-log", False) is True:
                     print_verbose("no-log request, skipping logging")
@@ -1748,6 +1773,7 @@ class Logging:
                     else {}
                 ),
                 result=result,
+                litellm_logging_obj=self,
             )
             for callback in callbacks:
                 try:
@@ -2015,6 +2041,28 @@ class Logging:
             return langFuseLogger
 
         return None
+
+    def _init_model_call_details_before_running_callbacks(
+        self,
+    ):
+        """
+        Initialize self.model_call_details with a fresh copy of logging data before running callbacks
+        """
+        self.model_call_details["messages"] = copy.copy(
+            self.pre_redaction_fields.get("messages", None)
+        )
+        self.model_call_details["prompt"] = copy.copy(
+            self.pre_redaction_fields.get("prompt", None)
+        )
+        self.model_call_details["input"] = copy.copy(
+            self.pre_redaction_fields.get("input", None)
+        )
+        self.model_call_details["response"] = copy.copy(
+            self.pre_redaction_fields.get("response", None)
+        )
+        self.model_call_details["standard_logging_object"] = copy.copy(
+            self.model_call_details.get("standard_logging_object", None)
+        )
 
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
@@ -2985,3 +3033,17 @@ def get_combined_callback_list(
     if dynamic_success_callbacks is None:
         return global_callbacks
     return list(set(dynamic_success_callbacks + global_callbacks))
+
+
+def map_custom_logger_to_callback_name(callback: Union[CustomLogger, str]) -> str:
+    if isinstance(callback, str):
+        return callback
+    class_to_callback_name = {
+        DataDogLogger.__name__: "datadog",
+        DataDogLLMObsLogger.__name__: "datadog_llm_observability",
+        LangsmithLogger.__name__: "langsmith",
+        GCSBucketLogger.__name__: "gcs_bucket",
+    }
+
+    custom_logger_class = callback.__class__.__name__
+    return class_to_callback_name.get(custom_logger_class, "")
