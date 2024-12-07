@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
@@ -102,13 +103,32 @@ def redact_message_input_output_from_logging(
     )
 
     # user has OPTED OUT of message redaction
-    if (
-        standard_callback_dynamic_params
-        and standard_callback_dynamic_params.get("turn_off_message_logging") is False
-    ):
+    if _get_turn_off_message_logging_from_dynamic_params(model_call_details) is False:
         return result
 
     return perform_redaction(model_call_details, result)
+
+
+def _get_turn_off_message_logging_from_dynamic_params(
+    model_call_details: dict,
+) -> Optional[bool]:
+    """
+    gets the value of `turn_off_message_logging` from the dynamic params, if it exists.
+
+    handles boolean and string values of `turn_off_message_logging`
+    """
+    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+        model_call_details.get("standard_callback_dynamic_params", None)
+    )
+    if standard_callback_dynamic_params:
+        _turn_off_message_logging = standard_callback_dynamic_params.get(
+            "turn_off_message_logging"
+        )
+        if isinstance(_turn_off_message_logging, bool):
+            return _turn_off_message_logging
+        elif isinstance(_turn_off_message_logging, str):
+            return str_to_bool(_turn_off_message_logging)
+    return None
 
 
 def redact_user_api_key_info(metadata: dict) -> dict:
