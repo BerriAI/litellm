@@ -33,6 +33,9 @@ from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.argilla import ArgillaLogger
+from litellm.integrations.langfuse.langfuse_prompt_management import (
+    LangfusePromptManagement,
+)
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
 
@@ -61,6 +64,7 @@ callback_class_str_to_classType = {
     "arize": OpenTelemetry,
     "langtrace": OpenTelemetry,
     "mlflow": MlflowLogger,
+    "langfuse": LangfusePromptManagement,
 }
 
 expected_env_vars = {
