@@ -21,6 +21,7 @@ from litellm.caching.caching import DualCache, RedisCache
 import logging
 from litellm._logging import verbose_router_logger
 import litellm
+from datetime import timezone, timedelta
 
 verbose_router_logger.setLevel(logging.DEBUG)
 
@@ -476,3 +477,89 @@ async def test_sync_in_memory_spend_with_redis():
 
     assert float(openai_spend) == 50.0
     assert float(anthropic_spend) == 75.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_provider_spend():
+    """
+    Test _get_current_provider_spend helper method
+
+    Scenarios:
+    1. Provider with no budget config returns None
+    2. Provider with budget config but no spend returns 0.0
+    3. Provider with budget config and spend returns correct value
+    """
+    cleanup_redis()
+    provider_budget = ProviderBudgetLimiting(
+        router_cache=DualCache(),
+        provider_budget_config={
+            "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+        },
+    )
+
+    # Test provider with no budget config
+    spend = await provider_budget._get_current_provider_spend("anthropic")
+    assert spend is None
+
+    # Test provider with budget config but no spend
+    spend = await provider_budget._get_current_provider_spend("openai")
+    assert spend == 0.0
+
+    # Test provider with budget config and spend
+    spend_key = "provider_spend:openai:1d"
+    await provider_budget.router_cache.async_set_cache(key=spend_key, value=50.5)
+
+    spend = await provider_budget._get_current_provider_spend("openai")
+    assert spend == 50.5
+
+
+@pytest.mark.asyncio
+async def test_get_current_provider_budget_reset_at():
+    """
+    Test _get_current_provider_budget_reset_at helper method
+
+    Scenarios:
+    1. Provider with no budget config returns None
+    2. Provider with budget config but no TTL returns None
+    3. Provider with budget config and TTL returns correct ISO timestamp
+    """
+    cleanup_redis()
+    provider_budget = ProviderBudgetLimiting(
+        router_cache=DualCache(
+            redis_cache=RedisCache(
+                host=os.getenv("REDIS_HOST"),
+                port=int(os.getenv("REDIS_PORT")),
+                password=os.getenv("REDIS_PASSWORD"),
+            )
+        ),
+        provider_budget_config={
+            "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+            "vertex_ai": ProviderBudgetInfo(time_period="1h", budget_limit=100),
+        },
+    )
+
+    await asyncio.sleep(2)
+
+    # Test provider with no budget config
+    reset_at = await provider_budget._get_current_provider_budget_reset_at("anthropic")
+    assert reset_at is None
+
+    # Test provider with budget config but no TTL
+    reset_at = await provider_budget._get_current_provider_budget_reset_at("openai")
+    assert reset_at is not None
+    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
+    expected_time = datetime.now(timezone.utc) + timedelta(seconds=(24 * 60 * 60))
+    time_difference = abs((reset_time - expected_time).total_seconds())
+    assert time_difference < 5
+
+    # Test provider with budget config and TTL
+    reset_at = await provider_budget._get_current_provider_budget_reset_at("vertex_ai")
+    assert reset_at is not None
+
+    # Verify the timestamp format and approximate time
+    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
+    expected_time = datetime.now(timezone.utc) + timedelta(seconds=3600)
+
+    # Allow for small time differences (within 5 seconds)
+    time_difference = abs((reset_time - expected_time).total_seconds())
+    assert time_difference < 5

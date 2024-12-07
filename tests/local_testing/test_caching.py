@@ -2478,3 +2478,51 @@ async def test_redis_increment_pipeline():
     except Exception as e:
         print(f"Error occurred: {str(e)}")
         raise e
+
+
+@pytest.mark.asyncio
+async def test_redis_get_ttl():
+    """
+    Test Redis get TTL functionality
+
+    Redis returns -2 if the key does not exist and -1 if the key exists but has no associated expire.
+
+    test that litellm redis caching wrapper handles -1 and -2 values and returns them as None
+    """
+    try:
+        from litellm.caching.redis_cache import RedisCache
+
+        redis_cache = RedisCache(
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+        )
+
+        # Test case 1: Key does not exist
+        result = await redis_cache.async_get_ttl("nonexistent_key")
+        print("ttl for nonexistent key: ", result)
+        assert result is None, f"Expected None for nonexistent key, got {result}"
+
+        # Test case 2: Key exists with TTL
+        test_key = "test_key_ttl"
+        test_value = "test_value"
+        ttl = 10  # 10 seconds TTL
+
+        # Set a key with TTL
+        _redis_client = await redis_cache.init_async_client()
+        async with _redis_client as redis_client:
+            await redis_client.set(test_key, test_value, ex=ttl)
+
+            # Get TTL and verify it's close to what we set
+            result = await redis_cache.async_get_ttl(test_key)
+            print("ttl for test_key: ", result)
+            assert (
+                result is not None and 0 <= result <= ttl
+            ), f"Expected TTL between 0 and {ttl}, got {result}"
+
+            # Clean up
+            await redis_client.delete(test_key)
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise e

@@ -8,10 +8,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -2464,3 +2466,92 @@ async def global_predict_spend_logs(request: Request):
     data = await request.json()
     data = data.get("data")
     return _forecast_daily_cost(data)
+
+
+@router.get("/provider/budgets", response_model=ProviderBudgetResponse)
+async def provider_budgets() -> ProviderBudgetResponse:
+    """
+    Provider Budget Routing - Get Budget, Spend Details https://docs.litellm.ai/docs/proxy/provider_budget_routing
+
+    Use this endpoint to check current budget, spend and budget reset time for a provider
+
+    Example Request
+
+    ```bash
+    curl -X GET http://localhost:4000/provider/budgets \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Response
+
+    ```json
+    {
+        "providers": {
+            "openai": {
+                "budget_limit": 1e-12,
+                "time_period": "1d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "azure": {
+                "budget_limit": 100.0,
+                "time_period": "1d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "anthropic": {
+                "budget_limit": 100.0,
+                "time_period": "10d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "vertex_ai": {
+                "budget_limit": 100.0,
+                "time_period": "12d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            }
+        }
+    }
+    ```
+
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500, detail={"error": "No llm_router found"}
+            )
+
+        provider_budget_config = llm_router.provider_budget_config
+        if provider_budget_config is None:
+            raise ValueError(
+                "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
+            )
+
+        provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
+        for _provider, _budget_info in provider_budget_config.items():
+            _provider_spend = (
+                await llm_router.provider_budget_logger._get_current_provider_spend(
+                    _provider
+                )
+                or 0.0
+            )
+            _provider_budget_ttl = await llm_router.provider_budget_logger._get_current_provider_budget_reset_at(
+                _provider
+            )
+            provider_budget_response_object = ProviderBudgetResponseObject(
+                budget_limit=_budget_info.budget_limit,
+                time_period=_budget_info.time_period,
+                spend=_provider_spend,
+                budget_reset_at=_provider_budget_ttl,
+            )
+            provider_budget_response_dict[_provider] = provider_budget_response_object
+        return ProviderBudgetResponse(providers=provider_budget_response_dict)
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/provider/budgets: Exception occured - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(e)
