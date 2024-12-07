@@ -97,6 +97,10 @@ from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.router_utils.get_retry_from_policy import (
+    get_num_retries_from_retry_policy,
+    reset_retry_policy,
+)
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -918,6 +922,14 @@ def client(original_function):  # noqa: PLR0915
                 num_retries = (
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
+                if kwargs.get("retry_policy", None):
+                    num_retries = get_num_retries_from_retry_policy(
+                        exception=e,
+                        retry_policy=kwargs.get("retry_policy"),
+                    )
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1137,6 +1149,13 @@ def client(original_function):  # noqa: PLR0915
                 num_retries = (
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
+                if kwargs.get("retry_policy", None):
+                    num_retries = get_num_retries_from_retry_policy(
+                        exception=e,
+                        retry_policy=kwargs.get("retry_policy"),
+                    )
+                    kwargs["retry_policy"] = reset_retry_policy()
+
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
