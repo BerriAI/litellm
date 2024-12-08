@@ -22,11 +22,11 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_cha
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
+from litellm.llms.azure.cost_calculation import (
+    cost_per_token as azure_openai_cost_per_token,
+)
 from litellm.llms.azure_ai.cost_calculator import (
     cost_per_query as azure_ai_rerank_cost_per_query,
-)
-from litellm.llms.AzureOpenAI.cost_calculation import (
-    cost_per_token as azure_openai_cost_per_token,
 )
 from litellm.llms.bedrock.image.cost_calculator import (
     cost_calculator as bedrock_image_cost_calculator,

@@ -102,12 +102,12 @@ from .llms import (
 from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
+from .llms.azure.audio_transcriptions import AzureAudioTranscription
+from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure_ai.chat import AzureAIChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.azure_text import AzureTextCompletion
-from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
-from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
-from .llms.AzureOpenAI.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
