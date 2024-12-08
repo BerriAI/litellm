@@ -723,7 +723,7 @@ class KeyRequest(LiteLLMBase):
 
 
 class LiteLLM_ModelTable(LiteLLMBase):
-    model_aliases: Optional[str] = None  # json dump the dict
+    model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
     created_by: str
     updated_by: str
 
@@ -981,6 +981,7 @@ class UpdateTeamRequest(LiteLLMBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
+    model_aliases: Optional[dict] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMBase):
@@ -1059,6 +1060,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
+    litellm_model_table: Optional[LiteLLM_ModelTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 

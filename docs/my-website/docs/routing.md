@@ -1130,7 +1130,7 @@ router_settings:
 
 If a call fails after num_retries, fall back to another model group. 
 
-### Quick Start 
+#### Quick Start 
 
 ```python
 from litellm import Router 
@@ -1365,6 +1365,7 @@ litellm --config /path/to/config.yaml
 
 </TabItem>
 </Tabs>
+
 
 ### Caching
 

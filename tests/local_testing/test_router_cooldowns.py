@@ -560,3 +560,34 @@ Unit tests for router set_cooldowns
 
 1. _set_cooldown_deployments() will cooldown a deployment after it fails 50% requests
 """
+
+
+def test_router_fallbacks_with_cooldowns_and_model_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"gpt-3.5-turbo": ["123"]}],
+    )
+
+    ## trigger ratelimit
+    try:
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.RateLimitError",
+        )
+    except litellm.RateLimitError:
+        pass
+
+    router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+    )
