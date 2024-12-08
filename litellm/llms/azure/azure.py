@@ -876,7 +876,6 @@ class AzureChatCompletion(BaseLLM):
         aembedding=None,
     ) -> litellm.EmbeddingResponse:
         super().embedding()
-
         if self._client_session is None:
             self._client_session = self.create_client_session()
         try:
