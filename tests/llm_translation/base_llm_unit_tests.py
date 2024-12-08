@@ -83,6 +83,8 @@ class BaseLLMChatTest(ABC):
         assert response.choices[0].message.content is not None
 
     def test_pydantic_model_input(self):
+        litellm.set_verbose = True
+
         from litellm import completion, Message
 
         base_completion_call_args = self.get_base_completion_call_args()
