@@ -626,6 +626,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 
+<TabItem value="langtrace" label="Log to Langtrace Cloud">
+
+#### Quick Start - Log to Langtrace
+
+**Step 1:**
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="https://app.langtrace.ai"
+OTEL_HEADERS="x-api-key=<your-api-key>"
+```
+
+**Step 2:** Add `otel` as a callbacks
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
 <TabItem value="traceloop" label="Log to Traceloop Cloud">
 
 #### Quick Start - Log to Traceloop
