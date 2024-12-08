@@ -1,12 +1,10 @@
 #### Analytics Endpoints #####
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -53,7 +51,6 @@ async def get_global_activity(
         "sum_llm_api_calls": 2012
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -64,7 +61,7 @@ async def get_global_activity(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:

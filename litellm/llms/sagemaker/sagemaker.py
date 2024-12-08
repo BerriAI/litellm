@@ -1,30 +1,17 @@
-import io
 import json
-import os
-import sys
 import time
-import traceback
 import types
 from copy import deepcopy
-from enum import Enum
-from functools import partial
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
-)
-from litellm.types.llms.openai import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk

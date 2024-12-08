@@ -1,8 +1,5 @@
 import importlib
-import traceback
-from typing import Dict, List, Literal, Optional
-
-from pydantic import BaseModel, RootModel
+from typing import Dict, List, Optional
 
 import litellm
 from litellm import get_secret
@@ -238,8 +235,6 @@ def init_guardrails_v2(  # noqa: PLR0915
                     "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
                 )
             import os
-
-            from litellm.proxy.utils import get_instance_fn
 
             # Custom guardrail
             _guardrail = litellm_params["guardrail"]

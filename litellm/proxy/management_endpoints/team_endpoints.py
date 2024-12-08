@@ -10,7 +10,6 @@ All /team management endpoints
 """
 
 import asyncio
-import copy
 import json
 import traceback
 import uuid
@@ -40,7 +39,6 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamAddMemberResponse,
-    TeamBase,
     TeamInfoResponseObject,
     TeamListResponseObject,
     TeamMemberAddRequest,
@@ -54,7 +52,7 @@ from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     get_team_object,
 )
-from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -709,12 +707,7 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -829,12 +822,7 @@ async def team_member_update(
 
     Update team member budgets
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -967,7 +955,6 @@ async def delete_team(
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
-        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
     )
@@ -1054,12 +1041,7 @@ async def team_info(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -1203,12 +1185,7 @@ async def block_team(
 
 
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -1251,12 +1228,7 @@ async def unblock_team(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise Exception("No DB Connected.")
@@ -1294,12 +1266,7 @@ async def list_team(
     Parameters:
     - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     if not allowed_route_check_inside_route(
         user_api_key_dict=user_api_key_dict, requested_user_id=user_id

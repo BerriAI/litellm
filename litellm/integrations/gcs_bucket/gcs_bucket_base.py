@@ -1,13 +1,7 @@
 import json
 import os
-import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
-import httpx
-from pydantic import BaseModel, Field
-
-import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -15,11 +9,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.gcs_bucket import *
-from litellm.types.utils import (
-    StandardCallbackDynamicParams,
-    StandardLoggingMetadata,
-    StandardLoggingPayload,
-)
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase

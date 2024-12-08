@@ -20,7 +20,7 @@ anthropic:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -447,7 +447,6 @@ class ProviderBudgetLimiting(CustomLogger):
 
         This is helpful for debugging and monitoring provider budget limits.
         """
-        from litellm.integrations.prometheus import PrometheusLogger
 
         prometheus_logger = _get_prometheus_logger_from_callbacks()
         if prometheus_logger:

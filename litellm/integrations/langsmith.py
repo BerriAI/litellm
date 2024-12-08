@@ -3,14 +3,12 @@
 import asyncio
 import os
 import random
-import time
 import traceback
 import types
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, Optional
 
-import dotenv  # type: ignore
 import httpx
 import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
@@ -19,7 +17,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )

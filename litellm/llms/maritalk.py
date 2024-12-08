@@ -1,15 +1,12 @@
 import json
-import os
 import time
-import traceback
 import types
-from enum import Enum
 from typing import Any, Callable, List, Optional
 
 import requests  # type: ignore
 
 import litellm
-from litellm.utils import Choices, Message, ModelResponse, Usage
+from litellm.utils import ModelResponse, Usage
 
 
 class MaritalkError(Exception):

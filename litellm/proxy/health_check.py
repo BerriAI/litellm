@@ -6,7 +6,6 @@ import random
 from typing import List, Optional
 
 import litellm
-from litellm._logging import print_verbose
 
 logger = logging.getLogger(__name__)
 

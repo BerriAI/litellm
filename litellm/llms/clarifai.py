@@ -1,6 +1,4 @@
 import json
-import os
-import time
 import traceback
 import types
 from typing import Callable, Optional
@@ -9,13 +7,10 @@ import httpx
 import requests
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    get_async_httpx_client,
-)
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from .prompt_templates.factory import prompt_factory
 
 
 class ClarifaiError(Exception):

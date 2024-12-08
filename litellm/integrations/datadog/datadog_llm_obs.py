@@ -8,12 +8,9 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 
 import asyncio
 import os
-import traceback
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
-
-from httpx import Response
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_logger

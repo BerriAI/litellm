@@ -2,7 +2,7 @@
 Handles the chat completion request for Databricks
 """
 
-from typing import Any, Callable, Literal, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 from httpx._config import Timeout
 
@@ -12,7 +12,6 @@ from litellm.utils import ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
 from ..common_utils import DatabricksBase
-from ..exceptions import DatabricksError
 from .transformation import DatabricksConfig
 
 

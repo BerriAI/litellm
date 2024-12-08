@@ -1,6 +1,5 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
 

@@ -7,7 +7,7 @@ Why separate file? Make it easy to see how transformation works
 from typing import List, Tuple
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import CachedContentRequestBody, SystemInstructions
+from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
 
 from ..common_utils import VertexAIError, get_supports_system_message

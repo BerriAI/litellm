@@ -13,14 +13,9 @@ Requires:
 * `pip install boto3>=1.28.57`
 """
 
-import ast
-import asyncio
-import base64
 import json
 import os
-import re
-import sys
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
@@ -49,7 +44,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         if use_aws_secret_manager is None or use_aws_secret_manager is False:
             return
         try:
-            import boto3
 
             cls.validate_environment()
             litellm.secret_manager_client = cls()

@@ -1,31 +1,14 @@
 import json
-import os
-import time
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    get_async_httpx_client,
-)
-from litellm.utils import (
-    Choices,
-    CustomStreamWrapper,
-    Delta,
-    EmbeddingResponse,
-    Message,
-    ModelResponse,
-    Usage,
-    map_finish_reason,
-)
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.utils import Choices, EmbeddingResponse, Message, ModelResponse
 
 from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from .prompt_templates.factory import prompt_factory
 
 
 class TritonError(Exception):

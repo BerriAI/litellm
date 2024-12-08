@@ -5,7 +5,6 @@ Utils used for slack alerting
 import asyncio
 from typing import Dict, List, Optional, Union
 
-import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret

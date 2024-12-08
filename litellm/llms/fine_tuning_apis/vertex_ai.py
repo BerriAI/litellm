@@ -1,18 +1,13 @@
 import traceback
 from datetime import datetime
-from typing import Any, Coroutine, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import httpx
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base import BaseLLM
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    get_async_httpx_client,
-)
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
@@ -132,7 +127,6 @@ class VertexFineTuningAPI(VertexLLM):
         headers: dict,
         request_data: FineTuneJobCreate,
     ):
-        from litellm.fine_tuning.main import FineTuningJob
 
         try:
             verbose_logger.debug(

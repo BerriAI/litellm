@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import traceback
 from datetime import datetime
 from logging import Formatter
 

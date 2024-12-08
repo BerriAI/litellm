@@ -15,7 +15,6 @@ from typing import Any
 
 import litellm
 from litellm._logging import print_verbose
-from litellm.types.caching import LiteLLMCacheType
 
 from .base_cache import BaseCache
 

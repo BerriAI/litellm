@@ -1,5 +1,3 @@
-import traceback
-
 from fastapi import HTTPException
 
 import litellm

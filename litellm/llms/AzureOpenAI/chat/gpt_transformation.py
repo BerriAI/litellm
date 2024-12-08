@@ -1,5 +1,5 @@
 import types
-from typing import List, Optional, Type, Union
+from typing import List, Optional, Union
 
 import litellm
 

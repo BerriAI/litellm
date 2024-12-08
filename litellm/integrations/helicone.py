@@ -3,11 +3,9 @@
 import os
 import traceback
 
-import dotenv
 import requests  # type: ignore
 
 import litellm
-from litellm._logging import verbose_logger
 
 
 class HeliconeLogger:

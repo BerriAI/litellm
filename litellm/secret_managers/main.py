@@ -1,19 +1,16 @@
 import ast
 import base64
 import binascii
-import json
 import os
-import sys
 import traceback
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
-from dotenv import load_dotenv
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import KeyManagementSystem
 
 oidc_cache = DualCache()

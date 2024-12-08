@@ -12,7 +12,7 @@ import asyncio
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger

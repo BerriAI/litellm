@@ -15,7 +15,6 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     DeleteUserRequest,
     KeyRequest,
     LiteLLM_TeamMembership,
-    LiteLLM_TeamTable,
     LiteLLM_UserTable,
     ManagementEndpointLoggingPayload,
     Member,

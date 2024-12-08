@@ -1,9 +1,6 @@
 import json
-import os
 import time
-import traceback
 import types
-from enum import Enum
 from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
@@ -12,15 +9,14 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.cohere import ToolResultObject
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     GenericStreamingChunk,
 )
-from litellm.utils import Choices, Message, ModelResponse, Usage
+from litellm.utils import ModelResponse, Usage
 
-from ..prompt_templates.factory import cohere_message_pt, cohere_messages_pt_v2
+from ..prompt_templates.factory import cohere_messages_pt_v2
 
 
 class CohereError(Exception):

@@ -1,6 +1,6 @@
 import io
 import json
-from typing import IO, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 
 class InMemoryFile(io.BytesIO):

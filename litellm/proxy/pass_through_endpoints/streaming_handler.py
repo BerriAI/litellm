@@ -1,27 +1,14 @@
 import asyncio
-import json
 import threading
 from datetime import datetime
-from enum import Enum
-from typing import AsyncIterable, Dict, List, Optional, Union
+from typing import List, Optional
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.chat.handler import (
-    ModelResponseIterator as AnthropicIterator,
-)
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
-    ModelResponseIterator as VertexAIIterator,
-)
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.types.utils import (
-    GenericStreamingChunk,
-    ModelResponse,
-    StandardPassThroughResponseObject,
-)
+from litellm.types.utils import StandardPassThroughResponseObject
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,

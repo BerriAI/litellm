@@ -1,7 +1,6 @@
 # What this does?
 ## Checks if key is allowed to use the cache controls passed in to the completion() call
 
-import traceback
 
 from fastapi import HTTPException
 

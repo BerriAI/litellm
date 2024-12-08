@@ -1,10 +1,8 @@
 import asyncio
 import json
 import time
-import traceback
 import types
 import uuid
-from copy import deepcopy
 from itertools import chain
 from typing import Any, Dict, List, Optional
 
@@ -13,12 +11,9 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
-from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
-
-from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OllamaError(Exception):

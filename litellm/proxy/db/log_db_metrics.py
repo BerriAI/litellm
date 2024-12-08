@@ -35,7 +35,6 @@ def log_db_metrics(func):
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        from prisma.errors import PrismaError
 
         start_time: datetime = datetime.now()
 

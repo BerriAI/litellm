@@ -5,7 +5,7 @@ this is OpenAI compatible - no translation needed / occurs
 """
 
 import types
-from typing import Optional, Union
+from typing import Optional
 
 
 class CerebrasConfig:

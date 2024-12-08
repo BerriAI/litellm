@@ -1,13 +1,8 @@
-import json
-import os
-import types
-from typing import Any, Literal, Optional, Union, cast
+from typing import Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -20,9 +15,7 @@ from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
 )
 from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import *
-from litellm.utils import Usage
 
-from .transformation import VertexAITextEmbeddingConfig
 from .types import *
 
 

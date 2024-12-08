@@ -1,8 +1,6 @@
-import json
-import time
 import uuid
 
-from locust import HttpUser, between, events, task
+from locust import HttpUser, between, task
 
 
 class MyUser(HttpUser):

@@ -1,8 +1,7 @@
 import json
 import time
 import types
-from re import A
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import httpx
 import requests
@@ -15,8 +14,6 @@ from litellm.types.llms.anthropic import (
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
-    AnthropicMessageRequestBase,
-    AnthropicMessagesRequest,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
@@ -28,18 +25,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    add_dummy_tool,
-    has_tool_call_blocks,
-)
+from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -127,7 +116,6 @@ class AnthropicConfig:
         pdf_used: bool = False,
         is_vertex_request: bool = False,
     ) -> dict:
-        import json
 
         betas = []
         if prompt_caching_set:

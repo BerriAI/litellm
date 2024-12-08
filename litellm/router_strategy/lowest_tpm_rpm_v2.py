@@ -1,7 +1,6 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx

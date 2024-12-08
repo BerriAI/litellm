@@ -12,7 +12,7 @@ Translations handled by LiteLLM:
 """
 
 import types
-from typing import Any, List, Optional, Union
+from typing import List, Optional
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage

@@ -1,14 +1,10 @@
 import json
-import os
 import time
-from enum import Enum
 from typing import Any, Callable, Optional
 
 import requests  # type: ignore
 
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
-
-from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OobaboogaError(Exception):

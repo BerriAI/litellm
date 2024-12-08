@@ -1,9 +1,7 @@
 import json
 import time
-import traceback
 import types
 import uuid
-from itertools import chain
 from typing import Any, List, Optional
 
 import aiohttp

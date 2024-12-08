@@ -1,8 +1,5 @@
-import json
-import os
 import time
 import types
-from enum import Enum
 from typing import Callable, Optional
 
 import requests  # type: ignore
@@ -155,7 +152,6 @@ def completion(
 
     else:
         try:
-            import torch
             from petals import AutoDistributedModelForCausalLM  # type: ignore
             from transformers import AutoTokenizer
         except Exception:

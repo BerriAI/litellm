@@ -16,11 +16,10 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import datetime
 import os
-import sys
 import traceback
 import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from httpx import Response
 
@@ -32,7 +31,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload

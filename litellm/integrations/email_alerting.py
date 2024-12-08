@@ -2,7 +2,6 @@
 Functions for sending Email Alerts
 """
 
-import asyncio
 import os
 from typing import List, Optional
 
@@ -20,7 +19,7 @@ async def get_all_team_member_emails(team_id: Optional[str] = None) -> list:
     )
     if team_id is None:
         return []
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise Exception("Not connected to DB!")
@@ -72,7 +71,6 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
     Send an Email Alert to All Team Members when the Team Budget is crossed
     Returns -> True if sent, False if not.
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client
     from litellm.proxy.utils import send_email
 
     _team_id = webhook_event.team_id

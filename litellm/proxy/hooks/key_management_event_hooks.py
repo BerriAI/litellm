@@ -2,7 +2,6 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
-from re import A
 from typing import Any, List, Optional
 
 from fastapi import status
@@ -26,6 +25,7 @@ from litellm.proxy._types import (
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
 
+
 class KeyManagementEventHooks:
 
     @staticmethod
@@ -46,11 +46,7 @@ class KeyManagementEventHooks:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
         )
-        from litellm.proxy.proxy_server import (
-            general_settings,
-            litellm_proxy_admin_name,
-            proxy_logging_obj,
-        )
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if data.send_invite_email is True:
             await KeyManagementEventHooks._send_key_created_email(response)

@@ -3,7 +3,6 @@
 import os
 import traceback
 
-import dotenv
 import requests  # type: ignore
 from pydantic import BaseModel
 

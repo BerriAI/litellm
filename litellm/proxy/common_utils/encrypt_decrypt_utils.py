@@ -40,7 +40,6 @@ def encrypt_value_helper(value: str):
 
 
 def decrypt_value_helper(value: str):
-    from litellm.proxy.proxy_server import master_key
 
     signing_key = _get_salt_key()
 

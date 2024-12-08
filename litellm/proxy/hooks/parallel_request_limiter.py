@@ -1,6 +1,5 @@
 import asyncio
 import sys
-import traceback
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, TypedDict, Union
 

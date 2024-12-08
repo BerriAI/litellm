@@ -7,14 +7,10 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
-import json
-import re
-import traceback
 from difflib import SequenceMatcher
 from typing import List, Literal, Optional
 
 from fastapi import HTTPException
-from typing_extensions import overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger

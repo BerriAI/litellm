@@ -1,14 +1,10 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import datetime
 import os
 import subprocess
 import sys
 import traceback
-
-import dotenv
-import requests  # type: ignore
 
 import litellm
 

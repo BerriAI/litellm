@@ -2,7 +2,7 @@
 Handles the chat completion request for groq
 """
 
-from typing import Any, Callable, Optional, Union
+from typing import Callable, Optional, Union
 
 from httpx._config import Timeout
 

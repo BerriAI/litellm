@@ -1,8 +1,6 @@
 import hashlib
 import json
 import os
-import time
-import traceback
 import types
 from typing import Any, Callable, Coroutine, Iterable, Literal, Optional, Union, cast
 
@@ -12,7 +10,7 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel
-from typing_extensions import overload, override
+from typing_extensions import overload
 
 import litellm
 from litellm import LlmProviders
@@ -20,7 +18,6 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ProviderField
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -28,14 +25,13 @@ from litellm.utils import (
     ModelResponse,
     ProviderConfigManager,
     TextCompletionResponse,
-    Usage,
     convert_to_model_response_object,
 )
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from ..prompt_templates.common_utils import convert_content_list_to_str
-from ..prompt_templates.factory import custom_prompt, prompt_factory
+from ..prompt_templates.factory import prompt_factory
 from .common_utils import drop_params_from_unprocessable_entity_error
 from .completion.utils import is_tokens_or_list_of_tokens
 

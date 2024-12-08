@@ -1,19 +1,14 @@
 ##### Calls /generate endpoint #######
 
 import json
-import os
 import time
-import traceback
 import types
-from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Callable, Optional
 
 import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import Choices, Message, ModelResponse, Usage
 
 

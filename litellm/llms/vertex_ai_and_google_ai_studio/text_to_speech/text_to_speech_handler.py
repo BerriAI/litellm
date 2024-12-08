@@ -1,15 +1,9 @@
-import traceback
-from datetime import datetime
-from typing import Any, Coroutine, Literal, Optional, TypedDict, Union
+from typing import Optional, TypedDict, Union
 
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
-from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )

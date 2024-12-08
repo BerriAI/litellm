@@ -3,11 +3,9 @@
 
 import json
 import os
-import traceback
 import uuid
 from typing import Literal, Optional
 
-import dotenv
 import httpx
 
 import litellm

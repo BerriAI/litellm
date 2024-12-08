@@ -1,29 +1,14 @@
 # What is this?
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
-import inspect
 import json
-import os
-import time
 import types
 import uuid
 from copy import deepcopy
-from enum import Enum
 from functools import partial
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
@@ -53,13 +38,10 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GenerateContentResponseBody,
-    GenerationConfig,
     HttpxPartType,
     LogprobsResult,
     PartType,
     RequestBody,
-    SafetSettingsConfig,
-    SystemInstructions,
     ToolConfig,
     Tools,
 )
@@ -69,22 +51,13 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     TopLogprob,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...base import BaseLLM
-from ..common_utils import (
-    VertexAIError,
-    _build_vertex_schema,
-    _get_gemini_url,
-    _get_vertex_url,
-    all_gemini_url_modes,
-    get_supports_system_message,
-)
+from ..common_utils import VertexAIError, _build_vertex_schema
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     _gemini_convert_messages_with_history,
-    _process_gemini_image,
     async_transform_request_body,
     set_headers,
     sync_transform_request_body,

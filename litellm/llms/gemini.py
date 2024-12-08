@@ -3,20 +3,10 @@
 # ####################################
 # # logic moved to `vertex_httpx.py` #
 
-import copy
-import time
-import traceback
 import types
-from typing import Callable, Optional
+from typing import Optional
 
 import httpx
-from packaging.version import Version
-
-import litellm
-from litellm import verbose_logger
-from litellm.utils import Choices, Message, ModelResponse, Usage
-
-from .prompt_templates.factory import custom_prompt, get_system_prompt, prompt_factory
 
 
 class GeminiError(Exception):

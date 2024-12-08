@@ -1,7 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 import random
-import traceback
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 

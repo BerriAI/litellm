@@ -12,9 +12,9 @@ from litellm.llms.cohere.rerank import CohereRerank
 from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
-from litellm.types.rerank import RerankRequest, RerankResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
-from litellm.utils import client, exception_type, supports_httpx_timeout
+from litellm.utils import client, exception_type
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here

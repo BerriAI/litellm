@@ -32,7 +32,6 @@ class RedisSemanticCache(BaseCache):
         **kwargs,
     ):
         from redisvl.index import SearchIndex
-        from redisvl.query import VectorQuery
 
         print_verbose(
             "redis semantic-cache initializing INDEX - litellm_semantic_cache_index"
@@ -141,7 +140,6 @@ class RedisSemanticCache(BaseCache):
 
     def get_cache(self, key, **kwargs):
         print_verbose(f"sync redis semantic-cache get_cache, kwargs: {kwargs}")
-        import numpy as np
         from redisvl.query import VectorQuery
 
         # query
@@ -253,7 +251,6 @@ class RedisSemanticCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         print_verbose(f"async redis semantic-cache get_cache, kwargs: {kwargs}")
-        import numpy as np
         from redisvl.query import VectorQuery
 
         from litellm.proxy.proxy_server import llm_model_list, llm_router

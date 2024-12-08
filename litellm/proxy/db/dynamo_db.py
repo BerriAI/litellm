@@ -2,20 +2,9 @@
 Deprecated. Only PostgresSQL is supported.
 """
 
-import json
-from datetime import datetime
-from typing import Any, List, Literal, Optional, Union
-
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import (
-    DynamoDBArgs,
-    LiteLLM_Config,
-    LiteLLM_UserTable,
-    LiteLLM_VerificationToken,
-)
+from litellm.proxy._types import DynamoDBArgs
 from litellm.proxy.db.base_client import CustomDB
-from litellm.proxy.utils import hash_token
-from litellm.secret_managers.main import get_secret
 
 
 class DynamoDBWrapper(CustomDB):
@@ -24,21 +13,7 @@ class DynamoDBWrapper(CustomDB):
     credentials: Credentials
 
     def __init__(self, database_arguments: DynamoDBArgs):
-        from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials
-        from aiodynamo.expressions import F, UpdateExpression, Value
-        from aiodynamo.http.aiohttp import AIOHTTP
-        from aiodynamo.http.httpx import HTTPX
-        from aiodynamo.models import (
-            KeySchema,
-            KeySpec,
-            KeyType,
-            PayPerRequest,
-            ReturnValues,
-            Throughput,
-        )
-        from aiohttp import ClientSession
-        from yarl import URL
+        from aiodynamo.models import PayPerRequest, Throughput
 
         self.throughput_type = None
         if database_arguments.billing_mode == "PAY_PER_REQUEST":

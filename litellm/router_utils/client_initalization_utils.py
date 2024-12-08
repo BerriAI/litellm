@@ -1,6 +1,5 @@
 import asyncio
 import os
-import traceback
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx
@@ -555,11 +554,7 @@ class InitalizeOpenAISDKClient:
     def get_azure_ad_token_from_entrata_id(
         tenant_id: str, client_id: str, client_secret: str
     ) -> Callable[[], str]:
-        from azure.identity import (
-            ClientSecretCredential,
-            DefaultAzureCredential,
-            get_bearer_token_provider,
-        )
+        from azure.identity import ClientSecretCredential, get_bearer_token_provider
 
         verbose_router_logger.debug("Getting Azure AD Token from Entrata ID")
 

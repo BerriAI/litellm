@@ -1,7 +1,5 @@
 import types
-from typing import Literal, Optional, Union
-
-import litellm
+from typing import Optional, Union
 
 
 class VolcEngineConfig:

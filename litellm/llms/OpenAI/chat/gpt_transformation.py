@@ -6,7 +6,7 @@ import types
 from typing import List, Optional, Union
 
 import litellm
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import AllMessageValues
 
 
 class OpenAIGPTConfig:

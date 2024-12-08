@@ -2,15 +2,10 @@
 ## Log success + failure events to Braintrust
 
 import copy
-import json
 import os
-import threading
-import traceback
-import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 
-import dotenv
 import httpx
 from pydantic import BaseModel
 
@@ -18,12 +13,11 @@ import litellm
 from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.utils import get_formatted_prompt, print_verbose
+from litellm.utils import print_verbose
 
 global_braintrust_http_handler = get_async_httpx_client(
     llm_provider=httpxSpecialProvider.LoggingCallback

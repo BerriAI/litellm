@@ -1,6 +1,6 @@
+import os
 import re
 import sys
-import traceback
 from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
@@ -8,10 +8,7 @@ from fastapi import HTTPException, Request, status
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.types.router import (
-    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
-    ConfigurableClientsideParamsCustomAuth,
-)
+from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
 
 def _get_request_ip_address(
@@ -266,7 +263,6 @@ def route_in_additonal_public_routes(current_route: str):
     """
 
     # check if user is premium_user - if not do nothing
-    from litellm.proxy._types import LiteLLMRoutes
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:

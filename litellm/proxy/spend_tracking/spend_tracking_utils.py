@@ -1,8 +1,5 @@
-import datetime
 import json
-import os
 import secrets
-import traceback
 from datetime import datetime as dt
 from typing import Optional
 
@@ -34,9 +31,7 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
 def get_logging_payload(
     kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
 ) -> SpendLogsPayload:
-    from pydantic import Json
 
-    from litellm.proxy._types import LiteLLM_SpendLogs
     from litellm.proxy.proxy_server import general_settings, master_key
 
     verbose_proxy_logger.debug(

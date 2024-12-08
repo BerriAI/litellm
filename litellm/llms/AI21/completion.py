@@ -1,9 +1,7 @@
 import json
-import os
 import time  # type: ignore
 import traceback
 import types
-from enum import Enum
 from typing import Callable, Optional
 
 import httpx

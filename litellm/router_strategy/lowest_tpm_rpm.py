@@ -1,13 +1,9 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-import os
-import random
 import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 
-import dotenv
-import requests
 from pydantic import BaseModel
 
 from litellm import token_counter

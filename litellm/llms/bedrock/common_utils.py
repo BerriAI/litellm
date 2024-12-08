@@ -5,7 +5,7 @@ Common utilities used across bedrock chat/embedding/image generation
 import os
 import types
 from enum import Enum
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 import httpx
 

@@ -1,16 +1,12 @@
 import enum
 import json
-import os
-import sys
-import traceback
 import uuid
-from dataclasses import fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
-from typing_extensions import Annotated, TypedDict
+from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from typing_extensions import TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig

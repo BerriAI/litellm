@@ -7,27 +7,12 @@
 
 import asyncio
 import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
-import fastapi
-import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 

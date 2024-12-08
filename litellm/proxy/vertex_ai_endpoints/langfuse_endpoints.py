@@ -8,35 +8,15 @@ Logging Pass-Through Endpoints
 1. Create pass-through endpoints for any LITELLM_BASE_URL/langfuse/<endpoint> map to LANGFUSE_BASE_URL/<endpoint>
 """
 
-import ast
-import asyncio
 import base64
-import traceback
+import os
 from base64 import b64encode
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-from urllib.parse import urlencode
+from typing import Optional
 
-import fastapi
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
-from starlette.datastructures import QueryParams
+from fastapi import APIRouter, Request, Response
 
 import litellm
-from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
-from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata

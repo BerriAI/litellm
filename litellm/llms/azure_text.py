@@ -1,27 +1,15 @@
-import json
-import types  # type: ignore
-import uuid
 from typing import Any, Callable, Optional, Union
 
 import httpx
-import requests
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
-from litellm import OpenAIConfig
-from litellm.utils import (
-    Choices,
-    CustomStreamWrapper,
-    Message,
-    ModelResponse,
-    TextCompletionResponse,
-    TranscriptionResponse,
-    convert_to_model_response_object,
-)
+from litellm.llms.OpenAI.openai import OpenAIConfig
+from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
 from .base import BaseLLM
-from .OpenAI.openai import OpenAITextCompletion, OpenAITextCompletionConfig
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from .OpenAI.openai import OpenAITextCompletionConfig
+from .prompt_templates.factory import prompt_factory
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 

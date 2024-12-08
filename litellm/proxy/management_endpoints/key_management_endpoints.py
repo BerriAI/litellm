@@ -12,7 +12,6 @@ All /key management endpoints
 import asyncio
 import copy
 import json
-import re
 import secrets
 import traceback
 import uuid
@@ -277,11 +276,8 @@ async def generate_key_fn(  # noqa: PLR0915
     """
     try:
         from litellm.proxy.proxy_server import (
-            create_audit_log_for_update,
-            general_settings,
             litellm_proxy_admin_name,
             prisma_client,
-            proxy_logging_obj,
             user_api_key_cache,
             user_custom_key_generate,
         )
@@ -582,8 +578,6 @@ async def update_key_fn(
     ```
     """
     from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -701,15 +695,7 @@ async def delete_key_fn(
         HTTPException: If an error occurs during key deletion.
     """
     try:
-        from litellm.proxy.proxy_server import (
-            create_audit_log_for_update,
-            general_settings,
-            litellm_proxy_admin_name,
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-            user_custom_key_generate,
-        )
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client is None:
             raise Exception("Not connected to DB!")
@@ -810,14 +796,7 @@ async def info_key_fn_v2(
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        general_settings,
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_custom_key_generate,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -881,14 +860,7 @@ async def info_key_fn(
 -H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        general_settings,
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_custom_key_generate,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:

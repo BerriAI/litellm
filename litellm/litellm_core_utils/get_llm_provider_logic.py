@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -531,7 +530,9 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
     elif custom_llm_provider == "galadriel":
         api_base = (
-            api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
+            api_base
+            or get_secret("GALADRIEL_API_BASE")
+            or "https://api.galadriel.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     if api_base is not None and not isinstance(api_base, str):

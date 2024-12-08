@@ -1,7 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
-import traceback
 from typing import Any, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
@@ -51,7 +50,6 @@ from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.cost_calculato
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import CallTypesLiteral, PassthroughCallTypes, Usage
 from litellm.utils import (
     CallTypes,

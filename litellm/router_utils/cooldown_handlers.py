@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
-from litellm.utils import get_utc_datetime
 
 from .router_callbacks.track_deployment_metrics import (
     get_deployment_failures_for_current_minute,

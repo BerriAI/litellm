@@ -1,8 +1,6 @@
 import json
-import os
 import time
 import types
-from enum import Enum
 from typing import Callable, Optional
 
 import httpx  # type: ignore
@@ -11,7 +9,7 @@ import requests  # type: ignore
 import litellm
 from litellm.utils import ModelResponse, Usage
 
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from .prompt_templates.factory import custom_prompt
 
 
 class CloudflareError(Exception):

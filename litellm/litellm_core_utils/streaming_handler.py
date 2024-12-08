@@ -12,10 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
+from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (

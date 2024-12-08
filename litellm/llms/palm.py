@@ -7,7 +7,6 @@ from typing import Callable, Optional
 import httpx
 
 import litellm
-from litellm import verbose_logger
 from litellm.utils import Choices, Message, ModelResponse, Usage
 
 

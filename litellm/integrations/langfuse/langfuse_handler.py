@@ -6,10 +6,7 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
-import os
 from typing import TYPE_CHECKING, Any, Dict, Optional
-
-from packaging.version import Version
 
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
 

@@ -3,7 +3,6 @@ from typing import Awaitable, Callable, Optional
 
 import anyio
 import anyio.to_thread
-from anyio import to_thread
 from typing_extensions import ParamSpec, TypeVar
 
 T_ParamSpec = ParamSpec("T_ParamSpec")

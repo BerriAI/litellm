@@ -10,7 +10,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
-from typing import List, Optional
+from typing import List
 
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,

@@ -11,15 +11,7 @@ from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.openai import (
-    Batch,
-    CreateFileRequest,
-    FileContentRequest,
-    FileObject,
-    FileTypes,
-    HttpxBinaryResponseContent,
-    PathLike,
-)
+from litellm.types.llms.openai import CreateFileRequest, FileObject, FileTypes, PathLike
 
 
 class VertexAIFilesTransformation(VertexGeminiConfig):

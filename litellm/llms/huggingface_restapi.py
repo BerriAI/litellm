@@ -1,11 +1,9 @@
 ## Uses the huggingface text generation inference API
 import copy
-import enum
 import json
 import os
 import time
 import types
-from enum import Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, get_args
 
 import httpx
@@ -14,7 +12,6 @@ import requests
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.completion import ChatCompletionMessageToolCallParam
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 

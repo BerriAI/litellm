@@ -1,7 +1,6 @@
 # What is this?
 ## Helper utilities
-import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 

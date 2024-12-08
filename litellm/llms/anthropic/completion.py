@@ -3,21 +3,15 @@ Translation logic for anthropic's `/v1/complete` endpoint
 """
 
 import json
-import os
 import time
 import types
 from enum import Enum
 from typing import Callable, Optional
 
 import httpx
-import requests
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    get_async_httpx_client,
-)
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ..base import BaseLLM

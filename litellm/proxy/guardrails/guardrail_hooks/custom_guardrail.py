@@ -1,12 +1,10 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import GuardrailEventHooks
 
 
 class myCustomGuardrail(CustomGuardrail):
