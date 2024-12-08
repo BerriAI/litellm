@@ -6817,6 +6817,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": {
@@ -6828,6 +6829,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": {
@@ -6840,6 +6842,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
@@ -6852,6 +6855,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/firefunction-v2": {
@@ -6863,6 +6867,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
@@ -6874,6 +6879,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct": {
@@ -6885,6 +6891,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct": {
@@ -6896,6 +6903,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/yi-large": {
@@ -6907,6 +6915,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": {
@@ -6918,6 +6927,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
