@@ -21,6 +21,7 @@ from litellm.constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     ROUTER_MAX_FALLBACKS,
+    DEFAULT_MAX_RETRIES,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
