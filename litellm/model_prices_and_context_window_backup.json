@@ -6424,6 +6424,7 @@
         "max_output_tokens": 127072,
         "input_cost_per_token": 0.000005, 
         "output_cost_per_token": 0.000005,
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
     },
@@ -6433,6 +6434,7 @@
         "max_output_tokens": 127072,
         "input_cost_per_token": 0.000001, 
         "output_cost_per_token": 0.000001,
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
     },
@@ -6441,7 +6443,8 @@
         "max_input_tokens": 127072,
         "max_output_tokens": 127072,
         "input_cost_per_token": 0.0000002, 
-        "output_cost_per_token": 0.0000002,  
+        "output_cost_per_token": 0.0000002,
+        "input_cost_per_request": 0.005,  
         "litellm_provider": "perplexity", 
         "mode": "chat" 
     },
