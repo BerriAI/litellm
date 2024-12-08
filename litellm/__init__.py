@@ -1168,18 +1168,18 @@ from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.xai_transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
-from .llms.AzureOpenAI.azure import (
+from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
 
-from .llms.AzureOpenAI.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.AzureOpenAI.chat.o1_transformation import AzureOpenAIO1Config
+from .llms.azure.chat.o1_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.handler import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .main import *  # type: ignore

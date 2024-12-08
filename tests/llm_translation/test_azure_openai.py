@@ -6,7 +6,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import pytest
-from litellm.llms.AzureOpenAI.common_utils import process_azure_headers
+from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
@@ -173,7 +173,7 @@ def test_azure_extra_headers(input, call_type):
     ],
 )
 def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
-    from litellm.llms.AzureOpenAI.azure import AzureChatCompletion
+    from litellm.llms.azure.azure import AzureChatCompletion
 
     azure_chat_completion = AzureChatCompletion()
     input_args = {
