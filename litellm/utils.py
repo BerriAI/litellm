@@ -6166,6 +6166,18 @@ def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
         )
 
 
+def validate_chat_completion_messages(messages: List[AllMessageValues]):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+    """
+    # 1. convert all messages to dict
+    messages = [
+        cast(AllMessageValues, convert_to_dict(cast(dict, m))) for m in messages
+    ]
+    # 2. validate user messages
+    return validate_chat_completion_user_messages(messages=messages)
+
+
 def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     """
     Ensures all user messages are valid OpenAI chat completion messages.
@@ -6180,10 +6192,8 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     Raises:
         ValueError: If any message is invalid
     """
-    validated_messages = []
     for idx, m in enumerate(messages):
         try:
-            m = convert_to_dict(cast(dict, m))
             if m["role"] == "user":
                 user_content = m.get("content")
                 if user_content is not None:
@@ -6194,7 +6204,6 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
                                     raise Exception("invalid content type")
-            validated_messages.append(m)
         except Exception as e:
             if "invalid content type" in str(e):
                 raise Exception(
@@ -6203,7 +6212,7 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
             else:
                 raise e
 
-    return validated_messages
+    return messages
 
 
 from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig

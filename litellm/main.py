@@ -77,7 +77,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_user_messages,
+    validate_chat_completion_messages,
 )
 
 from ._logging import verbose_logger
@@ -931,7 +931,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### VALIDATE USER MESSAGES ###
-        validate_chat_completion_user_messages(messages=messages)
+        messages = validate_chat_completion_messages(messages=messages)
 
         ### TIMEOUT LOGIC ###
         timeout = timeout or kwargs.get("request_timeout", 600) or 600
