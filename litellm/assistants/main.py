@@ -12,7 +12,7 @@ from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 
 import litellm
-from litellm.llms.AzureOpenAI import assistants
+from litellm.llms.azure import assistants
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
@@ -21,7 +21,7 @@ from litellm.utils import (
     supports_httpx_timeout,
 )
 
-from ..llms.AzureOpenAI.assistants import AzureAssistantsAPI
+from ..llms.azure.assistants import AzureAssistantsAPI
 from ..llms.OpenAI.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
