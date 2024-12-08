@@ -14,7 +14,8 @@ from typing import Optional
 
 import httpx
 
-from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.integrations.slack_alerting import *
+from litellm.proxy._types import VirtualKeyEvent
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -874,3 +875,329 @@ async def test_langfuse_trace_id():
     assert returned_trace_id == int(
         litellm_logging_obj._get_trace_id(service_name="langfuse")
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_tracking_alert():
+    """
+    Test if failed tracking alerts are:
+    1. Sent when tracking fails for a model
+    2. Not sent again within TTL period
+    3. Not sent when alerting is disabled
+    4. Not sent when failed_tracking_spend is not in alert_types
+    """
+    # Test 1: Alert is sent when tracking fails
+    slack_alerting = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.failed_tracking_spend],
+        internal_usage_cache=DualCache(),
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.failed_tracking_alert(
+            error_message="Failed to track spend", failing_model="gpt-4"
+        )
+        mock_send_alert.assert_awaited_once_with(
+            message="Failed Tracking Cost for Failed to track spend",
+            level="High",
+            alert_type=AlertType.failed_tracking_spend,
+            alerting_metadata={},
+        )
+
+    # Test 2: Alert is not sent again within TTL period
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.failed_tracking_alert(
+            error_message="Failed to track spend", failing_model="gpt-4"
+        )
+        mock_send_alert.assert_not_awaited()
+
+    # Test 3: Alert is not sent when alerting is disabled
+    slack_alerting_no_alerts = SlackAlerting(
+        alerting=None, internal_usage_cache=DualCache()
+    )
+
+    with patch.object(
+        slack_alerting_no_alerts, "send_alert", new=AsyncMock()
+    ) as mock_send_alert:
+        await slack_alerting_no_alerts.failed_tracking_alert(
+            error_message="Failed to track spend", failing_model="gpt-4"
+        )
+        mock_send_alert.assert_not_awaited()
+
+    # Test 4: Alert is not sent when failed_tracking_spend not in alert_types
+    slack_alerting_wrong_type = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.budget_alerts],  # different alert type
+        internal_usage_cache=DualCache(),
+    )
+
+    with patch.object(
+        slack_alerting_wrong_type, "send_alert", new=AsyncMock()
+    ) as mock_send_alert:
+        await slack_alerting_wrong_type.failed_tracking_alert(
+            error_message="Failed to track spend", failing_model="gpt-4"
+        )
+        mock_send_alert.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "spend, max_budget, expected_message",
+    [
+        (95, 100, "5% Threshold Crossed"),  # 5% threshold case
+        (85, 100, "15% Threshold Crossed"),  # 15% threshold case
+        (100, 100, "Budget Crossed"),  # budget exceeded case
+        (50, 100, None),  # no alert case
+    ],
+)
+@pytest.mark.asyncio
+async def test_budget_threshold_alerts(spend, max_budget, expected_message):
+    """
+    Test if budget alerts are triggered correctly at different thresholds:
+    1. 5% remaining budget
+    2. 15% remaining budget
+    3. Budget exceeded
+    4. Normal spending (no alert)
+    """
+    slack_alerting = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.budget_alerts],
+        internal_usage_cache=DualCache(),
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        user_info = CallInfo(
+            token="test_token",
+            spend=spend,
+            max_budget=max_budget,
+            user_id="test_user",
+            user_email="test@example.com",
+        )
+
+        await slack_alerting.budget_alerts(
+            type=BudgetAlertType.user_budget,
+            user_info=user_info,
+        )
+
+        if expected_message:
+            mock_send_alert.assert_awaited_once()
+            # Check if the expected message is in the alert message
+            assert expected_message in mock_send_alert.call_args[1]["message"]
+        else:
+            mock_send_alert.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "alert_type, id_field",
+    [
+        (BudgetAlertType.token_budget, "token"),
+        (BudgetAlertType.user_budget, "user_id"),
+        (BudgetAlertType.team_budget, "team_id"),
+        (BudgetAlertType.proxy_budget, None),  # proxy budget uses default_id
+        (BudgetAlertType.projected_limit_exceeded, "token"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_budget_alerts_caching(alert_type, id_field):
+    """
+    Test that budget alerts are:
+    1. Sent on first threshold crossing
+    2. Not sent again within TTL period for same ID
+    3. Sent again for different IDs
+    4. Tests caching behavior for all budget alert types
+    """
+    slack_alerting = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.budget_alerts],
+        internal_usage_cache=DualCache(),
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # Create initial user info
+        user_info = CallInfo(
+            token="test_token_1",
+            spend=95,  # 95% spent (triggers 5% threshold)
+            max_budget=100,
+            user_id="test_user_1",
+            user_email="test1@example.com",
+            team_id="test_team_1",
+        )
+
+        # First alert should be sent
+        await slack_alerting.budget_alerts(
+            type=alert_type,
+            user_info=user_info,
+        )
+        mock_send_alert.assert_awaited_once()
+        mock_send_alert.reset_mock()
+
+        # Second alert should not be sent (cached)
+        await slack_alerting.budget_alerts(
+            type=alert_type,
+            user_info=user_info,
+        )
+        mock_send_alert.assert_not_awaited()
+        mock_send_alert.reset_mock()
+
+        # Create new user info with different ID
+        new_user_info = user_info.model_copy()
+        if id_field:
+            # Update the relevant ID field
+            setattr(new_user_info, id_field, f"{getattr(new_user_info, id_field)}_new")
+
+        # Alert should be sent for new ID
+        await slack_alerting.budget_alerts(
+            type=alert_type,
+            user_info=new_user_info,
+        )
+
+        # For proxy_budget (default_id), alert should not be sent as it uses a global cache
+        if alert_type == "proxy_budget":
+            mock_send_alert.assert_not_awaited()
+        else:
+            mock_send_alert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_virtual_key_event_slack():
+    """
+    Test if virtual key events are properly formatted and sent
+    """
+    slack_alerting = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[AlertType.new_virtual_key_created],
+        internal_usage_cache=DualCache(),
+    )
+
+    # Create a sample VirtualKeyEvent
+    key_event = VirtualKeyEvent(
+        created_by_user_role="admin",
+        created_by_key_alias="test_key",
+        created_by_user_id="user_123",
+        request_kwargs={
+            "team_id": "team_456",
+            "metadata": {"purpose": "testing"},
+            "models": ["gpt-4"],
+            "user_api_key_dict": "sensitive_info",  # this should be excluded from alert
+        },
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.send_virtual_key_event_slack(
+            key_event=key_event,
+            alert_type=AlertType.new_virtual_key_created,
+            event_name="New Virtual Key Created",
+        )
+
+        # Verify send_alert was called once
+        mock_send_alert.assert_awaited_once()
+
+        # Verify message formatting
+        call_args = mock_send_alert.call_args[1]
+        message = call_args["message"]
+
+        # Check required components in message
+        assert "New Virtual Key Created" in message
+        assert "Action Done by:" in message
+        assert "test@example.com" in message
+        assert "user_123" in message
+        assert "Arguments passed:" in message
+        assert "team_456" in message
+        assert "sensitive_info" not in message  # Verify sensitive info is excluded
+
+        # Verify alert parameters
+        assert call_args["level"] == "High"
+        assert call_args["alert_type"] == AlertType.new_virtual_key_created
+        assert call_args["alerting_metadata"] == {}
+
+
+def test_get_budget_alert_info():
+    """
+    Test if budget alert info is correctly formatted for different types of alerts
+    """
+    slack_alerting = SlackAlerting()
+
+    # Create a sample user info
+    user_info = CallInfo(
+        token="test_token",
+        spend=100,
+        max_budget=1000,
+        user_id="user_123",
+        user_email="test@example.com",
+        team_id="team_456",
+    )
+
+    # Test cases for different budget alert types
+    test_cases = [
+        {
+            "type": "proxy_budget",
+            "expected_group": "proxy",
+            "expected_message": "Proxy Budget: ",
+            "expected_id": None,
+        },
+        {
+            "type": "user_budget",
+            "expected_group": "internal_user",
+            "expected_message": "User Budget: ",
+            "expected_id": "user_123",
+        },
+        {
+            "type": "team_budget",
+            "expected_group": "team",
+            "expected_message": "Team Budget: ",
+            "expected_id": "team_456",
+        },
+        {
+            "type": "token_budget",
+            "expected_group": "key",
+            "expected_message": "Key Budget: ",
+            "expected_id": "test_token",
+        },
+        {
+            "type": "projected_limit_exceeded",
+            "expected_group": "key",
+            "expected_message": "Key Budget: Projected Limit Exceeded",
+            "expected_id": "test_token",
+        },
+    ]
+
+    for test_case in test_cases:
+        result = slack_alerting._get_budget_alert_info(
+            budget_alert_type=test_case["type"], user_info=user_info
+        )
+
+        # Verify the result matches expected values
+        assert (
+            result.event_group == test_case["expected_group"]
+        ), f"Failed for type: {test_case['type']}"
+        assert (
+            result.event_message == test_case["expected_message"]
+        ), f"Failed for type: {test_case['type']}"
+        assert (
+            result.event_id == test_case["expected_id"]
+        ), f"Failed for type: {test_case['type']}"
+
+
+def test_get_budget_alert_info_missing_ids():
+    """
+    Test if budget alert info handles missing IDs gracefully
+    """
+    slack_alerting = SlackAlerting()
+
+    # Create user info with missing IDs
+    user_info = CallInfo(
+        token=None,
+        spend=100,
+        max_budget=1000,
+        user_id=None,
+        user_email="test@example.com",
+        team_id=None,
+    )
+
+    # Test that missing IDs don't cause errors
+    result = slack_alerting._get_budget_alert_info(
+        budget_alert_type=BudgetAlertType.user_budget, user_info=user_info
+    )
+
+    assert result.event_group == "internal_user"
+    assert result.event_message == "User Budget: "
+    assert result.event_id is None
