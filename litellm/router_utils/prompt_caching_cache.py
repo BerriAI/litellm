@@ -70,14 +70,14 @@ class PromptCachingCache:
             data_to_hash["tools"] = serialized_tools
 
         # Combine serialized data into a single string
-        data_to_hash = json.dumps(
+        data_to_hash_str = json.dumps(
             data_to_hash,
             sort_keys=True,
             separators=(",", ":"),
         )
 
         # Create a hash of the serialized data for a stable cache key
-        hashed_data = hashlib.sha256(data_to_hash.encode()).hexdigest()
+        hashed_data = hashlib.sha256(data_to_hash_str.encode()).hexdigest()
         return f"deployment:{hashed_data}:prompt_caching"
 
     def add_model_id(
