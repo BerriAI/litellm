@@ -54,7 +54,7 @@ from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
+from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
