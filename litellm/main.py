@@ -2360,6 +2360,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                     api_base=api_base,
                     extra_headers=extra_headers,
+                    base_model=litellm_params.get("base_model"),
                 )
             elif "openai" in model:
                 # Vertex Model Garden - OpenAI compatible models

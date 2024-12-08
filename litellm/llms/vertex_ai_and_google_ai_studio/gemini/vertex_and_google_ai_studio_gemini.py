@@ -1332,6 +1332,7 @@ class VertexLLM(VertexBase):
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         api_base: Optional[str] = None,
+        base_model: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
@@ -1347,6 +1348,7 @@ class VertexLLM(VertexBase):
             "logging_obj": logging_obj,
             "custom_llm_provider": custom_llm_provider,
             "litellm_params": litellm_params,
+            "base_model": base_model,
         }
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
