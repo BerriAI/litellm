@@ -2564,6 +2564,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 use_messages_api=(
                     True if custom_llm_provider == "sagemaker_chat" else False
                 ),
+                timeout=timeout,
             )
             if optional_params.get("stream", False):
                 ## LOGGING
