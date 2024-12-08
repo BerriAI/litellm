@@ -871,6 +871,7 @@ class AzureChatCompletion(BaseLLM):
         optional_params: dict,
         api_key: Optional[str] = None,
         azure_ad_token: Optional[str] = None,
+        max_retries: Optional[int] = None,
         client=None,
         aembedding=None,
     ) -> litellm.EmbeddingResponse:
@@ -879,7 +880,7 @@ class AzureChatCompletion(BaseLLM):
             self._client_session = self.create_client_session()
         try:
             data = {"model": model, "input": input, **optional_params}
-            max_retries = data.pop("max_retries", 2)
+            max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(
                     status_code=422, message="max retries must be an int"

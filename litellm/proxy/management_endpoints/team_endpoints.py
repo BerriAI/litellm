@@ -293,8 +293,13 @@ async def new_team(  # noqa: PLR0915
         reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
         complete_team_data.budget_reset_at = reset_at
 
-    team_row: LiteLLM_TeamTable = await prisma_client.insert_data(  # type: ignore
-        data=complete_team_data.json(exclude_none=True), table_name="team"
+    complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+    complete_team_data_dict = prisma_client.jsonify_team_object(
+        db_data=complete_team_data_dict
+    )
+    team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
+        data=complete_team_data_dict,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     ## ADD TEAM ID TO USER TABLE ##
@@ -340,6 +345,37 @@ async def new_team(  # noqa: PLR0915
         return team_row.dict()
 
 
+async def _update_model_table(
+    data: UpdateTeamRequest,
+    model_id: Optional[str],
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> Optional[str]:
+    """
+    Upsert model table and return the model id
+    """
+    ## UPSERT MODEL TABLE
+    _model_id = model_id
+    if data.model_aliases is not None and isinstance(data.model_aliases, dict):
+        litellm_modeltable = LiteLLM_ModelTable(
+            model_aliases=json.dumps(data.model_aliases),
+            created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+            updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+        )
+        model_dict = await prisma_client.db.litellm_modeltable.upsert(
+            where={"id": model_id},
+            data={
+                "update": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
+                "create": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
+            },
+        )  # type: ignore
+
+        _model_id = model_dict.id
+
+    return _model_id
+
+
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -370,6 +406,7 @@ async def update_team(
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
+    - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
 
     Example - update team TPM Limit
 
@@ -446,11 +483,25 @@ async def update_team(
         else:
             updated_kv["metadata"] = {"tags": _tags}
 
-    updated_kv = prisma_client.jsonify_object(data=updated_kv)
-    team_row: Optional[
-        LiteLLM_TeamTable
-    ] = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data=updated_kv  # type: ignore
+    if "model_aliases" in updated_kv:
+        updated_kv.pop("model_aliases")
+        _model_id = await _update_model_table(
+            data=data,
+            model_id=existing_team_row.model_id,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+        if _model_id is not None:
+            updated_kv["model_id"] = _model_id
+
+    updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
+    team_row: Optional[LiteLLM_TeamTable] = (
+        await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data=updated_kv,
+            include={"litellm_model_table": True},  # type: ignore
+        )
     )
 
     if team_row is None or team_row.team_id is None:
