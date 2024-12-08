@@ -99,7 +99,7 @@ from .llms import (
     replicate,
     vllm,
 )
-from .llms.AI21 import completion as ai21
+from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
 from .llms.azure_ai.chat import AzureAIChatCompletion
