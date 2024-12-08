@@ -277,6 +277,7 @@ def completion(  # noqa: PLR0915
         else:  # assume vertex model garden on public endpoint
             mode = "custom"
 
+            optional_params.pop("max_retries", None)
             instances = [optional_params.copy()]
             instances[0]["prompt"] = prompt
             instances = [
