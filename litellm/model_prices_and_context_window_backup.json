@@ -6615,7 +6615,7 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_parallel_function_calling": true
     },
     "deepinfra/01-ai/Yi-34B-200K": {
         "max_tokens": 4096,
