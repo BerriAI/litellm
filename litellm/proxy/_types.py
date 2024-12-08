@@ -1459,6 +1459,8 @@ class UserAPIKeyAuth(
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values):
@@ -1469,9 +1471,6 @@ class UserAPIKeyAuth(
             ).startswith("sk-"):
                 values.update({"api_key": hash_token(values.get("api_key"))})
         return values
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class UserInfoResponse(LiteLLMBase):
