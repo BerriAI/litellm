@@ -119,6 +119,8 @@ model LiteLLM_UserTable {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    created_at      DateTime?               @default(now()) @map("created_at")
+    updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
 
     // relations
     litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
