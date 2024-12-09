@@ -45,10 +45,10 @@ class CohereError(BaseLLMException):
 class CohereChatConfig(BaseConfig):
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        api_key: Optional[str] = None,
     ) -> dict:
         """
         Return headers to use for cohere chat completion request
@@ -127,11 +127,11 @@ class CohereChatConfig(BaseConfig):
         httpx_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         encoding: str,
+        api_key: Optional[str] = None,
     ) -> ModelResponse:
 
         try:

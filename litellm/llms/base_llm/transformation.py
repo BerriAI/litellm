@@ -77,10 +77,10 @@ class BaseConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        api_key: Optional[str] = None,
     ) -> dict:
         pass
 
@@ -108,11 +108,11 @@ class BaseConfig(ABC):
         httpx_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         encoding: str,
+        api_key: Optional[str] = None,
     ) -> ModelResponse:
         pass
 

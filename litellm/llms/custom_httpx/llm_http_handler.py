@@ -50,10 +50,10 @@ class BaseLLMHTTPHandler:
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str,
         messages: list,
         optional_params: dict,
         encoding: str,
+        api_key: Optional[str] = None,
     ):
         async_httpx_client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders(custom_llm_provider)
@@ -82,21 +82,19 @@ class BaseLLMHTTPHandler:
     def completion(
         self,
         model: str,
-        stream: bool,
         messages: list,
         api_base: str,
         custom_llm_provider: str,
         model_response: ModelResponse,
         encoding,
-        api_key: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
         acompletion: bool,
-        logger_fn=None,
+        stream: Optional[bool] = False,
+        api_key: Optional[str] = None,
         headers={},
-        client=None,
     ):
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
