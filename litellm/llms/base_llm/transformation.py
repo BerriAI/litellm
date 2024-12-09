@@ -121,6 +121,6 @@ class BaseConfig(ABC):
         self,
         error_message: str,
         status_code: int,
-        headers: dict,
+        headers: Optional[httpx.Headers] = None,
     ) -> BaseLLMException:
         pass

@@ -1066,6 +1066,7 @@ from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
+from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.clarifai import ClarifaiConfig
 from .llms.ai21.completion import AI21Config
 from .llms.ai21.chat import AI21ChatConfig

@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig
-from litellm.llms.prompt_templates.cohere import cohere_messages_pt_v2
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.prompt_templates.factory import cohere_messages_pt_v2
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 
@@ -18,13 +18,22 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class CohereError(Exception):
-    def __init__(self, status_code, message):
+class CohereError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[httpx.Headers] = None,
+    ):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.cohere.ai/v1/chat")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(self.message)  # Ca
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            headers=headers,
+        )
 
 
 class CohereChatConfig(BaseConfig):
@@ -57,6 +66,18 @@ class CohereChatConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"bearer {api_key}"
         return headers
+
+    def get_supported_openai_params(self, model: str) -> list:
+        return []
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        return {}
 
     def transform_request(
         self,
@@ -233,3 +254,20 @@ class CohereChatConfig(BaseConfig):
             cohere_tool["parameter_definitions"][param_name] = cohere_param_def
 
         return cohere_tool
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        return messages
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: Optional[httpx.Headers] = None,
+    ) -> BaseLLMException:
+        return CohereError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )

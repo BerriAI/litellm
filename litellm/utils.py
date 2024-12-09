@@ -6243,7 +6243,8 @@ class ProviderConfigManager:
             return litellm.XAIChatConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
             return litellm.OpenAITextCompletionConfig()
-
+        elif litellm.LlmProviders.COHERE_CHAT == provider:
+            return litellm.CohereChatConfig()
         return litellm.OpenAIGPTConfig()
 
 
