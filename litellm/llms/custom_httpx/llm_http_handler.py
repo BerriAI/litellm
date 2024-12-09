@@ -24,7 +24,6 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
@@ -145,13 +144,10 @@ class BaseLLMHTTPHandler:
                 encoding=encoding,
             )
 
-        if client is None or not isinstance(client, HTTPHandler):
-            client = HTTPHandler(timeout=timeout)  # type: ignore
-        else:
-            client = client
+        sync_httpx_client = _get_httpx_client()
 
         try:
-            response = client.post(
+            response = sync_httpx_client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
