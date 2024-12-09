@@ -244,9 +244,9 @@ def get_llm_provider(  # noqa: PLR0915
             or model in litellm.vertex_ai_image_models
         ):
             custom_llm_provider = "vertex_ai"
-        ## ai21
+        ## ai21 - AI21 deprecated /complete endpoint https://docs.ai21.com/reference/j2-complete-api-ref
         elif model in litellm.ai21_models:
-            custom_llm_provider = "ai21"
+            custom_llm_provider = "ai21_chat"
         elif model in litellm.ai21_chat_models:
             custom_llm_provider = "ai21_chat"
             api_base = (
@@ -531,7 +531,9 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
     elif custom_llm_provider == "galadriel":
         api_base = (
-            api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
+            api_base
+            or get_secret("GALADRIEL_API_BASE")
+            or "https://api.galadriel.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     if api_base is not None and not isinstance(api_base, str):
