@@ -1,7 +1,8 @@
+import os
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import litellm
-from acuvity import AcuvityClient
+from acuvity import Acuvity, Security
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -18,7 +19,7 @@ class AcuvityGuardrail(CustomGuardrail):
     ):
         # store kwargs as optional_params
         self.optional_params = kwargs
-        self.acuvity_client = AcuvityClient(token=api_key)
+        self.acuvity_client = Acuvity(Security(token=(api_key or os.environ["ACUVITY_TOKEN"])))
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
