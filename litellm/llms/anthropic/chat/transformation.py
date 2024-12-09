@@ -423,7 +423,7 @@ class AnthropicConfig(BaseConfig):
                 and isinstance(message["content"], list)
             ):
                 for content in message["content"]:
-                    if "type" in content:
+                    if "type" in content and content["type"] != "text":
                         return True
         return False
 
@@ -715,11 +715,6 @@ class AnthropicConfig(BaseConfig):
             return litellm.Message(content=json_mode_content_str)
         return None
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return super()._transform_messages(messages)
-
     def get_error_class(
         self, error_message: str, status_code: int, headers: Dict
     ) -> BaseLLMException:
@@ -745,7 +740,6 @@ class AnthropicConfig(BaseConfig):
             )
 
         tools = optional_params.get("tools")
-        is_vertex_request = optional_params.get("is_vertex_request", False)
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
         pdf_used = self.is_pdf_used(messages=messages)
@@ -754,7 +748,7 @@ class AnthropicConfig(BaseConfig):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
-            is_vertex_request=is_vertex_request,
+            is_vertex_request=False,
         )
 
         headers = {**headers, **anthropic_headers}
