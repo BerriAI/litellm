@@ -309,12 +309,16 @@ def test_all_model_configs():
 
     assert (
         "max_completion_tokens"
-        in VertexAIAnthropicConfig().get_supported_openai_params()
+        in VertexAIAnthropicConfig().get_supported_openai_params(
+            model="claude-3-5-sonnet-20240620"
+        )
     )
 
     assert VertexAIAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (

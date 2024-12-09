@@ -22,8 +22,6 @@ class XAIChatConfig(OpenAIGPTConfig):
             "logit_bias",
             "logprobs",
             "max_tokens",
-            "messages",
-            "model",
             "n",
             "presence_penalty",
             "response_format",
