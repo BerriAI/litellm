@@ -605,7 +605,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
-            custom_tokenizer: custom_tokenizer,
+            custom_tokenizer=custom_tokenizer,
         )
 
         try:
