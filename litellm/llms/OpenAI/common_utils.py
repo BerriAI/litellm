@@ -3,9 +3,43 @@ Common helpers / utils across al OpenAI endpoints
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+import httpx
 import openai
+
+from litellm.llms.base_llm.transformation import BaseLLMException
+
+
+class OpenAIError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        request: Optional[httpx.Request] = None,
+        response: Optional[httpx.Response] = None,
+        headers: Optional[httpx.Headers] = None,
+    ):
+        self.status_code = status_code
+        self.message = message
+        self.headers = headers
+        if request:
+            self.request = request
+        else:
+            self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        if response:
+            self.response = response
+        else:
+            self.response = httpx.Response(
+                status_code=status_code, request=self.request
+            )
+        super().__init__(
+            status_code=status_code,
+            message=self.message,
+            headers=self.headers,
+            request=self.request,
+            response=self.response,
+        )
 
 
 ####### Error Handling Utils for OpenAI API #######################
