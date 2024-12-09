@@ -22,6 +22,7 @@ from litellm.constants import (
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     ROUTER_MAX_FALLBACKS,
     DEFAULT_MAX_RETRIES,
+    LITELLM_CHAT_PROVIDERS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -1128,10 +1129,10 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.OpenAI.openai import (
     OpenAIConfig,
-    OpenAITextCompletionConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
 )
+from litellm.llms.OpenAI.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
@@ -1165,7 +1166,7 @@ from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.xai_transformation import XAIChatConfig
+from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure.azure import (

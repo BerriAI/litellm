@@ -277,7 +277,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             optional_params["stream"] = stream
 
         if messages is not None and custom_llm_provider is not None:
-            provider_config = ProviderConfigManager.get_provider_config(
+            provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
             messages = provider_config._transform_messages(messages)

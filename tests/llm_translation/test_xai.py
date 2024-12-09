@@ -17,7 +17,7 @@ import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
-from litellm.llms.xai.chat.xai_transformation import XAIChatConfig, XAI_API_BASE
+from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():

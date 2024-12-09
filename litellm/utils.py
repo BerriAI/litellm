@@ -6220,12 +6220,14 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     return messages
 
 
-from litellm.llms.llm_base.transformation import BaseConfig
+from litellm.llms.base_llm.transformation import BaseConfig
 
 
 class ProviderConfigManager:
     @staticmethod
-    def get_provider_config(model: str, provider: litellm.LlmProviders) -> BaseConfig:
+    def get_provider_chat_config(
+        model: str, provider: litellm.LlmProviders
+    ) -> BaseConfig:
         """
         Returns the provider config for a given provider.
         """
@@ -6237,6 +6239,10 @@ class ProviderConfigManager:
             return litellm.GroqChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             return litellm.DatabricksConfig()
+        elif litellm.LlmProviders.XAI == provider:
+            return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
+            return litellm.OpenAITextCompletionConfig()
 
         return litellm.OpenAIGPTConfig()
 
