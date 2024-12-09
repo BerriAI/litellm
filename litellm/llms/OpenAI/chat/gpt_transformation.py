@@ -194,7 +194,8 @@ class OpenAIGPTConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: str,
+        encoding: Any,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
         Transform the response from the API.
@@ -219,5 +220,6 @@ class OpenAIGPTConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
     ) -> dict:
         raise NotImplementedError

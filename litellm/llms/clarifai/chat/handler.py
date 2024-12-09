@@ -74,7 +74,11 @@ def completion(
     headers={},
 ):
     headers = litellm.ClarifaiConfig().validate_environment(
-        api_key=api_key, headers=headers, model=model, messages=messages
+        api_key=api_key,
+        headers=headers,
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
     )
     data = litellm.ClarifaiConfig().transform_request(
         model=model,

@@ -213,7 +213,11 @@ def completion(  # noqa: PLR0915
     timeout=None,
 ):
     headers = litellm.CohereChatConfig().validate_environment(
-        api_key=api_key, headers=headers, model=model, messages=messages
+        api_key=api_key,
+        headers=headers,
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
     )
     completion_url = api_base
     model = model

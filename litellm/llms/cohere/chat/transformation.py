@@ -168,7 +168,8 @@ class CohereChatConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: str,
+        encoding: Any,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         raise NotImplementedError
 
@@ -178,5 +179,6 @@ class CohereChatConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
     ) -> dict:
         return cohere_validate_environment(api_key=api_key, headers=headers)
