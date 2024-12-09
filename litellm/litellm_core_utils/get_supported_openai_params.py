@@ -75,33 +75,9 @@ def get_supported_openai_params(  # noqa: PLR0915
             "tool_choice",
         ]
     elif custom_llm_provider == "cohere":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "logit_bias",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-            "extra_headers",
-        ]
+        return litellm.CohereConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere_chat":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-            "tools",
-            "tool_choice",
-            "seed",
-            "extra_headers",
-        ]
+        return litellm.CohereChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "maritalk":
         return [
             "stream",

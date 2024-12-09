@@ -105,7 +105,7 @@ class BaseConfig(ABC):
     def transform_response(
         self,
         model: str,
-        raw_response: dict,
+        raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
         api_key: str,
