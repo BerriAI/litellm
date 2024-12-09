@@ -28,9 +28,7 @@ class BaseLLMHTTPHandler:
         messages: list,
         api_base: str,
         custom_llm_provider: str,
-        custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
         encoding,
         api_key,
         logging_obj,
@@ -42,18 +40,18 @@ class BaseLLMHTTPHandler:
         headers={},
         client=None,
     ):
-        provider_config = ProviderConfigManager.get_provider_config(
+        provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
         # get config from model, custom llm provider
-        headers = provider_config.validate_environment(  # type: ignore
-            api_key,
-            headers,
-            model,
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
             messages=messages,
         )
 
-        data = provider_config.transform_request(  # type: ignore
+        data = provider_config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -99,15 +97,14 @@ class BaseLLMHTTPHandler:
                 headers=error_headers,
             )
 
-        return provider_config.transform_response(  # type: ignore
+        return provider_config.transform_response(
             model=model,
-            response=response,
+            httpx_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
-            data=data,
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
             encoding=encoding,
         )

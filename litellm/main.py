@@ -111,9 +111,9 @@ from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
-from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
+from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
@@ -233,6 +233,7 @@ sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
 databricks_embedding = DatabricksEmbeddingHandler()
+base_llm_http_handler = BaseLLMHTTPHandler()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -1958,7 +1959,7 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 headers.update(extra_headers)
 
-            model_response = cohere_chat.completion(
+            model_response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1972,17 +1973,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-
-            # if "stream" in optional_params and optional_params["stream"] is True:
-            #     # don't try to access stream object,
-            #     response = CustomStreamWrapper(
-            #         model_response,
-            #         model,
-            #         custom_llm_provider="cohere_chat",
-            #         logging_obj=logging,
-            #         _response_headers=headers,
-            #     )
-            #     return response
             response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
