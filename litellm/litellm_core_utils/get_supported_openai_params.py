@@ -255,27 +255,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "watsonx":
         return litellm.IBMWatsonXChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "custom_openai" or "text-completion-openai":
-        return [
-            "functions",
-            "function_call",
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stream_options",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "max_retries",
-            "logprobs",
-            "top_logprobs",
-            "extra_headers",
-        ]
+        return litellm.OpenAITextCompletionConfig().get_supported_openai_params(
+            model=model
+        )
     return None

@@ -3,13 +3,26 @@ Support for gpt model family
 """
 
 import types
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+
+import httpx
 
 import litellm
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.utils import ModelResponse
+
+from ..common_utils import OpenAIError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    LoggingClass = LiteLLMLoggingObj
+else:
+    LoggingClass = Any
 
 
-class OpenAIGPTConfig:
+class OpenAIGPTConfig(BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
 
@@ -168,3 +181,57 @@ class OpenAIGPTConfig:
         self, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
         return messages
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        raise NotImplementedError
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: dict,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        api_key: str,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        encoding: str,
+    ) -> ModelResponse:
+        """
+        Transform the response from the API.
+
+        Returns:
+            dict: The transformed response.
+        """
+        raise NotImplementedError
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return OpenAIError(
+            status_code=status_code,
+            message=error_message,
+            headers=cast(httpx.Headers, headers),
+        )
+
+    def validate_environment(
+        self,
+        api_key: str,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+    ) -> dict:
+        raise NotImplementedError
