@@ -99,7 +99,6 @@ from .llms import (
     replicate,
     vllm,
 )
-from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
@@ -2501,48 +2500,6 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
-        elif custom_llm_provider == "ai21":
-            custom_llm_provider = "ai21"
-            ai21_key = (
-                api_key
-                or litellm.ai21_key
-                or os.environ.get("AI21_API_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("AI21_API_BASE")
-                or "https://api.ai21.com/studio/v1/"
-            )
-
-            model_response = ai21.completion(
-                model=model,
-                messages=messages,
-                api_base=api_base,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=ai21_key,
-                logging_obj=logging,
-            )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="ai21",
-                    logging_obj=logging,
-                )
-                return response
-
-            ## RESPONSE OBJECT
-            response = model_response
         elif (
             custom_llm_provider == "sagemaker"
             or custom_llm_provider == "sagemaker_chat"

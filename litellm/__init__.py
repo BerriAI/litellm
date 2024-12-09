@@ -1066,7 +1066,6 @@ from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
-from .llms.ai21.completion import AI21Config
 from .llms.ai21.chat import AI21ChatConfig
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
