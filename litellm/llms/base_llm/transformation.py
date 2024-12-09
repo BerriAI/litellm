@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 import httpx
 
@@ -82,6 +82,7 @@ class BaseConfig(ABC):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
     ) -> dict:
         pass
 
@@ -113,7 +114,8 @@ class BaseConfig(ABC):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: str,
+        encoding: Any,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         pass
 

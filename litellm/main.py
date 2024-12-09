@@ -1791,6 +1791,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     headers=headers,
                     timeout=timeout,
                     client=client,
+                    custom_llm_provider=custom_llm_provider,
                 )
             if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING

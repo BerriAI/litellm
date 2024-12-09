@@ -42,21 +42,7 @@ class ClarifaiConfig(BaseConfig):
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -122,6 +108,7 @@ class ClarifaiConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
     ) -> dict:
         headers = {
             "accept": "application/json",
@@ -153,6 +140,7 @@ class ClarifaiConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         encoding: str,
+        json_mode: Optional[bool] = None,
     ) -> litellm.ModelResponse:
         logging_obj.post_call(
             input=messages,

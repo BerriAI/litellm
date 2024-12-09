@@ -304,14 +304,19 @@ def test_provider_config_manager():
             BaseConfig,
         ), f"Provider {provider} is not a subclass of BaseConfig"
 
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="gpt-3.5-turbo", provider=LlmProviders(provider)
+        )
+
         if (
             provider != litellm.LlmProviders.OPENAI
             and provider != litellm.LlmProviders.OPENAI_LIKE
             and provider != litellm.LlmProviders.CUSTOM_OPENAI
         ):
-            config = ProviderConfigManager.get_provider_chat_config(
-                model="gpt-3.5-turbo", provider=LlmProviders(provider)
-            )
             assert (
                 config.__class__.__name__ != "OpenAIGPTConfig"
             ), f"Provider {provider} is an instance of OpenAIGPTConfig"
+
+        assert (
+            "_abc_impl" not in config.get_config()
+        ), f"Provider {provider} has _abc_impl"

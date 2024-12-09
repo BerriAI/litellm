@@ -2821,9 +2821,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.AnthropicConfig().map_openai_params(
+            model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            messages=messages,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
@@ -3054,8 +3059,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VertexAIAnthropicConfig().map_openai_params(
+            model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_llama3_models:
         supported_params = get_supported_openai_params(
@@ -6232,6 +6243,11 @@ class ProviderConfigManager:
             return litellm.CohereConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif litellm.LlmProviders.ANTHROPIC == provider:
+            return litellm.AnthropicConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            if "claude" in model:
+                return litellm.VertexAIAnthropicConfig()
 
         return litellm.OpenAIGPTConfig()
 
