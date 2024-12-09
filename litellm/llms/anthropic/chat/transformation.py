@@ -718,7 +718,7 @@ class AnthropicConfig(BaseConfig):
     def _transform_messages(
         self, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
-        return super()._transform_messages(messages)
+        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Dict
