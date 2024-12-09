@@ -1475,7 +1475,7 @@ class ProxyConfig:
             if "team_id" not in team:
                 raise Exception(f"team_id missing from team: {team}")
             if team_id == team["team_id"]:
-                team_config = team
+                team_config = copy.deepcopy(team)
                 break
         for k, v in team_config.items():
             if isinstance(v, str) and v.startswith("os.environ/"):
