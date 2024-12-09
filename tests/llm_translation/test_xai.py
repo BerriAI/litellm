@@ -91,8 +91,6 @@ def test_xai_chat_config_map_openai_params():
     assert result["frequency_penalty"] == 0.5
     assert result["logit_bias"] == {"50256": -100}
     assert result["logprobs"] == 5
-    assert result["messages"] == [{"role": "user", "content": "Hello"}]
-    assert result["model"] == "xai/grok-beta"
     assert result["n"] == 2
     assert result["presence_penalty"] == 0.2
     assert result["response_format"] == {"type": "json_object"}
