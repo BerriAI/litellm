@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
@@ -127,7 +127,7 @@ class BaseConfig(ABC):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str],
+        streaming_response: Union[Iterator[str], AsyncIterator[str]],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:

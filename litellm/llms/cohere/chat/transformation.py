@@ -1,6 +1,6 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
@@ -280,7 +280,7 @@ class CohereChatConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str],
+        streaming_response: Union[Iterator[str], AsyncIterator[str]],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ):
