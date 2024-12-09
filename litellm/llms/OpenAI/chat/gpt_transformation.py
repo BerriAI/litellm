@@ -6,10 +6,11 @@ import types
 from typing import List, Optional, Union
 
 import litellm
+from litellm.llms.llm_base.transformation import BaseConfig
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
 
-class OpenAIGPTConfig:
+class OpenAIGPTConfig(BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
 

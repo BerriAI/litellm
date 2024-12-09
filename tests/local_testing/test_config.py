@@ -288,3 +288,16 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
             assert len(llm_router.model_list) == len(model_list)
         else:
             assert len(llm_router.model_list) == len(model_list) + prev_llm_router_val
+
+
+def test_provider_config_manager():
+    from litellm.utils import ProviderConfigManager
+    from litellm.llms.llm_base.transformation import BaseConfig
+
+    for provider in litellm.LlmProviders:
+        assert isinstance(
+            ProviderConfigManager.get_provider_config(
+                model="gpt-3.5-turbo", provider=provider
+            ),
+            BaseConfig,
+        ), f"Provider {provider} is not a subclass of BaseConfig"
