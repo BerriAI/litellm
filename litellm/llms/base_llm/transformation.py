@@ -12,11 +12,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingClass = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingClass = Any
+    LiteLLMLoggingObj = Any
 
 
 class BaseLLMException(Exception):
@@ -105,9 +105,9 @@ class BaseConfig(ABC):
     def transform_response(
         self,
         model: str,
-        raw_response: dict,
+        httpx_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],

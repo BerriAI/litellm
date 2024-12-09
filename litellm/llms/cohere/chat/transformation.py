@@ -1,11 +1,21 @@
 import json
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.transformation import BaseConfig
+from litellm.llms.prompt_templates.cohere import cohere_messages_pt_v2
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class CohereError(Exception):
@@ -17,11 +27,13 @@ class CohereError(Exception):
         super().__init__(self.message)  # Ca
 
 
-class CohereChatConfig:
+class CohereChatConfig(BaseConfig):
     def validate_environment(
         self,
         api_key: str,
         headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
     ) -> dict:
         """
         Return headers to use for cohere chat completion request
@@ -48,16 +60,23 @@ class CohereChatConfig:
 
     def transform_request(
         self,
+        model: str,
+        messages: List[AllMessageValues],
         optional_params: dict,
-        most_recent_message: dict,
-        chat_history: list,
-    ):
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+
         ## Load Config
         # for k, v in self.items():
         #     if (
         #         k not in optional_params
         #     ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
         #         optional_params[k] = v
+
+        most_recent_message, chat_history = cohere_messages_pt_v2(
+            messages=messages, model=model, llm_provider="cohere_chat"
+        )
 
         ## Handle Tool Calling
         if "tools" in optional_params:
@@ -78,23 +97,30 @@ class CohereChatConfig:
     def transform_response(
         self,
         model: str,
-        model_response: ModelResponse,
         httpx_response: httpx.Response,
-        completion_response: dict,
-    ):
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: str,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        encoding: str,
+    ) -> ModelResponse:
+
         try:
-            model_response.choices[0].message.content = completion_response["text"]  # type: ignore
+            raw_response = httpx_response.json()
+            model_response.choices[0].message.content = raw_response["text"]  # type: ignore
         except Exception:
             raise CohereError(
                 message=httpx_response.text, status_code=httpx_response.status_code
             )
 
         ## ADD CITATIONS
-        if "citations" in completion_response:
-            setattr(model_response, "citations", completion_response["citations"])
+        if "citations" in raw_response:
+            setattr(model_response, "citations", raw_response["citations"])
 
         ## Tool calling response
-        cohere_tools_response = completion_response.get("tool_calls", None)
+        cohere_tools_response = raw_response.get("tool_calls", None)
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
             tool_calls = []
@@ -118,7 +144,7 @@ class CohereChatConfig:
             model_response.choices[0].message = _message  # type: ignore
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
-        billed_units = completion_response.get("meta", {}).get("billed_units", {})
+        billed_units = raw_response.get("meta", {}).get("billed_units", {})
 
         prompt_tokens = billed_units.get("input_tokens", 0)
         completion_tokens = billed_units.get("output_tokens", 0)
@@ -131,7 +157,7 @@ class CohereChatConfig:
             total_tokens=prompt_tokens + completion_tokens,
         )
         setattr(model_response, "usage", usage)
-        pass
+        return model_response
 
     def _construct_cohere_tool(
         self,
