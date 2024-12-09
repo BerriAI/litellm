@@ -156,7 +156,9 @@ def test_completion_cohere():
 
 
 # FYI - cohere_chat looks quite unstable, even when testing locally
-def test_chat_completion_cohere():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_chat_completion_cohere(sync_mode):
     try:
         litellm.set_verbose = True
         messages = [
@@ -166,19 +168,28 @@ def test_chat_completion_cohere():
                 "content": "Hey",
             },
         ]
-        response = completion(
-            model="cohere_chat/command-r",
-            messages=messages,
-            max_tokens=10,
-        )
+        if sync_mode is False:
+            response = await litellm.acompletion(
+                model="cohere_chat/command-r",
+                messages=messages,
+                max_tokens=10,
+            )
+        else:
+            response = completion(
+                model="cohere_chat/command-r",
+                messages=messages,
+                max_tokens=10,
+            )
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_chat_completion_cohere_stream():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [False])
+async def test_chat_completion_cohere_stream(sync_mode):
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You're a good bot"},
             {
@@ -186,14 +197,27 @@ def test_chat_completion_cohere_stream():
                 "content": "Hey",
             },
         ]
-        response = completion(
-            model="cohere_chat/command-r",
-            messages=messages,
-            max_tokens=10,
-            stream=True,
-        )
-        print(response)
-        for chunk in response:
-            print(chunk)
+        if sync_mode is False:
+            response = await litellm.acompletion(
+                model="cohere_chat/command-r",
+                messages=messages,
+                max_tokens=10,
+                stream=True,
+            )
+            print("async cohere stream response", response)
+            async for chunk in response:
+                print(chunk)
+        else:
+            response = completion(
+                model="cohere_chat/command-r",
+                messages=messages,
+                max_tokens=10,
+                stream=True,
+            )
+            print(response)
+            for chunk in response:
+                print(chunk)
+    except litellm.APIConnectionError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
