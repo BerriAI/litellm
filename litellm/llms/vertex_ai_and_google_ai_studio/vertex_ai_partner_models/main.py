@@ -7,6 +7,7 @@ from typing import Callable, Literal, Optional, Union
 import httpx  # type: ignore
 
 import litellm
+from litellm import LlmProviders
 from litellm.utils import ModelResponse
 
 from ..vertex_llm_base import VertexBase
@@ -211,6 +212,7 @@ class VertexAIPartnerModels(VertexBase):
                     headers=headers,
                     timeout=timeout,
                     client=client,
+                    custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
 
             return openai_like_chat_completions.completion(
