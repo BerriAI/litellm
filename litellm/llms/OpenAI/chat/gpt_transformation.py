@@ -82,21 +82,7 @@ class OpenAIGPTConfig(BaseConfig):
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params = [
@@ -201,7 +187,7 @@ class OpenAIGPTConfig(BaseConfig):
     def transform_response(
         self,
         model: str,
-        raw_response: dict,
+        raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
         api_key: str,

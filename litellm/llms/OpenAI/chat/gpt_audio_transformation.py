@@ -20,21 +20,7 @@ class OpenAIGPTAudioConfig(OpenAIGPTConfig):
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         """

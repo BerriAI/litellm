@@ -48,6 +48,7 @@ class BaseConfig(ABC):
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
