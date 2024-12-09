@@ -22,13 +22,13 @@ import litellm.types
 import litellm.types.utils
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.transformation import BaseConfig
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.utils import ModelResponse, ProviderConfigManager
+from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -82,6 +82,7 @@ class BaseLLMHTTPHandler:
     def completion(
         self,
         model: str,
+        stream: bool,
         messages: list,
         api_base: str,
         custom_llm_provider: str,
@@ -144,6 +145,25 @@ class BaseLLMHTTPHandler:
                 encoding=encoding,
             )
 
+        if stream is True:
+            data["stream"] = stream
+            completion_stream, headers = self.make_sync_call(
+                provider_config=provider_config,
+                api_base=api_base,
+                headers=headers,  # type: ignore
+                data=json.dumps(data),
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                timeout=timeout,
+            )
+            return CustomStreamWrapper(
+                completion_stream=completion_stream,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
+
         sync_httpx_client = _get_httpx_client()
 
         try:
@@ -170,6 +190,55 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             encoding=encoding,
         )
+
+    def make_sync_call(
+        self,
+        provider_config: BaseConfig,
+        api_base: str,
+        headers: dict,
+        data: str,
+        model: str,
+        messages: list,
+        logging_obj,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> Tuple[Any, httpx.Headers]:
+        sync_httpx_client = _get_httpx_client()
+        try:
+            response = sync_httpx_client.post(
+                api_base, headers=headers, data=data, stream=True, timeout=timeout
+            )
+        except httpx.HTTPStatusError as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+        except Exception as e:
+            for exception in litellm.LITELLM_EXCEPTION_TYPES:
+                if isinstance(e, exception):
+                    raise e
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        if response.status_code != 200:
+            raise BaseLLMException(
+                status_code=response.status_code,
+                message=str(response.read()),
+            )
+        completion_stream = provider_config.get_model_response_iterator(
+            streaming_response=response.iter_lines(), sync_stream=True
+        )
+
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
+
+        return completion_stream, response.headers
 
     def _handle_error(self, e: Exception, provider_config: BaseConfig):
         status_code = getattr(e, "status_code", 500)

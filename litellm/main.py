@@ -1961,6 +1961,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             model_response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
                 acompletion=acompletion,
                 api_base=api_base,
