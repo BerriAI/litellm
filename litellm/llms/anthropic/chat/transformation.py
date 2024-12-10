@@ -5,10 +5,10 @@ from re import A
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
+    AsyncIterator,
     Dict,
+    Iterator,
     List,
-    Literal,
     Optional,
     Tuple,
     Union,
@@ -16,22 +16,27 @@ from typing import (
 )
 
 import httpx
-import requests
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
+    AnthropicChatCompletionUsageBlock,
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
-    AnthropicMessageRequestBase,
-    AnthropicMessagesRequest,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
+    ContentBlockDelta,
+    ContentBlockStart,
+    ContentBlockStop,
+    MessageBlockDelta,
+    MessageStartBlock,
+    UsageDelta,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -43,24 +48,19 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
 )
+from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    add_dummy_tool,
-    has_tool_call_blocks,
-)
+from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingClass = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingClass = Any
+    LiteLLMLoggingObj = Any
 
 
 class AnthropicConfig(BaseConfig):
@@ -571,7 +571,7 @@ class AnthropicConfig(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
+        logging_obj: LiteLLMLoggingObj,
         request_data: Dict,
         messages: List[AllMessageValues],
         optional_params: Dict,
@@ -766,3 +766,264 @@ class AnthropicConfig(BaseConfig):
 
         headers = {**headers, **anthropic_headers}
         return headers
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return AnthropicModelResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class AnthropicModelResponseIterator(BaseModelResponseIterator):
+    def __init__(
+        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+    ):
+        self.streaming_response = streaming_response
+        self.response_iterator = self.streaming_response
+        self.content_blocks: List[ContentBlockDelta] = []
+        self.tool_index = -1
+        self.json_mode = json_mode
+        super().__init__(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+    def check_empty_tool_call_args(self) -> bool:
+        """
+        Check if the tool call block so far has been an empty string
+        """
+        args = ""
+        # if text content block -> skip
+        if len(self.content_blocks) == 0:
+            return False
+
+        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+            return False
+
+        for block in self.content_blocks:
+            if block["delta"]["type"] == "input_json_delta":
+                args += block["delta"].get("partial_json", "")  # type: ignore
+
+        if len(args) == 0:
+            return True
+        return False
+
+    def _handle_usage(
+        self, anthropic_usage_chunk: Union[dict, UsageDelta]
+    ) -> AnthropicChatCompletionUsageBlock:
+
+        usage_block = AnthropicChatCompletionUsageBlock(
+            prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
+            completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
+            total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
+            + anthropic_usage_chunk.get("output_tokens", 0),
+        )
+
+        cache_creation_input_tokens = anthropic_usage_chunk.get(
+            "cache_creation_input_tokens"
+        )
+        if cache_creation_input_tokens is not None and isinstance(
+            cache_creation_input_tokens, int
+        ):
+            usage_block["cache_creation_input_tokens"] = cache_creation_input_tokens
+
+        cache_read_input_tokens = anthropic_usage_chunk.get("cache_read_input_tokens")
+        if cache_read_input_tokens is not None and isinstance(
+            cache_read_input_tokens, int
+        ):
+            usage_block["cache_read_input_tokens"] = cache_read_input_tokens
+
+        return usage_block
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            type_chunk = chunk.get("type", "") or ""
+
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+
+            index = int(chunk.get("index", 0))
+            if type_chunk == "content_block_delta":
+                """
+                Anthropic content chunk
+                chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
+                """
+                content_block = ContentBlockDelta(**chunk)  # type: ignore
+                self.content_blocks.append(content_block)
+                if "text" in content_block["delta"]:
+                    text = content_block["delta"]["text"]
+                elif "partial_json" in content_block["delta"]:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": content_block["delta"]["partial_json"],
+                        },
+                        "index": self.tool_index,
+                    }
+            elif type_chunk == "content_block_start":
+                """
+                event: content_block_start
+                data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
+                """
+                content_block_start = ContentBlockStart(**chunk)  # type: ignore
+                self.content_blocks = []  # reset content blocks when new block starts
+                if content_block_start["content_block"]["type"] == "text":
+                    text = content_block_start["content_block"]["text"]
+                elif content_block_start["content_block"]["type"] == "tool_use":
+                    self.tool_index += 1
+                    tool_use = {
+                        "id": content_block_start["content_block"]["id"],
+                        "type": "function",
+                        "function": {
+                            "name": content_block_start["content_block"]["name"],
+                            "arguments": "",
+                        },
+                        "index": self.tool_index,
+                    }
+            elif type_chunk == "content_block_stop":
+                ContentBlockStop(**chunk)  # type: ignore
+                # check if tool call content block
+                is_empty = self.check_empty_tool_call_args()
+                if is_empty:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": "{}",
+                        },
+                        "index": self.tool_index,
+                    }
+            elif type_chunk == "message_delta":
+                """
+                Anthropic
+                chunk = {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens', 'stop_sequence': None}, 'usage': {'output_tokens': 10}}
+                """
+                # TODO - get usage from this chunk, set in response
+                message_delta = MessageBlockDelta(**chunk)  # type: ignore
+                finish_reason = map_finish_reason(
+                    finish_reason=message_delta["delta"].get("stop_reason", "stop")
+                    or "stop"
+                )
+                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+                is_finished = True
+            elif type_chunk == "message_start":
+                """
+                Anthropic
+                chunk = {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_vrtx_011PqREFEMzd3REdCoUFAmdG",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-sonnet-20240229",
+                        "content": [],
+                        "stop_reason": null,
+                        "stop_sequence": null,
+                        "usage": {
+                            "input_tokens": 270,
+                            "output_tokens": 1
+                        }
+                    }
+                }
+                """
+                message_start_block = MessageStartBlock(**chunk)  # type: ignore
+                if "usage" in message_start_block["message"]:
+                    usage = self._handle_usage(
+                        anthropic_usage_chunk=message_start_block["message"]["usage"]
+                    )
+            elif type_chunk == "error":
+                """
+                {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
+                """
+                _error_dict = chunk.get("error", {}) or {}
+                message = _error_dict.get("message", None) or str(chunk)
+                raise AnthropicError(
+                    message=message,
+                    status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
+                )
+
+            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+
+            returned_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+            )
+
+            return returned_chunk
+
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    def _handle_json_mode_chunk(
+        self, text: str, tool_use: Optional[ChatCompletionToolCallChunk]
+    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
+        """
+        If JSON mode is enabled, convert the tool call to a message.
+
+        Anthropic returns the JSON schema as part of the tool call
+        OpenAI returns the JSON schema as part of the content, this handles placing it in the content
+
+        Args:
+            text: str
+            tool_use: Optional[ChatCompletionToolCallChunk]
+        Returns:
+            Tuple[str, Optional[ChatCompletionToolCallChunk]]
+
+            text: The text to use in the content
+            tool_use: The ChatCompletionToolCallChunk to use in the chunk response
+        """
+        if self.json_mode is True and tool_use is not None:
+            message = AnthropicConfig._convert_tool_response_to_message(
+                tool_calls=[tool_use]
+            )
+            if message is not None:
+                text = message.content or ""
+                tool_use = None
+
+        return text, tool_use
+
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+        """
+        Convert a string chunk to a GenericStreamingChunk
+
+        Note: This is used for Anthropic pass through streaming logging
+
+        We can move __anext__, and __next__ to use this function since it's common logic.
+        Did not migrate them to minmize changes made in 1 PR.
+        """
+        str_line = chunk
+        if isinstance(chunk, bytes):  # Handle binary data
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
+            index = str_line.find("data:")
+            if index != -1:
+                str_line = str_line[index:]
+
+        if str_line.startswith("data:"):
+            data_json = json.loads(str_line[5:])
+            return self.chunk_parser(chunk=data_json)
+        else:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
