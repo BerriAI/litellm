@@ -109,6 +109,11 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
         )
 
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+        )
+
         data = provider_config.transform_request(
             model=model,
             messages=messages,

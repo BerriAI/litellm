@@ -4181,8 +4181,7 @@ def test_completion_together_ai_stream():
 # test_completion_together_ai_stream()
 
 
-# Cloud flare AI tests
-@pytest.mark.skip(reason="Flaky test-cloudflare is very unstable")
+# Cloud flare AI test
 def test_completion_cloudflare():
     try:
         litellm.set_verbose = True

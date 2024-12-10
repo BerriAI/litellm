@@ -95,9 +95,10 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
-    @abstractmethod
     def get_complete_url(self, api_base: str, model: str) -> str:
         """
+        OPTIONAL
+
         Get the complete url for the request
 
         Some providers need `model` in `api_base`
