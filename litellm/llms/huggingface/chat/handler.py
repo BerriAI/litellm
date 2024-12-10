@@ -67,13 +67,6 @@ hf_tasks_embeddings = Literal[  # pipeline tags + hf tei endpoints - https://hug
 ]
 
 
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    get_async_httpx_client,
-)
-
-
 def get_hf_task_embedding_for_model(
     model: str, task_type: Optional[str], api_base: str
 ) -> Optional[str]:
@@ -188,7 +181,7 @@ class Huggingface(BaseLLM):
                     return self.async_streaming(logging_obj=logging_obj, api_base=completion_url, data=data, headers=headers, model_response=model_response, model=model, timeout=timeout)  # type: ignore
                 else:
                     ### ASYNC COMPLETION
-                    return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, input_text=input_text, model=model, optional_params=optional_params, timeout=timeout, litellm_params=litellm_params)  # type: ignore
+                    return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, model=model, optional_params=optional_params, timeout=timeout, litellm_params=litellm_params)  # type: ignore
             if client is None or not isinstance(client, HTTPHandler):
                 client = HTTPHandler()
             ### SYNC STREAMING
