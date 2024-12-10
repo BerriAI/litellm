@@ -15,11 +15,11 @@ from litellm.types.utils import ModelResponse
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingClass = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingClass = Any
+    LiteLLMLoggingObj = Any
 
 
 class OpenAIGPTConfig(BaseConfig):
