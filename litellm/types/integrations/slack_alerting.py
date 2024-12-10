@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional, Set, TypedDict
 
 from pydantic import BaseModel, Field
 
+from litellm.types.utils import LiteLLMBase
+
 
 class BaseOutageModel(TypedDict):
     alerts: List[int]
@@ -25,19 +27,6 @@ class ProviderRegionOutageModel(BaseOutageModel):
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT = "support@berri.ai"
-
-
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
 
 
 class SlackAlertingArgsEnum(Enum):

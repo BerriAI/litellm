@@ -17,6 +17,7 @@ from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMBase,
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
@@ -132,28 +133,6 @@ def hash_token(token: str):
     hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token
-
-
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump(**kwargs)  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict(**kwargs)
-
-    def fields_set(self):
-        try:
-            return self.model_fields_set  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.__fields_set__
-
-    model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMBase):
