@@ -28,7 +28,7 @@ class CloudflareError(BaseLLMException):
         )  # Call the base class constructor with the parameters it needs
 
 
-class CloudflareConfig(BaseConfig):
+class CloudflareChatConfig(BaseConfig):
     max_tokens: Optional[int] = None
     stream: Optional[bool] = None
 
@@ -41,24 +41,6 @@ class CloudflareConfig(BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
 
     def validate_environment(
         self,
@@ -82,6 +64,27 @@ class CloudflareConfig(BaseConfig):
     def get_complete_url(self, api_base: str, model: str) -> str:
         return api_base + model
 
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return [
+            "stream",
+            "max_tokens",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params(model=model)
+        for param, value in non_default_params.items():
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
+
     def transform_request(
         self,
         model: str,
@@ -90,7 +93,7 @@ class CloudflareConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        config = litellm.CloudflareConfig.get_config()
+        config = litellm.CloudflareChatConfig.get_config()
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
@@ -142,3 +145,8 @@ class CloudflareConfig(BaseConfig):
             status_code=status_code,
             message=error_message,
         )
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        raise NotImplementedError

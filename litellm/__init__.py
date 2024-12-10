@@ -1067,10 +1067,10 @@ from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
+from .llms.cloudflare.chat.transformation import CloudflareChatConfig
 from .llms.ai21.completion import AI21Config
 from .llms.ai21.chat import AI21ChatConfig
 from .llms.together_ai.chat import TogetherAIConfig
-from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
 from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
