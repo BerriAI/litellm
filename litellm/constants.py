@@ -12,6 +12,7 @@ LITELLM_CHAT_PROVIDERS = [
     "cohere_chat",
     "clarifai",
     "anthropic",
+    "anthropic_text",
     "replicate",
     "huggingface",
     "together_ai",
