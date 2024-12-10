@@ -1,7 +1,7 @@
 import json
 import time
 import types
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
@@ -261,6 +261,18 @@ class CohereTextConfig(BaseConfig):
         if tools is None:
             tools = []
         return {"tools": tools}
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str]],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return ModelResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
 
 class ModelResponseIterator:
