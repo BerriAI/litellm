@@ -9,12 +9,13 @@ import os
 import time
 import types
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import httpx
 import requests
 
 import litellm
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.transformation import (
     BaseConfig,
     BaseLLMException,
@@ -27,6 +28,13 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    GenericStreamingChunk,
+    ModelResponse,
+    Usage,
+)
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 
@@ -153,12 +161,23 @@ class AnthropicTextConfig(BaseConfig):
         Note: the only difference is in the get supported openai params method between the AnthropicConfig and AnthropicTextConfig
         API Ref: https://docs.anthropic.com/en/api/complete
         """
-        return litellm.AnthropicConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=drop_params,
-        )
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["max_tokens_to_sample"] = value
+            if param == "max_completion_tokens":
+                optional_params["max_tokens_to_sample"] = value
+            if param == "stream" and value is True:
+                optional_params["stream"] = value
+            if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
+                _value = litellm.AnthropicConfig()._map_stop_sequences(value)
+                if _value is not None:
+                    optional_params["stop_sequences"] = _value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "user":
+                optional_params["metadata"] = {"user_id": value}
 
         return optional_params
 
@@ -252,3 +271,47 @@ class AnthropicTextConfig(BaseConfig):
     ) -> List[AllMessageValues]:
         "Not required"
         raise NotImplementedError
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return AnthropicTextCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class AnthropicTextCompletionResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields = None
+            index = int(chunk.get("index", 0))
+            _chunk_text = chunk.get("completion", None)
+            if _chunk_text is not None and isinstance(_chunk_text, str):
+                text = _chunk_text
+            finish_reason = chunk.get("stop_reason", None)
+            if finish_reason is not None:
+                is_finished = True
+            returned_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+                provider_specific_fields=provider_specific_fields,
+            )
+
+            return returned_chunk
+
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
