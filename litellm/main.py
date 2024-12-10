@@ -117,7 +117,7 @@ from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.groq.chat.handler import GroqChatCompletion
-from .llms.huggingface_restapi import Huggingface
+from .llms.huggingface.chat.handler import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.completion.handler import OpenAITextCompletion
@@ -2053,6 +2053,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
                 timeout=timeout,  # type: ignore
+                client=client,
             )
             if (
                 "stream" in optional_params

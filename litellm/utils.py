@@ -2918,7 +2918,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.HuggingfaceConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "together_ai":
         ## check if unsupported param passed in
@@ -6244,7 +6251,8 @@ class ProviderConfigManager:
                 return litellm.VertexAIAnthropicConfig()
         elif litellm.LlmProviders.REPLICATE == provider:
             return litellm.ReplicateConfig()
-
+        elif litellm.LlmProviders.HUGGINGFACE == provider:
+            return litellm.HuggingfaceConfig()
         return litellm.OpenAIGPTConfig()
 
 

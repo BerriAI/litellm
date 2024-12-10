@@ -1705,30 +1705,33 @@ HF Tests we should pass
 #####################################################
 #####################################################
 # Test util to sort models to TGI, conv, None
+from litellm.llms.huggingface.chat.transformation import HuggingfaceChatConfig
+
+
 def test_get_hf_task_for_model():
     model = "glaiveai/glaive-coder-7b"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "meta-llama/Llama-2-7b-hf"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "facebook/blenderbot-400M-distill"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     model = "facebook/blenderbot-3B"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     # neither Conv or None
     model = "roneneldan/TinyStories-3M"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation"
 
@@ -1816,14 +1819,17 @@ def tgi_mock_post(url, **kwargs):
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
+        client = HTTPHandler()
 
-        with patch("requests.post", side_effect=tgi_mock_post) as mock_client:
+        with patch.object(client, "post", side_effect=tgi_mock_post) as mock_client:
             response = completion(
                 model="huggingface/HuggingFaceH4/zephyr-7b-beta",
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 max_tokens=10,
                 wait_for_model=True,
+                client=client,
             )
+            mock_client.assert_called_once()
             # Add any assertions-here to check the response
             print(response)
             assert "options" in mock_client.call_args.kwargs["data"]

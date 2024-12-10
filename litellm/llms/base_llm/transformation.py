@@ -114,6 +114,7 @@ class BaseConfig(ABC):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         encoding: Any,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
