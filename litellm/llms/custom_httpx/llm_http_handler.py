@@ -51,6 +51,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         messages: list,
         optional_params: dict,
+        litellm_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
     ):
@@ -76,6 +77,7 @@ class BaseLLMHTTPHandler:
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            json_mode=litellm_params.get("json_mode", False),
         )
 
     def completion(
@@ -163,6 +165,7 @@ class BaseLLMHTTPHandler:
                     api_key=api_key,
                     messages=messages,
                     optional_params=optional_params,
+                    litellm_params=litellm_params,
                     encoding=encoding,
                 )
 
@@ -212,6 +215,7 @@ class BaseLLMHTTPHandler:
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            json_mode=litellm_params.get("json_mode", False),
         )
 
     def make_sync_call(

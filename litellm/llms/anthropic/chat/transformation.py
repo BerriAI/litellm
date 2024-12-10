@@ -538,8 +538,16 @@ class AnthropicConfig(BaseConfig):
                 optional_params[k] = v
 
         ## Handle Tool Calling
+        _is_function_call = False
         if "tools" in optional_params:
             _is_function_call = True
+
+        # litellm params used internally for transformation of response
+        json_mode: bool = optional_params.pop("json_mode", False)
+        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
+        litellm_params["json_mode"] = json_mode
+        litellm_params["is_vertex_request"] = is_vertex_request
+        litellm_params["_is_function_call"] = _is_function_call
 
         ## Handle user_id in metadata
         _litellm_metadata = litellm_params.get("metadata", None)

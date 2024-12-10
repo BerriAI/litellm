@@ -1722,7 +1722,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if api_base is not None and not api_base.endswith("/v1/complete"):
                 api_base += "/v1/complete"
-
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -1732,7 +1731,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="anthropic_text",
+                custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,
