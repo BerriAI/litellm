@@ -373,8 +373,12 @@ class BaseLLMHTTPHandler:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
             error_text = getattr(error_response, "text", error_text)
-        raise provider_config.error_class(  # type: ignore
-            message=error_text,
+        if error_headers:
+            error_headers = dict(error_headers)
+        else:
+            error_headers = {}
+        raise provider_config.get_error_class(
+            error_message=error_text,
             status_code=status_code,
             headers=error_headers,
         )
