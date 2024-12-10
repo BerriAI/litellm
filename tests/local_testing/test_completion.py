@@ -4182,18 +4182,18 @@ def test_completion_together_ai_stream():
 
 
 # Cloud flare AI test
-def test_completion_cloudflare():
+@pytest.mark.asyncio
+async def test_completion_cloudflare():
     try:
         litellm.set_verbose = False
-        response = completion(
+        response = await litellm.acompletion(
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
             messages=[{"content": "what llm are you", "role": "user"}],
             max_tokens=15,
-            num_retries=3,
             stream=True,
         )
         print(response)
-        for chunk in response:
+        async for chunk in response:
             print(chunk)
 
     except Exception as e:
